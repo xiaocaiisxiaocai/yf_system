@@ -401,7 +401,13 @@ public sealed class OemTransferFlowTests
         var options = (await recovery.GetAsync("/api/v1/oem/approver-options", ct).Ok()).AsArray();
         Assert.Contains(options, option => option!.Id() == backupId);
 
-        // Reassignment rules: never the initiator, always an eligible approver, reason required.
+        // Reassignment rules: never the initiator or the recovering admin, always an eligible approver, reason required.
+        var selfRecoveryId = await host.CreateInternalUserAsync("recover_approver", "Recover#2026x",
+            ["oem:approval_recover", "oem:flow_approve"], world.Org.Section, ct);
+        var selfRecovery = await host.LoginInternalAsync("recover_approver", "Recover#2026x", ct);
+        var toSelf = await selfRecovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",
+            new { newApproverUserId = selfRecoveryId, reason = "自己审", version = task["version"]!.GetValue<ulong>() }, ct).Status(HttpStatusCode.BadRequest);
+        Assert.Contains("不能把审批任务改派给自己", toSelf.Body);
         await recovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",
             new { newApproverUserId = world.SenderId, reason = "x", version = task["version"]!.GetValue<ulong>() }, ct).Status(HttpStatusCode.BadRequest);
         await recovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",

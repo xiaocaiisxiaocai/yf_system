@@ -204,11 +204,15 @@ public sealed class OemApprovalEngine
         string reason, ulong actorUserId, CancellationToken ct)
     {
         if (newApproverId == instance.InitiatorUserId) throw ApiException.BadRequest("新审批人不能是发送人本人");
-        if (newApproverId == task.ApproverUserId) throw ApiException.BadRequest("新审批人与原审批人相同");
+        // Recovery must not turn into approving on the approver's behalf.
+        if (newApproverId == actorUserId) throw ApiException.BadRequest("不能把审批任务改派给自己");
+        // A blocked flow may go back to its original approver once they are eligible again.
+        var restoring = newApproverId == task.ApproverUserId && instance.Status == FlowInstanceStatuses.ApprovalBlocked;
+        if (newApproverId == task.ApproverUserId && !restoring) throw ApiException.BadRequest("新审批人与原审批人相同");
         var eligible = await ApprovalPlanningService.EligibleIdsAsync(uow.Db, [newApproverId], ct);
         if (eligible.Length == 0) throw ApiException.BadRequest("新审批人必须是启用的内部账号且具备 OEM 审批权限");
         var conflict = await uow.Db.OemFlowTasks.AnyAsync(item => item.InstanceId == instance.Id && item.ApproverUserId == newApproverId
-            && item.Status != FlowTaskStatuses.Superseded && item.Status != FlowTaskStatuses.Cancelled, ct);
+            && item.Id != task.Id && item.Status != FlowTaskStatuses.Superseded && item.Status != FlowTaskStatuses.Cancelled, ct);
         if (conflict) throw ApiException.BadRequest("新审批人已在本传递单的审批流程中");
         var replacement = new OemFlowTask
         {
