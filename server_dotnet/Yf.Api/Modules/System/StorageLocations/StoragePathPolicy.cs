@@ -41,7 +41,14 @@ internal static class StoragePathPolicy
     /// </summary>
     internal static string ValidateTarget(
         string? input, string applicationRoot, string? webRoot, IEnumerable<string> others, long requiredBytes)
+        => ValidateTarget(input, applicationRoot, webRoot, others, requiredBytes, out _);
+
+    internal static string ValidateTarget(
+        string? input, string applicationRoot, string? webRoot, IEnumerable<string> others, long requiredBytes,
+        out IReadOnlyList<string> createdDirectories)
     {
+        var created = new List<string>();
+        createdDirectories = created;
         var path = NormalizeFormat(input);
         string resolved;
         try { resolved = AppOptions.ResolveComparisonPath(path); }
@@ -63,9 +70,10 @@ internal static class StoragePathPolicy
         }
 
         if (File.Exists(path)) throw ApiException.BadRequest("该路径是一个文件，请填写目录");
+        var existedBefore = Directory.Exists(path);
         try
         {
-            if (Directory.Exists(path))
+            if (existedBefore)
             {
                 if ((new DirectoryInfo(path).Attributes & FileAttributes.ReparsePoint) != 0)
                     throw ApiException.BadRequest("不能使用符号链接或目录联接");
@@ -74,19 +82,38 @@ internal static class StoragePathPolicy
             }
             else
             {
+                var missing = new Stack<string>();
+                var cursor = Path.GetFullPath(path);
+                while (!Directory.Exists(cursor) && !File.Exists(cursor))
+                {
+                    missing.Push(cursor);
+                    cursor = Path.GetDirectoryName(cursor)
+                        ?? throw new IOException("无法解析目标目录的父目录");
+                }
+                // Stack enumeration is parent-first, matching Directory.CreateDirectory's creation order.
+                created.AddRange(missing);
                 Directory.CreateDirectory(path);
             }
             Probe(path);
         }
         catch (UnauthorizedAccessException)
         {
+            RemoveCreatedEmptyDirectories(created);
             throw ApiException.BadRequest("网站运行账号无法读写该目录，请先为 IIS 应用池账号授予该目录的修改权限");
         }
         catch (IOException)
         {
+            RemoveCreatedEmptyDirectories(created);
             throw ApiException.BadRequest("无法在该目录读写文件，请检查磁盘与权限");
         }
+        catch
+        {
+            RemoveCreatedEmptyDirectories(created);
+            throw;
+        }
 
+        try
+        {
         var drive = Path.GetPathRoot(path) ?? throw ApiException.BadRequest("无法解析目录所在磁盘");
         var available = new DriveInfo(drive).AvailableFreeSpace;
         var required = requiredBytes + requiredBytes / 10 + MinimumFreeMarginBytes;
@@ -94,6 +121,27 @@ internal static class StoragePathPolicy
             throw ApiException.BadRequest(
                 $"目标磁盘剩余空间不足：需要约 {required / (1L << 20)} MiB，可用 {available / (1L << 20)} MiB");
         return path;
+        }
+        catch
+        {
+            RemoveCreatedEmptyDirectories(created);
+            throw;
+        }
+    }
+
+    /// <summary>Deletes only the exact directories created by this validation, leaf first and only while empty.</summary>
+    internal static void RemoveCreatedEmptyDirectories(IEnumerable<string> createdDirectories)
+    {
+        foreach (var directory in createdDirectories.Reverse())
+        {
+            try
+            {
+                if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
+                    Directory.Delete(directory, recursive: false);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
     }
 
     /// <summary>Writes, reads back and deletes a probe file as the site's own account.</summary>

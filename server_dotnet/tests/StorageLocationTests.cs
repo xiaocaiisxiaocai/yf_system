@@ -35,6 +35,7 @@ public sealed class StorageLocationTests
             var occupied = Directory.CreateDirectory(Path.Combine(sandbox, "occupied")).FullName;
             File.WriteAllText(Path.Combine(occupied, "keep.txt"), "x");
             Assert.Equal("新目录必须为空", Assert.Throws<ApiException>(() => Validate(occupied)).Message);
+            Assert.True(File.Exists(Path.Combine(occupied, "keep.txt")));
 
             var fresh = Path.Combine(sandbox, "fresh", "storage");
             Assert.Equal(fresh, Validate(fresh));
@@ -362,9 +363,18 @@ public sealed class StorageLocationTests
             var stale = await Assert.ThrowsAsync<ApiException>(() => service.MigrateAsync(
                 admin, "COLLAB", new StorageMigrationRequest { Path = newRoot }, null, ct));
             Assert.Equal((409, 40903), (stale.Status, stale.Code));
+            Assert.False(Directory.Exists(newRoot));
             var afterStale = await ReadAsync(service, "COLLAB", ct);
             Assert.Equal(("IDLE", oldRoot), (afterStale.Status, afterStale.Path));
             await database.ExecuteAsync("UPDATE storage_locations SET path='' WHERE kind='LOG'", ct);
+            var preexistingEmpty = Directory.CreateDirectory(Path.Combine(sandbox, "preexisting-empty")).FullName;
+            var staleExisting = await Assert.ThrowsAsync<ApiException>(() => service.MigrateAsync(
+                admin, "COLLAB", new StorageMigrationRequest { Path = preexistingEmpty }, null, ct));
+            Assert.Equal((409, 40903), (staleExisting.Status, staleExisting.Code));
+            Assert.True(Directory.Exists(preexistingEmpty));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(preexistingEmpty));
+            await database.ExecuteAsync("UPDATE storage_locations SET path='' WHERE kind='LOG'", ct);
+            service.BeforeLocking = null;
 
             // The walk and the probe are over by the time the gate is requested: nothing holds it meanwhile.
             var gateWasFree = false;

@@ -115,7 +115,10 @@ public sealed class StorageLocationService(
         // Walking the old tree and checking, creating and probing the target can take minutes on a large store, and
         // the exclusive management gate stalls every business write meanwhile. Both run before the gate; under it
         // only the rows the validation depended on are compared again.
-        var (target, baseline) = await PlanMigrationAsync(actor, kind, request, ct);
+        var (target, baseline, createdDirectories) = await PlanMigrationAsync(actor, kind, request, ct);
+        var committed = false;
+        try
+        {
         if (BeforeLocking is { } beforeLocking) await beforeLocking();
         await using var conn = await db.OpenAsync(ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -159,9 +162,15 @@ public sealed class StorageLocationService(
         await audit.WriteAsync(conn, tx, current.Id, action, "storage_location", null,
             new { kind, label = StorageKinds.Label(kind), from, to = target, pending = row.PendingPath is not null }, ip, ct);
         await tx.CommitAsync(ct);
+        committed = true;
         ApplyRuntime(row);
         signal.Wake();
         return ToResponse(row);
+        }
+        finally
+        {
+            if (!committed) StoragePathPolicy.RemoveCreatedEmptyDirectories(createdDirectories);
+        }
     }
 
     public async Task<StorageLocationResponse> CancelAsync(CurrentUser actor, string kindArgument, string? ip, CancellationToken ct)
@@ -218,7 +227,7 @@ public sealed class StorageLocationService(
         return ToResponse(row);
     }
 
-    private async Task<(string Target, string Baseline)> PlanMigrationAsync(
+    private async Task<(string Target, string Baseline, IReadOnlyList<string> CreatedDirectories)> PlanMigrationAsync(
         CurrentUser actor, string kind, StorageMigrationRequest request, CancellationToken ct)
     {
         StorageLocation[] rows;
@@ -238,8 +247,8 @@ public sealed class StorageLocationService(
             .Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path!).ToArray();
         var required = row.Path.Length == 0 ? 0 : await Task.Run(() => StoragePathPolicy.Measure(row.Path, ct).Bytes, ct);
         var target = StoragePathPolicy.ValidateTarget(
-            request.Path, environment.ContentRootPath, environment.WebRootPath, others, required);
-        return (target, Fingerprint(rows));
+            request.Path, environment.ContentRootPath, environment.WebRootPath, others, required, out var createdDirectories);
+        return (target, Fingerprint(rows), createdDirectories);
     }
 
     private static void RequireNoMigration(IEnumerable<StorageLocation> rows)
