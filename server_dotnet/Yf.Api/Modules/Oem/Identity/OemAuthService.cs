@@ -14,7 +14,7 @@ public sealed record OemChangePasswordRequest(
     [property: JsonRequired] string OldPassword,
     [property: JsonRequired] string NewPassword);
 
-public sealed record OemAccountBrief(ulong Id, string EmployeeNo, string RealName, string Email, ulong CompanyId, string CompanyName);
+public sealed record OemAccountBrief(ulong Id, string EmployeeNo, ulong CompanyId, string CompanyName);
 
 public sealed record OemLoginResponse(string AccessToken, long ExpiresAt, bool MustChangePassword, OemAccountBrief Account);
 
@@ -333,10 +333,10 @@ public sealed class OemAuthService(
     private static DateTime Min(DateTime left, DateTime right) => left <= right ? left : right;
 
     private static OemAccountBrief Brief(OemAccount account, OemCompany? company) =>
-        new(account.Id, account.EmployeeNo, account.RealName, account.Email, account.OemCompanyId, company?.Name ?? string.Empty);
+        new(account.Id, account.EmployeeNo, account.OemCompanyId, company?.Name ?? string.Empty);
 
     private static AuditRealmActor RealmActor(OemAccount account) =>
-        new(OemRealms.Oem, account.Id, account.EmployeeNo, account.RealName);
+        new(OemRealms.Oem, account.Id, account.EmployeeNo, account.EmployeeNo);
 
     /// <summary>
     /// Writes a login audit row outside any transaction on the caller's already-open

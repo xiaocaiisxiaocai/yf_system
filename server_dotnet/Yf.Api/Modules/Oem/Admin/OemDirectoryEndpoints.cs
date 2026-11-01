@@ -16,6 +16,8 @@ internal static class OemDirectoryEndpoints
             s.CompanyOptionsAsync(OemActorAccessor.Get(c), ct)).Produces<IReadOnlyList<OemCompanyOptionResponse>>();
         oem.MapPost("/companies", (OemCompanyUpsert r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.CreateCompanyAsync(OemActorAccessor.Get(c), r, ct)).Produces<OemCompanyResponse>();
+        oem.MapPost("/companies/import", (OemCompanyImportRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.ImportCompaniesAsync(OemActorAccessor.Get(c), r, ct)).Produces<OemImportResponse>();
         oem.MapGet("/companies/{id:long}", (ulong id, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.CompanyDetailAsync(OemActorAccessor.Get(c), id, ct)).Produces<OemCompanyResponse>();
         oem.MapPut("/companies/{id:long}", (ulong id, OemCompanyUpsert r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
@@ -30,12 +32,18 @@ internal static class OemDirectoryEndpoints
 
         oem.MapGet("/companies/{id:long}/accounts", (ulong id, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.ListAccountsAsync(OemActorAccessor.Get(c), id, ct)).Produces<IReadOnlyList<OemAccountResponse>>();
+        oem.MapPost("/companies/{id:long}/accounts/import", (ulong id, OemAccountImportRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.ImportAccountsAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemImportResponse>();
         oem.MapPost("/companies/{id:long}/accounts", (ulong id, OemAccountCreate r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.CreateAccountAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemAccountResponse>();
+        oem.MapGet("/companies/{id:long}/contacts", (ulong id, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.ListCompanyContactsAsync(OemActorAccessor.Get(c), id, ct)).Produces<IReadOnlyList<OemCompanyContactResponse>>();
+        oem.MapPost("/companies/{id:long}/contacts", (ulong id, OemCompanyContactUpsert r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.CreateCompanyContactAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemCompanyContactResponse>();
+        oem.MapPost("/companies/{id:long}/contacts/import", (ulong id, OemCompanyContactImportRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.ImportCompanyContactsAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemImportResponse>();
         oem.MapGet("/accounts/{id:long}", (ulong id, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.AccountDetailAsync(OemActorAccessor.Get(c), id, ct)).Produces<OemAccountResponse>();
-        oem.MapPut("/accounts/{id:long}", (ulong id, OemAccountUpdate r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
-            s.UpdateAccountAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemAccountResponse>();
         oem.MapPut("/accounts/{id:long}/status", (ulong id, OemStatusRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.SetAccountStatusAsync(OemActorAccessor.Get(c), id, r.Status, ct)).Produces<OemAccountResponse>();
         oem.MapPut("/accounts/{id:long}/password", async (ulong id, OemPasswordReset r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>

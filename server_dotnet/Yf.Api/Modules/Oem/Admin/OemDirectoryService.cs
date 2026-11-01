@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json.Serialization;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Identity;
@@ -11,9 +12,39 @@ namespace Yf.Api.Modules.Oem.Admin;
 
 public sealed record OemCompanyUpsert(string Name, string? ContactName, string? ContactPhone, string? ContactEmail, string? Remark);
 public sealed record OemStatusRequest(string Status);
-public sealed record OemAccountCreate(string EmployeeNo, string RealName, string Email, string Password);
-public sealed record OemAccountUpdate(string RealName, string Email);
+public sealed record OemAccountCreate(
+    [property: JsonRequired] string EmployeeNo,
+    [property: JsonRequired] string Password);
+public sealed record OemCompanyContactUpsert(
+    [property: JsonRequired] string Name,
+    string? Phone,
+    string? Email,
+    int? SortNo = null);
+public sealed record OemAccountImportRow(
+    int RowNumber,
+    [property: JsonRequired] string CompanyName,
+    [property: JsonRequired] string EmployeeNo,
+    [property: JsonRequired] string InitialPassword);
+public sealed record OemAccountImportRequest([property: JsonRequired] OemAccountImportRow[] Rows);
+public sealed record OemCompanyContactImportRow(
+    int RowNumber,
+    [property: JsonRequired] string CompanyName,
+    [property: JsonRequired] string Name,
+    string? Phone,
+    string? Email,
+    int? SortNo = null);
+public sealed record OemCompanyContactImportRequest([property: JsonRequired] OemCompanyContactImportRow[] Rows);
 public sealed record OemPasswordReset(string NewPassword);
+public sealed record OemCompanyImportRow(
+    int RowNumber,
+    [property: JsonRequired] string Name,
+    string? ContactName,
+    string? ContactPhone,
+    string? ContactEmail,
+    string? Remark);
+public sealed record OemCompanyImportRequest([property: JsonRequired] OemCompanyImportRow[] Rows);
+public sealed record OemImportRowResult(int RowNumber, string Key, string Status, string? Message);
+public sealed record OemImportResponse(int Created, int Skipped, int Failed, IReadOnlyList<OemImportRowResult> Rows);
 
 /// <summary>
 /// Management of OEM vendors and their login accounts. Only internal staff with the
@@ -27,6 +58,9 @@ public sealed record OemPasswordReset(string NewPassword);
 public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
     internal const string LastActiveAccountMessage = "厂商至少需要保留一个启用账号；如需停止合作，请停用厂商";
+    internal const int MaximumCompanyImportRows = 500;
+    internal const int MaximumAccountImportRows = 100;
+    internal const int MaximumContactsPerCompany = 100;
 
     public async Task<OemPageResponse<OemCompanyListItemResponse>> ListCompaniesAsync(OemActor actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
     {
@@ -53,7 +87,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
                 company.Id, company.Name, company.ContactName, company.ContactPhone, company.ContactEmail, company.Remark,
                 company.Status, company.CreatedAt, company.UpdatedAt,
                 uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id),
-                uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active)))
+                uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active),
+                uow.Db.OemCompanyContacts.LongCount(contact => contact.OemCompanyId == company.Id)))
             .ToArrayAsync(ct);
         return new OemPageResponse<OemCompanyListItemResponse>(rows, total, page, size);
     }
@@ -100,6 +135,100 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await audit.WriteAsync(uow, current, "OEM_COMPANY_CREATE", "oem_company", company.Id, new { targetName = company.Name }, ct);
         await uow.CommitAsync(ct);
         return CompanyJson(company);
+    }
+
+    public async Task<OemImportResponse> ImportCompaniesAsync(OemActor actor, OemCompanyImportRequest request, CancellationToken ct)
+    {
+        if (request.Rows is null || request.Rows.Length is < 1 or > MaximumCompanyImportRows
+            || request.Rows.Any(row => row is null))
+            throw ApiException.BadRequest($"导入行数需为 1–{MaximumCompanyImportRows} 行");
+
+        // Verify authority before exposing duplicate names in the preview/commit response.
+        await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+            await OemAuthorizer.RequireInternalAsync(read, actor, OemPermissions.CompanyManage, ct);
+
+        var normalized = new OemCompanyUpsert[request.Rows.Length];
+        var validationErrors = new string?[request.Rows.Length];
+        for (var index = 0; index < request.Rows.Length; index++)
+        {
+            try
+            {
+                var row = request.Rows[index] ?? throw ApiException.BadRequest("厂商名称不能为空");
+                normalized[index] = ValidateCompany(new OemCompanyUpsert(
+                    row.Name, row.ContactName, row.ContactPhone, row.ContactEmail, row.Remark));
+            }
+            catch (ApiException error) when (error.Status == 400)
+            {
+                validationErrors[index] = error.Message;
+                normalized[index] = new OemCompanyUpsert("", null, null, null, null);
+            }
+        }
+
+        var duplicatesInFile = normalized.Select(item => item.Name.Trim().ToUpperInvariant()).ToArray()
+            .Select((key, index) => (key, index)).Where(item => item.key.Length > 0)
+            .GroupBy(item => item.key, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1).SelectMany(group => group.Select(item => item.index)).ToHashSet();
+
+        string[] existingNames;
+        await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+        {
+            await OemAuthorizer.RequireInternalAsync(read, actor, OemPermissions.CompanyManage, ct);
+            var names = normalized.Select(item => item.Name).Where(name => name.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            existingNames = names.Length == 0 ? []
+                : await read.Db.OemCompanies.AsNoTracking().Where(company => Enumerable.Contains(names, company.Name))
+                    .Select(company => company.Name).ToArrayAsync(ct);
+        }
+        var existing = existingNames.Select(name => name.Trim().ToUpperInvariant()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var results = new List<OemImportRowResult>(request.Rows.Length);
+        for (var index = 0; index < request.Rows.Length; index++)
+        {
+            var row = request.Rows[index];
+            var rowNumber = row.RowNumber is >= 2 and <= 500_001 ? row.RowNumber : index + 2;
+            var name = normalized[index].Name;
+            if (validationErrors[index] is { } validationError)
+            {
+                results.Add(new(rowNumber, row.Name ?? "", "FAILED", validationError));
+                continue;
+            }
+            if (duplicatesInFile.Contains(index))
+            {
+                results.Add(new(rowNumber, name, "SKIPPED", "文件内厂商名称重复，本重复组未导入"));
+                continue;
+            }
+            if (existing.Contains(name.Trim().ToUpperInvariant()))
+            {
+                results.Add(new(rowNumber, name, "SKIPPED", "厂商名称已存在，未覆盖现有资料"));
+                continue;
+            }
+            try
+            {
+                await CreateCompanyAsync(actor, normalized[index], ct);
+                results.Add(new(rowNumber, name, "CREATED", null));
+            }
+            catch (ApiException error) when (error.Status is 400 or 409)
+            {
+                var status = error.Status == 409 && error.Message == "厂商名称已存在" ? "SKIPPED" : "FAILED";
+                results.Add(new(rowNumber, name, status, error.Message));
+            }
+            catch (ApiException error) when (error.Status == 403)
+            {
+                results.Add(new(rowNumber, name, "FAILED", "权限已变化，批次已停止"));
+                for (var remaining = index + 1; remaining < request.Rows.Length; remaining++)
+                {
+                    var pending = request.Rows[remaining];
+                    results.Add(new(pending.RowNumber is >= 2 and <= 500_001 ? pending.RowNumber : remaining + 2,
+                        pending.Name ?? "", "FAILED", "未执行"));
+                }
+                break;
+            }
+        }
+
+        return new(
+            results.Count(row => row.Status == "CREATED"),
+            results.Count(row => row.Status == "SKIPPED"),
+            results.Count(row => row.Status == "FAILED"),
+            results);
     }
 
     public async Task<OemCompanyResponse> UpdateCompanyAsync(OemActor actor, ulong id, OemCompanyUpsert request, CancellationToken ct)
@@ -172,11 +301,139 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             throw ApiException.BadRequest($"该厂商仍有 {accountCount} 个关联账号，请先逐个删除账号；如需保留账号请停用厂商");
         if (await uow.Db.OemTransfers.AnyAsync(transfer => transfer.OemCompanyId == id, ct))
             throw ApiException.BadRequest("该厂商仍有传递单或历史记录，请停用厂商，不要删除");
+        var removedContacts = await uow.Db.OemCompanyContacts.Where(contact => contact.OemCompanyId == id).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_COMPANY_DELETE", "oem_company", id,
-            new { targetName = company.Name, changes = Array.Empty<AuditChange>() }, ct);
+            new { targetName = company.Name, removedContacts, changes = Array.Empty<AuditChange>() }, ct);
         await uow.Db.OemCompanies.Where(item => item.Id == id).ExecuteDeleteAsync(ct);
         await uow.CommitAsync(ct);
     }
+
+    public async Task<OemCompanyContactResponse[]> ListCompanyContactsAsync(OemActor actor, ulong companyId, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+        if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId, ct)) throw ApiException.NotFound();
+        return await uow.Db.OemCompanyContacts.AsNoTracking()
+            .Where(contact => contact.OemCompanyId == companyId)
+            .OrderBy(contact => contact.SortNo).ThenBy(contact => contact.Id)
+            .Select(contact => ContactJson(contact)).ToArrayAsync(ct);
+    }
+
+    public async Task<OemCompanyContactResponse> CreateCompanyContactAsync(
+        OemActor actor, ulong companyId, OemCompanyContactUpsert request, CancellationToken ct)
+    {
+        var input = ValidateCompanyContact(request);
+        await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
+        var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+        var company = await LockCompanyAsync(uow, companyId, ct);
+        if (company.Status != OemStatus.Active) throw ApiException.BadRequest("厂商已被禁用，不能新增联络人");
+        if (await uow.Db.OemCompanyContacts.LongCountAsync(contact => contact.OemCompanyId == companyId, ct) >= MaximumContactsPerCompany)
+            throw ApiException.BadRequest($"每个厂商最多维护 {MaximumContactsPerCompany} 位联络人");
+        if (await uow.Db.OemCompanyContacts.AnyAsync(contact => contact.OemCompanyId == companyId && contact.Name == input.Name, ct))
+            throw ApiException.Conflict("该厂商下已有同名联络人");
+        var contact = new OemCompanyContact
+        {
+            OemCompanyId = companyId, Name = input.Name, Phone = input.Phone, Email = input.Email,
+            SortNo = input.SortNo, Status = OemStatus.Active, CreatedBy = current.User.Id,
+            CreatedAt = uow.Now, UpdatedAt = uow.Now,
+        };
+        uow.Db.OemCompanyContacts.Add(contact);
+        await uow.Db.SaveChangesAsync(ct);
+        await audit.WriteAsync(uow, current, "OEM_COMPANY_CONTACT_CREATE", "oem_company_contact", contact.Id,
+            new { companyId, companyName = company.Name, contact.Name, contact.Phone, contact.Email }, ct);
+        await uow.CommitAsync(ct);
+        return ContactJson(contact);
+    }
+
+    public async Task<OemImportResponse> ImportCompanyContactsAsync(
+        OemActor actor, ulong companyId, OemCompanyContactImportRequest request, CancellationToken ct)
+    {
+        if (request.Rows is null || request.Rows.Length is < 1 or > MaximumContactsPerCompany || request.Rows.Any(row => row is null))
+            throw ApiException.BadRequest($"导入行数需为 1–{MaximumContactsPerCompany} 行");
+
+        string companyName;
+        HashSet<string> existing;
+        await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+        {
+            await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+            companyName = await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Id == companyId)
+                .Select(company => company.Name).SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+            existing = (await uow.Db.OemCompanyContacts.AsNoTracking().Where(contact => contact.OemCompanyId == companyId)
+                .Select(contact => contact.Name).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var repeated = request.Rows.Select(row => row.Name?.Trim() ?? "").Select((name, index) => (name, index))
+            .Where(item => item.name.Length > 0).GroupBy(item => item.name, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1).SelectMany(group => group.Select(item => item.index)).ToHashSet();
+        var results = new List<OemImportRowResult>(request.Rows.Length);
+        for (var index = 0; index < request.Rows.Length; index++)
+        {
+            var row = request.Rows[index];
+            var rowNumber = row.RowNumber is >= 2 and <= 101 ? row.RowNumber : index + 2;
+            var name = row.Name?.Trim() ?? "";
+            if (!string.Equals(row.CompanyName?.Trim(), companyName, StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(new(rowNumber, name, "FAILED", "厂商名称与当前联络人抽屉不匹配"));
+                continue;
+            }
+            if (repeated.Contains(index))
+            {
+                results.Add(new(rowNumber, name, "SKIPPED", "文件内联络人姓名重复，本重复组未导入"));
+                continue;
+            }
+            if (existing.Contains(name))
+            {
+                results.Add(new(rowNumber, name, "SKIPPED", "该厂商已有同名联络人，未覆盖现有资料"));
+                continue;
+            }
+            try
+            {
+                await CreateCompanyContactAsync(actor, companyId,
+                    new OemCompanyContactUpsert(name, row.Phone, row.Email, row.SortNo), ct);
+                existing.Add(name);
+                results.Add(new(rowNumber, name, "CREATED", null));
+            }
+            catch (ApiException error) when (error.Status is 400 or 409)
+            {
+                results.Add(new(rowNumber, name, error.Status == 409 ? "SKIPPED" : "FAILED", error.Message));
+            }
+            catch (ApiException error) when (error.Status == 403)
+            {
+                results.Add(new(rowNumber, name, "FAILED", "权限已变化，批次已停止"));
+                AddNotRun(results, request.Rows, index + 1);
+                break;
+            }
+        }
+        return Summarize(results);
+    }
+
+    private static void AddNotRun(List<OemImportRowResult> results, IReadOnlyList<OemCompanyContactImportRow> rows, int start)
+    {
+        for (var index = start; index < rows.Count; index++)
+        {
+            var row = rows[index];
+            results.Add(new(row.RowNumber is >= 2 and <= 101 ? row.RowNumber : index + 2, row.Name ?? "", "FAILED", "未执行"));
+        }
+    }
+
+    private static OemImportResponse Summarize(IReadOnlyList<OemImportRowResult> results) => new(
+        results.Count(row => row.Status == "CREATED"), results.Count(row => row.Status == "SKIPPED"),
+        results.Count(row => row.Status == "FAILED"), results);
+
+    private static (string Name, string? Phone, string? Email, int SortNo) ValidateCompanyContact(OemCompanyContactUpsert request)
+    {
+        var name = OemValidation.RequiredText(request.Name, "联络人姓名", 64);
+        var phone = OemValidation.OptionalText(request.Phone, "联系电话", 32);
+        var email = OemValidation.OptionalEmail(request.Email);
+        if (phone is null && email is null) throw ApiException.BadRequest("请至少填写联系电话或联系邮箱");
+        var sortNo = request.SortNo ?? 0;
+        if (sortNo is < 0 or > 9999) throw ApiException.BadRequest("排序需为 0–9999");
+        return (name, phone, email, sortNo);
+    }
+
+    private static OemCompanyContactResponse ContactJson(OemCompanyContact contact) => new(
+        contact.Id, contact.OemCompanyId, contact.Name, contact.Phone, contact.Email, contact.SortNo,
+        contact.Status, contact.CreatedAt, contact.UpdatedAt);
 
     public async Task<IReadOnlyList<OemAccountResponse>> ListAccountsAsync(OemActor actor, ulong companyId, CancellationToken ct)
     {
@@ -186,6 +443,73 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         var accounts = await uow.Db.OemAccounts.AsNoTracking().Where(account => account.OemCompanyId == companyId)
             .OrderBy(account => account.Id).ToArrayAsync(ct);
         return accounts.Select(account => AccountJson(account, uow.Now)).ToArray();
+    }
+
+    public async Task<OemImportResponse> ImportAccountsAsync(
+        OemActor actor, ulong companyId, OemAccountImportRequest request, CancellationToken ct)
+    {
+        if (request.Rows is null || request.Rows.Length is < 1 or > MaximumAccountImportRows || request.Rows.Any(row => row is null))
+            throw ApiException.BadRequest($"导入行数需为 1–{MaximumAccountImportRows} 行");
+
+        string companyName;
+        HashSet<string> existing;
+        await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+        {
+            await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
+            companyName = await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Id == companyId)
+                .Select(company => company.Name).SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+            existing = (await uow.Db.OemAccounts.AsNoTracking().Select(account => account.EmployeeNo).ToArrayAsync(ct))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var repeated = request.Rows.Select(row => row.EmployeeNo?.Trim() ?? "").Select((key, index) => (key, index))
+            .Where(item => item.key.Length > 0).GroupBy(item => item.key, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1).SelectMany(group => group.Select(item => item.index)).ToHashSet();
+        var results = new List<OemImportRowResult>(request.Rows.Length);
+        for (var index = 0; index < request.Rows.Length; index++)
+        {
+            var row = request.Rows[index];
+            var rowNumber = row.RowNumber is >= 2 and <= 101 ? row.RowNumber : index + 2;
+            var employeeNo = row.EmployeeNo?.Trim() ?? "";
+            if (!string.Equals(row.CompanyName?.Trim(), companyName, StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(new(rowNumber, employeeNo, "FAILED", "厂商名称与当前账号抽屉不匹配"));
+                continue;
+            }
+            if (repeated.Contains(index))
+            {
+                results.Add(new(rowNumber, employeeNo, "SKIPPED", "文件内账号重复，本重复组未导入"));
+                continue;
+            }
+            if (existing.Contains(employeeNo))
+            {
+                results.Add(new(rowNumber, employeeNo, "SKIPPED", "登录账号已存在，未覆盖现有资料"));
+                continue;
+            }
+            try
+            {
+                await CreateAccountAsync(actor, companyId,
+                    new OemAccountCreate(employeeNo, row.InitialPassword ?? ""), ct);
+                existing.Add(employeeNo);
+                results.Add(new(rowNumber, employeeNo, "CREATED", null));
+            }
+            catch (ApiException error) when (error.Status is 400 or 409)
+            {
+                results.Add(new(rowNumber, employeeNo, error.Status == 409 ? "SKIPPED" : "FAILED", error.Message));
+            }
+            catch (ApiException error) when (error.Status == 403)
+            {
+                results.Add(new(rowNumber, employeeNo, "FAILED", "权限已变化，批次已停止"));
+                for (var remaining = index + 1; remaining < request.Rows.Length; remaining++)
+                {
+                    var pending = request.Rows[remaining];
+                    results.Add(new(pending.RowNumber is >= 2 and <= 101 ? pending.RowNumber : remaining + 2,
+                        pending.EmployeeNo ?? "", "FAILED", "未执行"));
+                }
+                break;
+            }
+        }
+        return Summarize(results);
     }
 
     public async Task<OemAccountResponse> AccountDetailAsync(OemActor actor, ulong id, CancellationToken ct)
@@ -199,8 +523,6 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     public async Task<OemAccountResponse> CreateAccountAsync(OemActor actor, ulong companyId, OemAccountCreate request, CancellationToken ct)
     {
         var employeeNo = OemValidation.EmployeeNo(request.EmployeeNo);
-        var realName = OemValidation.RequiredText(request.RealName, "姓名", 64);
-        var email = OemValidation.Email(request.Email);
         PasswordService.Validate(request.Password);
         await PrecheckAccountManageAsync(actor, ct);
         var hash = await PasswordService.HashAsync(request.Password, ct);
@@ -211,7 +533,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         if (await uow.Db.OemAccounts.AnyAsync(account => account.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("登录账号已存在");
         var created = new OemAccount
         {
-            EmployeeNo = employeeNo, PasswordHash = hash, RealName = realName, Email = email, OemCompanyId = companyId,
+            EmployeeNo = employeeNo, PasswordHash = hash, RealName = employeeNo, Email = string.Empty, OemCompanyId = companyId,
             Status = OemStatus.Active, MustChangePassword = true, FailedLoginAttempts = 0, CreatedBy = current.User.Id,
             CreatedAt = uow.Now, UpdatedAt = uow.Now,
         };
@@ -219,30 +541,10 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await uow.Db.SaveChangesAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_ACCOUNT_CREATE", "oem_account", created.Id, new
         {
-            targetName = $"{created.RealName}（{created.EmployeeNo}）", companyId, companyName = company.Name, created.Email,
+            targetName = created.EmployeeNo, companyId, companyName = company.Name,
         }, ct);
         await uow.CommitAsync(ct);
         return AccountJson(created, uow.Now);
-    }
-
-    public async Task<OemAccountResponse> UpdateAccountAsync(OemActor actor, ulong id, OemAccountUpdate request, CancellationToken ct)
-    {
-        var realName = OemValidation.RequiredText(request.RealName, "姓名", 64);
-        var email = OemValidation.Email(request.Email);
-        await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
-        var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
-        var account = await LockAccountAsync(uow, id, ct);
-        var changes = AuditChange.OnlyChanged(
-            new AuditChange("realName", "姓名", account.RealName, realName),
-            new AuditChange("email", "邮箱", account.Email, email));
-        account.RealName = realName;
-        account.Email = email;
-        account.UpdatedAt = uow.Now;
-        await uow.Db.SaveChangesAsync(ct);
-        await audit.WriteAsync(uow, current, "OEM_ACCOUNT_UPDATE", "oem_account", id,
-            new { targetName = $"{account.RealName}（{account.EmployeeNo}）", changes }, ct);
-        await uow.CommitAsync(ct);
-        return AccountJson(account, uow.Now);
     }
 
     public async Task<OemAccountResponse> SetAccountStatusAsync(OemActor actor, ulong id, string status, CancellationToken ct)
@@ -264,7 +566,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             var revoked = target == OemStatus.Disabled ? await OemAuthService.RevokeAllAsync(uow.Db, id, RefreshRevokeReasons.Admin, ct) : 0;
             await audit.WriteAsync(uow, current, "OEM_ACCOUNT_STATUS", "oem_account", id, new
             {
-                targetName = $"{account.RealName}（{account.EmployeeNo}）", revokedSessions = revoked,
+                targetName = account.EmployeeNo, revokedSessions = revoked,
                 changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", previous, target)),
             }, ct);
         }
@@ -288,7 +590,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await uow.Db.SaveChangesAsync(ct);
         var revoked = await OemAuthService.RevokeAllAsync(uow.Db, id, RefreshRevokeReasons.Admin, ct);
         await audit.WriteAsync(uow, current, "OEM_ACCOUNT_RESET_PASSWORD", "oem_account", id,
-            new { targetName = $"{account.RealName}（{account.EmployeeNo}）", revokedSessions = revoked }, ct);
+            new { targetName = account.EmployeeNo, revokedSessions = revoked }, ct);
         await uow.CommitAsync(ct);
     }
 
@@ -306,8 +608,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await audit.WriteAsync(uow, current, "OEM_ACCOUNT_DELETE", "oem_account", id, new
         {
             account.EmployeeNo,
-            account.RealName,
-            targetName = $"{account.RealName}（{account.EmployeeNo}）",
+            targetName = account.EmployeeNo,
             revokedSessions,
             changes = Array.Empty<AuditChange>(),
         }, ct);
@@ -388,7 +689,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
 
     /// <param name="now">The unit of work's database clock, which is also what login lockout compares against.</param>
     private static OemAccountResponse AccountJson(OemAccount account, DateTime now) => new(
-        account.Id, account.EmployeeNo, account.RealName, account.Email, account.OemCompanyId, account.Status,
+        account.Id, account.EmployeeNo, account.OemCompanyId, account.Status,
         account.MustChangePassword, account.LockedUntil.HasValue && account.LockedUntil > now,
         account.LastLoginAt, account.CreatedAt, account.UpdatedAt);
 }

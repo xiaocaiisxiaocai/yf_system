@@ -177,7 +177,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
 
     public async Task<SupplierAccountResponse> CreateAccountAsync(CurrentUser actor, ulong supplierId, SupplierAccountCreate request, CancellationToken ct)
     {
-        AccessService.RequireInternal(actor); AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.Email(request.Email); PasswordService.Validate(request.Password);
+        AccessService.RequireInternal(actor); AdminValidation.EmployeeNo(request.EmployeeNo); PasswordService.Validate(request.Password);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await ManagementAuthorization.PrecheckAsync(context, actor, "supplier:account", ct);
         var passwordHash = await PasswordService.HashAsync(request.Password, ct);
@@ -191,8 +191,8 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var role = await EnsureSupplierRoleAssignableAsync(context, actor, roleId, ct);
         var user = new User
         {
-            EmployeeNo = employeeNo, PasswordHash = passwordHash, RealName = request.RealName.Trim(),
-            Email = request.Email.Trim(), UserType = UserTypes.Supplier, SupplierId = supplierId, Status = AccountStatuses.Active,
+            EmployeeNo = employeeNo, PasswordHash = passwordHash, RealName = employeeNo,
+            Email = string.Empty, UserType = UserTypes.Supplier, SupplierId = supplierId, Status = AccountStatuses.Active,
             MustChangePassword = true, FailedLoginAttempts = 0, CreatedBy = actor.Id
         };
         context.Users.Add(user); await context.SaveChangesAsync(ct);
@@ -201,33 +201,12 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_CREATE", "user", user.Id, new
         {
             employeeNo = created.EmployeeNo, supplierId, roleId = role.Id, roleName = role.Name, supplierName = supplier.Name,
-            created.RealName, created.Email, targetName = AccountAuditName(created),
+            targetName = AccountAuditName(created),
             changes = AuditChange.OnlyChanged(new AuditChange("employeeNo", "账号", null, created.EmployeeNo),
-                new AuditChange("realName", "姓名", null, created.RealName), new AuditChange("email", "邮箱", null, created.Email),
                 new AuditChange("supplierId", "所属供应商", null, new { supplier.Id, supplier.Name }),
                 new AuditChange("roleId", "角色", null, new { role.Id, role.Name }), new AuditChange("status", "状态", null, created.Status))
         }, null, ct);
         var result = AccountJson(created); await transaction.CommitAsync(ct); return result;
-    }
-
-    public async Task<SupplierAccountResponse> UpdateAccountAsync(CurrentUser actor, ulong id, SupplierAccountUpdate request, CancellationToken ct)
-    {
-        AccessService.RequireInternal(actor);
-        if (request.RealName is not null) ValidateName(request.RealName); if (request.Email is not null) AdminValidation.Email(request.Email);
-        await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await GateAsync(context, actor, "supplier:account", ct);
-        var user = await FindAccountAsync(context, id, ct) ?? throw ApiException.NotFound();
-        await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
-        var realName = request.RealName?.Trim() ?? user.RealName;
-        var email = request.Email?.Trim() ?? user.Email;
-        await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s
-            .SetProperty(x => x.RealName, realName).SetProperty(x => x.Email, email), ct);
-        var updated = await FindAccountAsync(context, id, ct) ?? throw ApiException.NotFound();
-        var changes = AuditChange.OnlyChanged(new AuditChange("realName", "姓名", user.RealName, updated.RealName), new AuditChange("email", "邮箱", user.Email, updated.Email));
-        await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_UPDATE", "user", id,
-            new { user.EmployeeNo, changedFields = changes.Select(x => x.Field).ToArray(), targetName = AccountAuditName(updated), changes }, null, ct);
-        var result = AccountJson(updated); await transaction.CommitAsync(ct); return result;
     }
 
     public async Task<SupplierAccountResponse> SetAccountStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
@@ -293,7 +272,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await EnsureSupplierAccountWithinCeilingAsync(context, actor, user, ct);
         await UserService.EnsureNoHistoryAsync(context, id, ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, "SUPPLIER_ACCOUNT_DELETE", "user", id,
-            new { user.EmployeeNo, user.RealName, targetName = AccountAuditName(user), changes = Array.Empty<AuditChange>() }, null, ct);
+            new { user.EmployeeNo, targetName = AccountAuditName(user), changes = Array.Empty<AuditChange>() }, null, ct);
         await UserService.RemoveAsync(context, id, ct); await transaction.CommitAsync(ct);
     }
 
@@ -383,16 +362,12 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     }
 
     private static SupplierResponse Json(Supplier supplier) => new(supplier.Id, supplier.Name, supplier.Remark, supplier.Status, supplier.CreatedAt);
-    private static SupplierAccountResponse AccountJson(AdminUserRow user) => new(user.Id, user.EmployeeNo, user.RealName, user.Email, user.SupplierId, user.Status, user.LastLoginAt, user.CreatedAt, user.RoleId, user.RoleName);
-    private static string AccountAuditName(AdminUserRow user) => $"{user.RealName}（{user.EmployeeNo}）";
+    private static SupplierAccountResponse AccountJson(AdminUserRow user) => new(user.Id, user.EmployeeNo, user.SupplierId, user.Status, user.LastLoginAt, user.CreatedAt, user.RoleId, user.RoleName);
+    private static string AccountAuditName(AdminUserRow user) => user.EmployeeNo;
     private static void Validate(SupplierUpsert request)
     {
         if (string.IsNullOrWhiteSpace(request.Name)) throw ApiException.BadRequest("供应商名称不能为空");
         if (request.Name.Trim().EnumerateRunes().Count() > 64) throw ApiException.BadRequest("供应商名称过长");
         if (request.Remark?.EnumerateRunes().Count() > 500) throw ApiException.BadRequest("备注过长");
-    }
-    private static void ValidateName(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Trim().EnumerateRunes().Count() > 32) throw ApiException.BadRequest("姓名需为 1~32 个字符");
     }
 }

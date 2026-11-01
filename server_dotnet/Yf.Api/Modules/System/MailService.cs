@@ -160,9 +160,9 @@ public sealed class MailService
             .ToListAsync(ct))
             .ToDictionary(item => item.Status, item => checked((ulong)item.Count));
         var missingCount = checked((ulong)await context.Users.LongCountAsync(
-            user => user.Status == AccountStatuses.Active && user.Email.Trim() == string.Empty, ct));
+            user => user.UserType == UserTypes.Internal && user.Status == AccountStatuses.Active && user.Email.Trim() == string.Empty, ct));
         var missing = await context.Users
-            .Where(user => user.Status == AccountStatuses.Active && user.Email.Trim() == string.Empty)
+            .Where(user => user.UserType == UserTypes.Internal && user.Status == AccountStatuses.Active && user.Email.Trim() == string.Empty)
             .OrderBy(user => user.EmployeeNo)
             .Take(20)
             .Select(user => new MissingEmailAccount(user.Id, user.EmployeeNo, user.RealName, user.UserType, user.Status))
@@ -425,8 +425,8 @@ public sealed class MailService
                 var recipientAddressValid = mail.RecipientUserId is null
                     ? MailboxAddress.TryParse(mail.RecipientEmail, out _)
                     : currentRecipient is not null
-                      && (currentRecipient.ContactAddress
-                          ? MailboxAddress.TryParse(mail.RecipientEmail, out _)
+                      && (currentRecipient.UserType == UserTypes.Supplier
+                          ? currentRecipient.ContactAddress && MailboxAddress.TryParse(mail.RecipientEmail, out _)
                           : !string.IsNullOrWhiteSpace(currentRecipient.Email)
                             && string.Equals(currentRecipient.Email.Trim(), mail.RecipientEmail.Trim(), StringComparison.OrdinalIgnoreCase)
                             && MailboxAddress.TryParse(currentRecipient.Email, out _));

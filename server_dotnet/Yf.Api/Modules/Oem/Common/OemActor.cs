@@ -26,11 +26,11 @@ public sealed record InternalOemActor(CurrentUser User, string SessionId)
     public override AuditRealmActor? AuditRealmActor => null;
 }
 
-public sealed record OemAccountActor(ulong AccountId, string AccountEmployeeNo, string RealName, ulong CompanyId, string SessionId)
+public sealed record OemAccountActor(ulong AccountId, string AccountEmployeeNo, ulong CompanyId, string SessionId)
     : OemActor(OemRealms.Oem, AccountId, AccountEmployeeNo, SessionId)
 {
     public override ulong? AuditUserId => null;
-    public override AuditRealmActor? AuditRealmActor => new(OemRealms.Oem, AccountId, AccountEmployeeNo, RealName);
+    public override AuditRealmActor? AuditRealmActor => new(OemRealms.Oem, AccountId, AccountEmployeeNo, AccountEmployeeNo);
 }
 
 public static class OemActorAccessor

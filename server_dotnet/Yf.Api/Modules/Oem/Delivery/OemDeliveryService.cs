@@ -404,8 +404,8 @@ public sealed class OemDeliveryService(
         if (session.ActorRealm != OemRealms.Oem)
             return new InternalOemActor(new CurrentUser(session.ActorId, string.Empty, UserTypes.Internal, null, session.LoginSessionId), session.LoginSessionId);
         var account = await uow.Db.OemAccounts.AsNoTracking().Where(item => item.Id == session.ActorId)
-            .Select(item => new { item.EmployeeNo, item.RealName, item.OemCompanyId }).SingleAsync(ct);
-        return new OemAccountActor(session.ActorId, account.EmployeeNo, account.RealName, account.OemCompanyId, session.LoginSessionId);
+            .Select(item => new { item.EmployeeNo, item.OemCompanyId }).SingleAsync(ct);
+        return new OemAccountActor(session.ActorId, account.EmployeeNo, account.OemCompanyId, session.LoginSessionId);
     }
 
     /// <summary>File, transfer and capability for a content read; throws unless the caller may read a ready, unexpired file.</summary>
@@ -433,7 +433,7 @@ public sealed class OemDeliveryService(
             if (!await Identity.OemAuthService.HasActiveSessionAsync(uow.Db, grant.ActorId, grant.LoginSessionId, uow.Now, ct))
                 throw ApiException.Unauthorized("登录状态已失效，请重新登录");
             var account = await uow.Db.OemAccounts.AsNoTracking().SingleOrDefaultAsync(item => item.Id == grant.ActorId, ct) ?? throw ApiException.Unauthorized();
-            var actor = new OemAccountActor(account.Id, account.EmployeeNo, account.RealName, account.OemCompanyId, grant.LoginSessionId);
+            var actor = new OemAccountActor(account.Id, account.EmployeeNo, account.OemCompanyId, grant.LoginSessionId);
             return await OemAuthorizer.RecheckAsync(uow, actor, ct);
         }
         if (grant.Realm != OemRealms.Internal) throw ApiException.Unauthorized();

@@ -248,6 +248,8 @@ public sealed class IdentityService(
 
     public async Task<ProfileResponse> UpdateProfileAsync(CurrentUser current, UpdateProfileRequest request, CancellationToken ct)
     {
+        if (current.UserType != UserTypes.Internal)
+            throw ApiException.Forbidden("供应商账号不单独维护姓名和邮箱，请由供应商联络人接收邮件通知");
         ValidateEmail(request.Email);
         var email = request.Email.Trim();
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -354,7 +356,10 @@ public sealed class IdentityService(
     }
 
     private async Task<UserBrief> BriefAsync(YfDbContext context, User user, CancellationToken ct) =>
-        new(user.Id, user.EmployeeNo, user.RealName, user.Email, user.UserType, user.SupplierId,
+        new(user.Id, user.EmployeeNo,
+            user.UserType == UserTypes.Supplier ? user.EmployeeNo : user.RealName,
+            user.UserType == UserTypes.Supplier ? string.Empty : user.Email,
+            user.UserType, user.SupplierId,
             user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal
                 && await AccessService.IsSystemAdminAsync(context.Database.Connection(), context.Database.Transaction(), user.Id, ct));
 

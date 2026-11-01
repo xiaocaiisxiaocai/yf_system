@@ -47,7 +47,7 @@ public sealed partial class OemIdentityExtension(IDbContextFactory<YfDbContext> 
             .Where(account => account.Id == claims.UserId)
             .Join(db.OemCompanies, account => account.OemCompanyId, company => company.Id, (account, company) => new
             {
-                account.Id, account.EmployeeNo, account.RealName, account.Status, account.MustChangePassword,
+                account.Id, account.EmployeeNo, account.Status, account.MustChangePassword,
                 account.OemCompanyId, CompanyStatus = company.Status,
             })
             .SingleOrDefaultAsync(ct) ?? throw ApiException.Unauthorized("账号不存在");
@@ -55,7 +55,7 @@ public sealed partial class OemIdentityExtension(IDbContextFactory<YfDbContext> 
         if (row.CompanyStatus != OemStatus.Active) throw ApiException.Unauthorized("所属厂商已被禁用");
         if (row.MustChangePassword && !PasswordPendingPaths.Contains(NormalizedPath(context.Request)))
             throw new ApiException(403, 40303, "请先修改初始密码");
-        context.Items[typeof(OemAccountActor)] = new OemAccountActor(row.Id, row.EmployeeNo, row.RealName, row.OemCompanyId, claims.SessionId);
+        context.Items[typeof(OemAccountActor)] = new OemAccountActor(row.Id, row.EmployeeNo, row.OemCompanyId, claims.SessionId);
         context.Items[typeof(AccessClaims)] = claims;
     }
 

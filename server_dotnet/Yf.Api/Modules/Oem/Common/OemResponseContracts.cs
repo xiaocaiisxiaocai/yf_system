@@ -20,7 +20,8 @@ public sealed record OemCompanyListItemResponse(
     DateTime CreatedAt,
     DateTime UpdatedAt,
     long AccountCount,
-    long ActiveAccountCount);
+    long ActiveAccountCount,
+    long ContactCount);
 
 public sealed record OemCompanyResponse(
     ulong Id,
@@ -36,13 +37,22 @@ public sealed record OemCompanyResponse(
 public sealed record OemAccountResponse(
     ulong Id,
     string EmployeeNo,
-    string RealName,
-    string Email,
     ulong CompanyId,
     string Status,
     bool MustChangePassword,
     bool Locked,
     DateTime? LastLoginAt,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+public sealed record OemCompanyContactResponse(
+    ulong Id,
+    ulong CompanyId,
+    string Name,
+    string? Phone,
+    string? Email,
+    int SortNo,
+    string Status,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 

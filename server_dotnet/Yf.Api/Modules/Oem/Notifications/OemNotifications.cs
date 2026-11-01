@@ -40,7 +40,7 @@ public static class OemMailEvents
         settings.Bool(OemSettingCatalog.NotifyEnabled) && (SwitchKey(eventType) is not { } key || settings.Bool(key));
 }
 
-public sealed record MailRecipient(string Realm, ulong Id, string Email, string Name);
+public sealed record MailRecipient(string Realm, ulong Id, string Email, string Name, ulong? ContactId = null);
 
 /// <summary>Queries for people addressed by OEM notifications.</summary>
 internal static class OemRecipients
@@ -58,29 +58,66 @@ internal static class OemRecipients
                     && db.Permissions.Any(permission => permission.Id == rolePermission.PermissionId && permission.Code == required))));
         }
         return await query.OrderBy(user => user.Id)
-            .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName)).ToArrayAsync(ct);
+            .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName, null)).ToArrayAsync(ct);
     }
 
-    public static async Task<MailRecipient[]> VendorAccountsAsync(YfDbContext db, ulong companyId, CancellationToken ct) =>
-        await db.OemAccounts.AsNoTracking()
-            .Where(account => account.OemCompanyId == companyId && account.Status == OemStatus.Active
-                && db.OemCompanies.Any(company => company.Id == companyId && company.Status == OemStatus.Active))
-            .OrderBy(account => account.Id)
-            .Select(account => new MailRecipient(OemRealms.Oem, account.Id, account.Email, account.RealName)).ToArrayAsync(ct);
+    public static async Task<MailRecipient[]> VendorContactsAsync(
+        YfDbContext db, ulong companyId, CancellationToken ct, ulong? preferredAnchorAccountId = null)
+    {
+        var company = await db.OemCompanies.AsNoTracking()
+            .Where(item => item.Id == companyId && item.Status == OemStatus.Active)
+            .Select(item => new { item.Name, item.ContactName, item.ContactEmail })
+            .SingleOrDefaultAsync(ct);
+        if (company is null) return [];
 
-    public static async Task<MailRecipient?> SenderAsync(YfDbContext db, OemTransfer transfer, CancellationToken ct)
+        var anchorAccountId = preferredAnchorAccountId is ulong preferred
+            ? await db.OemAccounts.AsNoTracking().Where(account => account.Id == preferred
+                && account.OemCompanyId == companyId && account.Status == OemStatus.Active)
+                .Select(account => (ulong?)account.Id).SingleOrDefaultAsync(ct)
+            : null;
+        anchorAccountId ??= await db.OemAccounts.AsNoTracking().Where(account => account.OemCompanyId == companyId
+                && account.Status == OemStatus.Active).OrderBy(account => account.Id)
+            .Select(account => (ulong?)account.Id).FirstOrDefaultAsync(ct);
+        if (anchorAccountId is not ulong anchor) return [];
+
+        var result = new List<MailRecipient>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(company.ContactEmail) && seen.Add(company.ContactEmail.Trim()))
+            result.Add(new(OemRealms.Oem, anchor, company.ContactEmail.Trim(), company.ContactName?.Trim() is { Length: > 0 } name ? name : company.Name, 0));
+
+        var contacts = await db.OemCompanyContacts.AsNoTracking()
+            .Where(contact => contact.OemCompanyId == companyId && contact.Status == OemStatus.Active && contact.Email != null)
+            .OrderBy(contact => contact.SortNo).ThenBy(contact => contact.Id)
+            .Select(contact => new { contact.Id, contact.Name, contact.Email }).ToArrayAsync(ct);
+        foreach (var contact in contacts)
+        {
+            var email = contact.Email?.Trim();
+            if (!string.IsNullOrWhiteSpace(email) && seen.Add(email))
+                result.Add(new(OemRealms.Oem, anchor, email, contact.Name, contact.Id));
+        }
+        return result.ToArray();
+    }
+
+    public static async Task<MailRecipient[]> SenderRecipientsAsync(YfDbContext db, OemTransfer transfer, CancellationToken ct)
     {
         if (transfer.InternalSenderUserId is ulong userId)
-            return await db.Users.AsNoTracking().Where(user => user.Id == userId && user.Status == OemStatus.Active)
-                .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName)).SingleOrDefaultAsync(ct);
+        {
+            var recipient = await db.Users.AsNoTracking().Where(user => user.Id == userId && user.Status == OemStatus.Active)
+                .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName, null)).SingleOrDefaultAsync(ct);
+            return recipient is null ? [] : [recipient];
+        }
         if (transfer.OemSenderAccountId is ulong accountId)
-            return (await VendorAccountsAsync(db, transfer.OemCompanyId, ct)).SingleOrDefault(account => account.Id == accountId);
-        return null;
+            return await VendorContactsAsync(db, transfer.OemCompanyId, ct, accountId);
+        return [];
     }
+
+    public static string DedupeRecipient(MailRecipient recipient) => recipient.ContactId is ulong contactId
+        ? $"{recipient.Realm}:{recipient.Id}:contact:{contactId}"
+        : $"{recipient.Realm}:{recipient.Id}";
 
     public static async Task<MailRecipient?> InternalUserAsync(YfDbContext db, ulong userId, CancellationToken ct) =>
         await db.Users.AsNoTracking().Where(user => user.Id == userId && user.Status == OemStatus.Active && user.UserType == "INTERNAL")
-            .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName)).SingleOrDefaultAsync(ct);
+            .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName, null)).SingleOrDefaultAsync(ct);
 }
 
 /// <summary>
@@ -114,18 +151,18 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
                 break;
             case TransferReleasedEvent:
                 var recipients = transfer.Direction == TransferDirections.InternalToOem
-                    ? await OemRecipients.VendorAccountsAsync(uow.Db, transfer.OemCompanyId, ct)
+                    ? await OemRecipients.VendorContactsAsync(uow.Db, transfer.OemCompanyId, ct)
                     : await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
                 foreach (var recipient in recipients)
-                    await EnqueueAsync(uow, settings, OemMailEvents.TransferReleased, $"oem:released:{transfer.Id}:{recipient.Realm}:{recipient.Id}",
+                    await EnqueueAsync(uow, settings, OemMailEvents.TransferReleased, $"oem:released:{transfer.Id}:{OemRecipients.DedupeRecipient(recipient)}",
                         recipient, facts, $"新文件已送达：{transfer.Title}", "有新的文件传递给您，请登录平台查看和下载。", null, ct);
-                if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } releasedSender)
-                    await EnqueueAsync(uow, settings, OemMailEvents.SenderReleased, $"oem:sender-released:{transfer.Id}", releasedSender, facts,
+                foreach (var releasedSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
+                    await EnqueueAsync(uow, settings, OemMailEvents.SenderReleased, $"oem:sender-released:{transfer.Id}:{OemRecipients.DedupeRecipient(releasedSender)}", releasedSender, facts,
                         $"已发布：{transfer.Title}", "您发送的文件传递单已通过检查并发布给接收方。", null, ct);
                 break;
             case TransferClosedEvent closed:
-                if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } closedSender)
-                    await EnqueueAsync(uow, settings, OemMailEvents.TransferClosed, $"oem:closed:{transfer.Id}", closedSender, facts,
+                foreach (var closedSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
+                    await EnqueueAsync(uow, settings, OemMailEvents.TransferClosed, $"oem:closed:{transfer.Id}:{OemRecipients.DedupeRecipient(closedSender)}", closedSender, facts,
                         $"{TransferStateMachine.Label(closed.Lifecycle)}：{transfer.Title}", closed.Lifecycle switch
                         {
                             TransferLifecycle.Rejected => "您发送的文件传递单已被审批驳回，如需重新发送请创建新的传递单。",
@@ -136,32 +173,32 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
             case ApprovalBlockedEvent blocked:
                 var stamp = uow.Now.Ticks.ToString(CultureInfo.InvariantCulture);
                 var audience = new List<MailRecipient>();
-                if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } blockedSender) audience.Add(blockedSender);
+                audience.AddRange(await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct));
                 audience.AddRange(await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.ApprovalRecover));
-                foreach (var person in audience.DistinctBy(item => (item.Realm, item.Id)))
-                    await EnqueueAsync(uow, settings, OemMailEvents.ApprovalBlocked, $"oem:blocked:{transfer.Id}:{stamp}:{person.Realm}:{person.Id}", person, facts,
+                foreach (var person in audience.DistinctBy(item => (item.Realm, item.Id, item.ContactId)))
+                    await EnqueueAsync(uow, settings, OemMailEvents.ApprovalBlocked, $"oem:blocked:{transfer.Id}:{stamp}:{OemRecipients.DedupeRecipient(person)}", person, facts,
                         $"审批异常：{transfer.Title}", "文件传递单的审批因审批人不可用而暂停，需要具有异常处置权限的管理员改派或终止。", blocked.Reason, ct);
                 break;
             case DraftFileValidationFailedEvent failed:
-                if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } draftSender)
-                    await EnqueueAsync(uow, settings, OemMailEvents.ValidationFailed, $"oem:validationfail:{failed.FileId}", draftSender, facts,
+                foreach (var draftSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
+                    await EnqueueAsync(uow, settings, OemMailEvents.ValidationFailed, $"oem:validationfail:{failed.FileId}:{OemRecipients.DedupeRecipient(draftSender)}", draftSender, facts,
                         $"附件未通过文件校验：{transfer.Title}", "草稿中有附件未通过文件校验，请移除该附件后再发送。", null, ct);
                 break;
             case FileMissingEvent missing:
-                if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } missingSender)
-                    await EnqueueAsync(uow, settings, OemMailEvents.FileMissing, $"oem:missing:{missing.FileId}", missingSender, facts,
+                foreach (var missingSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
+                    await EnqueueAsync(uow, settings, OemMailEvents.FileMissing, $"oem:missing:{missing.FileId}:{OemRecipients.DedupeRecipient(missingSender)}", missingSender, facts,
                         $"附件不可用：{transfer.Title}", missing.PayloadStatus == PayloadStatuses.MissingUnverified
                             ? "系统恢复后发现传递单中有附件不可用（原因待核实），如需继续传递请重新创建传递单。"
                             : "传递单中有附件在存储中丢失，已禁止下载，如需继续传递请重新创建传递单。", null, ct);
                 break;
             case FirstReceiptEvent receipt:
-                if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } receiptSender)
-                    await EnqueueAsync(uow, settings, OemMailEvents.FirstReceipt, $"oem:receipt:{receipt.FileId}", receiptSender, facts,
+                foreach (var receiptSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
+                    await EnqueueAsync(uow, settings, OemMailEvents.FirstReceipt, $"oem:receipt:{receipt.FileId}:{OemRecipients.DedupeRecipient(receiptSender)}", receiptSender, facts,
                         $"文件已被接收：{transfer.Title}", "接收方已完整下载传递单中的附件。", null, ct);
                 break;
             case FilePurgedEvent purged:
-                if (await OemRecipients.SenderAsync(uow.Db, transfer, ct) is { } purgedSender)
-                    await EnqueueAsync(uow, settings, OemMailEvents.FilePurged, $"oem:purged:{purged.FileId}", purgedSender, facts,
+                foreach (var purgedSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
+                    await EnqueueAsync(uow, settings, OemMailEvents.FilePurged, $"oem:purged:{purged.FileId}:{OemRecipients.DedupeRecipient(purgedSender)}", purgedSender, facts,
                         $"附件已按策略删除：{transfer.Title}", "传递单中的附件已按删除策略从服务器删除，相关记录仍可在平台查看。", null, ct);
                 break;
             case FilePurgeFailingEvent failing:
@@ -179,7 +216,7 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
         var company = await db.OemCompanies.AsNoTracking().Where(item => item.Id == transfer.OemCompanyId).Select(item => item.Name).SingleAsync(ct);
         var sender = transfer.InternalSenderUserId is ulong userId
             ? await db.Users.AsNoTracking().Where(user => user.Id == userId).Select(user => user.RealName).SingleOrDefaultAsync(ct)
-            : await db.OemAccounts.AsNoTracking().Where(account => account.Id == transfer.OemSenderAccountId).Select(account => account.RealName).SingleOrDefaultAsync(ct);
+            : await db.OemAccounts.AsNoTracking().Where(account => account.Id == transfer.OemSenderAccountId).Select(account => account.EmployeeNo).SingleOrDefaultAsync(ct);
         var sizes = await OemTransferFiles.Members(db, transfer.Id).Select(file => file.SizeBytes).ToArrayAsync(ct);
         return new TransferFactsForMail(transfer, company, sender ?? "-", sizes.Length, sizes.Aggregate(0UL, (sum, size) => sum + size));
     }
@@ -251,12 +288,17 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
 
         if (mail.RecipientRealm == OemRealms.Oem)
         {
-            var recipient = await db.OemAccounts.AsNoTracking()
+            var companyId = await db.OemAccounts.AsNoTracking()
                 .Where(account => account.Id == recipientId && account.Status == OemStatus.Active
                     && db.OemCompanies.Any(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active)
                     && account.OemCompanyId == transfer.OemCompanyId)
-                .Select(account => account.Email).SingleOrDefaultAsync(ct);
-            if (!EmailMatches(mail.RecipientEmail, recipient)) return Stale();
+                .Select(account => (ulong?)account.OemCompanyId).SingleOrDefaultAsync(ct);
+            if (companyId is null || !System.Net.Mail.MailAddress.TryCreate(mail.RecipientEmail.Trim(), out _)) return Stale();
+            var emailIsCurrentContact = await db.OemCompanies.AnyAsync(company => company.Id == companyId
+                    && company.Status == OemStatus.Active && company.ContactEmail == mail.RecipientEmail.Trim(), ct)
+                || await db.OemCompanyContacts.AnyAsync(contact => contact.OemCompanyId == companyId
+                    && contact.Status == OemStatus.Active && contact.Email == mail.RecipientEmail.Trim(), ct);
+            if (!emailIsCurrentContact) return Stale();
             if (mail.EventType == OemMailEvents.TransferReleased
                 && (transfer.Direction != TransferDirections.InternalToOem || transfer.LifecycleStatus != TransferLifecycle.Released))
                 return Stale();

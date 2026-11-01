@@ -228,7 +228,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             .ToDictionaryAsync(user => user.Id, user => new { user.EmployeeNo, user.RealName }, ct);
         var accountIds = transfers.Where(transfer => transfer.OemSenderAccountId.HasValue).Select(transfer => transfer.OemSenderAccountId!.Value).Distinct().ToArray();
         var accounts = await db.OemAccounts.AsNoTracking().Where(account => Enumerable.Contains(accountIds, account.Id))
-            .ToDictionaryAsync(account => account.Id, account => new { account.EmployeeNo, account.RealName }, ct);
+            .ToDictionaryAsync(account => account.Id, account => account.EmployeeNo, ct);
         var files = await db.OemTransferFiles.AsNoTracking()
             .Where(file => Enumerable.Contains(ids, file.TransferId) && (file.PurgeReason == null || file.PurgeReason != PurgeReasons.FileRemoved))
             .Select(file => new { file.TransferId, file.SizeBytes, file.ScanStatus, file.PayloadStatus }).ToArrayAsync(ct);
@@ -250,7 +250,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             var sender = transfer.InternalSenderUserId is ulong userId && users.TryGetValue(userId, out var user)
                 ? new OemPersonRefResponse(OemRealms.Internal, userId, forVendor ? string.Empty : user.EmployeeNo, user.RealName)
                 : transfer.OemSenderAccountId is ulong accountId && accounts.TryGetValue(accountId, out var account)
-                    ? new OemPersonRefResponse(OemRealms.Oem, accountId, account.EmployeeNo, account.RealName)
+                    ? new OemPersonRefResponse(OemRealms.Oem, accountId, account, account)
                     : new OemPersonRefResponse("unknown", 0UL, "", "");
             result[transfer.Id] = new OemTransferSummaryResponse(
                 transfer.Id, transfer.Direction, transfer.OemCompanyId, companies.GetValueOrDefault(transfer.OemCompanyId),

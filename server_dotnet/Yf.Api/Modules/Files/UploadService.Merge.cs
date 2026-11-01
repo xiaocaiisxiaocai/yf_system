@@ -437,10 +437,11 @@ public sealed partial class UploadService
         var contacts = uploader.UserType == UserTypes.Supplier
             ? []
             : await ProjectNotificationService.ActiveContactEmailsAsync(context, project.SupplierId, ct);
-        if (contacts.Length > 0)
+        var supplierRecipients = recipients.Where(recipient => recipient.UserType == UserTypes.Supplier).ToArray();
+        if (supplierRecipients.Length > 0)
         {
-            // The supplier has contacts: every active contact receives the summary instead of the account address.
-            var anchors = recipients.Where(recipient => policy.Allows("FILE_UPLOADED", recipient.UserType))
+            // Supplier accounts are shared credentials; notify only the supplier's active contacts.
+            var anchors = supplierRecipients.Where(recipient => policy.Allows("FILE_UPLOADED", recipient.UserType))
                 .Select(recipient => recipient.Id);
             foreach (var target in ProjectNotificationService.ContactTargets(anchors, contacts))
                 await EnqueueFileSummaryForRecipientAsync(

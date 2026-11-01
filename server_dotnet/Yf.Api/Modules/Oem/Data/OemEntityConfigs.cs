@@ -85,6 +85,27 @@ public sealed class OemAccountConfig : IEntityTypeConfiguration<OemAccount>
     }
 }
 
+public sealed class OemCompanyContactConfig : IEntityTypeConfiguration<OemCompanyContact>
+{
+    public void Configure(EntityTypeBuilder<OemCompanyContact> b)
+    {
+        b.Table("oem_company_contacts").HasKey(x => x.Id);
+        b.Property(x => x.OemCompanyId).HasColumnName("oem_company_id");
+        b.Property(x => x.Name).Text("name", 64);
+        b.Property(x => x.Phone).OptionalText("phone", 32);
+        b.Property(x => x.Email).OptionalText("email", 128);
+        b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
+        b.Property(x => x.Status).Text("status", 16).HasDefaultValue("ACTIVE");
+        b.Property(x => x.CreatedBy).HasColumnName("created_by");
+        b.Property(x => x.CreatedAt).Clock("created_at");
+        b.Property(x => x.UpdatedAt).Clock("updated_at");
+        b.HasIndex(x => new { x.OemCompanyId, x.Name }).IsUnique().HasDatabaseName("uk_oem_company_contacts_company_name");
+        b.HasIndex(x => new { x.OemCompanyId, x.Status, x.SortNo, x.Id }).HasDatabaseName("idx_oem_company_contacts_company_status");
+        b.HasOne<OemCompany>().WithMany().HasForeignKey(x => x.OemCompanyId)
+            .HasConstraintName("fk_oem_company_contacts_company").OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
 public sealed class OemRefreshTokenConfig : IEntityTypeConfiguration<OemRefreshToken>
 {
     public void Configure(EntityTypeBuilder<OemRefreshToken> b)

@@ -37,6 +37,21 @@ public sealed class OemAccount
     public DateTime UpdatedAt { get; set; }
 }
 
+/// <summary>Additional people who can be contacted at an OEM company; the legacy company fields remain its primary contact.</summary>
+public sealed class OemCompanyContact
+{
+    public ulong Id { get; set; }
+    public ulong OemCompanyId { get; set; }
+    public string Name { get; set; } = null!;
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public int SortNo { get; set; }
+    public string Status { get; set; } = null!;
+    public ulong? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
 public sealed class OemRefreshToken
 {
     public ulong Id { get; set; }

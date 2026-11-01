@@ -7,6 +7,7 @@ public static class AdminModule
     public static IServiceCollection AddAdminModule(this IServiceCollection services) => services
         .AddSingleton<DepartmentService>()
         .AddSingleton<UserService>()
+        .AddSingleton<AdminImportService>()
         .AddSingleton<RoleService>()
         .AddSingleton<SupplierService>()
         .AddSingleton<SupplierContactService>();
@@ -20,6 +21,8 @@ public static class AdminModule
         admin.MapGet("/users", (HttpContext c, UserService s, CancellationToken ct) => { var p = QueryValues.Page(c.Request); var dept = QueryValues.OptionalUInt64(c.Request, "departmentId"); return s.ListAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, c.Request.Query["keyword"], dept, c.Request.Query["status"], ct); });
         admin.MapGet("/user-role-options", (HttpContext c, UserService s, CancellationToken ct) => s.RoleOptionsAsync(AccessService.GetCurrent(c), c.Request.Query["keyword"], ct));
         admin.MapPost("/users", (UserCreate r, HttpContext c, UserService s, CancellationToken ct) => s.CreateAsync(AccessService.GetCurrent(c), r, ct));
+        admin.MapPost("/users/import", (InternalUserImportRequest r, HttpContext c, AdminImportService s, CancellationToken ct) =>
+            s.ImportInternalUsersAsync(AccessService.GetCurrent(c), r, ct)).Produces<AdminImportResponse>();
         admin.MapPut("/users/{id:long}", (ulong id, UserUpdate r, HttpContext c, UserService s, CancellationToken ct) => s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
         admin.MapPut("/users/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, UserService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapPut("/users/{id:long}/password", async (ulong id, PasswordRequest r, HttpContext c, UserService s, CancellationToken ct) => { await s.ResetPasswordAsync(AccessService.GetCurrent(c), id, r.NewPassword, ct); return EmptyResponse.Instance; });
@@ -49,11 +52,14 @@ public static class AdminModule
         admin.MapGet("/suppliers/{id:long}/accounts", (ulong id, HttpContext c, SupplierService s, CancellationToken ct) => s.AccountsAsync(AccessService.GetCurrent(c), id, ct));
         admin.MapGet("/suppliers/{id:long}/contacts", (ulong id, HttpContext c, SupplierContactService s, CancellationToken ct) => s.ListAsync(AccessService.GetCurrent(c), id, ct));
         admin.MapPost("/suppliers/{id:long}/contacts", (ulong id, SupplierContactUpsert r, HttpContext c, SupplierContactService s, CancellationToken ct) => s.CreateAsync(AccessService.GetCurrent(c), id, r, ct));
+        admin.MapPost("/suppliers/{id:long}/contacts/import", (ulong id, SupplierContactImportRequest r, HttpContext c, SupplierContactService s, CancellationToken ct) =>
+            s.ImportAsync(AccessService.GetCurrent(c), id, r, ct)).Produces<AdminImportResponse>();
         admin.MapPut("/supplier-contacts/{id:long}", (ulong id, SupplierContactUpsert r, HttpContext c, SupplierContactService s, CancellationToken ct) => s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
         admin.MapPut("/supplier-contacts/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, SupplierContactService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapGet("/supplier-role-options", (HttpContext c, SupplierService s, CancellationToken ct) => s.RoleOptionsAsync(AccessService.GetCurrent(c), c.Request.Query["keyword"], ct));
         admin.MapPost("/suppliers/{id:long}/accounts", (ulong id, SupplierAccountCreate r, HttpContext c, SupplierService s, CancellationToken ct) => s.CreateAccountAsync(AccessService.GetCurrent(c), id, r, ct));
-        admin.MapPut("/supplier-accounts/{id:long}", (ulong id, SupplierAccountUpdate r, HttpContext c, SupplierService s, CancellationToken ct) => s.UpdateAccountAsync(AccessService.GetCurrent(c), id, r, ct));
+        admin.MapPost("/suppliers/{id:long}/accounts/import", (ulong id, SupplierAccountImportRequest r, HttpContext c, AdminImportService s, CancellationToken ct) =>
+            s.ImportSupplierAccountsAsync(AccessService.GetCurrent(c), id, r, ct)).Produces<AdminImportResponse>();
         admin.MapPut("/supplier-accounts/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, SupplierService s, CancellationToken ct) => s.SetAccountStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapPut("/supplier-accounts/{id:long}/password", async (ulong id, PasswordRequest r, HttpContext c, SupplierService s, CancellationToken ct) => { await s.ResetAccountPasswordAsync(AccessService.GetCurrent(c), id, r.NewPassword, ct); return EmptyResponse.Instance; });
         admin.MapDelete("/supplier-accounts/{id:long}", async (ulong id, HttpContext c, SupplierService s, CancellationToken ct) => { await s.DeleteAccountAsync(AccessService.GetCurrent(c), id, ct); return EmptyResponse.Instance; });

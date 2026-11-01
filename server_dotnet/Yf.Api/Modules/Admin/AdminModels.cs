@@ -29,12 +29,31 @@ public sealed record SupplierUpsert([property: JsonRequired] string Name, string
 public sealed record SupplierAccountCreate(
     [property: JsonRequired] string EmployeeNo,
     [property: JsonRequired] string Password,
+    ulong? RoleId = null);
+public sealed record SupplierContactUpsert([property: JsonRequired] string Name, [property: JsonRequired] string Email, int? SortNo = null);
+public sealed record SupplierContactImportRow(int RowNumber, [property: JsonRequired] string Name, [property: JsonRequired] string Email, int? SortNo = null);
+public sealed record SupplierContactImportRequest([property: JsonRequired] SupplierContactImportRow[] Rows);
+public sealed record DepartmentLeaderRequest(ulong? LeaderUserId);
+
+public sealed record InternalUserImportRow(
+    int RowNumber,
+    [property: JsonRequired] string EmployeeNo,
     [property: JsonRequired] string RealName,
     [property: JsonRequired] string Email,
-    ulong? RoleId = null);
-public sealed record SupplierAccountUpdate(string? RealName, string? Email);
-public sealed record SupplierContactUpsert([property: JsonRequired] string Name, [property: JsonRequired] string Email, int? SortNo = null);
-public sealed record DepartmentLeaderRequest(ulong? LeaderUserId);
+    [property: JsonRequired] ulong DepartmentId,
+    [property: JsonRequired] ulong RoleId,
+    [property: JsonRequired] string InitialPassword);
+public sealed record InternalUserImportRequest([property: JsonRequired] InternalUserImportRow[] Rows);
+
+public sealed record SupplierAccountImportRow(
+    int RowNumber,
+    [property: JsonRequired] string EmployeeNo,
+    ulong? RoleId,
+    [property: JsonRequired] string InitialPassword);
+public sealed record SupplierAccountImportRequest([property: JsonRequired] SupplierAccountImportRow[] Rows);
+
+public sealed record AdminImportRowResult(int RowNumber, string Key, string Status, string? Message);
+public sealed record AdminImportResponse(int Created, int Skipped, int Failed, IReadOnlyList<AdminImportRowResult> Rows);
 
 internal sealed class AdminUserRow
 {
@@ -144,8 +163,6 @@ public sealed record SupplierContactResponse(ulong Id, ulong SupplierId, string 
 public sealed record SupplierAccountResponse(
     ulong Id,
     string EmployeeNo,
-    string RealName,
-    string Email,
     ulong? SupplierId,
     string Status,
     DateTime? LastLoginAt,

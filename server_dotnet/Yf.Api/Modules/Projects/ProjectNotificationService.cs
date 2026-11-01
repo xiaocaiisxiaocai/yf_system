@@ -352,7 +352,7 @@ internal static class ProjectNotificationService
             {
                 continue;
             }
-            if (recipient.UserType == UserTypes.Supplier && contacts.Length > 0)
+            if (recipient.UserType == UserTypes.Supplier)
             {
                 supplierAnchors.Add(recipient);
                 continue;
@@ -389,9 +389,10 @@ internal static class ProjectNotificationService
             .ToArrayAsync(ct);
 
     /// <summary>
-    /// A supplier that has contacts is mailed at every active contact instead of its account addresses. Each row is
-    /// anchored to the lowest eligible supplier account so the sender still re-checks that account's project access
-    /// and the contact's status before sending. With no eligible account, nothing is queued.
+    /// Supplier mail goes only to active contact addresses; the shared login account is the project-access anchor,
+    /// never the mail recipient. Each row is anchored to the lowest eligible supplier account so the sender still
+    /// re-checks that account's project access and the contact's status before sending. With no active contact or
+    /// eligible account, nothing is queued.
     /// </summary>
     internal static IEnumerable<MailTarget> ContactTargets(
         IEnumerable<ulong> eligibleSupplierAccountIds, IReadOnlyList<(ulong Id, string Email)> contacts)

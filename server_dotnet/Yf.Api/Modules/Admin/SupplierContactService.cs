@@ -58,6 +58,60 @@ public sealed class SupplierContactService(IDbContextFactory<YfDbContext> dbFact
         return Json(created);
     }
 
+    public async Task<AdminImportResponse> ImportAsync(
+        CurrentUser actor, ulong supplierId, SupplierContactImportRequest request, CancellationToken ct)
+    {
+        if (request.Rows is null || request.Rows.Length is < 1 or > MaximumPerSupplier || request.Rows.Any(row => row is null))
+            throw ApiException.BadRequest($"导入行数需为 1–{MaximumPerSupplier} 行");
+
+        // Authenticate before reading existing names; the response must not disclose contact data to other vendors.
+        var existingRows = await ListAsync(actor, supplierId, ct);
+        var existing = existingRows.Select(row => row.Name.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var repeated = request.Rows.Select(row => row.Name?.Trim() ?? "").Select((name, index) => (name, index))
+            .Where(item => item.name.Length > 0).GroupBy(item => item.name, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1).SelectMany(group => group.Select(item => item.index)).ToHashSet();
+        var results = new List<AdminImportRowResult>(request.Rows.Length);
+        for (var index = 0; index < request.Rows.Length; index++)
+        {
+            var row = request.Rows[index];
+            var rowNumber = row.RowNumber is >= 2 and <= 101 ? row.RowNumber : index + 2;
+            var name = row.Name?.Trim() ?? "";
+            if (repeated.Contains(index))
+            {
+                results.Add(new(rowNumber, name, "SKIPPED", "文件内联络人姓名重复，本重复组未导入"));
+                continue;
+            }
+            if (existing.Contains(name))
+            {
+                results.Add(new(rowNumber, name, "SKIPPED", "该厂商已有同名联络人，未覆盖现有资料"));
+                continue;
+            }
+            try
+            {
+                await CreateAsync(actor, supplierId, new SupplierContactUpsert(name, row.Email ?? "", row.SortNo), ct);
+                existing.Add(name);
+                results.Add(new(rowNumber, name, "CREATED", null));
+            }
+            catch (ApiException error) when (error.Status is 400 or 409)
+            {
+                results.Add(new(rowNumber, name, error.Status == 409 ? "SKIPPED" : "FAILED", error.Message));
+            }
+            catch (ApiException error) when (error.Status == 403)
+            {
+                results.Add(new(rowNumber, name, "FAILED", "权限已变化，批次已停止"));
+                for (var remaining = index + 1; remaining < request.Rows.Length; remaining++)
+                {
+                    var pending = request.Rows[remaining];
+                    results.Add(new(pending.RowNumber is >= 2 and <= 101 ? pending.RowNumber : remaining + 2,
+                        pending.Name ?? "", "FAILED", "未执行"));
+                }
+                break;
+            }
+        }
+        return new(results.Count(row => row.Status == "CREATED"), results.Count(row => row.Status == "SKIPPED"),
+            results.Count(row => row.Status == "FAILED"), results);
+    }
+
     public async Task<SupplierContactResponse> UpdateAsync(
         CurrentUser actor, ulong id, SupplierContactUpsert request, CancellationToken ct)
     {
