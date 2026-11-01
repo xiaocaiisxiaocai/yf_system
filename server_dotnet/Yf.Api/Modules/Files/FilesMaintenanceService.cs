@@ -45,19 +45,28 @@ public sealed class FilesMaintenanceService(
         }
     }
 
+    private bool Migrating => options.StorageFallbackRoot is not null;
+
     internal async Task RunGarbageCollectionAsync(CancellationToken ct)
     {
         await RecoverAbandonedMergesAsync(ct);
         await ExpireUploadsAsync(ct);
         // During a storage migration, physical deletion, orphan scans and blob verification wait: they would race
         // the copy or judge a file missing that still sits in the old root. Soft-deleted content is retained anyway.
-        if (options.StorageFallbackRoot is not null) return;
+        // A migration may also start while this cycle runs, so every step re-checks before it begins.
+        if (Migrating) return;
         await ResumePendingBlobGarbageCollectionAsync(ct);
+        if (Migrating) return;
         await PurgeDeletedFilesAsync(ct);
+        if (Migrating) return;
         await VerifyReferencedBlobFilesAsync(ct);
+        if (Migrating) return;
         await PurgeOrphanBlobFilesAsync(ct);
+        if (Migrating) return;
         await PurgeDeletedMessageImagesAsync(ct);
+        if (Migrating) return;
         PurgeTemporaryArchives(ct);
+        if (Migrating) return;
         await PurgeOrphanUploadDirectoriesAsync(ct);
     }
 
@@ -376,7 +385,9 @@ public sealed class FilesMaintenanceService(
             await tx.CommitAsync(ct);
             return;
         }
-        FileBlobStore.DeleteCanonicalFile(FileStorage.Root(options.StorageRoot), blob, ct);
+        // A cycle that began before a storage migration may finish after it started: delete in every root.
+        foreach (var root in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+            FileBlobStore.DeleteCanonicalFile(root, blob, ct);
         context.FileBlobs.Remove(blob);
         await context.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
