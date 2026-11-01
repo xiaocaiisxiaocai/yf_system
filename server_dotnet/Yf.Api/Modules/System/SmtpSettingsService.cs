@@ -44,7 +44,7 @@ public sealed class SmtpSettingsService(AppDb db, AppOptions options, AuditServi
         return new(cfg, false);
     }
 
-    public async Task<SmtpSettingsView> SaveAsync(SmtpSettingsUpdate request, CurrentUser actor, CancellationToken ct)
+    public async Task<SmtpSettingsView> SaveAsync(SmtpSettingsUpdate request, CurrentUser actor, CancellationToken ct, string? ip = null)
     {
         await using var conn = await db.OpenAsync(ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
@@ -89,7 +89,7 @@ public sealed class SmtpSettingsService(AppDb db, AppOptions options, AuditServi
                     new AuditChange("username", "登录账号", previous.Options.Username, next.Username),
                     new AuditChange("from", "发件邮箱", previous.Options.From, next.From),
                     new AuditChange("security", "加密方式", previous.Options.Security, next.Security))
-            }, null, ct);
+            }, ip, ct);
         await tx.CommitAsync(ct);
         return new ResolvedSmtpSettings(next, false).View;
     }

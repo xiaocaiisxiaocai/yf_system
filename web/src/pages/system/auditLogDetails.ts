@@ -70,6 +70,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   LOGIN_LOCKED: action('账号锁定', 'AUTH', '认证安全', 'red'),
   LOGOUT: action('退出登录', 'AUTH', '认证安全', 'gray'),
   PASSWORD_CHANGE: action('修改密码', 'AUTH', '认证安全', 'orange'),
+  PASSWORD_CHANGE_FAILED: action('修改密码失败', 'AUTH', '认证安全', 'red'),
   PROFILE_UPDATE: action('更新个人资料', 'AUTH', '认证安全', 'purple'),
   PROJECT_CREATE: action('创建项目', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_GROUP_CREATE: action('创建主项目', 'PROJECT', '项目协作', 'arcoblue'),

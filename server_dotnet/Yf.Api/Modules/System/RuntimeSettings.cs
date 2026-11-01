@@ -20,7 +20,8 @@ internal static class RuntimeSettings
 
     internal static readonly Setting[] All =
     [
-        new("retention.audit_days", "操作日志保留天数", "超过天数的操作日志自动清理", 1, 3650,
+        // At least the default 30 days: a short window would let a settings change wipe recent evidence within hours.
+        new("retention.audit_days", "操作日志保留天数", "超过天数的操作日志自动清理", 30, 3650,
             options => options.AuditRetentionDays, (options, value) => options.AuditRetentionDays = (int)value),
         new("retention.mail_days", "邮件记录保留天数", "已发送、失败或取消的邮件记录保留天数", 1, 3650,
             options => options.MailRetentionDays, (options, value) => options.MailRetentionDays = (int)value),

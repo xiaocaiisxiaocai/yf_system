@@ -93,10 +93,11 @@ public sealed class IdentityService(
         var grants = await permissions.GetCodesAndMenusAsync(context.Database.Connection(), context.Database.Transaction(), user.Id, ct);
         var response = new LoginResponse(accessToken.Token, accessToken.ExpiresAt, user.MustChangePassword,
             grants.Permissions, grants.Menus, await BriefAsync(context, user, ct));
+        // A session is only issued together with its audit record (written in the same transaction).
+        await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), user.Id, "LOGIN", null, null,
+            evictedSessions > 0 ? new { evictedSessions, reason = RefreshRevokeReasons.SessionCap } : null, clientIp, ct, user.EmployeeNo);
         await tx.CommitAsync(ct);
         loginRateLimiter.RecordSuccessfulLogin(IdentityRealms.Internal, user.Id, clientIp);
-        await AuditBestEffortAsync(context.Database.Connection(), user.Id, user.EmployeeNo, "LOGIN", null, null,
-            evictedSessions > 0 ? new { evictedSessions, reason = RefreshRevokeReasons.SessionCap } : null, clientIp, ct);
         return (response, refresh.Token, refresh.ExpiresAt);
     }
 
@@ -204,7 +205,13 @@ public sealed class IdentityService(
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             snapshot = await lookup.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == current.Id, ct) ?? throw ApiException.NotFound();
         if (!await PasswordService.VerifyForPasswordChangeAsync(request.OldPassword, snapshot.PasswordHash, ct))
+        {
+            await using var auditContext = await dbFactory.CreateDbContextAsync(ct);
+            await auditContext.Database.OpenConnectionAsync(ct);
+            await AuditBestEffortAsync(auditContext.Database.Connection(), current.Id, snapshot.EmployeeNo, "PASSWORD_CHANGE_FAILED",
+                null, null, new { reason = "OLD_PASSWORD_MISMATCH" }, null, ct);
             throw ApiException.BadRequest("原密码错误");
+        }
         var replacementHash = await PasswordService.HashAsync(request.NewPassword, ct);
 
         await using var context = await dbFactory.CreateDbContextAsync(ct);

@@ -29,11 +29,15 @@ public static class SystemModule
         });
         config.MapGet("/configs", (SystemService service, CancellationToken ct) => service.ListConfigsAsync(ct));
         config.MapPut("/configs", async (ConfigBatch body, HttpContext ctx, SystemService service, CancellationToken ct) =>
-        { await service.UpdateConfigsAsync(body, AccessService.GetCurrent(ctx), ct); return EmptyResponse.Instance; });
+        {
+            await service.UpdateConfigsAsync(body, AccessService.GetCurrent(ctx), ct,
+                ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>()));
+            return EmptyResponse.Instance;
+        });
         config.MapGet("/mail-status", (MailService service, CancellationToken ct) => service.StatusAsync(ct));
         config.MapGet("/mail-settings", (SmtpSettingsService service, CancellationToken ct) => service.GetAsync(ct));
         config.MapPut("/mail-settings", (SmtpSettingsUpdate body, HttpContext ctx, SmtpSettingsService service, CancellationToken ct) =>
-            service.SaveAsync(body, AccessService.GetCurrent(ctx), ct));
+            service.SaveAsync(body, AccessService.GetCurrent(ctx), ct, ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>())));
         var logs = endpoints.MapGroup("/api/v1/admin/audit-logs");
         logs.AddEndpointFilter(async (context, next) =>
         {
@@ -133,7 +137,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
         return value;
     }
 
-    public async Task UpdateConfigsAsync(ConfigBatch body, CurrentUser actor, CancellationToken ct)
+    public async Task UpdateConfigsAsync(ConfigBatch body, CurrentUser actor, CancellationToken ct, string? ip = null)
     {
         if (body.Items is null || body.Items.Length is < 1 or > 100 || body.Items.Any(x => x is null || string.IsNullOrWhiteSpace(x.Key)))
             throw ApiException.BadRequest("参数必须为 1–100 个不重复的项目");
@@ -166,7 +170,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
             config.UpdatedAt = updatedAt;
         }
         await context.SaveChangesAsync(ct);
-        await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null, new { keys = normalized.Select(x => x.Key), changes }, null, ct);
+        await audit.WriteAsync(conn, tx, actor.Id, "CONFIG_UPDATE", "system_config", null, new { keys = normalized.Select(x => x.Key), changes }, ip, ct);
         await tx.CommitAsync(ct);
         // Retention and upload-quota settings take effect at once: their consumers read the in-memory options.
         if (options is not null)
@@ -275,7 +279,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
 
     private static readonly Dictionary<string, string[]> Categories = new(StringComparer.Ordinal)
     {
-        ["AUTH"] = "LOGIN LOGIN_FAILED LOGIN_LOCKED LOGOUT PASSWORD_CHANGE PROFILE_UPDATE".Split(' '),
+        ["AUTH"] = "LOGIN LOGIN_FAILED LOGIN_LOCKED LOGOUT PASSWORD_CHANGE PASSWORD_CHANGE_FAILED PROFILE_UPDATE".Split(' '),
         ["PROJECT"] = "PROJECT_GROUP_CREATE PROJECT_GROUP_UPDATE PROJECT_GROUP_TRANSFER PROJECT_GROUP_STATUS_AUTO PROJECT_GROUP_DELETE PROJECT_CREATE PROJECT_COPY PROJECT_UPDATE PROJECT_START PROJECT_SUBMIT PROJECT_CONFIRM PROJECT_REJECT PROJECT_WITHDRAW PROJECT_MATERIAL_APPROVE PROJECT_MATERIAL_RETURN PROJECT_ACCEPTANCE_MIGRATE PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE PROJECT_TERMINATE PROJECT_RESTART PROJECT_REOPEN PROJECT_MEMBERS PROJECT_DELETE".Split(' '),
         ["FILE"] = "FILE_UPLOAD FILE_DOWNLOAD FILE_BATCH_DOWNLOAD FILE_PREVIEW FILE_DELETE UPLOAD_ABORT".Split(' '),
         ["MESSAGE"] = "MESSAGE_CREATE MESSAGE_DELETE MESSAGE_READ".Split(' '),

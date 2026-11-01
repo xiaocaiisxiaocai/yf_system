@@ -8,7 +8,7 @@ namespace Yf.Api.Tests;
 public sealed class RuntimeSettingsTests
 {
     [Theory]
-    [InlineData("retention.audit_days", "0", "3651")]
+    [InlineData("retention.audit_days", "29", "3651")]
     [InlineData("retention.mail_days", "0", "3651")]
     [InlineData("retention.mail_pending_days", "0", "366")]
     [InlineData("retention.upload_session_days", "29", "3651")]
