@@ -185,7 +185,7 @@ export function renderMailSettingsPanel({
         {mail.missingEmailCount > 0 && (
           <div>
             <Typography.Text type="warning">
-              {mail.missingEmailCount} 个启用账号未填写邮箱，相关通知不会入队。示例：{mail.missingEmailAccounts.map((account) => `${account.realName}（${account.employeeNo}）`).join('、') || '请查看操作日志'}
+              {mail.missingEmailCount} 个启用内部账号未填写邮箱，相关通知不会入队。示例：{mail.missingEmailAccounts.map((account) => `${account.realName}（${account.employeeNo}）`).join('、') || '请查看操作日志'}
             </Typography.Text>
             <Button type="text" size="small" onClick={onViewLogs}>查看操作日志</Button>
           </div>

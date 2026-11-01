@@ -114,18 +114,20 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
       )}
       <div className="drawer-toolbar responsive-toolbar">
         <Typography.Text type="secondary">{loading ? '联络人加载中…' : failed ? '联络人列表暂不可用' : `共 ${contacts.length} 位联络人`}</Typography.Text>
-        <Button
-          type="primary"
-          size="small"
-          icon={<IconPlus />}
-          onClick={() => {
-            setEditing(null)
-            form.resetFields()
-            setEditOpen(true)
-          }}
-        >
-          新增联络人
-        </Button>
+        <Space>
+          <Button
+            type="primary"
+            size="small"
+            icon={<IconPlus />}
+            onClick={() => {
+              setEditing(null)
+              form.resetFields()
+              setEditOpen(true)
+            }}
+          >
+            新增联络人
+          </Button>
+        </Space>
       </div>
       {!failed && <Table
         rowKey="id"
@@ -175,6 +177,7 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
           },
         ]}
       />}
+
 
       <Modal
         className="form-dialog"

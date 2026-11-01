@@ -84,7 +84,7 @@ export function PortalChangePasswordPage() {
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入当前密码" aria-label="当前密码" autoComplete="current-password" disabled={loading} />
         </Form.Item>
         <Form.Item field="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }, passwordRule]}>
-          <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6-20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
+          <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（5-20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
         </Form.Item>
         <Form.Item field="confirm" label="确认新密码" dependencies={['newPassword']} rules={[{ required: true, message: '请再次输入新密码' }, confirmPasswordRule(form)]}>
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />

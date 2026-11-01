@@ -70,11 +70,12 @@ export type RetentionTemplate = Narrow<Api.OemRetentionTemplateResponse, { mode:
 
 /** Single-company responses (create/update/status) carry no account counts; list rows do. */
 export type Company = Narrow<Api.OemCompanyResponse, { status: ActiveStatus }>
-  & Partial<Pick<Api.OemCompanyListItemResponse, 'accountCount' | 'activeAccountCount'>>
+  & Partial<Pick<Api.OemCompanyListItemResponse, 'accountCount' | 'activeAccountCount' | 'contactCount'>>
 
 export type CompanyListItem = Narrow<Api.OemCompanyListItemResponse, { status: ActiveStatus }>
 
 export type VendorAccount = Narrow<Api.OemAccountResponse, { status: ActiveStatus }>
+export type CompanyContact = Narrow<Api.OemCompanyContactResponse, { status: ActiveStatus }>
 
 export type TemplatePerson = Api.OemFlowNodePersonResponse
 
@@ -118,7 +119,7 @@ export type TransferUpdate = Api.TransferUpdate
 export type UploadInitRequest = Api.OemUploadInit
 export type CompanyUpsert = Api.OemCompanyUpsert
 export type AccountCreate = Api.OemAccountCreate
-export type AccountUpdate = Api.OemAccountUpdate
+export type CompanyContactUpsert = Api.OemCompanyContactUpsert
 export type RetentionTemplateCreate = Narrow<Api.RetentionTemplateCreate, { mode: RetentionMode }>
 export type RetentionTemplateUpdate = Narrow<Api.RetentionTemplateUpdate, { mode: RetentionMode; status: ActiveStatus }>
 export type FlowTemplateCreate = Narrow<Api.FlowTemplateCreate, { nodes: FlowNodeInput[] }>

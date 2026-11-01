@@ -102,7 +102,7 @@ describe('系统参数与 SMTP 生产界面', () => {
     expect(screen.getAllByText('SMTP 未配置')).toHaveLength(2)
     expect(screen.getByText(/待发送/)).toHaveTextContent('2')
     expect(screen.getAllByText((_text, element) => element?.textContent === '失败 3')).toHaveLength(2)
-    expect(screen.getByText(/1 个启用账号未填写邮箱/)).toHaveTextContent('未填邮箱（E7）')
+    expect(screen.getByText(/1 个启用内部账号未填写邮箱/)).toHaveTextContent('未填邮箱（E7）')
     expect(screen.getByText('发送失败')).toBeVisible()
     expect(screen.getByText('已取消：事件失效')).toBeVisible()
     expect(screen.getByText('未知动作：EMAIL_FUTURE_ACTION')).toBeVisible()

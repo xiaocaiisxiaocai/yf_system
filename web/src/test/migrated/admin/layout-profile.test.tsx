@@ -208,34 +208,27 @@ describe('管理员布局与个人资料', () => {
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login')
   })
 
-  it('personal profile submits only own email and keeps password change in the same page', async () => {
-    const updatedUser = { ...mocks.auth.user, email: 'after@example.invalid' }
-    mocks.put.mockImplementation(async (url: string, body: Record<string, unknown>) => {
-      if (url === '/auth/profile') return { data: { user: { ...updatedUser, email: body.email } } }
-      return { data: {} }
-    })
+  it('shared supplier account profile does not expose person name or email and keeps password change', async () => {
     const user = userEvent.setup()
     render(<MemoryRouter><Profile /></MemoryRouter>)
 
-    expect(screen.getByRole('note')).toHaveTextContent('账号信息由企业管理员维护')
-    const email = screen.getByPlaceholderText('请输入联系邮箱')
-    await user.clear(email)
-    await user.type(email, 'after@example.invalid')
-    await user.click(screen.getByRole('button', { name: '保存资料' }))
-    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/auth/profile', { email: 'after@example.invalid' }))
-    expect(mocks.setUser).toHaveBeenCalledWith(updatedUser)
+    expect(screen.getByRole('note')).toHaveTextContent('供应商账号为共用登录账号；姓名和邮箱由供应商联络人资料维护')
+    expect(screen.queryByText('姓名')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('请输入联系邮箱')).not.toBeInTheDocument()
 
     await user.type(screen.getByPlaceholderText('请输入当前密码'), 'Old#2026')
-    await user.type(screen.getByPlaceholderText('6-20 位'), 'New#2026')
+    await user.type(screen.getByPlaceholderText('5-20 位'), 'New#2026')
     await user.type(screen.getByPlaceholderText('请再次输入新密码'), 'New#2026')
     await user.click(screen.getByRole('button', { name: '修改密码' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/auth/password', {
       oldPassword: 'Old#2026', newPassword: 'New#2026',
     }))
+    expect(mocks.put).toHaveBeenCalledTimes(1)
     expect(mocks.logout).toHaveBeenCalledOnce()
   })
 
   it('profile locks both forms during save, rejects overlapping requests and unlocks after failure', async () => {
+    mocks.auth.user = { ...mocks.auth.user, employeeNo: 'employee8', realName: '内部员工', userType: 'INTERNAL' }
     let rejectSave: (reason?: unknown) => void = () => undefined
     mocks.put.mockImplementation(() => new Promise((_resolve, reject) => { rejectSave = reject }))
     const user = userEvent.setup()

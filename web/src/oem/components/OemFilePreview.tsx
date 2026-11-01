@@ -16,8 +16,9 @@ function useViewerIdentity(): { employeeNo?: string; realName?: string } {
   const { realm } = useOem()
   const internalUser = useAuth((state) => state.user)
   const portalAccount = usePortalAuth((state) => state.account)
-  const viewer = realm === 'oem' ? portalAccount : internalUser
-  return { employeeNo: viewer?.employeeNo, realName: viewer?.realName }
+  return realm === 'oem'
+    ? { employeeNo: portalAccount?.employeeNo }
+    : { employeeNo: internalUser?.employeeNo, realName: internalUser?.realName }
 }
 
 function OemImage({ file }: { file: TransferFile }) {

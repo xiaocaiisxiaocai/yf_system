@@ -385,23 +385,23 @@ export default function FileTable({
       >
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'excel' && (
           <Suspense fallback={<PreviewLoading text="加载 Excel 渲染器…" />}>
-            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ExcelPreview fileId={preview.id} ext={preview.ext} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><ExcelPreview fileId={preview.id} ext={preview.ext} /></WatermarkedPreview>
           </Suspense>
         )}
-        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'image' && (
           <Suspense fallback={<PreviewLoading text="加载图片预览…" />}>
-            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
           <Suspense fallback={<PreviewLoading text="加载 PPTX 渲染器…" />}>
-            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (
           <Suspense fallback={<PreviewLoading text="加载视频播放器…" />}>
-            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.realName}><VideoPreview fileId={preview.id} /></WatermarkedPreview>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><VideoPreview fileId={preview.id} /></WatermarkedPreview>
           </Suspense>
         )}
       </Modal>

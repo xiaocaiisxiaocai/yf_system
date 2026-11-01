@@ -80,6 +80,7 @@ export function useSupplierListState() {
   return {
     data,
     loading,
+    keyword,
     status,
     page,
     pageSize,

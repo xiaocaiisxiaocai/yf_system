@@ -12,11 +12,13 @@ import PasswordInput from '../../components/PasswordInput'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
-import { passwordRule } from '../../utils/password'
+import { passwordRule, validatePassword } from '../../utils/password'
 import type { ApiResponses } from '../../api/types'
 import type { DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
+import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../components/ExcelImportDialog'
+import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../utils/excelWorkbook'
 
 interface UserRow {
   id: number
@@ -31,6 +33,7 @@ interface UserRow {
   roleIds?: number[]
   roleNames?: string[]
   status: 'ACTIVE' | 'DISABLED'
+  mustChangePassword?: boolean
   lastLoginAt?: string | null
   createdAt: string
 }
@@ -40,6 +43,8 @@ interface RoleOpt {
   name: string
 }
 
+const EMPTY_ROLE_OPTIONS: RoleOpt[] = []
+
 // Department tree from the API, with kind narrowed to the fixed three-level hierarchy.
 type DeptNode = Omit<ApiDepartmentTreeNode, 'kind' | 'children'> & {
   kind: 'DIVISION' | 'DEPARTMENT' | 'SECTION'
@@ -47,6 +52,20 @@ type DeptNode = Omit<ApiDepartmentTreeNode, 'kind' | 'children'> & {
 }
 
 const ORG_KIND_LABEL = { DIVISION: '事业部', DEPARTMENT: '部门', SECTION: '课别' } as const
+const USER_IMPORT_HEADERS = ['账号', '姓名', '邮箱', '课别', '角色', '初始密码'] as const
+const USER_EXPORT_HEADERS = ['状态', '需改密', '最近登录'] as const
+const USER_OPTION_HEADERS = ['课别', '角色名称'] as const
+
+interface DepartmentSectionOption { id: number; name: string; active: boolean; kind: string }
+interface InternalUserImportPayload {
+  rowNumber: number
+  employeeNo: string
+  realName: string
+  email: string
+  departmentId: number
+  roleId: number
+  initialPassword: string
+}
 
 interface DeptTreeData { key: string; title: string; value: string; children?: DeptTreeData[] }
 function toTreeData(nodes: DeptNode[]): DeptTreeData[] {
@@ -56,6 +75,31 @@ function toTreeData(nodes: DeptNode[]): DeptTreeData[] {
     value: String(n.id),
     children: n.children && n.children.length ? toTreeData(n.children) : undefined,
   }))
+}
+
+function departmentSections(nodes: DeptNode[], parentActive = true): DepartmentSectionOption[] {
+  return nodes.flatMap(node => {
+    const active = parentActive && node.status === 'ACTIVE'
+    return [
+      { id: node.id, name: node.name, active, kind: node.kind },
+      ...departmentSections(node.children, active),
+    ]
+  })
+}
+
+async function fetchAllUsers(query: { keyword?: string; departmentId?: number; status?: string } = {}): Promise<UserRow[]> {
+  const pageSize = 100
+  const first = await http.get<ApiResponses['GET /admin/users']>('/admin/users', { params: { ...query, page: 1, pageSize } })
+  const firstPage = first.data as PageResp<UserRow>
+  const users = [...firstPage.list]
+  const pages = Math.ceil(firstPage.total / pageSize)
+  for (let pageIndex = 2; pageIndex <= pages; pageIndex++) {
+    const response = await http.get<ApiResponses['GET /admin/users']>('/admin/users', {
+      params: { ...query, page: pageIndex, pageSize },
+    })
+    users.push(...(response.data as PageResp<UserRow>).list)
+  }
+  return users
 }
 
 function isAuthorizationError(error: unknown): boolean {
@@ -86,6 +130,8 @@ export default function UserList() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [editOpen, setEditOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [editing, setEditing] = useState<UserRow | null>(null)
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null)
   const saveInFlight = useRef(false)
@@ -123,11 +169,27 @@ export default function UserList() {
   const usersFailed = usersQuery.isError && !usersQuery.isFetching
   const loadError = usersFailed && (authorizationError || !usersQuery.data)
   const refreshError = usersFailed && !loadError
-  const roles = authorizationError ? [] : optionsQuery.data?.roles ?? []
+  const roles = authorizationError ? EMPTY_ROLE_OPTIONS : optionsQuery.data?.roles ?? EMPTY_ROLE_OPTIONS
   const optionsLoading = optionsQuery.isFetching
   const optionsError = optionsQuery.isError && !optionsQuery.isFetching
   const loadedDepts = authorizationError ? undefined : optionsQuery.data?.depts
   const deptTreeData = useMemo(() => toTreeData(loadedDepts ?? []), [loadedDepts])
+  const activeSections = useMemo(() => departmentSections(loadedDepts ?? [])
+    .filter(item => item.active && item.kind === 'SECTION'), [loadedDepts])
+  const userWorkbookSheets = useMemo<ExcelWorkbookSheet[]>(() => {
+    const optionRows = Array.from({ length: Math.max(activeSections.length, roles.length) }, (_, index) => [
+      activeSections[index]?.name ?? '', roles[index]?.name ?? '',
+    ])
+    return [
+      { name: '数据', headers: [...USER_IMPORT_HEADERS], rows: [] },
+      { name: '选项', headers: USER_OPTION_HEADERS, rows: optionRows },
+      { name: '说明', headers: ['说明'], rows: [
+        ['仅新增账号；已存在账号会跳过，不会覆盖。'],
+        ['课别名称、角色必须来自“选项”工作表；如果课别名称重名，请先区分课别名称再导入。'],
+        ['新增账号必须填写初始密码，首次登录须修改；导出文件不包含密码。'],
+      ] },
+    ]
+  }, [activeSections, roles])
   const editingRoleId = editing?.roleId ?? editing?.roleIds?.[0]
   const editingRoleUnavailable = editingRoleId != null
     && !optionsLoading
@@ -151,6 +213,89 @@ export default function UserList() {
   }, [page, pageSize, usersQuery.data])
 
   const invalidateUsers = () => queryClient.invalidateQueries({ queryKey: usersQueryKey })
+  const prepareUserImport = async (sourceRows: ExcelImportRow[]): Promise<PreparedImport<InternalUserImportPayload>> => {
+    if (optionsLoading || optionsError || roles.length === 0 || !loadedDepts)
+      throw new Error('组织或角色选项暂不可用，请刷新后重试')
+    const allUsers = await fetchAllUsers()
+    const existingEmployees = new Set(allUsers.map(user => user.employeeNo.trim().toUpperCase()))
+    const sectionsByName = new Map<string, DepartmentSectionOption[]>()
+    for (const section of activeSections) {
+      const key = section.name.trim().toLowerCase()
+      sectionsByName.set(key, [...(sectionsByName.get(key) ?? []), section])
+    }
+    const roleByName = new Map(roles.map(role => [role.name.trim().toLowerCase(), role.id]))
+    const sourceCounts = new Map<string, number>()
+    for (const row of sourceRows) {
+      const employeeNo = row.values['账号']?.trim().toUpperCase() ?? ''
+      if (employeeNo) sourceCounts.set(employeeNo, (sourceCounts.get(employeeNo) ?? 0) + 1)
+    }
+    const payload: InternalUserImportPayload[] = []
+    const preview: ImportPreviewRow[] = sourceRows.map(row => {
+      const employeeNo = row.values['账号']?.trim() ?? ''
+      const realName = row.values['姓名']?.trim() ?? ''
+      const email = row.values['邮箱']?.trim() ?? ''
+      const departmentName = row.values['课别']?.trim() ?? ''
+      const roleName = row.values['角色']?.trim() ?? ''
+      const initialPassword = row.values['初始密码'] ?? ''
+      const key = employeeNo || `第 ${row.rowNumber} 行`
+      const detail = [realName, departmentName, roleName].filter(Boolean).join(' · ')
+      const normalizedEmployeeNo = employeeNo.toUpperCase()
+      if (normalizedEmployeeNo && (sourceCounts.get(normalizedEmployeeNo) ?? 0) > 1)
+        return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '文件内账号重复，本重复组未导入' }
+      if (employeeNo && existingEmployees.has(normalizedEmployeeNo))
+        return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '账号已存在，不会覆盖现有资料' }
+      if (!employeeNo || !/^[A-Za-z0-9_]{3,32}$/.test(employeeNo))
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号需为 3–32 位字母、数字或下划线' }
+      if (row.numericCells.has('账号'))
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号列请设置为文本格式，以保留前导零' }
+      if (!realName || Array.from(realName).length > 64)
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '姓名不能为空且不能超过 64 个字符' }
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '邮箱格式不正确' }
+      const sections = sectionsByName.get(departmentName.toLowerCase()) ?? []
+      if (sections.length > 1)
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '课别名称重名，请先区分课别名称再导入' }
+      const selectedSection = sections[0]
+      if (!selectedSection) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '课别不存在或已停用' }
+      const departmentId = selectedSection.id
+      const roleId = roleByName.get(roleName.toLowerCase())
+      if (!roleId) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '角色不存在或当前账号不可授予' }
+      const passwordError = validatePassword(initialPassword)
+      if (passwordError) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '初始密码不符合密码规则' }
+      payload.push({ rowNumber: row.rowNumber, employeeNo, realName, email, departmentId, roleId, initialPassword })
+      return { rowNumber: row.rowNumber, key, detail, status: 'READY' }
+    })
+    return { payload, preview }
+  }
+
+  const exportUsers = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      if (optionsError || !loadedDepts) throw new Error('组织和角色资料暂不可用，请重试')
+      const allUsers = await fetchAllUsers({ keyword: keyword || undefined, departmentId, status })
+      const sectionsById = new Map(departmentSections(loadedDepts).map(item => [item.id, item.name]))
+      const rows = allUsers.map(user => [
+        user.employeeNo, user.realName, user.email,
+        user.departmentId ? sectionsById.get(user.departmentId) ?? user.departmentName ?? '' : '',
+        user.roleName ?? '', '', user.status, user.mustChangePassword ? '是' : '否', user.lastLoginAt ?? '',
+      ])
+      await downloadExcelWorkbook('公司内部账号.xlsx', [
+        { name: '数据', headers: [...USER_IMPORT_HEADERS, ...USER_EXPORT_HEADERS], rows },
+        ...userWorkbookSheets.slice(1),
+      ])
+      Message.success(`已导出 ${rows.length} 个账号；导出文件不包含密码`)
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : '账号导出失败')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const importUsers = async (rows: InternalUserImportPayload[]) => {
+    const response = await http.post<ApiResponses['POST /admin/users/import']>('/admin/users/import', { rows })
+    return response.data as unknown as ImportBatchOutcome
+  }
   const saveMutation = useMutation({
     mutationFn: async ({ id, payload }: { id?: number; payload: Record<string, unknown> }) => id
       ? http.put<ApiResponses['PUT /admin/users/{id}']>(`/admin/users/${id}`, payload)
@@ -326,6 +471,12 @@ export default function UserList() {
         <Space>
           {optionsError && <Button size="small" onClick={() => { void optionsQuery.refetch() }}>重试加载组织和角色</Button>}
           {!optionsLoading && !optionsError && roles.length === 0 && <Typography.Text type="warning">暂无启用的角色</Typography.Text>}
+          <Button size="small" disabled={optionsLoading || optionsError || roles.length === 0} onClick={() => setImportOpen(true)}>
+            导入 Excel
+          </Button>
+          <Button size="small" loading={exporting} disabled={optionsLoading || optionsError} onClick={() => void exportUsers()}>
+            导出 Excel
+          </Button>
           <Button
             type="primary"
             icon={<IconPlus />}
@@ -436,6 +587,20 @@ export default function UserList() {
         />
       )}
 
+      <ExcelImportDialog<InternalUserImportPayload>
+        visible={importOpen}
+        title="导入公司内部账号"
+        templateName="公司内部账号导入模板.xlsx"
+        requiredHeaders={USER_IMPORT_HEADERS}
+        optionalHeaders={USER_EXPORT_HEADERS}
+        templateSheets={userWorkbookSheets}
+        maxRows={100}
+        prepare={prepareUserImport}
+        commit={importUsers}
+        onImported={() => void invalidateUsers()}
+        onClose={() => setImportOpen(false)}
+      />
+
       <Modal
         className="form-dialog"
         title={editing ? '编辑用户' : '新增用户'}
@@ -461,7 +626,7 @@ export default function UserList() {
                   field="password"
                   rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
                 >
-                  <PasswordInput placeholder="6-20 位" />
+                  <PasswordInput placeholder="5-20 位" />
                 </Form.Item>
               </>
             )}
@@ -512,7 +677,7 @@ export default function UserList() {
             field="newPassword"
                 rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
-            <PasswordInput autoFocus placeholder="6-20 位" />
+            <PasswordInput autoFocus placeholder="5-20 位" />
           </Form.Item>
           <div className="dialog-note">重置后，该用户的全部登录会话将立即退出</div>
         <EnterSubmit /></Form>

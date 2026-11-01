@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(),
+  downloadExcelWorkbook: vi.fn(),
   getImpl: async (_url: string, _config?: unknown): Promise<{ data: unknown }> => ({ data: [] }),
   permissions: [] as string[],
   user: { id: 1, employeeNo: 'admin', realName: '管理员', userType: 'INTERNAL', isSystemAdmin: true },
@@ -33,6 +34,12 @@ vi.mock('../../../store/auth', () => ({
 
 vi.mock('../../../store/collaboration', () => ({
   useCollaboration: (selector: (state: { revision: string; status: string }) => unknown) => selector({ revision: '', status: 'ready' }),
+}))
+
+vi.mock('../../../utils/excelWorkbook', () => ({
+  downloadExcelWorkbook: (...args: unknown[]) => mocks.downloadExcelWorkbook(...args),
+  createExcelWorkbook: vi.fn(),
+  readExcelTable: vi.fn(),
 }))
 
 import SupplierList from '../../../pages/supplier/SupplierList'
@@ -69,7 +76,7 @@ function supplierRow(overrides: Record<string, unknown> = {}) {
 }
 
 function account(id: number, employeeNo: string) {
-  return { id, employeeNo, realName: `账号${id}`, email: `${employeeNo}@example.invalid`, roleName: '供应商人员', status: 'ACTIVE', createdAt: '', lastLoginAt: null }
+  return { id, employeeNo, roleName: '供应商人员', status: 'ACTIVE', createdAt: '', lastLoginAt: null }
 }
 
 async function openAccounts(user: ReturnType<typeof userEvent.setup>, supplierName = 'fixture') {
@@ -80,6 +87,7 @@ async function openAccounts(user: ReturnType<typeof userEvent.setup>, supplierNa
 
 describe('供应商与分页列表行为', () => {
   beforeEach(() => {
+    mocks.downloadExcelWorkbook.mockReset()
     mocks.permissions = ['project:create', 'project:update', 'project:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'supplier:account_delete', 'user:manage', 'user:delete', 'role:manage', 'role:delete', 'file:download', 'file:delete']
     mocks.user = { id: 1, employeeNo: 'admin', realName: '管理员', userType: 'INTERNAL', isSystemAdmin: true }
     installGet(async (url: string) => {
@@ -90,6 +98,30 @@ describe('供应商与分页列表行为', () => {
     mocks.post.mockResolvedValue({ data: {} })
     mocks.put.mockResolvedValue({ data: {} })
     mocks.delete.mockResolvedValue({ data: {} })
+  })
+
+  it('账号和联络人 Excel 批量入口位于供应商总表页', async () => {
+    render(<MemoryRouter><SupplierList /></MemoryRouter>)
+
+    expect(await screen.findByRole('button', { name: '导入账号' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '导出账号' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '导入联络人' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '导出联络人' })).toBeVisible()
+  })
+
+  it('供应商账号导出不包含姓名、邮箱或任何密码列', async () => {
+    const user = userEvent.setup()
+    render(<MemoryRouter><SupplierList /></MemoryRouter>)
+
+    await user.click(await screen.findByRole('button', { name: '导出账号' }))
+    await waitFor(() => expect(mocks.downloadExcelWorkbook).toHaveBeenCalledTimes(1))
+
+    const sheets = mocks.downloadExcelWorkbook.mock.calls[0][1] as Array<{ headers: string[]; rows: string[][] }>
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].headers).toEqual(['供应商名称', '账号', '角色', '状态', '最近登录'])
+    expect(sheets[0].headers).not.toContain('姓名')
+    expect(sheets[0].headers).not.toContain('邮箱')
+    expect(sheets[0].headers).not.toContain('初始密码')
   })
 
   it('project interaction wording and navigation match the current supplier access model', async () => {
@@ -175,11 +207,11 @@ describe('供应商与分页列表行为', () => {
     let view = render(<UserList />)
     let row = (await screen.findByText('user-a')).closest('tr')!
     await user.click(within(row).getByRole('button', { name: '重置密码' }))
-    await user.type(screen.getByPlaceholderText('6-20 位'), 'Secret#2026')
+    await user.type(screen.getByPlaceholderText('5-20 位'), 'Secret#2026')
     await user.click(screen.getByRole('button', { name: '取消' }))
     row = screen.getByText('user-b').closest('tr')!
     await user.click(within(row).getByRole('button', { name: '重置密码' }))
-    expect(screen.getByPlaceholderText('6-20 位')).toHaveValue('')
+    expect(screen.getByPlaceholderText('5-20 位')).toHaveValue('')
     view.unmount()
 
     const accounts = [account(21, 'supplier-a'), account(22, 'supplier-b')]
@@ -188,13 +220,13 @@ describe('供应商与分页列表行为', () => {
     await openAccounts(user)
     row = (await screen.findByText('supplier-a')).closest('tr')!
     await user.click(within(row).getByRole('button', { name: '重置密码' }))
-    await user.type(screen.getByPlaceholderText('6-20 位'), 'Secret#2026')
+    await user.type(screen.getByPlaceholderText('5-20 位'), 'Secret#2026')
     expect(document.querySelector('.account-drawer')).toBeInTheDocument()
     expect(screen.getAllByText(/重置密码 · supplier-a/)[0]).toBeVisible()
     await user.click(screen.getByRole('button', { name: '取消' }))
     row = screen.getByText('supplier-b').closest('tr')!
     await user.click(within(row).getByRole('button', { name: '重置密码' }))
-    expect(screen.getByPlaceholderText('6-20 位')).toHaveValue('')
+    expect(screen.getByPlaceholderText('5-20 位')).toHaveValue('')
   }, 10_000)
 
   it('disabled supplier account drawer disables new account creation and rejects stale submit', async () => {
@@ -277,8 +309,13 @@ describe('供应商与分页列表行为', () => {
     const user = userEvent.setup()
     render(<SupplierList />)
     await openAccounts(user, '川崎')
+    const drawer = document.querySelector<HTMLElement>('.account-drawer')!
+    expect(within(drawer).queryByText('姓名')).not.toBeInTheDocument()
+    expect(within(drawer).queryByText('邮箱')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '新增账号' }))
     const dialog = await screen.findByRole('dialog', { name: '新增供应商账号' })
+    expect(within(dialog).queryByLabelText('姓名')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('邮箱')).not.toBeInTheDocument()
     expect(await within(dialog).findByText('供应商权限')).toBeVisible()
   })
 

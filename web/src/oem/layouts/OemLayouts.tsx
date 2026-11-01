@@ -157,7 +157,7 @@ export function PortalLayout() {
               <Menu.Item key="logout"><IconPoweroff style={{ marginRight: 8 }} />退出登录</Menu.Item>
             </Menu>
           }>
-            <Button className="oem-account-button" type="text" style={{ color: 'inherit' }} title={account?.realName}><span className="oem-account-name">{account?.realName}</span><IconDown /></Button>
+            <Button className="oem-account-button" type="text" style={{ color: 'inherit' }} title={account?.employeeNo}><span className="oem-account-name">{account?.employeeNo}</span><IconDown /></Button>
           </Dropdown>
         } />
       </OemProvider>

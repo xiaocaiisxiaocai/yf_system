@@ -95,8 +95,6 @@ function isPortalAccount(value: unknown): value is PortalAccount {
   const account = value as Partial<PortalAccount>
   return typeof account.id === 'number' && account.id > 0
     && typeof account.employeeNo === 'string' && account.employeeNo.length > 0
-    && typeof account.realName === 'string' && account.realName.length > 0
-    && typeof account.email === 'string'
     && typeof account.companyId === 'number' && account.companyId > 0
     && typeof account.companyName === 'string' && account.companyName.length > 0
 }

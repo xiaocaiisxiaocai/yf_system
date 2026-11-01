@@ -77,7 +77,7 @@ export default function ChangePassword() {
               passwordRule,
             ]}
           >
-            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（6-20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
+            <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（5-20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
           </Form.Item>
           <Form.Item label="确认新密码" field="confirm" dependencies={['newPassword']} rules={[{ required: true, message: '请再次输入新密码' }, confirmPasswordRule(form)]}>
             <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />

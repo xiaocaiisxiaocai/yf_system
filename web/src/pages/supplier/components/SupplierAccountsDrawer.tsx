@@ -9,7 +9,6 @@ import PasswordInput from '../../../components/PasswordInput'
 import { useAuth } from '../../../store/auth'
 import { type ApiResponses, fmtTime } from '../../../api/types'
 import { passwordRule } from '../../../utils/password'
-import { textLengthRule } from '../../../utils/textRules'
 import type { Account, RoleOption, Supplier } from './supplierTypes'
 import EnterSubmit from '../../../components/EnterSubmit'
 
@@ -33,7 +32,6 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [resettingPassword, setResettingPassword] = useState(false)
-  const [editing, setEditing] = useState<Account | null>(null)
   const [resetTarget, setResetTarget] = useState<Account | null>(null)
   const [roleOptions, setRoleOptions] = useState<RoleOption[]>([])
   const [roleOptionsLoading, setRoleOptionsLoading] = useState(false)
@@ -95,7 +93,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
     try {
       const response = await http.get<ApiResponses['GET /admin/supplier-role-options']>('/admin/supplier-role-options', { quietNetworkError: true } as QuietRequestConfig)
       if (!Array.isArray(response.data)) throw new Error('Invalid supplier role options response')
-      if (roleOptionsRequestId.current !== requestId) return
+      if (roleOptionsRequestId.current !== requestId) return []
       const options = response.data as RoleOption[]
       setRoleOptions(options)
       const selected = form.getFieldValue('roleId')
@@ -103,11 +101,13 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
       if ((selected === undefined || selected === null || selected === '') && roleId !== undefined) {
         form.setFieldValue('roleId', roleId)
       }
+      return options
     } catch {
       if (roleOptionsRequestId.current === requestId) {
         setRoleOptions([])
         setRoleOptionsError(true)
       }
+      return []
     } finally {
       if (roleOptionsRequestId.current === requestId) setRoleOptionsLoading(false)
     }
@@ -117,20 +117,15 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
     if (saveInFlight.current) return
     saveInFlight.current = true
     try {
-      if (!editing && supplier?.status === 'DISABLED') {
+      if (supplier?.status === 'DISABLED') {
         Message.warning('供应商已禁用，不能新增账号')
         return
       }
       const values = await form.validate().catch(() => null)
       if (!values) return
       setSaving(true)
-      if (editing) {
-        await http.put<ApiResponses['PUT /admin/supplier-accounts/{id}']>(`/admin/supplier-accounts/${editing.id}`, values)
-        Message.success('账号已更新')
-      } else {
-        await http.post<ApiResponses['POST /admin/suppliers/{id}/accounts']>(`/admin/suppliers/${supplier!.id}/accounts`, values)
-        Message.success('账号已创建（首次登录需改密）')
-      }
+      await http.post<ApiResponses['POST /admin/suppliers/{id}/accounts']>(`/admin/suppliers/${supplier!.id}/accounts`, values)
+      Message.success('账号已创建（首次登录需改密）')
       setEditOpen(false)
       load()
     } finally {
@@ -215,20 +210,21 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
       )}
       <div className="drawer-toolbar responsive-toolbar">
         <Typography.Text type="secondary">{loading ? '账号加载中…' : accountsFailed ? '账号列表暂不可用' : `共 ${accounts.length} 个账号`}</Typography.Text>
-        <Button
-          type="primary"
-          size="small"
-          icon={<IconPlus />}
-          disabled={supplier?.status === 'DISABLED'}
-          onClick={() => {
-            setEditing(null)
-            form.resetFields()
-            setEditOpen(true)
-            loadRoleOptions()
-          }}
-        >
-          新增账号
-        </Button>
+        <Space wrap>
+          <Button
+            type="primary"
+            size="small"
+            icon={<IconPlus />}
+            disabled={supplier?.status === 'DISABLED'}
+            onClick={() => {
+              form.resetFields()
+              setEditOpen(true)
+              void loadRoleOptions()
+            }}
+          >
+            新增账号
+          </Button>
+        </Space>
       </div>
       {!accountsFailed && <Table
         className="account-table"
@@ -241,9 +237,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
         scroll={{ x: 840 }}
         columns={[
           { title: '账号', dataIndex: 'employeeNo', width: 90, align: 'center' as const, ellipsis: true },
-          { title: '姓名', dataIndex: 'realName', width: 80, align: 'center' as const, ellipsis: true },
           { title: '角色', dataIndex: 'roleName', width: 100, align: 'center' as const, ellipsis: true },
-          { title: '邮箱', dataIndex: 'email', width: 150, ellipsis: true },
           {
             title: '状态',
             dataIndex: 'status',
@@ -257,23 +251,6 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
             width: 216,
             fixed: 'right' as const,
             render: (_: unknown, account: Account) => actionSlots([
-              <Button
-                key="edit"
-                size="mini"
-                type="text"
-                onClick={() => {
-                  setEditing(account)
-                  form.resetFields()
-                  form.setFieldsValue({
-                    employeeNo: account.employeeNo,
-                    realName: account.realName,
-                    email: account.email,
-                  })
-                  setEditOpen(true)
-                }}
-              >
-                编辑
-              </Button>,
               <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(account)}>
                 重置密码
               </Button>,
@@ -314,56 +291,46 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
 
       <Modal
         className="form-dialog"
-        title={editing ? '编辑供应商账号' : '新增供应商账号'}
+        title="新增供应商账号"
         visible={editOpen}
         confirmLoading={saving}
         closable={!saving}
         maskClosable={!saving}
         escToExit={!saving}
         cancelButtonProps={{ disabled: saving }}
-        okButtonProps={{ disabled: !editing && (roleOptionsLoading || roleOptionsError || roleOptions.length === 0) }}
-        okText={editing ? '保存账号' : '创建账号'}
+        okButtonProps={{ disabled: roleOptionsLoading || roleOptionsError || roleOptions.length === 0 }}
+        okText="创建账号"
         onOk={submit}
         onCancel={() => { if (!saving) setEditOpen(false) }}
       >
         <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
-            {!editing && (
-              <>
-                <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
-                  <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
-                </Form.Item>
-                <Form.Item
-                  label="初始密码"
-                  field="password"
-                  extra="首次登录需改密"
-                  rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
-                >
-                  <PasswordInput placeholder="6-20 位" />
-                </Form.Item>
-                <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择供应商角色' }]}
-                  extra={roleOptionsError
-                    ? <>角色加载失败。<Button size="mini" type="text" onClick={loadRoleOptions}>重试</Button></>
-                    : !roleOptionsLoading && roleOptions.length === 0
-                      ? '暂无可用供应商角色，请先由管理员在“角色与权限”中创建或启用角色，并仅授予供应商自有项目权限。'
-                      : undefined}>
-                  <Select
-                    placeholder={roleOptionsLoading ? '正在加载角色' : '选择供应商角色'}
-                    loading={roleOptionsLoading}
-                    disabled={roleOptionsLoading || roleOptionsError || roleOptions.length === 0}
-                  >
-                    {roleOptions.map((role) => (
-                      <Select.Option key={role.id} value={role.id}>{role.name}</Select.Option>
-                    ))}
-                  </Select>
-                </Form.Item>
-              </>
-            )}
-            <Form.Item label="姓名" field="realName" rules={[{ required: true, message: '请输入姓名' }, textLengthRule('姓名', 32)]}>
-              <Input placeholder="姓名" />
+            <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
+              <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
             </Form.Item>
-            <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }, textLengthRule('邮箱', 128)]}>
-              <Input placeholder="name@example.com" />
+            <Form.Item
+              label="初始密码"
+              field="password"
+              extra="首次登录需改密"
+              rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}
+            >
+              <PasswordInput placeholder="5-20 位" />
+            </Form.Item>
+            <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择供应商角色' }]}
+              extra={roleOptionsError
+                ? <>角色加载失败。<Button size="mini" type="text" onClick={loadRoleOptions}>重试</Button></>
+                : !roleOptionsLoading && roleOptions.length === 0
+                  ? '暂无可用供应商角色，请先由管理员在“角色与权限”中创建或启用角色，并仅授予供应商自有项目权限。'
+                  : undefined}>
+              <Select
+                placeholder={roleOptionsLoading ? '正在加载角色' : '选择供应商角色'}
+                loading={roleOptionsLoading}
+                disabled={roleOptionsLoading || roleOptionsError || roleOptions.length === 0}
+              >
+                {roleOptions.map((role) => (
+                  <Select.Option key={role.id} value={role.id}>{role.name}</Select.Option>
+                ))}
+              </Select>
             </Form.Item>
           </div>
         <EnterSubmit /></Form>
@@ -388,7 +355,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
             field="newPassword"
                 rules={[{ required: true, message: '请输入新密码' }, passwordRule]}
           >
-            <PasswordInput autoFocus placeholder="6-20 位" />
+            <PasswordInput autoFocus placeholder="5-20 位" />
           </Form.Item>
           <div className="dialog-note">下次登录需改密</div>
         <EnterSubmit /></Form>

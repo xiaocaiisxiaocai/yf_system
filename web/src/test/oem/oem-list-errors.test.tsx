@@ -79,8 +79,6 @@ function account(): VendorAccount {
   return {
     id: 31,
     employeeNo: 'OEM_0031',
-    realName: '厂商账号甲',
-    email: 'oem@example.invalid',
     companyId: 7,
     status: 'ACTIVE',
     mustChangePassword: false,

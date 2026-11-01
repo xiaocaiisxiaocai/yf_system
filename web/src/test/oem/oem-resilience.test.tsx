@@ -161,7 +161,7 @@ describe('OEM 传递单详情加载失败', () => {
 })
 
 describe('OEM 厂商门户登录页跳转', () => {
-  const account = { id: 31, employeeNo: 'OEM31', realName: '厂商用户', email: 'oem31@example.test', companyId: 9, companyName: '测试代工厂' }
+  const account = { id: 31, employeeNo: 'OEM31', companyId: 9, companyName: '测试代工厂' }
 
   afterEach(() => {
     usePortalAuth.setState({ token: null, account: null, mustChangePassword: false, booted: true, generation: 0 })
@@ -200,7 +200,7 @@ describe('OEM 厂商门户登录页跳转', () => {
     await user.type(screen.getByLabelText('新密码'), 'password1')
     await user.type(screen.getByLabelText('确认新密码'), 'password1')
     await user.click(screen.getByRole('button', { name: '保存' }))
-    expect(await screen.findByText('密码需 6-20 个字符，不能使用常见弱密码或简单重复序列')).toBeInTheDocument()
+    expect(await screen.findByText('密码需 5-20 个字符，不能使用常见弱密码或简单重复序列')).toBeInTheDocument()
   })
 })
 

@@ -13,7 +13,8 @@ export const PreviewWatermark = memo(function PreviewWatermark({ employeeNo, rea
 }) {
   const [openedAt] = useState(() => new Date())
   const labels = useMemo(() => {
-    const label = `${employeeNo?.trim() || '未知'} ${realName?.trim() || '未知'} ${formatWatermarkTime(openedAt)}`
+    const identity = [employeeNo?.trim(), realName?.trim()].filter((value): value is string => Boolean(value))
+    const label = `${identity.length ? identity.join(' ') : '未知'} ${formatWatermarkTime(openedAt)}`
     return WATERMARK_TILE_KEYS.map(tile => <span key={tile}>{label}</span>)
   }, [employeeNo, realName, openedAt])
   return <div className="preview-watermark" aria-hidden="true">{labels}</div>

@@ -16,8 +16,6 @@ import {
 const account: PortalAccount = {
   id: 31,
   employeeNo: 'OEM31',
-  realName: '厂商用户',
-  email: 'oem31@example.test',
   companyId: 9,
   companyName: '测试代工厂',
 }

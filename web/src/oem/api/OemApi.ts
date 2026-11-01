@@ -2,12 +2,12 @@ import type { AxiosInstance, AxiosRequestConfig } from 'axios'
 import type { QuietRequestConfig } from '../../api/client'
 import type * as Api from '../../api/generated/api-types'
 import type {
-  AccountCreate, AccountUpdate, ActiveStatus, ApiResponses, ApiRoute, ApprovalStatus, ApproverOption, AuditRow, Company,
+  AccountCreate, ActiveStatus, ApiResponses, ApiRoute, ApprovalStatus, ApproverOption, AuditRow, Company,
   CompanyListItem, CompanyOption, CompanyUpsert, DepartmentNode, DownloadSession, FlowNodeInput, FlowTemplate,
   FlowTemplateCreate, FlowTemplateDefinitionUpdate, FlowTemplateUpdate, InternalUserOption, Page, PendingTask,
   RetentionTemplate, RetentionTemplateCreate, RetentionTemplateUpdate, RoutingPreview, SettingItem, SettingUpdateItem,
   TransferCreate, TransferDetail, TransferSummary, TransferUpdate, UploadedFile, UploadInit, UploadInitRequest,
-  VendorAccount,
+  CompanyContact, CompanyContactUpsert, VendorAccount,
 } from './types'
 
 export interface TransferQuery {
@@ -122,15 +122,23 @@ export class OemApi {
   // Administration (internal staff only)
   companies = (params: { page: number; pageSize: number; keyword?: string; status?: string }) =>
     this.get<'GET /oem/companies', Page<CompanyListItem>>('/oem/companies', params)
+  importCompanies = (rows: Api.OemCompanyImportRow[]) =>
+    this.post<'POST /oem/companies/import', Api.OemImportResponse>('/oem/companies/import', { rows })
   createCompany = (body: CompanyUpsert) => this.post<'POST /oem/companies', Company>('/oem/companies', body)
   updateCompany = (id: number, body: CompanyUpsert) => this.put<'PUT /oem/companies/{id}', Company>(`/oem/companies/${id}`, body)
   setCompanyStatus = (id: number, status: ActiveStatus) =>
     this.put<'PUT /oem/companies/{id}/status', Company>(`/oem/companies/${id}/status`, { status } satisfies Api.OemStatusRequest)
   deleteCompany = (id: number) => this.delete<'DELETE /oem/companies/{id}'>(`/oem/companies/${id}`)
   accounts = (companyId: number) => this.get<'GET /oem/companies/{id}/accounts', VendorAccount[]>(`/oem/companies/${companyId}/accounts`)
+  importAccounts = (companyId: number, rows: Api.OemAccountImportRow[]) =>
+    this.post<'POST /oem/companies/{id}/accounts/import', Api.OemImportResponse>(`/oem/companies/${companyId}/accounts/import`, { rows })
   createAccount = (companyId: number, body: AccountCreate) =>
     this.post<'POST /oem/companies/{id}/accounts', VendorAccount>(`/oem/companies/${companyId}/accounts`, body)
-  updateAccount = (id: number, body: AccountUpdate) => this.put<'PUT /oem/accounts/{id}', VendorAccount>(`/oem/accounts/${id}`, body)
+  contacts = (companyId: number) => this.get<'GET /oem/companies/{id}/contacts', CompanyContact[]>(`/oem/companies/${companyId}/contacts`)
+  importContacts = (companyId: number, rows: Api.OemCompanyContactImportRow[]) =>
+    this.post<'POST /oem/companies/{id}/contacts/import', Api.OemImportResponse>(`/oem/companies/${companyId}/contacts/import`, { rows })
+  createContact = (companyId: number, body: CompanyContactUpsert) =>
+    this.post<'POST /oem/companies/{id}/contacts', CompanyContact>(`/oem/companies/${companyId}/contacts`, body)
   setAccountStatus = (id: number, status: ActiveStatus) =>
     this.put<'PUT /oem/accounts/{id}/status', VendorAccount>(`/oem/accounts/${id}/status`, { status } satisfies Api.OemStatusRequest)
   deleteAccount = (id: number) => this.delete<'DELETE /oem/accounts/{id}'>(`/oem/accounts/${id}`)

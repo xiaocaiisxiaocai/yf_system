@@ -30,7 +30,7 @@ import { OemProvider } from '../../oem/OemContext'
 const ABC_SHA256 = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
 
 const account: PortalAccount = {
-  id: 31, employeeNo: 'OEM31', realName: '厂商用户', email: 'oem31@example.test', companyId: 9, companyName: '测试代工厂',
+  id: 31, employeeNo: 'OEM31', companyId: 9, companyName: '测试代工厂',
 }
 
 function context(api: Partial<OemApi>, realm: 'internal' | 'oem' = 'internal') {
@@ -237,7 +237,8 @@ describe('D. OEM 预览带水印', () => {
     await waitFor(() => expect(document.querySelector('img[src="blob:oem-image"]')).not.toBeNull())
     expect(previewBlob).toHaveBeenCalledWith(88, expect.any(AbortSignal))
     const watermark = document.querySelector('.preview-watermark')
-    expect(watermark?.textContent).toContain('OEM31 厂商用户')
+    expect(watermark?.textContent).toContain('OEM31')
+    expect(watermark?.textContent).not.toContain('厂商用户')
     view.unmount()
   })
 
@@ -247,7 +248,8 @@ describe('D. OEM 预览带水印', () => {
     render(<OemProvider value={context({ previewBlob }, 'oem')}><OemFilePreview file={file('pdf')} onClose={() => undefined} /></OemProvider>)
 
     expect(await screen.findByTestId('pdf-preview')).toBeInTheDocument()
-    expect(document.querySelector('.file-preview-surface .preview-watermark')?.textContent).toContain('OEM31 厂商用户')
+    expect(document.querySelector('.file-preview-surface .preview-watermark')?.textContent).toContain('OEM31')
+    expect(document.querySelector('.file-preview-surface .preview-watermark')?.textContent).not.toContain('厂商用户')
     const bytes = await pdfProps.loadContent!(new AbortController().signal)
     expect(bytes.byteLength).toBe(4)
     expect(previewBlob).toHaveBeenCalledWith(88, expect.any(AbortSignal))

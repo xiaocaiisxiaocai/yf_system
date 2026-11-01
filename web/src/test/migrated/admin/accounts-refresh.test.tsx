@@ -53,13 +53,11 @@ const supplier = { id: 8, name: '并发供应商', status: 'ACTIVE' as const, cr
 type AccountFixture = {
   id: number
   employeeNo: string
-  realName: string
-  email: string
   status: 'ACTIVE' | 'DISABLED'
   createdAt: string
 }
-const accountA: AccountFixture = { id: 11, employeeNo: 'a11', realName: '账号A', email: 'a@example.invalid', status: 'ACTIVE', createdAt: '' }
-const accountB: AccountFixture = { id: 12, employeeNo: 'b12', realName: '账号B', email: 'b@example.invalid', status: 'ACTIVE', createdAt: '' }
+const accountA: AccountFixture = { id: 11, employeeNo: 'a11', status: 'ACTIVE', createdAt: '' }
+const accountB: AccountFixture = { id: 12, employeeNo: 'b12', status: 'ACTIVE', createdAt: '' }
 
 function supplierPage() {
   return { data: { list: [supplier], total: 1, page: 1, pageSize: 10 } }

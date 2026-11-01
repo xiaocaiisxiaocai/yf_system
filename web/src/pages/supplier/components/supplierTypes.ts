@@ -9,8 +9,6 @@ export interface Supplier {
 export interface Account {
   id: number
   employeeNo: string
-  realName: string
-  email: string
   status: 'ACTIVE' | 'DISABLED'
   roleId?: number | null
   roleName?: string | null

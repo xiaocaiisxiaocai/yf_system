@@ -74,10 +74,10 @@ export default function Profile() {
             <span>账号</span>
             <strong>{user?.employeeNo || '-'}</strong>
           </div>
-          <div className="profile-readonly-item">
+          {user?.userType !== 'SUPPLIER' && <div className="profile-readonly-item">
             <span>姓名</span>
             <strong>{user?.realName || '-'}</strong>
-          </div>
+          </div>}
           <div className="profile-readonly-item">
             <span>账号类型</span>
             <strong>{user?.userType === 'SUPPLIER' ? '供应商人员' : '企业内部人员'}</strong>
@@ -85,11 +85,11 @@ export default function Profile() {
         </div>
         {user?.userType === 'SUPPLIER' && (
           <div className="profile-boundary-note" role="note">
-            账号信息由企业管理员维护
+            供应商账号为共用登录账号；姓名和邮箱由供应商联络人资料维护
           </div>
         )}
         <div className="profile-grid">
-          <section className="profile-section" aria-labelledby="profile-contact-title">
+          {user?.userType !== 'SUPPLIER' && <section className="profile-section" aria-labelledby="profile-contact-title">
             <div className="profile-section-heading">
               <h2 id="profile-contact-title">联系方式</h2>
               <Text type="secondary">用于接收项目协作通知</Text>
@@ -115,7 +115,7 @@ export default function Profile() {
                 保存资料
               </Button>
             </Form>
-          </section>
+          </section>}
 
           <section className="profile-section" aria-labelledby="profile-password-title">
             <div className="profile-section-heading">
@@ -134,7 +134,7 @@ export default function Profile() {
                   passwordRule,
                 ]}
               >
-                <PasswordInput prefix={<IconLock />} placeholder="6-20 位" autoComplete="new-password" disabled={busy} />
+                <PasswordInput prefix={<IconLock />} placeholder="5-20 位" autoComplete="new-password" disabled={busy} />
               </Form.Item>
               <Form.Item label="确认新密码" field="confirm" dependencies={['newPassword']} rules={[{ required: true, message: '请再次输入新密码' }, confirmPasswordRule(passwordForm)]}>
                 <PasswordInput prefix={<IconLock />} placeholder="请再次输入新密码" autoComplete="new-password" disabled={busy} />

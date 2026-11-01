@@ -294,8 +294,6 @@ describe('OEM 前端入口与路由', () => {
       account: {
         id: 31,
         employeeNo: 'OEM31',
-        realName: '厂商用户',
-        email: 'oem31@example.test',
         companyId: 9,
         companyName: '测试代工厂',
       },
@@ -421,8 +419,6 @@ describe('OEM 前端入口与路由', () => {
       account: {
         id: 31,
         employeeNo: 'OEM31',
-        realName: '厂商用户',
-        email: 'oem31@example.test',
         companyId: 9,
         companyName: '测试代工厂',
       },
@@ -519,8 +515,6 @@ describe('OEM 前端入口与路由', () => {
       account: {
         id: 31,
         employeeNo: 'OEM31',
-        realName: '厂商用户',
-        email: 'oem31@example.test',
         companyId: 9,
         companyName: '测试代工厂',
       },

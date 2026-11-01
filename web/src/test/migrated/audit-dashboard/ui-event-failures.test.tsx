@@ -174,7 +174,7 @@ describe('UI 事件失败保护', () => {
 
   it('supplier account status failure resolves the button handler and preserves the account for retry', async () => {
     const supplier = { id: 8, name: '供应商', status: 'ACTIVE', createdAt: '' }
-    const account = { id: 12, employeeNo: 's12', realName: '供应商账号', email: 's12@example.invalid', roleName: '供应商角色', status: 'ACTIVE', createdAt: '' }
+    const account = { id: 12, employeeNo: 's12', roleName: '供应商角色', status: 'ACTIVE', createdAt: '' }
     const firstWrite = deferred<{ data: unknown }>()
     let accountGets = 0
     let attempts = 0
@@ -192,7 +192,8 @@ describe('UI 事件失败保护', () => {
     const user = userEvent.setup()
     render(<SupplierList />)
     await user.click(await screen.findByRole('button', { name: '账号管理' }))
-    expect(await screen.findByText('供应商账号')).toBeVisible()
+    expect(await screen.findByText('账号管理 · 供应商')).toBeVisible()
+    expect(screen.getByText('s12')).toBeVisible()
 
     const disableButton = () => screen.getByRole('button', { name: '禁用' })
     await user.click(disableButton())
@@ -201,7 +202,8 @@ describe('UI 事件失败保护', () => {
     await act(async () => firstWrite.reject(new Error('account status failed')))
     await waitFor(() => expect(disableButton()).toBeEnabled())
     expect(accountGets).toBe(1)
-    expect(screen.getByText('供应商账号')).toBeVisible()
+    expect(screen.getByText('账号管理 · 供应商')).toBeVisible()
+    expect(screen.getByText('s12')).toBeVisible()
 
     await user.click(disableButton())
     fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)

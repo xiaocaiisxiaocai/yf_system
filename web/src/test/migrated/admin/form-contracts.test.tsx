@@ -108,33 +108,34 @@ describe('管理员表单契约', () => {
   })
 
   it('password contract counts Unicode scalars and is shared by every password-writing form', async () => {
-    expect(PASSWORD_MIN_CHARS).toBe(6)
+    expect(PASSWORD_MIN_CHARS).toBe(5)
     expect(PASSWORD_MAX_CHARS).toBe(20)
     expect(PASSWORD_MAX_BYTES).toBe(256)
     const sixCharacters = 'A中🙂b2#'
     const twentyCharacters = sixCharacters.repeat(3) + 'Z9'
     expect(Array.from(sixCharacters)).toHaveLength(6)
     expect(Array.from(twentyCharacters)).toHaveLength(20)
-    expect(validatePassword('A中🙂2#')).toMatch(/6-20/)
+    expect(validatePassword('A中2#')).toMatch(/5-20/)
+    expect(validatePassword('A中🙂2#')).toBeUndefined()
     expect(validatePassword(sixCharacters)).toBeUndefined()
     expect(validatePassword(twentyCharacters)).toBeUndefined()
-    expect(validatePassword(`${twentyCharacters}x`)).toMatch(/6-20/)
+    expect(validatePassword(`${twentyCharacters}x`)).toMatch(/5-20/)
     for (const weak of ['短密码', 'abcdef', '中'.repeat(6), 'Password123456!', 'P@ssw0rd1234!', 'passwordpassword1!', 'qwerty123456', '123456789012', 'abcdabcdabcd']) {
       expect(validatePassword(weak)).toBe(PASSWORD_VALIDATION_MESSAGE)
     }
 
     const changePassword = render(<MemoryRouter><ChangePassword /></MemoryRouter>)
-    expect(screen.getByPlaceholderText(/新密码（6-20 位）/)).toBeVisible()
+    expect(screen.getByPlaceholderText(/新密码（5-20 位）/)).toBeVisible()
     changePassword.unmount()
 
     const profile = render(<MemoryRouter><Profile /></MemoryRouter>)
-    expect(screen.getByPlaceholderText('6-20 位')).toBeVisible()
+    expect(screen.getByPlaceholderText('5-20 位')).toBeVisible()
     profile.unmount()
 
     const user = userEvent.setup()
     const users = render(<UserList />)
     await user.click(await screen.findByRole('button', { name: '新增用户' }))
-    expect(screen.getByPlaceholderText('6-20 位')).toBeVisible()
+    expect(screen.getByPlaceholderText('5-20 位')).toBeVisible()
     users.unmount()
 
     mocks.get.mockImplementation(async (url: string) => {
@@ -145,7 +146,7 @@ describe('管理员表单契约', () => {
     const suppliers = render(<SupplierList />)
     await user.click(await screen.findByRole('button', { name: '账号管理' }))
     await user.click(await screen.findByRole('button', { name: '新增账号' }))
-    expect(screen.getByPlaceholderText('6-20 位')).toBeVisible()
+    expect(screen.getByPlaceholderText('5-20 位')).toBeVisible()
     suppliers.unmount()
   })
 
@@ -204,7 +205,7 @@ describe('管理员表单契约', () => {
     render(<UserList />)
     await user.click(await screen.findByRole('button', { name: '新增用户' }))
     await user.type(screen.getByPlaceholderText('3-32 位字母、数字或下划线'), 'employee_1')
-    await user.type(screen.getByPlaceholderText('6-20 位'), 'Strong#2026')
+    await user.type(screen.getByPlaceholderText('5-20 位'), 'Strong#2026')
     await user.type(screen.getByPlaceholderText('姓名'), '测试用户')
     await user.type(screen.getByPlaceholderText('name@example.com'), 'employee@example.invalid')
     await openArcoSelect('选择角色', '内部成员')
@@ -242,7 +243,7 @@ describe('管理员表单契约', () => {
     render(<UserList />)
     await user.click(await screen.findByRole('button', { name: '新增用户' }))
     await user.type(screen.getByPlaceholderText('3-32 位字母、数字或下划线'), 'employee_1')
-    await user.type(screen.getByPlaceholderText('6-20 位'), 'Strong#2026')
+    await user.type(screen.getByPlaceholderText('5-20 位'), 'Strong#2026')
     await user.type(screen.getByPlaceholderText('姓名'), '测试用户')
     await user.type(screen.getByPlaceholderText('name@example.com'), 'employee@example.invalid')
     await openArcoSelect('选择组织', '研发部（部门）')
@@ -266,7 +267,7 @@ describe('管理员表单契约', () => {
       : screen.getByPlaceholderText('请输入当前密码')
     const newPassword = pageName === 'ChangePassword'
       ? screen.getByLabelText('新密码')
-      : screen.getByPlaceholderText('6-20 位')
+      : screen.getByPlaceholderText('5-20 位')
     const confirmPassword = pageName === 'ChangePassword'
       ? screen.getByLabelText('确认新密码')
       : screen.getByPlaceholderText('请再次输入新密码')

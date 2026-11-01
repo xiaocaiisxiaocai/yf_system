@@ -397,7 +397,7 @@ export default function MessagePanel({
         targetId={targetId}
         userId={user?.id}
         watermarkEmployeeNo={user?.employeeNo}
-        watermarkRealName={user?.realName}
+        watermarkRealName={user?.userType === 'INTERNAL' ? user.realName : undefined}
         canDelete={canDelete}
         receiptRefresh={receiptPoll.dataUpdatedAt}
         listRef={listRef}

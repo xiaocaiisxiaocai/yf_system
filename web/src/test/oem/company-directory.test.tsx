@@ -7,6 +7,13 @@ import { OemApi } from '../../oem/api/OemApi'
 import type { Company, Page, VendorAccount } from '../../oem/api/types'
 import CompaniesPage from '../../oem/pages/admin/CompaniesPage'
 
+vi.mock('../../utils/excelWorkbook', () => ({
+  downloadExcelWorkbook: vi.fn().mockResolvedValue(undefined),
+  createExcelWorkbook: vi.fn(),
+  readExcelTable: vi.fn(),
+}))
+import { downloadExcelWorkbook } from '../../utils/excelWorkbook'
+
 
 function company(overrides: Partial<Company> = {}): Company {
   return {
@@ -29,8 +36,6 @@ function account(overrides: Partial<VendorAccount> = {}): VendorAccount {
   return {
     id: 31,
     employeeNo: 'OEM_0031',
-    realName: '厂商账号甲',
-    email: 'oem-0031@example.invalid',
     companyId: 7,
     status: 'ACTIVE',
     mustChangePassword: false,
@@ -77,7 +82,6 @@ function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
     setCompanyStatus: vi.fn(),
     deleteCompany: vi.fn(),
     createAccount: vi.fn(),
-    updateAccount: vi.fn(),
     setAccountStatus: vi.fn(),
     deleteAccount: vi.fn(),
     resetAccountPassword: vi.fn(),
@@ -93,6 +97,46 @@ async function openAccounts(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('OEM 厂商与账号目录', () => {
+  it('账号和联络人 Excel 批量入口位于 ODM/OEM 厂商总表页', async () => {
+    renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
+
+    expect(await screen.findByRole('button', { name: '导入账号' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '导出账号' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '导入联络人' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '导出联络人' })).toBeVisible()
+  })
+
+  it('ODM/OEM账号导出不包含姓名、邮箱或任何密码列', async () => {
+    vi.mocked(downloadExcelWorkbook).mockClear()
+    const user = userEvent.setup()
+    renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
+
+    await user.click(await screen.findByRole('button', { name: '导出账号' }))
+    await waitFor(() => expect(downloadExcelWorkbook).toHaveBeenCalledTimes(1))
+
+    const sheets = vi.mocked(downloadExcelWorkbook).mock.calls[0][1]
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].headers).toEqual(['厂商名称', '登录账号', '状态', '需改密', '锁定', '最近登录'])
+    expect(sheets[0].headers).not.toContain('姓名')
+    expect(sheets[0].headers).not.toContain('邮箱')
+    expect(sheets[0].headers).not.toContain('初始密码')
+  })
+
+  it('共用 OEM 登录账号不显示或要求填写联系人姓名和邮箱', async () => {
+    const user = userEvent.setup()
+    renderDirectory(baseApi(), ['oem:account_manage'])
+    const drawer = await openAccounts(user)
+
+    expect(within(drawer).queryByText('姓名')).not.toBeInTheDocument()
+    expect(within(drawer).queryByText('邮箱')).not.toBeInTheDocument()
+    await user.click(within(drawer).getByRole('button', { name: '新增账号' }))
+    const dialog = await screen.findByRole('dialog', { name: '新增账号' })
+    expect(within(dialog).getByLabelText('登录账号')).toBeVisible()
+    expect(within(dialog).getByLabelText('初始密码')).toBeVisible()
+    expect(within(dialog).queryByLabelText('姓名')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('邮箱')).not.toBeInTheDocument()
+  })
+
   it('调用约定的厂商和账号删除端点', async () => {
     const http = { delete: vi.fn().mockResolvedValue({ data: {} }) }
     const api = new OemApi(http as unknown as AxiosInstance)
