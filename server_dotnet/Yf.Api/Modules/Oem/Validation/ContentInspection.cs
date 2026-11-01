@@ -150,8 +150,9 @@ public static class ArchiveInspector
         return detected switch
         {
             "zip" when ext == "zip" => await InspectZipAsync(path, limits, depth: 1, workDirectory, new Budget(limits), null, ct),
-            // OOXML containers: encrypted entries or zip bombs are refused, nested archives are not expected.
-            "zip" => await InspectZipAsync(path, limits with { MaxDepth = 1 }, depth: 1, workDirectory, new Budget(limits), ooxml, ct),
+            // OOXML containers: encrypted entries or zip bombs are refused. The only nesting allowed is an
+            // embedded Office package (a chart's workbook) under */embeddings/, inspected as one more level.
+            "zip" => await InspectZipAsync(path, limits with { MaxDepth = 2 }, depth: 1, workDirectory, new Budget(limits), ooxml, ct),
             "rar" or "7z" => await InspectSharpArchiveAsync(path, detected, limits, depth: 1, workDirectory, new Budget(limits), ct),
             _ => await ContainsEmbeddedArchiveAsync(path, ct)
                 ? new ArchiveVerdict(ArchiveOutcome.Forbidden, "文件中夹带了压缩包数据，禁止传递")
@@ -162,24 +163,121 @@ public static class ArchiveInspector
     private const int EmbeddedSignatureScanBytes = 1024 * 1024;
     private const int ZipEndRecordLength = 22;
     private const int MaxZipCommentLength = ushort.MaxValue;
+    private const int ZipEndSearchWindow = ZipEndRecordLength + MaxZipCommentLength;
 
     /// <summary>
     /// Archive readers do not need the archive at offset zero: ZIP is located from its
     /// end record, and RAR/7z tools find a signature after a stub. A file that is not an
-    /// archive by its leading bytes must therefore not carry a complete ZIP end record at its
-    /// tail or a RAR/7z signature near its start; otherwise encryption and expansion limits
+    /// archive by its leading bytes must therefore not carry a ZIP end record in its tail
+    /// window or a RAR/7z signature near its start; otherwise encryption and expansion limits
     /// could be bypassed by prepending a few bytes.
     /// </summary>
     private static async Task<bool> ContainsEmbeddedArchiveAsync(string path, CancellationToken ct)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
-        if (ZipDirectory.FindEnd(stream, exactTail: true) is not null) return true;
-        stream.Seek(0, SeekOrigin.Begin);
-        var head = new byte[(int)Math.Min(stream.Length, EmbeddedSignatureScanBytes)];
+        var length = stream.Length;
+        var head = new byte[(int)Math.Min(length, EmbeddedSignatureScanBytes)];
         await stream.ReadExactlyAsync(head, ct);
-        return head.Length > 1 && (head.AsSpan(1).IndexOf(FileSignatureInspector.RarSignature) >= 0
-            || head.AsSpan(1).IndexOf(FileSignatureInspector.SevenZipSignature) >= 0);
+        var tail = new byte[(int)Math.Min(length, ZipEndSearchWindow)];
+        stream.Seek(length - tail.Length, SeekOrigin.Begin);
+        await stream.ReadExactlyAsync(tail, ct);
+        var probe = new byte[4];
+        return EmbeddedArchive.Contains(head, tail, length - tail.Length, offset =>
+        {
+            stream.Seek(offset, SeekOrigin.Begin);
+            return stream.ReadAtLeast(probe, probe.Length, throwOnEndOfStream: false) == probe.Length
+                && BinaryPrimitives.ReadUInt32LittleEndian(probe) == 0x02014B50;
+        });
     }
+
+    internal static class EmbeddedArchive
+    {
+        /// <summary>
+        /// True when <paramref name="head"/> carries a RAR/7z signature after offset zero, or
+        /// <paramref name="tail"/> (the last bytes, starting at <paramref name="tailStart"/>) holds a
+        /// ZIP end record a reader would accept: trailing bytes after it are tolerated, as archive
+        /// tools tolerate them. The record must point at a central directory that physically
+        /// precedes it; <paramref name="directoryAt"/> checks one outside the tail, and without it
+        /// such a record counts as an archive.
+        /// </summary>
+        public static bool Contains(ReadOnlySpan<byte> head, ReadOnlySpan<byte> tail, long tailStart, Func<long, bool>? directoryAt = null)
+        {
+            if (head.Length > 1 && (head[1..].IndexOf(FileSignatureInspector.RarSignature) >= 0
+                || head[1..].IndexOf(FileSignatureInspector.SevenZipSignature) >= 0))
+                return true;
+            for (var i = tail.Length - ZipEndRecordLength; i >= 0; i--)
+            {
+                if (BinaryPrimitives.ReadUInt32LittleEndian(tail[i..]) != 0x06054B50) continue;
+                if (i + ZipEndRecordLength + BinaryPrimitives.ReadUInt16LittleEndian(tail[(i + 20)..]) > tail.Length) continue;
+                var entries = BinaryPrimitives.ReadUInt16LittleEndian(tail[(i + 10)..]);
+                long size = BinaryPrimitives.ReadUInt32LittleEndian(tail[(i + 12)..]);
+                long offset = BinaryPrimitives.ReadUInt32LittleEndian(tail[(i + 16)..]);
+                if (entries == ushort.MaxValue || size == uint.MaxValue || offset == uint.MaxValue) return true;
+                // An empty archive carries nothing.
+                if (entries == 0 || size == 0) continue;
+                var endOffset = tailStart + i;
+                if (size > endOffset) continue;
+                var directory = endOffset - size;
+                if (directory >= tailStart)
+                {
+                    if (BinaryPrimitives.ReadUInt32LittleEndian(tail[(int)(directory - tailStart)..]) == 0x02014B50) return true;
+                    continue;
+                }
+                if (directoryAt is null || directoryAt(directory)) return true;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>Keeps the first and last bytes of a streamed archive entry for <see cref="EmbeddedArchive"/>.</summary>
+    private sealed class EmbeddedArchiveProbe
+    {
+        private readonly MemoryStream head = new();
+        private byte[]? ring;
+        private long overflow;
+
+        public void Append(ReadOnlySpan<byte> data)
+        {
+            var toHead = (int)Math.Min(data.Length, EmbeddedSignatureScanBytes - head.Length);
+            head.Write(data[..toHead]);
+            data = data[toHead..];
+            if (data.IsEmpty) return;
+            ring ??= new byte[ZipEndSearchWindow];
+            if (data.Length > ring.Length)
+            {
+                overflow += data.Length - ring.Length;
+                data = data[^ring.Length..];
+            }
+            while (!data.IsEmpty)
+            {
+                var position = (int)(overflow % ring.Length);
+                var count = Math.Min(data.Length, ring.Length - position);
+                data[..count].CopyTo(ring.AsSpan(position));
+                overflow += count;
+                data = data[count..];
+            }
+        }
+
+        public bool ContainsArchive()
+        {
+            var headBytes = head.GetBuffer().AsSpan(0, (int)head.Length);
+            var total = head.Length + overflow;
+            var tail = new byte[(int)Math.Min(total, ZipEndSearchWindow)];
+            var fromRing = (int)Math.Min(overflow, tail.Length);
+            var fromHead = tail.Length - fromRing;
+            headBytes[^fromHead..].CopyTo(tail);
+            if (fromRing > 0)
+            {
+                var position = (int)(overflow % ring!.Length);
+                for (var i = 0; i < fromRing; i++)
+                    tail[fromHead + i] = ring[(position - fromRing + i + ring.Length) % ring.Length];
+            }
+            return EmbeddedArchive.Contains(headBytes, tail, total - tail.Length);
+        }
+    }
+
+    private static bool IsEmbeddedOfficePart(string entryName) =>
+        entryName.Replace('\\', '/').Contains("/embeddings/", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Unsafe names would let an extracting client write outside its target directory.</summary>
     internal static bool UnsafeEntryName(string? name)
@@ -203,7 +301,7 @@ public static class ArchiveInspector
     {
         public sealed record End(long EndOffset, long DirectoryOffset, long DirectorySize);
 
-        public static End? FindEnd(Stream stream, bool exactTail)
+        public static End? FindEnd(Stream stream)
         {
             var length = stream.Length;
             if (length < ZipEndRecordLength) return null;
@@ -215,7 +313,7 @@ public static class ArchiveInspector
             {
                 if (BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(i)) != 0x06054B50) continue;
                 var commentEnd = i + ZipEndRecordLength + BinaryPrimitives.ReadUInt16LittleEndian(tail.AsSpan(i + 20));
-                if (exactTail ? commentEnd != tailLength : commentEnd > tailLength) continue;
+                if (commentEnd > tailLength) continue;
                 var endOffset = length - tailLength + i;
                 long size = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(i + 12));
                 long offset = BinaryPrimitives.ReadUInt32LittleEndian(tail.AsSpan(i + 16));
@@ -250,7 +348,7 @@ public static class ArchiveInspector
         public static long? CountRecords(string path, long limit)
         {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.SequentialScan);
-            var end = FindEnd(stream, exactTail: false);
+            var end = FindEnd(stream);
             if (end is null) return null;
             stream.Seek(end.DirectoryOffset, SeekOrigin.Begin);
             var header = new byte[46];
@@ -356,7 +454,8 @@ public static class ArchiveInspector
                 try
                 {
                     await using var input = entry.Open();
-                    var verdict = await InspectEntryAsync(input, entry.Length, limits, depth, workDirectory, budget, ct);
+                    var verdict = await InspectEntryAsync(input, entry.FullName, entry.Length,
+                        nestedAllowed: ooxml is null || IsEmbeddedOfficePart(entry.FullName), limits, depth, workDirectory, budget, ct);
                     if (verdict.Outcome is not ArchiveOutcome.Accepted) return verdict;
                 }
                 catch (ArchiveLimitException ex) { return new(ArchiveOutcome.LimitExceeded, ex.Message); }
@@ -476,7 +575,7 @@ public static class ArchiveInspector
                         continue;
                     }
                     await using var input = await reader.OpenEntryStreamAsync(ct);
-                    var verdict = await InspectEntryAsync(input, entry.Size, limits, depth, workDirectory, budget, ct);
+                    var verdict = await InspectEntryAsync(input, entry.Key, entry.Size, nestedAllowed: true, limits, depth, workDirectory, budget, ct);
                     if (verdict.Outcome is not ArchiveOutcome.Accepted) return verdict;
                 }
             }
@@ -564,7 +663,7 @@ public static class ArchiveInspector
         if (entry.IsDirectory)
             return entry.Size != 0 ? new(ArchiveOutcome.Corrupt, "压缩包目录条目不能包含文件内容") : null;
         await using var input = open();
-        var verdict = await InspectEntryAsync(input, entry.Size, limits, depth, workDirectory, budget, ct);
+        var verdict = await InspectEntryAsync(input, entry.Key, entry.Size, nestedAllowed: true, limits, depth, workDirectory, budget, ct);
         return verdict.Outcome is ArchiveOutcome.Accepted ? null : verdict;
     }
 
@@ -593,7 +692,9 @@ public static class ArchiveInspector
 
     private static async Task<ArchiveVerdict> InspectEntryAsync(
         Stream input,
+        string? entryName,
         long declaredLength,
+        bool nestedAllowed,
         ArchiveLimits limits,
         int depth,
         string workDirectory,
@@ -614,14 +715,26 @@ public static class ArchiveInspector
         if (FileSignatureInspector.IsExecutable(buffer.AsSpan(0, headLength)))
             return new(ArchiveOutcome.Forbidden, "压缩包内包含可执行程序，禁止传递");
         var detected = FileSignatureInspector.Detect(buffer.AsSpan(0, headLength));
+        if (detected == "ole2" && Path.GetExtension(entryName ?? "").ToLowerInvariant() is ".docx" or ".xlsx" or ".pptx")
+            return new(ArchiveOutcome.Encrypted, "不允许传递加密的 Office 文档");
         if (detected is not ("zip" or "rar" or "7z"))
         {
-            total += await DrainAsync(input, Stream.Null, buffer, budget, ct);
-            return total == declaredLength
-                ? ArchiveVerdict.Accepted
-                : new(ArchiveOutcome.Corrupt, "压缩包条目实际大小与记录不符");
+            // Like a top-level file, an entry must not hide an archive behind a few leading bytes.
+            var probe = new EmbeddedArchiveProbe();
+            probe.Append(buffer.AsSpan(0, headLength));
+            int read;
+            while ((read = await input.ReadAsync(buffer, ct)) > 0)
+            {
+                AccountActualBytes(budget, read);
+                total += read;
+                probe.Append(buffer.AsSpan(0, read));
+            }
+            if (total != declaredLength) return new(ArchiveOutcome.Corrupt, "压缩包条目实际大小与记录不符");
+            return probe.ContainsArchive()
+                ? new(ArchiveOutcome.Forbidden, "压缩包条目中夹带了压缩包数据，禁止传递")
+                : ArchiveVerdict.Accepted;
         }
-        if (depth + 1 > limits.MaxDepth)
+        if (!nestedAllowed || depth + 1 > limits.MaxDepth)
             return new(ArchiveOutcome.LimitExceeded, "压缩包嵌套层级超出限制");
 
         // Never incorporate an attacker-controlled entry name into a filesystem path.

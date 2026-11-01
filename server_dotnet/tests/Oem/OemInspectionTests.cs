@@ -307,6 +307,77 @@ public sealed class OemInspectionTests
     }
 
     [Fact]
+    public async Task ArchivesHiddenBehindLeadingOrTrailingBytesAreFoundAtEveryLevel()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var work = Directory.CreateTempSubdirectory("oem-embedded-").FullName;
+        try
+        {
+            byte[] Concat(params byte[][] parts) => parts.SelectMany(part => part).ToArray();
+            var random = new byte[2 * 1024 * 1024];
+            new Random(7).NextBytes(random);
+
+            // Readers tolerate data after the end record, so a trailing byte must not hide the archive.
+            var pdfWithZip = Write(work, "smuggled.pdf", Concat(OemTestHost.Pdf("x"), EncryptedZip(), [0x0A]));
+            Assert.Equal(ArchiveOutcome.Forbidden, (await ArchiveInspector.InspectAsync(pdfWithZip, "pdf", Limits, work, ct)).Outcome);
+
+            foreach (var payload in new[]
+            {
+                Concat([0x00], EncryptedZip()),
+                Concat([0x00], EncryptedZip(), "trailing"u8.ToArray()),
+                Concat(random, EncryptedZip(), "trailing"u8.ToArray()),
+            })
+            {
+                var prefixed = Write(work, "prefixed.zip", Zip(("drawing.bin", payload)));
+                Assert.Equal(ArchiveOutcome.Forbidden, (await ArchiveInspector.InspectAsync(prefixed, "zip", Limits, work, ct)).Outcome);
+            }
+
+            var large = Write(work, "large.zip", Zip(("noise.bin", random), ("drawing.pdf", OemTestHost.Pdf("x"))));
+            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(large, "zip", Limits, work, ct)).Outcome);
+        }
+        finally { Directory.Delete(work, recursive: true); }
+    }
+
+    [Fact]
+    public async Task OfficeDocumentsMayEmbedOfficePackagesButNothingElseNested()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var work = Directory.CreateTempSubdirectory("oem-ooxml-embedded-").FullName;
+        try
+        {
+            byte[] DocxWith(string name, byte[] content)
+            {
+                using var source = new ZipArchive(new MemoryStream(MinimalOoxml("docx")), ZipArchiveMode.Read);
+                var entries = source.Entries.Select(entry =>
+                {
+                    using var stream = entry.Open();
+                    using var copy = new MemoryStream();
+                    stream.CopyTo(copy);
+                    return (entry.FullName, copy.ToArray());
+                }).Append((name, content)).ToArray();
+                return Zip(entries);
+            }
+
+            var chart = Write(work, "chart.docx", DocxWith("word/embeddings/Microsoft_Excel_Worksheet.xlsx", MinimalOoxml("xlsx")));
+            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(chart, "docx", Limits, work, ct)).Outcome);
+
+            var stray = Write(work, "stray.docx", DocxWith("word/media/archive.zip", Zip(("a.txt", "x"u8.ToArray()))));
+            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(stray, "docx", Limits, work, ct)).Outcome);
+
+            var deeper = Write(work, "deeper.docx", DocxWith("word/embeddings/package.zip", Zip(("inner.zip", Zip(("a.txt", "x"u8.ToArray()))))));
+            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(deeper, "docx", Limits, work, ct)).Outcome);
+
+            var hidden = Write(work, "hidden.docx", DocxWith("word/embeddings/secret.zip", EncryptedZip()));
+            Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(hidden, "docx", Limits, work, ct)).Outcome);
+
+            byte[] ole2 = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00, 0x00];
+            var encryptedOffice = Write(work, "encrypted-office.docx", DocxWith("word/embeddings/Microsoft_Excel_Worksheet.xlsx", ole2));
+            Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(encryptedOffice, "docx", Limits, work, ct)).Outcome);
+        }
+        finally { Directory.Delete(work, recursive: true); }
+    }
+
+    [Fact]
     public async Task ValidationPipelineRejectsTamperedDigestAndDisguisedContentWithoutAnEngine()
     {
         var ct = TestContext.Current.CancellationToken;
