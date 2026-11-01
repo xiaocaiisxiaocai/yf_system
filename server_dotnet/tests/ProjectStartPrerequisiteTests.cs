@@ -149,6 +149,22 @@ public sealed class ProjectStartPrerequisiteTests
             ProjectService.SupplierDisabledStartMessage);
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE suppliers SET status='ACTIVE' WHERE id=9701", cancellationToken: ct));
+
+        // A terminated main project may be owned by a disabled account; restarting it would leave nobody to review.
+        await conn.ExecuteAsync(new CommandDefinition("""
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(9715,'disabled-owner','unused','已停用负责人','disabled-owner@example.test','INTERNAL',NULL,9703,'DISABLED',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9715,2);
+            UPDATE project_groups SET responsible_user_id=9715 WHERE id=@GroupId;
+            UPDATE projects SET responsible_user_id=9715 WHERE project_group_id=@GroupId;
+            """, new { GroupId = group.Id }, cancellationToken: ct));
+        await AssertStartRejectedWithoutSideEffectsAsync(conn, projects, actor, projectIds[1], ct,
+            ProjectService.ResponsibleUserUnavailableStartMessage);
+        await conn.ExecuteAsync(new CommandDefinition("""
+            UPDATE project_groups SET responsible_user_id=9704 WHERE id=@GroupId;
+            UPDATE projects SET responsible_user_id=9704 WHERE project_group_id=@GroupId;
+            """, new { GroupId = group.Id }, cancellationToken: ct));
+
         var restarted = await SetStatusAsync(
             projects, conn, actor, projectIds[1], ProjectStatuses.InProgress, ct);
         Assert.Equal(ProjectStatuses.InProgress, restarted.Status);

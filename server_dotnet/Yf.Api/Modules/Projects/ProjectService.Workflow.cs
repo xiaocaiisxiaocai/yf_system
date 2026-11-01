@@ -31,6 +31,7 @@ internal sealed partial class ProjectService
         var (to, action) = ProjectWorkflowRules.ManagementTransition(project.Status, requested);
         if (action is "START" or "RESTART")
         {
+            await EnsureResponsibleUserCanActAsync(conn, tx, project.ResponsibleUserId, ct);
             await EnsureSupplierCanCollaborateAsync(conn, tx, project.SupplierId, ct);
         }
         if (action == "TERMINATE" && await CountActiveUploadsAsync(conn, tx, projectId, false, ct) > 0)
@@ -43,6 +44,21 @@ internal sealed partial class ProjectService
         var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
         await tx.CommitAsync(ct);
         return result;
+    }
+
+    internal const string ResponsibleUserUnavailableStartMessage = "主项目负责人已停用或没有项目列表权限，请先转交主项目后再开始项目";
+
+    /// <summary>
+    /// Only the responsible user reviews, returns and reopens material. The disable guard covers draft and in-progress
+    /// main projects only, so a terminated one may be owned by a disabled account; restarting it would strand the subproject.
+    /// </summary>
+    private static async Task EnsureResponsibleUserCanActAsync(MySqlConnection conn, MySqlTransaction tx, ulong? responsibleUserId, CancellationToken ct)
+    {
+        await using var db = EfDb.Use(conn, tx);
+        if (responsibleUserId is not ulong ownerId || !await EligibleOwners(db).AnyAsync(owner => owner.Id == ownerId, ct))
+        {
+            throw ApiException.Conflict(ResponsibleUserUnavailableStartMessage);
+        }
     }
 
     internal const string SupplierDisabledStartMessage = "项目所属厂商已停用，请先启用厂商后再开始项目";
