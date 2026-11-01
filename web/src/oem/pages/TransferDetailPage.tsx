@@ -431,8 +431,14 @@ export default function TransferDetailPage() {
   }
   const download = async (file: TransferFile) => {
     const session = await api.startDownload(file.id)
+    // Only follow a download URL on this site; anything else would carry the user off-origin.
+    const target = new URL(session.url, window.location.origin)
+    if (target.origin !== window.location.origin) {
+      Message.error('下载地址无效，请刷新后重试')
+      return
+    }
     // The grant cookie is path-scoped and HttpOnly; a plain navigation lets the browser stream the file to disk.
-    window.location.href = session.url
+    window.location.href = target.href
   }
   const preview = (file: TransferFile) => {
     // PDF and images open in-page with the viewer watermark. Other formats are not offered.

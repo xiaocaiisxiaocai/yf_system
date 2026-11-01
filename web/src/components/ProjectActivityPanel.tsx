@@ -63,6 +63,9 @@ const PROJECT_ACTION_LABEL: Record<string, string> = {
   REJECT: '验收驳回',
   WITHDRAW: '撤回验收申请',
   TERMINATE: '终止项目',
+  REOPEN: '重开子项目',
+  MATERIAL_APPROVE: '确认资料 OK 并完成',
+  MATERIAL_RETURN: '退回回传资料',
   UPDATE: '更新项目',
   COPY: '复制项目',
 }

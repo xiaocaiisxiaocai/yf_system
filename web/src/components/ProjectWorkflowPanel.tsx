@@ -132,7 +132,8 @@ export default function ProjectWorkflowPanel({
       closeApproval()
       onChanged()
     } catch (error) {
-      if (!isVersionConflict(error)) throw error
+      // 其他错误已由拦截器提示；保留弹窗以便重试，不再抛给 Modal 的 onOk。
+      if (!isVersionConflict(error)) return
       Message.info('厂商回传资料已更新，请查看新资料后再确认')
       closeApproval()
       onChanged()
@@ -163,7 +164,7 @@ export default function ProjectWorkflowPanel({
       closeReturn()
       onChanged()
     } catch (error) {
-      if (!isVersionConflict(error)) throw error
+      if (!isVersionConflict(error)) return
       // 厂商期间又回传了资料：关闭弹窗并刷新，由负责人查看新资料后重新决定。
       Message.info('厂商回传资料已更新，请查看新资料后再操作')
       closeReturn()
@@ -192,7 +193,7 @@ export default function ProjectWorkflowPanel({
       closeReopen()
       onChanged()
     } catch (error) {
-      if (!isVersionConflict(error)) throw error
+      if (!isVersionConflict(error)) return
       Message.info('子项目已被他人修改，请刷新后再操作')
       closeReopen()
       onChanged()

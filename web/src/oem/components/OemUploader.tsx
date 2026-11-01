@@ -189,7 +189,8 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
         try {
           if (!md5) {
             patch(key, { phase: 'hashing', error: undefined, percent: 0 })
-            md5 = await fileMd5(file)
+            // Closing the dialog (unmount) aborts the signal, which also terminates the hashing worker.
+            md5 = await fileMd5(file, () => signal.aborted)
             if (signal.aborted) return false
             patch(key, { md5 })
           }

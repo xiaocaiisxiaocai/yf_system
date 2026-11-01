@@ -85,7 +85,7 @@ describe('collaboration migration', () => {
     live.onStatus('connected')
     live.onReady()
     await settle()
-    expect(useCollaboration.getState().reconnectRevision).toBe(0)
+    expect(useCollaboration.getState().reconnectRevision).toBe(1)
     const afterReady = mocks.get.mock.calls.length
     expect(afterReady).toBeGreaterThan(0)
 
@@ -106,7 +106,7 @@ describe('collaboration migration', () => {
     live.onStatus('connected')
     live.onReady()
     await settle()
-    expect(useCollaboration.getState().reconnectRevision).toBe(1)
+    expect(useCollaboration.getState().reconnectRevision).toBe(2)
     stop()
     expect(mocks.realtimeStop).toHaveBeenCalledOnce()
     expect(vi.getTimerCount()).toBe(0)
@@ -114,25 +114,22 @@ describe('collaboration migration', () => {
     await settle()
   })
 
-  it('does not count the first ready of a session as a reconnect', async () => {
+  it('the first ready of a session also triggers a catch-up refetch', async () => {
     vi.useFakeTimers()
     const stop = startCollaborationPolling()
     await settle()
     const live = mocks.realtimeOptions!
     live.onReady()
     await settle()
-    expect(useCollaboration.getState().reconnectRevision).toBe(0)
+    expect(useCollaboration.getState().reconnectRevision).toBe(1)
     live.onReady()
     await settle()
-    expect(useCollaboration.getState().reconnectRevision).toBe(1)
+    expect(useCollaboration.getState().reconnectRevision).toBe(2)
 
     useAuth.setState((state) => ({
       generation: 2,
       user: state.user ? { ...state.user, id: 8 } : state.user,
     }))
-    await settle()
-    expect(useCollaboration.getState().reconnectRevision).toBe(0)
-    live.onReady()
     await settle()
     expect(useCollaboration.getState().reconnectRevision).toBe(0)
     live.onReady()

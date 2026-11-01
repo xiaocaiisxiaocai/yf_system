@@ -81,7 +81,7 @@ export default function ActiveUploadSessions({
   if (sessions.total <= 0) return null
   if (compact) {
     return (
-      <Tooltip content="未完成的上传会阻止提交验收和终止，可在文件页继续或取消。">
+      <Tooltip content="未完成的上传会阻止资料确认、退回和终止，可在文件页继续或取消。">
         <Tag color="orange" className="active-upload-tag">{sessions.total} 个未完成上传</Tag>
       </Tooltip>
     )
@@ -90,7 +90,7 @@ export default function ActiveUploadSessions({
     <section className="active-upload-sessions" aria-label="未完成的上传">
       <div className="active-upload-sessions-title">
         <IconExclamationCircleFill />
-        <span>有 {sessions.total} 个未完成的上传，会阻止提交验收和终止。继续上传需要重新选择同一个文件。</span>
+        <span>有 {sessions.total} 个未完成的上传，会阻止资料确认、退回和终止。继续上传需要重新选择同一个文件。</span>
       </div>
       <ul>
         {sessions.items.map((item) => (

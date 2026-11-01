@@ -83,7 +83,7 @@ usePortalAuth.subscribe((state, previous) => {
   portalQueryClient.clear()
 })
 
-let refreshing: Promise<boolean> | null = null
+let refreshing: Promise<RefreshOutcome> | null = null
 let refreshingGeneration: number | undefined
 type PortalSessionConfig = InternalAxiosRequestConfig & QuietRequestConfig & { _retried?: boolean; authGeneration?: number }
 
@@ -101,35 +101,64 @@ function isPortalAccount(value: unknown): value is PortalAccount {
     && typeof account.companyName === 'string' && account.companyName.length > 0
 }
 
-async function refreshSession(generation = usePortalAuth.getState().generation): Promise<boolean> {
-  if (usePortalAuth.getState().generation !== generation) return false
+/**
+ * ok: the session is usable (a new token is stored). denied: the refresh cookie or the account was
+ * rejected, so the session is over. unavailable: refresh worked but the account could not be loaded
+ * for a reason other than auth (network blip); the rotated cookie stays valid, so keep the session.
+ */
+type RefreshOutcome = 'ok' | 'denied' | 'unavailable'
+
+const isAuthFailure = (error: unknown) =>
+  axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)
+
+async function refreshSession(generation = usePortalAuth.getState().generation): Promise<RefreshOutcome> {
+  if (usePortalAuth.getState().generation !== generation) return 'denied'
   if (!refreshing || refreshingGeneration !== generation) {
     refreshingGeneration = generation
-    const pending = withPortalAuthLock(async () => {
-      if (usePortalAuth.getState().generation !== generation) return false
+    const pending = withPortalAuthLock(async (): Promise<RefreshOutcome> => {
+      if (usePortalAuth.getState().generation !== generation) return 'denied'
       const response = await axios.post<ApiResponses['POST /oem/auth/refresh']>('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: REFRESH_TIMEOUT_MS })
       const token = response.data?.accessToken
       if (typeof token !== 'string' || token.length === 0) throw new Error('OEM 刷新响应格式无效')
-      const me = await axios.get<ApiResponses['GET /oem/auth/me']>('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: REFRESH_TIMEOUT_MS })
+      let me: { data?: ApiResponses['GET /oem/auth/me'] }
+      try {
+        me = await axios.get<ApiResponses['GET /oem/auth/me']>('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: REFRESH_TIMEOUT_MS })
+      } catch (error) {
+        if (isAuthFailure(error) || usePortalAuth.getState().generation !== generation) return 'denied'
+        // A signed-in tab already holds the full account: the new token alone restores the session.
+        // A booting tab only has the persisted id and cannot render without the account.
+        if (isPortalAccount(usePortalAuth.getState().account)) {
+          usePortalAuth.getState().setToken(token)
+          return 'ok'
+        }
+        return 'unavailable'
+      }
       if (usePortalAuth.getState().generation !== generation
         || !isPortalAccount(me.data?.account)
-        || typeof me.data?.mustChangePassword !== 'boolean') return false
+        || typeof me.data?.mustChangePassword !== 'boolean') return 'denied'
       usePortalAuth.getState().setLogin(token, me.data.account, me.data.mustChangePassword, false)
-      return true
+      return 'ok'
     })
-    .catch(() => false)
+    .catch((): RefreshOutcome => 'denied')
     .finally(() => setTimeout(() => { if (refreshing === pending) refreshing = null }, 0))
     refreshing = pending
   }
   return refreshing
 }
 
+const UNAVAILABLE_MESSAGE = '网络错误，暂时无法恢复登录状态，请稍后重试'
+
 export async function bootPortalSession(): Promise<void> {
   const state = usePortalAuth.getState()
   if (state.booted) return
   const generation = state.generation
-  if (state.account && !state.token && !(await refreshSession(generation))
-    && usePortalAuth.getState().generation === generation) usePortalAuth.getState().logout()
+  if (state.account && !state.token) {
+    const outcome = await refreshSession(generation)
+    if (usePortalAuth.getState().generation === generation) {
+      if (outcome === 'denied') usePortalAuth.getState().logout()
+      else if (outcome === 'unavailable') Message.error(UNAVAILABLE_MESSAGE)
+    }
+  }
   usePortalAuth.getState().setBooted(true)
 }
 
@@ -174,7 +203,12 @@ portalHttp.interceptors.response.use(
     const code = error.response?.data?.code
     if (status === 401 && config && !config._retried && !config.url?.includes('/oem/auth/')) {
       config._retried = true
-      if (await refreshSession(config.authGeneration) && isCurrentSession(config)) return portalHttp(config)
+      const outcome = await refreshSession(config.authGeneration)
+      if (outcome === 'ok' && isCurrentSession(config)) return portalHttp(config)
+      if (outcome === 'unavailable') {
+        Message.error(UNAVAILABLE_MESSAGE)
+        return Promise.reject(error)
+      }
     }
     if (status === 401 && isCurrentSession(config)) {
       usePortalAuth.getState().logout()
@@ -192,16 +226,37 @@ portalHttp.interceptors.response.use(
   },
 )
 
+/*
+ * Login, logout and password change all replace or revoke the portal refresh cookie, so they run under
+ * the same cross-tab lock as refresh: a login landing while another tab rotates the old cookie would
+ * otherwise be overwritten (or trip replay revocation) and lose the new session.
+ */
 export async function portalLogin(employeeNo: string, password: string): Promise<boolean> {
-  const response = await portalHttp.post<ApiResponses['POST /oem/auth/login']>('/oem/auth/login', { employeeNo, password }, { withCredentials: true })
-  if (typeof response.data?.accessToken !== 'string'
-    || !isPortalAccount(response.data?.account)
-    || typeof response.data?.mustChangePassword !== 'boolean') throw new Error('OEM 登录响应格式无效')
-  usePortalAuth.getState().setLogin(response.data.accessToken, response.data.account, response.data.mustChangePassword)
-  return response.data.mustChangePassword
+  return withPortalAuthLock(async () => {
+    const response = await portalHttp.post<ApiResponses['POST /oem/auth/login']>('/oem/auth/login', { employeeNo, password }, { withCredentials: true })
+    if (typeof response.data?.accessToken !== 'string'
+      || !isPortalAccount(response.data?.account)
+      || typeof response.data?.mustChangePassword !== 'boolean') throw new Error('OEM 登录响应格式无效')
+    usePortalAuth.getState().setLogin(response.data.accessToken, response.data.account, response.data.mustChangePassword)
+    return response.data.mustChangePassword
+  })
 }
 
 export async function portalLogout(): Promise<void> {
-  try { await portalHttp.post<ApiResponses['POST /oem/auth/logout']>('/oem/auth/logout', null, { withCredentials: true }) } catch { /* 忽略 */ }
+  try {
+    await withPortalAuthLock(async () => {
+      try { await portalHttp.post<ApiResponses['POST /oem/auth/logout']>('/oem/auth/logout', null, { withCredentials: true }) } catch { /* 忽略 */ }
+    })
+  } catch {
+    /* 锁失败也要完成本地退出 */
+  }
   usePortalAuth.getState().logout()
+}
+
+/** A password change revokes every portal session; the caller signs in again with the new password. */
+export async function portalChangePassword(oldPassword: string, newPassword: string): Promise<void> {
+  await withPortalAuthLock(async () => {
+    await portalHttp.put<ApiResponses['PUT /oem/auth/password']>('/oem/auth/password', { oldPassword, newPassword })
+    usePortalAuth.getState().logout()
+  })
 }

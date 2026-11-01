@@ -4,6 +4,7 @@ import { Message } from '@arco-design/web-react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import {
+  bootPortalSession,
   createPortalQueryScope,
   portalHttp,
   portalQueryClient,
@@ -178,6 +179,41 @@ describe('OEM 门户 HTTP 拦截器', () => {
     expect(usePortalAuth.getState()).toMatchObject({ token: null, account: null, generation: 5 })
     expect(get.mock.calls.length).toBeLessThanOrEqual(1)
     expect(usePortalAuth.getState().token).not.toBe('stale-token')
+  })
+
+  it('刷新成功但读取账号时网络中断：保留会话并用新令牌重试', async () => {
+    vi.spyOn(axios, 'post').mockResolvedValue({ data: { accessToken: 'new-token' } } as never)
+    vi.spyOn(axios, 'get').mockRejectedValue(new AxiosError('Network Error', 'ERR_NETWORK'))
+    const tokens: unknown[] = []
+    const adapter: AxiosAdapter = async (config) => {
+      tokens.push(config.headers.Authorization)
+      if ((config as { _retried?: boolean })._retried) return responseOf(config, { ok: true })
+      throw httpError(config, 401, { message: '登录已过期' })
+    }
+
+    const response = await portalHttp.get('/oem/transfers', { adapter })
+
+    expect(response.data).toEqual({ ok: true })
+    expect(tokens).toEqual(['Bearer old-token', 'Bearer new-token'])
+    expect(usePortalAuth.getState()).toMatchObject({ token: 'new-token', generation: 4, account: { id: 31 } })
+  })
+
+  it('启动恢复时读取账号网络中断不退出，账号读取被拒才退出', async () => {
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    vi.spyOn(axios, 'post').mockResolvedValue({ data: { accessToken: 'new-token' } } as never)
+    const get = vi.spyOn(axios, 'get').mockRejectedValue(new AxiosError('Network Error', 'ERR_NETWORK'))
+    usePortalAuth.setState({ token: null, account: { id: 31 } as PortalAccount, booted: false, generation: 4 })
+
+    await bootPortalSession()
+
+    expect(usePortalAuth.getState()).toMatchObject({ token: null, booted: true, generation: 4, account: { id: 31 } })
+    expect(toast).toHaveBeenCalledOnce()
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    get.mockImplementation(async (url) => { throw httpError({ url, headers: {} } as InternalAxiosRequestConfig, 401, {}) })
+    usePortalAuth.setState({ booted: false })
+    await bootPortalSession()
+    expect(usePortalAuth.getState()).toMatchObject({ token: null, account: null, booted: true, generation: 5 })
   })
 
   it('40303 进入修改密码且不弹出错误', async () => {

@@ -19,7 +19,9 @@ vi.mock('../../components/PdfPreview', () => ({
 
 import { OemApi } from '../../oem/api/OemApi'
 import { PORTAL_AUTH_LOCK_NAME, PORTAL_STORAGE_LOCK_KEY, withPortalStorageLease } from '../../oem/api/portalAuthLock'
-import { bootPortalSession, portalHttp, usePortalAuth, type PortalAccount } from '../../oem/api/portalSession'
+import {
+  bootPortalSession, portalChangePassword, portalHttp, portalLogin, portalLogout, usePortalAuth, type PortalAccount,
+} from '../../oem/api/portalSession'
 import type { TransferFile } from '../../oem/api/types'
 import OemFilePreview from '../../oem/components/OemFilePreview'
 import OemUploader from '../../oem/components/OemUploader'
@@ -78,6 +80,18 @@ describe('A. OEM 分片 SHA-256 摘要', () => {
     expect([sessionId, index, sha256]).toEqual(['session-1', 0, ABC_SHA256])
   })
 
+  it('卸载上传队列会取消进行中的整文件 MD5 计算', async () => {
+    const user = userEvent.setup()
+    hashMocks.fileMd5.mockReturnValue(new Promise(() => undefined))
+    const view = renderUploader(uploadApi())
+    await user.upload(screen.getByLabelText('选择文件'), new File(['abc'], '校验中.pdf'))
+    await waitFor(() => expect(hashMocks.fileMd5).toHaveBeenCalledOnce())
+    const cancelled = hashMocks.fileMd5.mock.calls[0][1] as () => boolean
+    expect(cancelled()).toBe(false)
+    view.unmount()
+    expect(cancelled()).toBe(true)
+  })
+
   it('摘要不符时重新读取并重发一次，再次不符才失败', async () => {
     const user = userEvent.setup()
     const mismatch = { response: { status: 400, data: { message: '分片 SHA-256 校验失败' } } }
@@ -110,6 +124,46 @@ describe('B. 门户刷新锁与协作端隔离', () => {
       expect(names).toEqual([PORTAL_AUTH_LOCK_NAME])
       expect(PORTAL_AUTH_LOCK_NAME).not.toBe('yf-auth-session')
     } finally {
+      if (descriptor) Object.defineProperty(navigator, 'locks', descriptor)
+      else Reflect.deleteProperty(navigator, 'locks')
+    }
+  })
+
+  it('门户登录、退出和改密在门户刷新锁内轮换 refresh cookie', async () => {
+    const order: string[] = []
+    const descriptor = Object.getOwnPropertyDescriptor(navigator, 'locks')
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: vi.fn(async (name: string, operation: () => Promise<unknown>) => {
+          order.push(`lock:${name}`)
+          const result = await operation()
+          order.push('unlock')
+          return result
+        }),
+      },
+    })
+    const adapter: AxiosAdapter = async (config) => {
+      order.push(`${config.method}:${config.url}`)
+      const data = config.url === '/oem/auth/login' ? { accessToken: 'token-1', account, mustChangePassword: false } : {}
+      return { data, status: 200, statusText: 'OK', headers: {}, config }
+    }
+    const previousAdapter = portalHttp.defaults.adapter
+    portalHttp.defaults.adapter = adapter
+    try {
+      await portalLogin('OEM31', 'secret')
+      await portalChangePassword('secret', 'secret-2')
+      usePortalAuth.getState().setLogin('token-2', account, false)
+      await portalLogout()
+      const lock = `lock:${PORTAL_AUTH_LOCK_NAME}`
+      expect(order).toEqual([
+        lock, 'post:/oem/auth/login', 'unlock',
+        lock, 'put:/oem/auth/password', 'unlock',
+        lock, 'post:/oem/auth/logout', 'unlock',
+      ])
+      expect(usePortalAuth.getState().token).toBeNull()
+    } finally {
+      portalHttp.defaults.adapter = previousAdapter
       if (descriptor) Object.defineProperty(navigator, 'locks', descriptor)
       else Reflect.deleteProperty(navigator, 'locks')
     }

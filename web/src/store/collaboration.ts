@@ -25,6 +25,7 @@ interface CollaborationState extends CollaborationSummary {
   messageRevisions: Record<number, number>
   receiptRevisions: Record<number, number>
   activityRevisions: Record<number, number>
+  /** 每次实时通道（重新）连上都递增；页面据此重拉一次，补上未收到的推送。 */
   reconnectRevision: number
   refresh: () => Promise<void>
   reset: () => void
@@ -366,7 +367,6 @@ export function startCollaborationPolling(): () => void {
       void poller.refresh()
     }, EVENT_REFRESH_DELAY_MS + Math.floor(Math.random() * EVENT_REFRESH_JITTER_MS))
   }
-  let readySessionKey: string | null = null
   const stop = startProjectRealtime({
     getSession: () => { const session = currentPollSession(); return { ...session, key: session.key ?? '' } },
     getAccessToken: getRealtimeAccessToken,
@@ -376,11 +376,10 @@ export function startCollaborationPolling(): () => void {
       if (realtimeStatus !== 'connected') void poller.refresh()
     },
     onReady: () => {
-      const sessionKey = currentPollSession().key
-      if (sessionKey && sessionKey === readySessionKey) {
+      // 会话的首次连上也要递增：页面首次 REST 加载到连上之间的推送（例如厂商上传）从未收到，需重拉一次。
+      if (currentPollSession().key) {
         useCollaboration.setState((state) => ({ reconnectRevision: state.reconnectRevision + 1 }))
       }
-      readySessionKey = sessionKey
       void poller.refresh()
     },
     onEvent: ({ projectId, kind }) => {

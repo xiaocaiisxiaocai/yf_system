@@ -5,8 +5,7 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import AuthShell from '../../../components/AuthShell'
 import PasswordInput from '../../../components/PasswordInput'
 import { confirmPasswordRule, passwordRule } from '../../../utils/password'
-import type { ApiResponses } from '../../api/types'
-import { bootPortalSession, portalHttp, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
+import { bootPortalSession, portalChangePassword, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
 
 const OEM_BRAND = 'ODM/OEM 文件传递'
 
@@ -59,9 +58,8 @@ export function PortalChangePasswordPage() {
   const submit = async (values: { oldPassword: string; newPassword: string; confirm: string }) => {
     setLoading(true)
     try {
-      await portalHttp.put<ApiResponses['PUT /oem/auth/password']>('/oem/auth/password', { oldPassword: values.oldPassword, newPassword: values.newPassword })
       // A password change revokes every session: sign in again with the new password.
-      usePortalAuth.getState().logout()
+      await portalChangePassword(values.oldPassword, values.newPassword)
       Message.success('密码已修改，请使用新密码重新登录')
       navigate(`${PORTAL_BASE}/login`, { replace: true })
     } finally {
