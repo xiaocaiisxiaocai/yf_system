@@ -138,7 +138,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 ```powershell
 $env:YF_CONFIG_PATH = 'D:\YfConfig\appsettings.Local.json'
-$secret = Read-Host '初始管理员密码（6–20字符，禁止常见弱密码）' -AsSecureString
+$secret = Read-Host '初始管理员密码（5–20字符，禁止常见弱密码）' -AsSecureString
 $credential = New-Object System.Net.NetworkCredential('', $secret)
 $env:YF_BOOTSTRAP_PASSWORD = $credential.Password
 try { dotnet run --project .\Yf.Api -- --initialize-database }
@@ -149,7 +149,7 @@ finally { Remove-Item Env:\YF_BOOTSTRAP_PASSWORD; $credential = $null; $secret =
 
 初始化种子由 `BootstrapSeedCatalog` 通过 EF 实体写入，不再内嵌或导出 schema JSON。当前开发阶段需要切换旧数据库时，删除并重建空开发库后重新初始化；不提供旧手写迁移历史收编或数据转换。
 
-新建账号、初始化管理员、重置密码和修改密码统一要求 6–20 个 Unicode 字符，拒绝常见弱密码和简单重复。登录只需工号和密码，不再提供或校验图形验证码。已有 Argon2 PHC 密码继续验证，包括此前设置的超过 20 字符的密码，不强制批量重置；旧密码验证仍保留 256 UTF-8 字节的输入上限。
+新建账号、初始化管理员、重置密码和修改密码统一要求 5–20 个 Unicode 字符，拒绝常见弱密码和简单重复。登录只需工号和密码，不再提供或校验图形验证码。已有 Argon2 PHC 密码继续验证，包括此前设置的超过 20 字符的密码，不强制批量重置；旧密码验证仍保留 256 UTF-8 字节的输入上限。
 
 登录保护：只限速，不锁账号。错误密码不在数据库累计失败次数，也不暂停账号，避免他人恶意锁号。进程内存中按 1 分钟窗口限流，超出返回 429/42902：每个来源 IP 60 次；每个来源 IP + 账号 10 次；每个账号不分来源 30 次（`LoginRateLimiter.AllowAccountLogin`，内部与 OEM 领域分开计数）。账号级限额在查询账号后、校验口令前生效，已存在的账号按数据库 ID 计数（大小写变化不会绕过），不存在的账号名按规范化文本同样计数，429 不暴露账号是否存在。最近 30 天内在该账号上成功登录过的来源 IP 不受账号级限额约束（仍受 IP 与 IP+账号限额），因此他人的持续猜测不会把账号本人挡在外面。限流与来源记录都在进程内存中，不影响已登录会话，进程重启后清零。可结合 `LOGIN_FAILED` 审计监控。
 
