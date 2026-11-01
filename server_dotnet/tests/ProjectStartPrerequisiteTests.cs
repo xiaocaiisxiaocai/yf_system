@@ -191,6 +191,19 @@ public sealed class ProjectStartPrerequisiteTests
         var detail = await projects.DetailAsync(conn, actor, projectIds[1], ct);
         Assert.Equal(MaterialReviewStatuses.Pending, detail.MaterialReviewStatus);
         Assert.Equal(newFileId, detail.LatestSupplierFileId);
+
+        // The supplier cannot be disabled while a subproject waits for its material. The scope pools one
+        // connection, so release it before the factory-based admin service runs.
+        await conn.ExecuteAsync(new CommandDefinition(
+            "INSERT INTO role_permissions(role_id,permission_id) SELECT 2,id FROM permissions WHERE code='supplier:manage'",
+            cancellationToken: ct));
+        await conn.CloseAsync();
+        var suppliers = new Yf.Api.Modules.Admin.SupplierService(
+            EfTestSupport.DbContextFactory(database.Options), new Yf.Api.Modules.Identity.PermissionService(), audit);
+        var refused = await Assert.ThrowsAsync<ApiException>(() => suppliers.SetStatusAsync(
+            actor, 9701, AccountStatuses.Disabled, ct));
+        Assert.Equal((409, 40901), (refused.Status, refused.Code));
+        Assert.Contains("2 个进行中的子项目", refused.Message);
     }
 
     private static async Task AssertStartRejectedWithoutSideEffectsAsync(

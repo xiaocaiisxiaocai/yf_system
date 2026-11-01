@@ -81,6 +81,13 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var row = await context.Suppliers.FromSqlInterpolated($"SELECT * FROM suppliers WHERE id={id} FOR UPDATE")
             .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         if (row.Status == status) return Json(row);
+        if (status == AccountStatuses.Disabled)
+        {
+            // In-progress subprojects wait for this supplier's material; start/restart/reopen share-lock the row.
+            var inProgress = await context.Projects.LongCountAsync(x => x.SupplierId == id && x.Status == "IN_PROGRESS", ct);
+            if (inProgress > 0)
+                throw ApiException.Conflict($"该供应商仍有 {inProgress} 个进行中的子项目，请先终止或完成相关子项目后再停用");
+        }
         await context.Suppliers.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
         var revokedSessionCount = 0;
         if (status == AccountStatuses.Disabled)

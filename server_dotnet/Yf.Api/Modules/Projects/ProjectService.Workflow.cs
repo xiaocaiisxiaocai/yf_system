@@ -88,13 +88,17 @@ internal sealed partial class ProjectService
         "项目所属厂商的启用用户都没有上传文件权限，请先为厂商用户分配包含“上传文件”权限的角色后再开始项目";
 
     /// <summary>
-    /// START/RESTART hands the subproject to the supplier, so the supplier company must be active and at least one
+    /// START/RESTART/REOPEN hand the subproject to the supplier, so the supplier company must be active and at least one
     /// of its active supplier accounts must effectively hold <c>file:upload</c> (through an active role) to return material.
+    /// The supplier row is share-locked so a concurrent disable (which refuses while subprojects are in progress) waits for this one.
     /// </summary>
     private static async Task EnsureSupplierCanCollaborateAsync(MySqlConnection conn, MySqlTransaction tx, ulong supplierId, CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
-        if (!await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct))
+        var supplierStatus = await db.Database
+            .SqlQuery<string>($"SELECT status AS Value FROM suppliers WHERE id={supplierId} LOCK IN SHARE MODE")
+            .SingleOrDefaultAsync(ct);
+        if (supplierStatus != AccountStatuses.Active)
         {
             throw ApiException.Conflict(SupplierDisabledStartMessage);
         }
@@ -146,6 +150,7 @@ internal sealed partial class ProjectService
         {
             throw ApiException.Conflict("只有已完成的子项目可以重开");
         }
+        await EnsureSupplierCanCollaborateAsync(conn, tx, project.SupplierId, ct);
 
         await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.InProgress, "REOPEN", reason, ip, ct);
         await using var db = EfDb.Use(conn, tx);
