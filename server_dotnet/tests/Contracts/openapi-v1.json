@@ -369,6 +369,45 @@
         }
       }
     },
+    "/api/v1/admin/users/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InternalUserImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/users/{id}": {
       "put": {
         "tags": [
@@ -1544,6 +1583,56 @@
         }
       }
     },
+    "/api/v1/admin/suppliers/{id}/contacts/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SupplierContactImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/supplier-contacts/{id}": {
       "put": {
         "tags": [
@@ -1676,8 +1765,8 @@
         }
       }
     },
-    "/api/v1/admin/supplier-accounts/{id}": {
-      "put": {
+    "/api/v1/admin/suppliers/{id}/accounts/import": {
+      "post": {
         "tags": [
           "Yf.Api.Tests"
         ],
@@ -1696,7 +1785,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SupplierAccountUpdate"
+                "$ref": "#/components/schemas/SupplierAccountImportRequest"
               }
             }
           },
@@ -1708,45 +1797,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SupplierAccountResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmptyResponse"
+                  "$ref": "#/components/schemas/AdminImportResponse"
                 }
               }
             }
@@ -1840,6 +1891,46 @@
           },
           "required": true
         },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/supplier-accounts/{id}": {
+      "delete": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -5029,6 +5120,45 @@
         }
       }
     },
+    "/api/v1/oem/companies/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OemCompanyImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OemImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/oem/companies/{id}": {
       "get": {
         "tags": [
@@ -5296,7 +5426,57 @@
         }
       }
     },
-    "/api/v1/oem/accounts/{id}": {
+    "/api/v1/oem/companies/{id}/accounts/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OemAccountImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OemImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oem/companies/{id}/contacts": {
       "get": {
         "tags": [
           "Yf.Api.Tests"
@@ -5318,7 +5498,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OemAccountResponse"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OemCompanyContactResponse"
+                  }
                 }
               }
             }
@@ -5335,7 +5518,7 @@
           }
         }
       },
-      "put": {
+      "post": {
         "tags": [
           "Yf.Api.Tests"
         ],
@@ -5354,12 +5537,102 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OemAccountUpdate"
+                "$ref": "#/components/schemas/OemCompanyContactUpsert"
               }
             }
           },
           "required": true
         },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OemCompanyContactResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oem/companies/{id}/contacts/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OemCompanyContactImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OemImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oem/accounts/{id}": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -7129,6 +7402,62 @@
   },
   "components": {
     "schemas": {
+      "AdminImportResponse": {
+        "required": [
+          "created",
+          "failed",
+          "rows",
+          "skipped"
+        ],
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminImportRowResult"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminImportRowResult": {
+        "required": [
+          "key",
+          "message",
+          "rowNumber",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "ApiErrorResponse": {
         "required": [
           "code",
@@ -8173,6 +8502,60 @@
         },
         "additionalProperties": false
       },
+      "InternalUserImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InternalUserImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "InternalUserImportRow": {
+        "required": [
+          "departmentId",
+          "email",
+          "employeeNo",
+          "initialPassword",
+          "realName",
+          "roleId",
+          "rowNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "realName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "departmentId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "roleId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "initialPassword": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "LoginRequest": {
         "required": [
           "employeeNo",
@@ -8720,10 +9103,8 @@
         "required": [
           "companyId",
           "companyName",
-          "email",
           "employeeNo",
-          "id",
-          "realName"
+          "id"
         ],
         "type": "object",
         "properties": {
@@ -8732,12 +9113,6 @@
             "format": "int64"
           },
           "employeeNo": {
-            "type": "string"
-          },
-          "realName": {
-            "type": "string"
-          },
-          "email": {
             "type": "string"
           },
           "companyId": {
@@ -8752,23 +9127,55 @@
       },
       "OemAccountCreate": {
         "required": [
-          "email",
           "employeeNo",
-          "password",
-          "realName"
+          "password"
         ],
         "type": "object",
         "properties": {
           "employeeNo": {
             "type": "string"
           },
-          "realName": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string"
-          },
           "password": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemAccountImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OemAccountImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemAccountImportRow": {
+        "required": [
+          "companyName",
+          "employeeNo",
+          "initialPassword",
+          "rowNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "companyName": {
+            "type": "string"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "initialPassword": {
             "type": "string"
           }
         },
@@ -8778,13 +9185,11 @@
         "required": [
           "companyId",
           "createdAt",
-          "email",
           "employeeNo",
           "id",
           "lastLoginAt",
           "locked",
           "mustChangePassword",
-          "realName",
           "status",
           "updatedAt"
         ],
@@ -8795,12 +9200,6 @@
             "format": "int64"
           },
           "employeeNo": {
-            "type": "string"
-          },
-          "realName": {
-            "type": "string"
-          },
-          "email": {
             "type": "string"
           },
           "companyId": {
@@ -8828,22 +9227,6 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
-          }
-        },
-        "additionalProperties": false
-      },
-      "OemAccountUpdate": {
-        "required": [
-          "email",
-          "realName"
-        ],
-        "type": "object",
-        "properties": {
-          "realName": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string"
           }
         },
         "additionalProperties": false
@@ -9075,10 +9458,194 @@
         },
         "additionalProperties": false
       },
+      "OemCompanyContactImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OemCompanyContactImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemCompanyContactImportRow": {
+        "required": [
+          "companyName",
+          "email",
+          "name",
+          "phone",
+          "rowNumber",
+          "sortNo"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "companyName": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemCompanyContactResponse": {
+        "required": [
+          "companyId",
+          "createdAt",
+          "email",
+          "id",
+          "name",
+          "phone",
+          "sortNo",
+          "status",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "companyId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemCompanyContactUpsert": {
+        "required": [
+          "email",
+          "name",
+          "phone",
+          "sortNo"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemCompanyImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OemCompanyImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemCompanyImportRow": {
+        "required": [
+          "contactEmail",
+          "contactName",
+          "contactPhone",
+          "name",
+          "remark",
+          "rowNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "contactName": {
+            "type": "string",
+            "nullable": true
+          },
+          "contactPhone": {
+            "type": "string",
+            "nullable": true
+          },
+          "contactEmail": {
+            "type": "string",
+            "nullable": true
+          },
+          "remark": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "OemCompanyListItemResponse": {
         "required": [
           "accountCount",
           "activeAccountCount",
+          "contactCount",
           "contactEmail",
           "contactName",
           "contactPhone",
@@ -9130,6 +9697,10 @@
             "format": "int64"
           },
           "activeAccountCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "contactCount": {
             "type": "integer",
             "format": "int64"
           }
@@ -9502,6 +10073,62 @@
             "items": {
               "$ref": "#/components/schemas/OemFlowScopeResponse"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemImportResponse": {
+        "required": [
+          "created",
+          "failed",
+          "rows",
+          "skipped"
+        ],
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OemImportRowResult"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemImportRowResult": {
+        "required": [
+          "key",
+          "message",
+          "rowNumber",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -12630,10 +13257,8 @@
       },
       "SupplierAccountCreate": {
         "required": [
-          "email",
           "employeeNo",
           "password",
-          "realName",
           "roleId"
         ],
         "type": "object",
@@ -12644,12 +13269,6 @@
           "password": {
             "type": "string"
           },
-          "realName": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string"
-          },
           "roleId": {
             "type": "integer",
             "format": "int64",
@@ -12658,14 +13277,54 @@
         },
         "additionalProperties": false
       },
+      "SupplierAccountImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupplierAccountImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SupplierAccountImportRow": {
+        "required": [
+          "employeeNo",
+          "initialPassword",
+          "roleId",
+          "rowNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "roleId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "initialPassword": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "SupplierAccountResponse": {
         "required": [
           "createdAt",
-          "email",
           "employeeNo",
           "id",
           "lastLoginAt",
-          "realName",
           "roleId",
           "roleName",
           "status",
@@ -12678,12 +13337,6 @@
             "format": "int64"
           },
           "employeeNo": {
-            "type": "string"
-          },
-          "realName": {
-            "type": "string"
-          },
-          "email": {
             "type": "string"
           },
           "supplierId": {
@@ -12715,19 +13368,43 @@
         },
         "additionalProperties": false
       },
-      "SupplierAccountUpdate": {
+      "SupplierContactImportRequest": {
         "required": [
-          "email",
-          "realName"
+          "rows"
         ],
         "type": "object",
         "properties": {
-          "realName": {
-            "type": "string",
-            "nullable": true
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupplierContactImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SupplierContactImportRow": {
+        "required": [
+          "email",
+          "name",
+          "rowNumber",
+          "sortNo"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
           },
           "email": {
-            "type": "string",
+            "type": "string"
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32",
             "nullable": true
           }
         },
