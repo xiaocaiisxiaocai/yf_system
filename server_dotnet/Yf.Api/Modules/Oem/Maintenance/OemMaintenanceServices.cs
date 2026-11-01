@@ -299,6 +299,7 @@ public sealed class OemReconcileService(
         if (unresolved > 0)
             throw new InvalidOperationException($"OEM reconcile left {unresolved} promotion(s) unresolved; it will be retried.");
 
+        var restored = await RestoreFoundFilesAsync(ct);
         var missing = await MarkMissingAsync(PayloadStatuses.MissingUnverified, ct);
         int purgedClaims;
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
@@ -324,14 +325,120 @@ public sealed class OemReconcileService(
             await uow.Db.SystemConfigs.Where(config => config.CfgKey == OemSettingCatalog.ReconcileRequired)
                 .ExecuteUpdateAsync(setters => setters.SetProperty(config => config.CfgValue, string.Empty), ct);
             await audit.WriteAsync(uow, null, "OEM_RECONCILE_COMPLETED", "oem_storage", null,
-                new { missing, completedPurges = purgedClaims, orphansDeleted = orphans, resumedPromotions = prepared.Length }, ct);
+                new { missing, restoredFiles = restored, completedPurges = purgedClaims, orphansDeleted = orphans, resumedPromotions = prepared.Length }, ct);
             await uow.CommitAsync(ct);
         }
-        return missing + orphans;
+        return restored + missing + orphans;
     }
 
     public async Task<int> RoutineCheckAsync(CancellationToken ct) =>
-        await MarkMissingAsync(PayloadStatuses.StorageLost, ct) + await DeleteOrphansAsync(TimeSpan.FromHours(48), ct);
+        await RestoreFoundFilesAsync(ct) + await MarkMissingAsync(PayloadStatuses.StorageLost, ct)
+        + await DeleteOrphansAsync(TimeSpan.FromHours(48), ct);
+
+    /// <summary>
+    /// Restores only the storage fact of content found at its recorded path. A transfer closed because of the
+    /// loss keeps its terminal lifecycle and cancelled approval instance; finding its bytes never reopens it.
+    /// </summary>
+    private async Task<int> RestoreFoundFilesAsync(CancellationToken ct)
+    {
+        (ulong Id, ulong TransferId, string Path, string StoredName, ulong Size, string Sha256)[] candidates;
+        await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+            candidates = (await read.Db.OemTransferFiles.AsNoTracking()
+                .Where(file => file.PayloadStatus == PayloadStatuses.StorageLost)
+                .Select(file => new { file.Id, file.TransferId, file.StoragePath, file.StoredName, file.SizeBytes, file.Sha256 })
+                .ToArrayAsync(ct))
+                .Select(file => (file.Id, file.TransferId, file.StoragePath, file.StoredName, file.SizeBytes, file.Sha256)).ToArray();
+        var restored = 0;
+        foreach (var candidate in candidates)
+        {
+            var area = candidate.Path == OemStorage.AvailableRelative(candidate.StoredName) ? OemStorage.AvailableArea
+                : candidate.Path == OemStorage.QuarantineRelative(candidate.StoredName) ? OemStorage.QuarantineArea : null;
+            if (area is null) continue;
+            // The potentially large hash runs before taking transfer or file locks.
+            var content = await PrepareRestorationAsync(candidate.Id, candidate.Path, candidate.Size, candidate.Sha256, ct);
+            if (content is null) continue;
+            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+            var transfer = await OemTransferProgression.LockTransferAsync(uow, candidate.TransferId, ct);
+            var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, candidate.Id).SingleOrDefaultAsync(ct);
+            if (file is null || file.PayloadStatus != PayloadStatuses.StorageLost || file.StoragePath != candidate.Path
+                || file.StoredName != candidate.StoredName || file.SizeBytes != candidate.Size || file.Sha256 != candidate.Sha256
+                || !await RestorationStillMatchesAsync(file.StoragePath, content, ct)) continue;
+            file.PayloadStatus = area == OemStorage.AvailableArea ? PayloadStatuses.Available : PayloadStatuses.Quarantined;
+            if (file.PurgeDueAt is null)
+            {
+                if (transfer.LifecycleStatus == TransferLifecycle.Released && transfer.ReleasedAt is DateTime releasedAt
+                    && transfer.RetentionMode is { } mode)
+                {
+                    var snapshot = new RetentionSnapshot(mode, transfer.ReleaseTtlMinutes, transfer.ReceiptGraceMinutes);
+                    var due = snapshot.Strategy.InitialPurgeDue(snapshot, releasedAt);
+                    if (file.FirstRecipientDownloadAt is DateTime firstReceipt)
+                        due = snapshot.Strategy.PurgeDueAfterFirstReceipt(snapshot, due, transfer.ExpiresAt, firstReceipt);
+                    file.PurgeDueAt = due;
+                    if (due is not null) file.PurgeReason ??= PurgeReasons.Retention;
+                }
+                else if (transfer.LifecycleStatus is TransferLifecycle.Blocked or TransferLifecycle.Rejected or TransferLifecycle.Cancelled)
+                {
+                    var settings = await OemSettings.LoadAsync(uow.Db, ct);
+                    file.PurgeDueAt = (transfer.ClosedAt ?? uow.Now).Add(settings.BlockedRetention);
+                    file.PurgeReason ??= transfer.LifecycleStatus switch
+                    {
+                        TransferLifecycle.Rejected => PurgeReasons.Rejected,
+                        TransferLifecycle.Cancelled => PurgeReasons.Cancelled,
+                        _ => PurgeReasons.Blocked,
+                    };
+                }
+            }
+            file.ConcurrencyVersion++;
+            file.UpdatedAt = uow.Now;
+            await uow.Db.SaveChangesAsync(ct);
+            await audit.WriteAsync(uow, null, "OEM_FILE_STORAGE_RESTORED", "oem_file", file.Id,
+                new { transferId = file.TransferId, area, file.Sha256, file.SizeBytes }, ct);
+            await uow.CommitAsync(ct);
+            restored++;
+        }
+        return restored;
+    }
+
+    private async Task<Relocation?> PrepareRestorationAsync(
+        ulong fileId, string storagePath, ulong size, string expectedSha256, CancellationToken ct)
+    {
+        try
+        {
+            if (!Intact(storagePath, size)) return null;
+            var source = await storage.ResolveExistingFileAsync(storagePath, ct);
+            var before = new FileInfo(source);
+            var length = before.Length;
+            var lastWrite = before.LastWriteTimeUtc;
+            if ((ulong)length != size) return null;
+            await using (var stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                var sha256 = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream, ct));
+                if (!sha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase)) return null;
+            }
+            var after = new FileInfo(source);
+            return after.Length == length && after.LastWriteTimeUtc == lastWrite
+                ? new Relocation(source, after.Length, after.LastWriteTimeUtc) : null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            logger.LogWarning("OEM reconcile could not inspect restored file {FileId} ({ErrorType}).", fileId, error.GetType().Name);
+            return null;
+        }
+    }
+
+    private async Task<bool> RestorationStillMatchesAsync(string storagePath, Relocation content, CancellationToken ct)
+    {
+        try
+        {
+            var path = await storage.ResolveExistingFileAsync(storagePath, ct);
+            if (!string.Equals(path, content.Source,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) return false;
+            var current = new FileInfo(path);
+            return current.Exists && current.Length == content.Length && current.LastWriteTimeUtc == content.LastWriteUtc;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException) { return false; }
+    }
 
     /// <summary>Flags files whose content should be on disk but is absent or has the wrong size.</summary>
     private async Task<int> MarkMissingAsync(string status, CancellationToken ct)
@@ -350,7 +457,7 @@ public sealed class OemReconcileService(
             missing = files.Where(file => !Intact(file.Path, file.Size)).ToArray();
         else
         {
-            // STORAGE_LOST is permanent (its transfer is closed), so it is only declared when the volume itself can be
+            // A loss may close its transfer permanently, so it is only declared when the volume itself can be
             // trusted: a volume that is unmounted, unreadable or half-restored makes every file look lost at once.
             var suspicion = UnreadableStorage(files.Select(file => file.Path));
             missing = suspicion is null ? files.Where(file => !Intact(file.Path, file.Size)).ToArray() : [];

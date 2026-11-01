@@ -1,4 +1,5 @@
 using Dapper;
+using System.Text.Json;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Maintenance;
 using static Yf.Api.Tests.Oem.OemTransferFlowTests;
@@ -73,6 +74,88 @@ public sealed class OemStorageSafetyTests
         Assert.Equal(OemReconcileService.MassLossMinimumFiles - 1, statuses.Count(status => status == "STORAGE_LOST"));
         Assert.Single(statuses, status => status == "AVAILABLE");
         Assert.Equal(2, await SuspectAlertsAsync(host, ct));
+    }
+
+    [Theory(Timeout = 240_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReappearingContentRestoresOnlyItsStorageStateAndAuditOnce(bool available)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "找回文件" }, ct).Ok();
+        var transferId = TransferId(draft);
+        await host.UploadAsync(world.Vendor, transferId, "restored.pdf", OemTestHost.Pdf("restored"), ct);
+        var detail = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
+        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version = Version(detail) }, ct).Ok();
+        if (available) await host.RunOemJobsAsync(ct);
+        await using var conn = await host.OpenAsync(ct);
+        var (fileId, relative) = await conn.QuerySingleAsync<(ulong FileId, string Path)>(
+            "SELECT id AS FileId, storage_path AS Path FROM oem_transfer_files WHERE transfer_id=@transferId", new { transferId });
+        var absolute = Path.Combine(host.StorageRoot, "oem", relative.Replace('/', Path.DirectorySeparatorChar));
+        var original = await File.ReadAllBytesAsync(absolute, ct);
+        var purgeBefore = await conn.QuerySingleAsync<(DateTime? Due, string? Reason)>(
+            "SELECT purge_due_at AS Due,purge_reason AS Reason FROM oem_transfer_files WHERE id=@fileId", new { fileId });
+        File.Delete(absolute);
+        var reconcile = host.Service<OemReconcileService>();
+        Assert.Equal(1, await reconcile.RoutineCheckAsync(ct));
+        Assert.Equal("STORAGE_LOST", await conn.ExecuteScalarAsync<string>(
+            "SELECT payload_status FROM oem_transfer_files WHERE id=@fileId", new { fileId }));
+        var lifecycle = await conn.ExecuteScalarAsync<string>(
+            "SELECT lifecycle_status FROM oem_transfers WHERE id=@transferId", new { transferId });
+        Assert.Equal(available ? "RELEASED" : "BLOCKED", lifecycle);
+        // BLOCKED files were outside the on-disk purge schedule; recovery fills that existing retention.
+        if (!available)
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET purge_due_at=NULL,purge_reason=NULL WHERE id=@fileId", new { fileId });
+
+        await File.WriteAllBytesAsync(absolute, original, ct);
+        Assert.Equal(1, await reconcile.RoutineCheckAsync(ct));
+        var recovered = await conn.QuerySingleAsync<(string Status, DateTime? Due, string? Reason)>(
+            "SELECT payload_status AS Status,purge_due_at AS Due,purge_reason AS Reason FROM oem_transfer_files WHERE id=@fileId", new { fileId });
+        Assert.Equal(available ? "AVAILABLE" : "QUARANTINED", recovered.Status);
+        if (available)
+        {
+            Assert.Equal(purgeBefore.Due, recovered.Due);
+            Assert.Equal(purgeBefore.Reason, recovered.Reason);
+        }
+        else
+        {
+            Assert.NotNull(recovered.Due);
+            Assert.Equal("BLOCKED", recovered.Reason);
+        }
+        Assert.Equal(lifecycle, await conn.ExecuteScalarAsync<string>(
+            "SELECT lifecycle_status FROM oem_transfers WHERE id=@transferId", new { transferId }));
+        var audit = await conn.QuerySingleAsync<string>("SELECT detail FROM audit_logs WHERE action='OEM_FILE_STORAGE_RESTORED'");
+        using (var document = JsonDocument.Parse(audit))
+        {
+            Assert.Equal(available ? "available" : "quarantine", document.RootElement.GetProperty("area").GetString());
+            Assert.False(document.RootElement.TryGetProperty("path", out _));
+            Assert.False(document.RootElement.TryGetProperty("storagePath", out _));
+        }
+        Assert.Equal(0, await reconcile.RoutineCheckAsync(ct));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM audit_logs WHERE action='OEM_FILE_STORAGE_RESTORED'"));
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ReappearingContentWithTheSameSizeButDifferentHashStaysStorageLost()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var (fileId, relative) = Assert.Single(await ReleasedInboundFilesAsync(host, world, 1, ct));
+        var absolute = Path.Combine(host.StorageRoot, "oem", relative.Replace('/', Path.DirectorySeparatorChar));
+        var changed = await File.ReadAllBytesAsync(absolute, ct);
+        File.Delete(absolute);
+        var reconcile = host.Service<OemReconcileService>();
+        Assert.Equal(1, await reconcile.RoutineCheckAsync(ct));
+        changed[0] ^= 1;
+        await File.WriteAllBytesAsync(absolute, changed, ct);
+
+        Assert.Equal(0, await reconcile.RoutineCheckAsync(ct));
+        Assert.Equal(["STORAGE_LOST"], await PayloadStatusesAsync(host, [fileId], ct));
+        await using var conn = await host.OpenAsync(ct);
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM audit_logs WHERE action='OEM_FILE_STORAGE_RESTORED'"));
     }
 
     [Fact(Timeout = 240_000)]

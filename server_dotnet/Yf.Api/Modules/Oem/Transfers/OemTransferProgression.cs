@@ -51,7 +51,8 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
             await CloseAsync(uow, transfer, TransferLifecycle.Blocked, "附件未通过文件校验", null, PurgeReasons.Blocked, ct);
             return;
         }
-        // Reconcile marks lost content STORAGE_LOST / MISSING_UNVERIFIED for good; waiting would never end.
+        // Missing content closes a sealed transfer permanently; reconciliation may later restore a verified
+        // STORAGE_LOST payload fact, but that does not reopen the transfer or its cancelled approval instance.
         if (files.AnyMissing)
         {
             await CloseAsync(uow, transfer, TransferLifecycle.Blocked, MissingFilesReason, null, PurgeReasons.Blocked, ct);
