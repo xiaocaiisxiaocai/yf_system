@@ -246,6 +246,8 @@ public sealed class MailService
     }
 
     internal const int BatchSize = 10;
+    internal const int MaximumSendAttempts = 3;
+    internal const string InterruptedSendError = "发送过程多次中断，结果未知，已停止重试以免重复发送";
 
     /// <summary>Delivers up to <see cref="BatchSize"/> due messages and returns how many were picked up.</summary>
     public async Task<int> FlushAsync(CancellationToken ct)
@@ -345,12 +347,31 @@ public sealed class MailService
                     ? item.NextAttemptAt == null
                     : item.NextAttemptAt == mail.NextAttemptAt)
                 && (item.NextAttemptAt == null || item.NextAttemptAt <= claimNow));
+            // A SENDING row whose lease ran out was interrupted mid-send: the server may already have accepted it.
+            // Each such re-claim counts as an attempt, so a crash loop cannot resend the same message forever.
+            var interrupted = mail.Status == MailStatuses.Sending;
+            if (interrupted && mail.RetryCount + 1 >= MaximumSendAttempts)
+            {
+                var abandoned = await claimQuery.ExecuteUpdateAsync(setters => setters
+                    .SetProperty(item => item.Status, MailStatuses.Failed)
+                    .SetProperty(item => item.RetryCount, item => item.RetryCount + 1)
+                    .SetProperty(item => item.LastError, InterruptedSendError)
+                    .SetProperty(item => item.NextAttemptAt, (DateTime?)null), ct);
+                if (abandoned == 1)
+                    await audit.WriteAsync(claimConnection, claimTransaction, null, AuditAction(mail.EventType, "EMAIL_FAILED"),
+                        "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail),
+                            status = MailStatuses.Failed, retryCount = mail.RetryCount + 1, error = InterruptedSendError }, null, ct);
+                await claimTransaction.CommitAsync(ct);
+                return DeliveryOutcome.Skipped;
+            }
             var claimed = await claimQuery.ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, MailStatuses.Sending)
+                .SetProperty(item => item.RetryCount, item => interrupted ? item.RetryCount + 1 : item.RetryCount)
                 .SetProperty(item => item.DedupeKey,
                     item => item.EventType == CoalescedFileEvent || item.EventType == CoalescedMessageEvent ? null : item.DedupeKey)
                 .SetProperty(item => item.NextAttemptAt, lease), ct);
             if (claimed != 1) return DeliveryOutcome.Skipped;
+            if (interrupted) mail.RetryCount++;
             var claimedMail = await claimContext.EmailOutbox.AsNoTracking()
                 .Where(item => item.Id == mail.Id && item.Status == MailStatuses.Sending && item.NextAttemptAt == lease)
                 .Select(item => new
@@ -498,7 +519,7 @@ public sealed class MailService
             else
             {
                 retries++;
-                var terminal = retries >= 3 || kind == SmtpFailureKind.PermanentForMessage;
+                var terminal = retries >= MaximumSendAttempts || kind == SmtpFailureKind.PermanentForMessage;
                 status = terminal ? MailStatuses.Failed : MailStatuses.Pending;
                 if (!terminal) retryDelay = TimeSpan.FromSeconds(30 * (1 << Math.Clamp(retries - 1, 0, 6)));
             }

@@ -261,6 +261,37 @@ public sealed class MailDeliveryTests
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task AMessageInterruptedMidSendIsNotResentForever()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+            await conn.ExecuteAsync(new CommandDefinition("""
+                INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count,next_attempt_at,last_error,sent_at)
+                VALUES(9,'TEST_NOTIFICATION','interrupted@example.invalid','interrupted','body','SENDING',2,UTC_TIMESTAMP()-INTERVAL 1 MINUTE,NULL,NULL);
+                """, cancellationToken: ct));
+        var delivery = new RecordingDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery);
+
+        await service.FlushAsync(ct);
+
+        // Two earlier attempts ended with the lease running out: the outcome is unknown, so stop instead of a third copy.
+        Assert.DoesNotContain("interrupted@example.invalid", delivery.Recipients);
+        await using var check = await scope.Database.OpenAsync(ct);
+        var state = await check.QuerySingleAsync<OutboxState>(new CommandDefinition(
+            "SELECT status AS Status,last_error AS LastError FROM email_outbox WHERE id=9", cancellationToken: ct));
+        Assert.Equal("FAILED", state.Status);
+        Assert.Equal(MailService.InterruptedSendError, state.LastError);
+    }
+
+    private sealed class RecordingDelivery : ISmtpDelivery
+    {
+        public List<string> Recipients { get; } = [];
+        public Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct)
+        { Recipients.Add(envelope.Recipient); return Task.FromResult(new SmtpDeliveryResult(null)); }
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task ExternalMailUsesItsOwnPolicyWhenCollaborationNotificationsAreDisabled()
     {
         var ct = TestContext.Current.CancellationToken;
