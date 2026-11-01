@@ -46,7 +46,7 @@ public sealed class FilesMaintenanceService(
         }
     }
 
-    private bool Migrating => options.StorageFallbackRoot is not null;
+    private bool Migrating => options.StorageRoots.Fallback is not null;
 
     internal async Task RunGarbageCollectionAsync(CancellationToken ct)
     {
@@ -119,7 +119,7 @@ public sealed class FilesMaintenanceService(
                 }
                 if (expired)
                 {
-                    foreach (var root in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+                    foreach (var root in FileStorage.Roots(options.StorageRoots))
                         FileStorage.DeleteDirectoryTree(root, FileStorage.SessionDirectory(FileStorage.Root(root), candidate.Id), ct);
                 }
             }
@@ -156,7 +156,7 @@ public sealed class FilesMaintenanceService(
             if (claimed != 1) continue;
             try
             {
-                foreach (var configured in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+                foreach (var configured in FileStorage.Roots(options.StorageRoots))
                 {
                     var root = FileStorage.Root(configured);
                     FileStorage.DeleteDirectoryTree(root, FileStorage.SessionDirectory(root, session.Id), ct);
@@ -389,7 +389,7 @@ public sealed class FilesMaintenanceService(
             return;
         }
         // A cycle that began before a storage migration may finish after it started: delete in every root.
-        foreach (var root in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+        foreach (var root in FileStorage.Roots(options.StorageRoots))
             FileBlobStore.DeleteCanonicalFile(root, blob, ct);
         context.FileBlobs.Remove(blob);
         await context.SaveChangesAsync(ct);

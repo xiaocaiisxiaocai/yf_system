@@ -536,7 +536,7 @@ internal sealed class MessageService(
         try
         {
             var path = FileStorage.ResolveStoredFile(
-                options.StorageRoot, options.StorageFallbackRoot, image.StoragePath, ct);
+                options.StorageRoots, image.StoragePath, ct);
             return new(path, image.OriginalName, image.MimeType, image.SizeBytes);
         }
         catch (FileNotFoundException)
@@ -740,7 +740,7 @@ internal sealed class MessageService(
                     candidate => candidate.StoredName == image.StoredName, ct);
                 if (!referenced)
                 {
-                    foreach (var root in FileStorage.Roots(options.StorageRoot, options.StorageFallbackRoot))
+                    foreach (var root in FileStorage.Roots(options.StorageRoots))
                     {
                         try
                         {

@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.Files;
 
@@ -30,6 +31,8 @@ internal static class FileStorage
     public static IReadOnlyList<string> Roots(string primary, string? fallback) =>
         fallback is null ? [primary] : [primary, fallback];
 
+    public static IReadOnlyList<string> Roots(StorageRootPair roots) => Roots(roots.Root, roots.Fallback);
+
     /// <summary>Resolves a stored relative path in the primary root, falling back to a migration's old root.</summary>
     public static string ResolveStoredFile(string primary, string? fallback, string relative, CancellationToken ct)
     {
@@ -42,6 +45,9 @@ internal static class FileStorage
         }
         return ResolveExistingFile(primary, Path.Combine(primary, relative), ct);
     }
+
+    public static string ResolveStoredFile(StorageRootPair roots, string relative, CancellationToken ct) =>
+        ResolveStoredFile(roots.Root, roots.Fallback, relative, ct);
 
     /// <summary>
     /// The resolved root that holds an upload session: a session started before a storage migration keeps working
@@ -56,6 +62,9 @@ internal static class FileStorage
         var old = Root(fallback);
         return Directory.Exists(SessionDirectory(old, sessionId)) ? old : root;
     }
+
+    public static string SessionRoot(StorageRootPair roots, string sessionId) =>
+        SessionRoot(roots.Root, roots.Fallback, sessionId);
 
     public static string SessionDirectory(string root, string sessionId)
     {

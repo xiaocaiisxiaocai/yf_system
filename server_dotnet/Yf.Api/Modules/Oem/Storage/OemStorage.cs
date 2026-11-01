@@ -19,22 +19,29 @@ public sealed class OemStorage(AppOptions options)
     public const string QuarantineArea = "quarantine";
     public const string AvailableArea = "available";
 
-    public bool IsConfigured => options.OemStorageRoot.Length > 0;
+    public bool IsConfigured => options.OemStorageRoots.Root.Length > 0;
 
     /// <summary>True while a storage migration copies OEM content to a new root.</summary>
-    public bool Migrating => options.OemStorageFallbackRoot is not null;
+    public bool Migrating => options.OemStorageRoots.Fallback is not null;
 
     public string Root()
     {
-        if (!IsConfigured) throw new ApiException(503, 50301, "OEM 文件存储未配置，请联系管理员");
-        return ResolveRoot(options.OemStorageRoot);
+        var roots = options.OemStorageRoots;
+        if (roots.Root.Length == 0) throw new ApiException(503, 50301, "OEM 文件存储未配置，请联系管理员");
+        return ResolveRoot(roots.Root);
     }
 
     /// <summary>The primary root, then the old root of a running migration.</summary>
     public IReadOnlyList<string> Roots()
     {
-        var primary = Root();
-        return options.OemStorageFallbackRoot is { } fallback ? [primary, ResolveRoot(fallback)] : [primary];
+        return Roots(options.OemStorageRoots);
+    }
+
+    private static IReadOnlyList<string> Roots(StorageRootPair roots)
+    {
+        if (roots.Root.Length == 0) throw new ApiException(503, 50301, "OEM 文件存储未配置，请联系管理员");
+        var primary = ResolveRoot(roots.Root);
+        return roots.Fallback is { } fallback ? [primary, ResolveRoot(fallback)] : [primary];
     }
 
     private static string ResolveRoot(string configuredRoot)
@@ -50,30 +57,38 @@ public sealed class OemStorage(AppOptions options)
     /// The root holding an existing upload session directory; new sessions use the primary root. The old root is
     /// checked first, so a copy in the new root never moves an in-flight upload away from its chunks.
     /// </summary>
-    private string SessionRoot(string sessionId)
-    {
-        var roots = Roots();
-        return roots.Reverse().FirstOrDefault(root => Directory.Exists(Path.Combine(root, UploadsArea, sessionId))) ?? roots[0];
-    }
-
     public string SessionDirectory(string sessionId, bool create, CancellationToken ct)
     {
         if (!Guid.TryParseExact(sessionId, "D", out _)) throw ApiException.NotFound();
-        var root = SessionRoot(sessionId);
+        var roots = Roots(options.OemStorageRoots);
+        var root = SessionRoot(roots, sessionId);
         var directory = FileStorage.EnsureLexicallyWithin(root, Path.Combine(root, UploadsArea, sessionId), allowRoot: false);
         return create ? FileStorage.CreateDirectoryWithin(root, directory, ct) : directory;
     }
 
-    public string ChunkPath(string sessionId, uint index) =>
-        FileStorage.EnsureLexicallyWithin(SessionRoot(sessionId),
-            Path.Combine(SessionDirectory(sessionId, false, CancellationToken.None), $"{index}.part"), false);
+    public string ChunkPath(string sessionId, uint index)
+    {
+        if (!Guid.TryParseExact(sessionId, "D", out _)) throw ApiException.NotFound();
+        var roots = Roots(options.OemStorageRoots);
+        var root = SessionRoot(roots, sessionId);
+        var directory = FileStorage.EnsureLexicallyWithin(root, Path.Combine(root, UploadsArea, sessionId), false);
+        return FileStorage.EnsureLexicallyWithin(root, Path.Combine(directory, $"{index}.part"), false);
+    }
+
+    private static string SessionRoot(IReadOnlyList<string> roots, string sessionId) =>
+        roots.Reverse().FirstOrDefault(root => Directory.Exists(Path.Combine(root, UploadsArea, sessionId))) ?? roots[0];
 
     /// <summary>The root containing <paramref name="absolutePath"/>.</summary>
     public string RootOf(string absolutePath)
     {
         var full = Path.GetFullPath(absolutePath);
+        return RootOf(Roots(options.OemStorageRoots), full);
+    }
+
+    private static string RootOf(IReadOnlyList<string> roots, string full)
+    {
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        return Roots().FirstOrDefault(root => full.StartsWith(root + Path.DirectorySeparatorChar, comparison))
+        return roots.FirstOrDefault(root => full.StartsWith(root + Path.DirectorySeparatorChar, comparison))
             ?? throw new InvalidOperationException("非法 OEM 存储路径");
     }
 
@@ -86,7 +101,11 @@ public sealed class OemStorage(AppOptions options)
     /// </summary>
     public string Absolute(string relative)
     {
-        var roots = Roots();
+        return Absolute(Roots(options.OemStorageRoots), relative);
+    }
+
+    private static string Absolute(IReadOnlyList<string> roots, string relative)
+    {
         if (roots.Count > 1)
         {
             foreach (var root in roots)
@@ -121,8 +140,9 @@ public sealed class OemStorage(AppOptions options)
     /// <summary>Resolves an existing file through reparse points and confirms it is still inside the root.</summary>
     public Task<string> ResolveExistingFileAsync(string relative, CancellationToken ct)
     {
-        var path = Absolute(relative);
-        return Task.FromResult(FileStorage.ResolveExistingFile(RootOf(path), path, ct));
+        var roots = Roots(options.OemStorageRoots);
+        var path = Absolute(roots, relative);
+        return Task.FromResult(FileStorage.ResolveExistingFile(RootOf(roots, path), path, ct));
     }
 
     public bool Exists(string relative) => AbsoluteEverywhere(relative).Any(File.Exists);

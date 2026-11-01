@@ -228,6 +228,7 @@ public sealed class StorageLocationTests
     [Fact(Timeout = 60_000)]
     public async Task RootAndFallbackSwapAsOnePairSoTheOldRootIsNeverUnreadable()
     {
+        var ct = TestContext.Current.CancellationToken;
         var first = Path.Combine(Path.GetTempPath(), "yf_swap_a");
         var second = Path.Combine(Path.GetTempPath(), "yf_swap_b");
         static Yf.Api.Infrastructure.Entities.StorageLocation Row(string kind, string path, string previous) =>
@@ -251,9 +252,10 @@ public sealed class StorageLocationTests
                 if (pair.Fallback is null || pair.Root == pair.Fallback || oem.Fallback is null || oem.Root == oem.Fallback)
                     Interlocked.Increment(ref mixed);
             }
-        });
+        }, ct);
         for (var swap = 0; swap < 50_000; swap++)
         {
+            ct.ThrowIfCancellationRequested();
             var (root, previous) = swap % 2 == 0 ? (first, second) : (second, first);
             StorageLocationState.Apply(options, Row(StorageKinds.Collaboration, root, previous));
             StorageLocationState.Apply(options, Row(StorageKinds.Oem, root, previous));
@@ -273,6 +275,60 @@ public sealed class StorageLocationTests
         });
         Assert.Equal(new StorageRootPair(second, null), options.StorageRoots);
         Assert.Equal(new StorageRootPair("", null), options.OemStorageRoots);
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task SnapshotResolveOverloadsFindFilesAcrossCancelledRootSwaps()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sandbox = Sandbox();
+        try
+        {
+            var first = Directory.CreateDirectory(Path.Combine(sandbox, "first")).FullName;
+            var second = Directory.CreateDirectory(Path.Combine(sandbox, "second")).FullName;
+            var relativeFirst = Path.Combine("files", "first.bin");
+            var relativeSecond = Path.Combine("files", "second.bin");
+            Directory.CreateDirectory(Path.Combine(first, "files"));
+            Directory.CreateDirectory(Path.Combine(second, "files"));
+            File.WriteAllText(Path.Combine(first, relativeFirst), "first");
+            File.WriteAllText(Path.Combine(second, relativeSecond), "second");
+            var options = new AppOptions();
+            options.SetStorageRoots(new StorageRootPair(first, second));
+            using var stop = new CancellationTokenSource();
+            using var started = new ManualResetEventSlim();
+            long failures = 0;
+            var reader = Task.Run(() =>
+            {
+                started.Set();
+                while (!stop.IsCancellationRequested)
+                {
+                    var roots = options.StorageRoots;
+                    foreach (var relative in new[] { relativeFirst, relativeSecond })
+                    {
+                        try { FileStorage.ResolveStoredFile(roots, relative, ct); }
+                        catch (FileNotFoundException) { Interlocked.Increment(ref failures); }
+                    }
+                }
+            }, ct);
+            started.Wait(ct);
+            for (var swap = 0; swap < 10_000; swap++)
+            {
+                ct.ThrowIfCancellationRequested();
+                options.SetStorageRoots(swap % 2 == 0
+                    ? new StorageRootPair(second, first)
+                    : new StorageRootPair(first, second));
+            }
+            stop.Cancel();
+            await reader;
+            Assert.Equal(0L, Interlocked.Read(ref failures));
+
+            var snapshot = options.StorageRoots;
+            Assert.Equal(FileStorage.ResolveStoredFile(snapshot.Root, snapshot.Fallback, relativeFirst, ct),
+                FileStorage.ResolveStoredFile(snapshot, relativeFirst, ct));
+            Assert.Equal(FileStorage.ResolveStoredFile(snapshot.Root, snapshot.Fallback, relativeSecond, ct),
+                FileStorage.ResolveStoredFile(snapshot, relativeSecond, ct));
+        }
+        finally { Directory.Delete(sandbox, true); }
     }
 
     [Fact(Timeout = 120_000)]

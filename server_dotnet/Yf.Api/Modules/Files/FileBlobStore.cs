@@ -40,6 +40,9 @@ internal static class FileBlobStore
         return File.Exists(AbsolutePath(old, sha256)) ? old : root;
     }
 
+    internal static string RootHolding(StorageRootPair roots, string sha256) =>
+        RootHolding(roots.Root, roots.Fallback, sha256);
+
     internal static string LockName(MySqlConnection connection, string sha256) =>
         MySqlNamedLock.Name("file-blob", connection.Database, NormalizeSha256(sha256));
 
