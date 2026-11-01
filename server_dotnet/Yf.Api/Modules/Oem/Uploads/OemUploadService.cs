@@ -1,10 +1,13 @@
+using System.Globalization;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
+using Yf.Api.Modules.Oem.Delivery;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Storage;
 using Yf.Api.Modules.Oem.Transfers;
@@ -26,10 +29,19 @@ public sealed partial class OemUploadService(
     AppDb appDb,
     OemStorage storage,
     OemAuditWriter audit,
+    OemDownloadRateLimiter rateLimiter,
     ILogger<OemUploadService> logger)
 {
+    /// <summary>
+    /// Files of one vendor that may be waiting for or undergoing validation. The validation worker is a single
+    /// queue, so a vendor that keeps uploading cannot be allowed to bury the others. Checked when a session is
+    /// initialised; sessions already open may still add up to the concurrent-upload limit on top.
+    /// </summary>
+    internal const int MaxUnfinishedValidationsPerCompany = 100;
+
     public async Task<OemUploadSessionInitResponse> InitAsync(OemActor actor, ulong transferId, OemUploadInit request, CancellationToken ct)
     {
+        rateLimiter.Require(actor, OemDownloadRateLimiter.UploadInitScope);
         var name = ValidateFileName(request.FileName);
         var extension = ExtensionOf(name);
         if (request.FileSize == 0) throw ApiException.BadRequest("空文件不可上传");
@@ -67,6 +79,12 @@ public sealed partial class OemUploadService(
             && ((session.Status == UploadStatuses.Uploading && session.ExpiresAt > uow.Now) || session.Status == UploadStatuses.Merging));
         if (await activeSessions.CountAsync(ct) >= settings.MaxConcurrentPerCompany)
             throw ApiException.Conflict("该厂商同时进行的上传过多，请稍后重试");
+        var unfinishedValidations = await uow.Db.OemFileScanJobs
+            .Where(job => job.Status == ValidationJobStatuses.Pending || job.Status == ValidationJobStatuses.Running)
+            .Join(uow.Db.OemTransferFiles, job => job.FileId, file => file.Id, (job, file) => file.TransferId)
+            .CountAsync(fileTransferId => companyTransfers.Contains(fileTransferId), ct);
+        if (unfinishedValidations >= MaxUnfinishedValidationsPerCompany)
+            throw ApiException.Conflict("该厂商等待校验的文件过多，请等待已上传文件校验完成后再继续上传");
         var storedBytes = (ulong)(await uow.Db.OemTransferFiles
             .Where(file => companyTransfers.Contains(file.TransferId) && Enumerable.Contains(onDisk, file.PayloadStatus))
             .SumAsync(file => (decimal?)file.SizeBytes, ct) ?? 0m);
@@ -149,8 +167,15 @@ public sealed partial class OemUploadService(
             // Checked before the chunk replaces anything: a mismatching body never becomes a chunk.
             if (declaredDigest is not null && !actualDigest.Equals(declaredDigest, StringComparison.Ordinal))
                 throw ApiException.BadRequest("分片 SHA-256 校验失败");
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(temporary, path, overwrite: false);
+            // The chunk replaces its predecessor under the session row lock, re-reading the status there: a merge
+            // sets MERGING under the same lock and then reads the chunks, so once it has started no chunk can
+            // change underneath it, and a swap that won the lock first is complete before the merge checks.
+            await using var swap = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+            var locked = await LoadOwnSessionAsync(swap, actor, sessionId, forUpdate: true, ct);
+            if (locked.Status != UploadStatuses.Uploading) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
+            if (locked.ExpiresAt <= swap.Now) throw ApiException.Conflict("上传会话已过期，请重新发起");
+            File.Move(temporary, path, overwrite: true);
+            await swap.CommitAsync(ct);
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
@@ -498,6 +523,10 @@ public sealed partial class OemUploadService(
         var name = value?.Trim() ?? string.Empty;
         if (name.Length == 0 || name.EnumerateRunes().Count() > 255 || name.Any(c => char.IsControl(c) || c is '/' or '\\' or ':' or '*' or '?' or '"' or '<' or '>' or '|'))
             throw ApiException.BadRequest("文件名需为 1~255 个字符且不能包含路径或特殊字符");
+        // Unicode "format" characters (bidirectional overrides such as U+202E, zero-width and joiner marks, the BOM)
+        // are invisible and let a name display as another extension; they are refused like control characters.
+        if (name.EnumerateRunes().Any(rune => Rune.GetUnicodeCategory(rune) == UnicodeCategory.Format))
+            throw ApiException.BadRequest("文件名不能包含不可见的格式控制字符（如方向控制符）");
         if (!name.Contains('.') || name.EndsWith('.')) throw ApiException.BadRequest("文件必须带有扩展名");
         return name;
     }

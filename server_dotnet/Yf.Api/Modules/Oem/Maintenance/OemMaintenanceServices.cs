@@ -116,14 +116,19 @@ public sealed class OemPurgeService(
         {
             try
             {
-                // Every root: during a storage migration the content may exist in both.
-                foreach (var path in storage.AbsoluteEverywhere(relative))
+                // Every root: during a storage migration the content may exist in both. The old (fallback) root goes
+                // first and the new one last: the migration copies old → new and deletes the old copy only after
+                // verifying the new one, so removing the new copy while the old one still exists could let the
+                // migration copy it back, leaving a copy nothing owns. A failure stops here and keeps both for the retry.
+                foreach (var path in storage.AbsoluteEverywhere(relative).Reverse())
                 {
                     // Delete is already idempotent for an absent file. File.Exists would
                     // also return false on access errors and incorrectly acknowledge a purge.
                     try { File.Delete(path); }
                     catch (DirectoryNotFoundException) { /* The containing directory is already absent. */ }
                 }
+                // Look at every root again: only a purge that left no copy anywhere may become PURGED.
+                if (storage.Exists(relative)) failure ??= "文件被占用或删除失败";
             }
             catch (DirectoryNotFoundException) { /* The containing directory is already absent. */ }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
@@ -239,7 +244,15 @@ public sealed class OemReconcileService(
     /// </summary>
     internal static readonly TimeSpan RoutineInterval = TimeSpan.FromHours(1);
 
+    /// <summary>
+    /// A routine check that finds at least this many files missing, and more than <see cref="MassLossFraction"/> of
+    /// the files it checked, treats it as a storage outage and marks nothing: files are not lost in bulk.
+    /// </summary>
+    internal const int MassLossMinimumFiles = 5;
+    internal const double MassLossFraction = 0.5;
+
     private DateTime nextRoutineCheck = DateTime.MinValue;
+    private bool storageAlerted;
 
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
@@ -332,7 +345,25 @@ public sealed class OemReconcileService(
                 .Select(file => (file.Id, file.StoragePath, file.SizeBytes, file.StoredName, file.Sha256)).ToArray();
         var marked = 0;
         var restoring = status == PayloadStatuses.MissingUnverified;
-        foreach (var candidate in files.Where(file => !Intact(file.Path, file.Size)))
+        var missing = files;
+        if (restoring)
+            missing = files.Where(file => !Intact(file.Path, file.Size)).ToArray();
+        else
+        {
+            // STORAGE_LOST is permanent (its transfer is closed), so it is only declared when the volume itself can be
+            // trusted: a volume that is unmounted, unreadable or half-restored makes every file look lost at once.
+            var suspicion = UnreadableStorage(files.Select(file => file.Path));
+            missing = suspicion is null ? files.Where(file => !Intact(file.Path, file.Size)).ToArray() : [];
+            if (suspicion is null && missing.Length >= MassLossMinimumFiles && missing.Length > files.Length * MassLossFraction)
+                suspicion = $"被检查的 {files.Length} 个文件中有 {missing.Length} 个同时缺失";
+            if (suspicion is not null)
+            {
+                missing = [];
+                await AlertStorageSuspectAsync(suspicion, files.Length, ct);
+            }
+            else storageAlerted = false;
+        }
+        foreach (var candidate in missing)
         {
             // Hash a relocation candidate (up to the file size limit) before any lock is taken; under the
             // locks only a cheap "still the same file" check remains.
@@ -366,6 +397,43 @@ public sealed class OemReconcileService(
         }
         await BlockSealedTransfersWithMissingFilesAsync(ct);
         return marked;
+    }
+
+    /// <summary>
+    /// Why the content areas cannot be trusted right now — the OEM root, or an area holding checked files, is missing
+    /// or unreadable — or null. Areas no checked file lives in need not exist (a fresh install has no available/ yet).
+    /// </summary>
+    private string? UnreadableStorage(IEnumerable<string> storedPaths)
+    {
+        try
+        {
+            var root = storage.Root();
+            if (!Directory.Exists(root)) return "OEM 存储根目录不存在";
+            foreach (var area in new[] { OemStorage.QuarantineArea, OemStorage.AvailableArea })
+            {
+                if (!storedPaths.Any(path => path.StartsWith(area + "/", StringComparison.Ordinal))) continue;
+                var directory = Path.Combine(root, area);
+                if (!Directory.Exists(directory)) return $"OEM 存储区 {area}/ 不存在";
+                using var entries = Directory.EnumerateFileSystemEntries(directory).GetEnumerator();
+                entries.MoveNext();
+            }
+            return null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return $"OEM 存储根目录或存储区不可读（{error.GetType().Name}）";
+        }
+    }
+
+    /// <summary>Logs every time; writes one audit row per outage (re-armed once a check finds the storage sound again).</summary>
+    private async Task AlertStorageSuspectAsync(string reason, int checkedFiles, CancellationToken ct)
+    {
+        logger.LogError("OEM storage check marked no file lost: {Reason} ({Files} file(s) checked). Check the OEM storage volume.", reason, checkedFiles);
+        if (storageAlerted) return;
+        storageAlerted = true;
+        await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+        await audit.WriteAsync(uow, null, "OEM_RECONCILE_STORAGE_SUSPECT", "oem_storage", null, new { reason, checkedFiles }, ct);
+        await uow.CommitAsync(ct);
     }
 
     /// <summary>
@@ -648,13 +716,16 @@ public sealed class OemReconcileService(
 /// <summary>
 /// Bounded cleanup of OEM session bookkeeping that otherwise grows forever: refresh tokens
 /// expired for longer than the retention, and download sessions that finished (or passed their
-/// absolute deadline) longer ago. Download ranges and leases go with their session through
+/// absolute deadline) longer ago, and aborted or expired upload sessions after <see cref="UploadSessionRetention"/>.
+/// Download ranges and leases go with their session through
 /// the ON DELETE CASCADE foreign keys. Deleted rows are unusable already; who downloaded what
 /// stays in the audit log, which also keeps account-deletion history checks intact.
 /// </summary>
 public sealed class OemSessionCleanupService(IDbContextFactory<YfDbContext> dbFactory, ILogger<OemSessionCleanupService> logger)
 {
     internal static readonly TimeSpan Retention = TimeSpan.FromDays(30);
+    /// <summary>How long an aborted or expired upload session row is kept (its chunks are deleted at once; nothing can resume it).</summary>
+    internal static readonly TimeSpan UploadSessionRetention = TimeSpan.FromDays(7);
     internal const int BatchSize = 500;
     internal const int MaximumBatchesPerRun = 20;
 
@@ -686,9 +757,25 @@ public sealed class OemSessionCleanupService(IDbContextFactory<YfDbContext> dbFa
             await uow.CommitAsync(ct);
             if (ids.Length < BatchSize) break;
         }
-        if (tokens + sessions > 0)
-            logger.LogInformation("OEM session cleanup removed {Tokens} refresh token(s) and {Sessions} download session(s).", tokens, sessions);
-        return tokens + sessions;
+        var uploads = 0;
+        for (var batch = 0; batch < MaximumBatchesPerRun; batch++)
+        {
+            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+            var cutoff = uow.Now.Subtract(UploadSessionRetention);
+            var ids = await uow.Db.OemUploadSessions.AsNoTracking()
+                .Where(session => (session.Status == UploadStatuses.Aborted || session.Status == UploadStatuses.Expired) && session.UpdatedAt < cutoff)
+                .OrderBy(session => session.UpdatedAt).Select(session => session.Id).Take(BatchSize).ToArrayAsync(ct);
+            if (ids.Length == 0) break;
+            uploads += await uow.Db.OemUploadSessions
+                .Where(session => ids.Contains(session.Id) && (session.Status == UploadStatuses.Aborted || session.Status == UploadStatuses.Expired))
+                .ExecuteDeleteAsync(ct);
+            await uow.CommitAsync(ct);
+            if (ids.Length < BatchSize) break;
+        }
+        if (tokens + sessions + uploads > 0)
+            logger.LogInformation("OEM session cleanup removed {Tokens} refresh token(s), {Sessions} download session(s) and {Uploads} finished upload session(s).",
+                tokens, sessions, uploads);
+        return tokens + sessions + uploads;
     }
 }
 

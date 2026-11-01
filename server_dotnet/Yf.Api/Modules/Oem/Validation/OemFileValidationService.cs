@@ -34,20 +34,13 @@ public sealed class OemFileValidationService(
 
     private readonly OemItemBackoff<ulong> backoff = new();
 
+    /// <summary>Jobs taken per run.</summary>
+    internal const int BatchSize = 4;
+
     public async Task<int> RunOnceAsync(CancellationToken ct)
     {
         if (!storage.IsConfigured) return 0;
-        ulong[] candidates;
-        await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
-        {
-            if ((await OemSettings.LoadAsync(uow.Db, ct)).ReconcileRequired) return 0;
-            var suppressed = backoff.Suppressed();
-            candidates = await uow.Db.OemFileScanJobs.AsNoTracking()
-                .Where(job => (job.Status == ValidationJobStatuses.Pending && (job.NextAttemptAt == null || job.NextAttemptAt <= uow.Now))
-                    || (job.Status == ValidationJobStatuses.Running && job.LeaseUntil <= uow.Now))
-                .Where(job => !suppressed.Contains(job.Id))
-                .OrderBy(job => job.Id).Select(job => job.Id).Take(4).ToArrayAsync(ct);
-        }
+        var candidates = await SelectCandidatesAsync(ct);
         var processed = 0;
         foreach (var jobId in candidates)
         {
@@ -78,6 +71,57 @@ public sealed class OemFileValidationService(
             }
         }
         return processed;
+    }
+
+    /// <summary>
+    /// The jobs to run next. The queue is processed serially, so jobs are taken round-robin by vendor (each
+    /// vendor's oldest job first, then their next ones in turn) instead of strictly by age; otherwise one vendor
+    /// with a long backlog would delay every other vendor's files until the whole backlog is done.
+    /// </summary>
+    internal async Task<ulong[]> SelectCandidatesAsync(CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        if ((await OemSettings.LoadAsync(uow.Db, ct)).ReconcileRequired) return [];
+        var suppressed = backoff.Suppressed();
+        var ready = uow.Db.OemFileScanJobs.AsNoTracking()
+            .Where(job => (job.Status == ValidationJobStatuses.Pending && (job.NextAttemptAt == null || job.NextAttemptAt <= uow.Now))
+                || (job.Status == ValidationJobStatuses.Running && job.LeaseUntil <= uow.Now))
+            .Where(job => !suppressed.Contains(job.Id))
+            .Join(uow.Db.OemTransferFiles, job => job.FileId, file => file.Id, (job, file) => new { job.Id, file.TransferId })
+            .Join(uow.Db.OemTransfers, item => item.TransferId, transfer => transfer.Id, (item, transfer) => new { item.Id, transfer.OemCompanyId });
+        // Every vendor's oldest ready job, then the oldest of the rest: enough to fill a batch in turn.
+        var heads = await ready.GroupBy(item => item.OemCompanyId)
+            .Select(group => new { Id = group.Min(item => item.Id), OemCompanyId = group.Key })
+            .OrderBy(item => item.Id).Take(BatchSize * 8).ToArrayAsync(ct);
+        var headIds = heads.Select(item => item.Id).ToArray();
+        var rest = await ready.Where(item => !Enumerable.Contains(headIds, item.Id))
+            .OrderBy(item => item.Id).Take(BatchSize * 8).ToArrayAsync(ct);
+        return RoundRobinByCompany(heads.Concat(rest).OrderBy(item => item.Id).Select(item => (item.Id, item.OemCompanyId)), BatchSize);
+    }
+
+    /// <summary>Interleaves jobs (given oldest first) by vendor: one per vendor per round, vendors in order of their oldest job.</summary>
+    internal static ulong[] RoundRobinByCompany(IEnumerable<(ulong JobId, ulong CompanyId)> jobsOldestFirst, int take)
+    {
+        var queues = new List<Queue<ulong>>();
+        var queueOf = new Dictionary<ulong, Queue<ulong>>();
+        foreach (var (jobId, companyId) in jobsOldestFirst)
+        {
+            if (!queueOf.TryGetValue(companyId, out var queue))
+            {
+                queue = new Queue<ulong>();
+                queueOf[companyId] = queue;
+                queues.Add(queue);
+            }
+            queue.Enqueue(jobId);
+        }
+        var result = new List<ulong>(take);
+        while (result.Count < take && queues.Any(queue => queue.Count > 0))
+            foreach (var queue in queues)
+            {
+                if (result.Count >= take) break;
+                if (queue.TryDequeue(out var jobId)) result.Add(jobId);
+            }
+        return [.. result];
     }
 
     internal sealed record Claim(ulong JobId, ulong Version, ulong FileId, string StoragePath, string Extension, ulong Size, string Sha256);

@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.IdentityModel.Tokens;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Oem.Common;
 
 namespace Yf.Api.Modules.Oem.Delivery;
 
@@ -157,15 +158,33 @@ public sealed class OemDownloadGrantService(AppOptions options)
     private static ApiException Invalid() => ApiException.Unauthorized("下载凭证无效或已过期，请重新发起下载");
 }
 
-/// <summary>Per-account request budget for downloads (sliding one-minute window, in memory: single node).</summary>
+/// <summary>
+/// Per-account request budget (fixed one-minute window, in memory: single node). Download streaming
+/// uses the unscoped budget; the entry points that write rows on every call (preview, download start,
+/// upload init) each get their own scoped budget so one cannot starve another.
+/// </summary>
 public sealed class OemDownloadRateLimiter
 {
+    public const string PreviewScope = "preview";
+    public const string DownloadStartScope = "download-start";
+    public const string UploadInitScope = "upload-init";
+
+    /// <summary>Budget of those entry points per account and minute: far above normal use, but bounded.</summary>
+    public const int EntryPerMinute = 120;
+
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime Start, int Count)> windows = new();
 
-    public bool Allow(string realm, ulong actorId, int perMinute)
+    /// <summary>Counts one call of <paramref name="actor"/> in <paramref name="scope"/>; 429/42902 once the entry-point budget is spent.</summary>
+    public void Require(OemActor actor, string scope)
+    {
+        if (!Allow(actor.Realm, actor.Id, EntryPerMinute, scope))
+            throw ApiException.TooManyRequests("操作过于频繁，请稍后再试");
+    }
+
+    public bool Allow(string realm, ulong actorId, int perMinute, string scope = "")
     {
         var now = DateTime.UtcNow;
-        var key = realm + ":" + actorId;
+        var key = scope.Length == 0 ? realm + ":" + actorId : scope + ":" + realm + ":" + actorId;
         if (windows.Count > 10_000)
             foreach (var stale in windows.Where(item => now - item.Value.Start > TimeSpan.FromMinutes(1)).ToArray())
                 windows.TryRemove(stale.Key, out _);

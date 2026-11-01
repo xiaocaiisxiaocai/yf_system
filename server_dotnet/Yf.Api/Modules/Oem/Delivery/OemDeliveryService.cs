@@ -51,11 +51,14 @@ public sealed class OemDeliveryService(
     public const long PreviewLimitBytes = 50L * 1024 * 1024;
     private static readonly TimeSpan GrantLifetime = TimeSpan.FromMinutes(30);
     private static readonly TimeSpan Heartbeat = TimeSpan.FromSeconds(5);
+    /// <summary>Flush (and count as delivered) at least every this many bytes, so an interrupted request still credits what it sent.</summary>
+    private const ulong FlushConfirmBytes = 1024 * 1024;
     private static readonly string Owner = $"{Environment.MachineName}:{Environment.ProcessId}";
 
     /// <summary>Inline preview (bearer-authenticated). Never counts as a receipt.</summary>
     public async Task<IResult> PreviewAsync(OemActor actor, ulong fileId, CancellationToken ct)
     {
+        rateLimiter.Require(actor, OemDownloadRateLimiter.PreviewScope);
         string path;
         OemTransferFile file;
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
@@ -78,6 +81,7 @@ public sealed class OemDeliveryService(
     /// <summary>Starts a logical download session and hands the browser a path-scoped HttpOnly grant cookie.</summary>
     public async Task<OemDownloadSessionResponse> StartAsync(HttpContext context, OemActor actor, ulong fileId, CancellationToken ct)
     {
+        rateLimiter.Require(actor, OemDownloadRateLimiter.DownloadStartScope);
         // The grant and cookie are checked against this process's clock, the session row against
         // the database clock; the app-clock expiry is derived from a DB-clock duration, anchored
         // before the database clock is read so it can only err early.
@@ -159,7 +163,8 @@ public sealed class OemDeliveryService(
             range = parsed.Value;
 
             // Admission and purge claiming serialise on the file row: a purge cannot slip
-            // between this check and opening the file.
+            // between this check and opening the file. Lock order transfer → file (see OemLocks), as in purge.
+            await OemTransferProgression.LockTransferAsync(uow, file.TransferId, ct);
             var locked = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, fileId).SingleAsync(ct);
             if (locked.PayloadStatus != PayloadStatuses.Available || locked.PurgeDueAt is DateTime due && due <= uow.Now)
                 throw new ApiException(410, 41003, "文件已到期或不可用");
@@ -181,15 +186,28 @@ public sealed class OemDeliveryService(
             await uow.CommitAsync(ct);
         }
 
-        var delivered = false;
+        var progress = new DeliveryProgress();
         try
         {
-            delivered = await SendRangeAsync(context, path, file, range, leaseId, appHardDeadline, idleTimeout, ct);
+            await SendRangeAsync(context, path, file, range, leaseId, grant, appHardDeadline, idleTimeout, progress, ct);
         }
         finally
         {
-            await FinishAsync(leaseId, session, file, range, delivered, CancellationToken.None);
+            // Even a request that ended early (client gone, deadline, revoked login) records the bytes it flushed.
+            await FinishAsync(leaseId, session, file, progress.Delivered(range), CancellationToken.None);
         }
+    }
+
+    /// <summary>
+    /// Bytes of the requested range that were handed to the client connection and flushed. Only bytes
+    /// confirmed by a successful flush count: written-but-unflushed bytes are never reported as delivered.
+    /// </summary>
+    internal sealed class DeliveryProgress
+    {
+        public ulong Flushed;
+
+        public ByteRange? Delivered(ByteRange range) =>
+            Flushed == 0 ? null : new ByteRange(range.Start, range.Start + Math.Min(Flushed, range.Length) - 1);
     }
 
     public async Task<IReadOnlyList<OemDownloadStatusResponse>> StatusAsync(OemActor actor, ulong fileId, CancellationToken ct)
@@ -208,7 +226,7 @@ public sealed class OemDeliveryService(
 
     /// <param name="appHardDeadline">Hard deadline in this process's UTC clock (the lease row keeps the DB-clock one).</param>
     private async Task<bool> SendRangeAsync(HttpContext context, string path, OemTransferFile file, ByteRange range, string leaseId,
-        DateTime appHardDeadline, TimeSpan idleTimeout, CancellationToken ct)
+        DownloadGrant grant, DateTime appHardDeadline, TimeSpan idleTimeout, DeliveryProgress progress, CancellationToken ct)
     {
         var partial = range.Start != 0 || range.End != file.SizeBytes - 1;
         var response = context.Response;
@@ -229,6 +247,7 @@ public sealed class OemDeliveryService(
         stream.Seek((long)range.Start, SeekOrigin.Begin);
         var buffer = new byte[64 * 1024];
         var remaining = range.Length;
+        var written = 0UL;
         var nextHeartbeat = DateTime.UtcNow.Add(Heartbeat);
         try
         {
@@ -243,13 +262,31 @@ public sealed class OemDeliveryService(
                     await response.Body.WriteAsync(buffer.AsMemory(0, read), idle.Token);
                 }
                 remaining -= (ulong)read;
-                if (DateTime.UtcNow >= nextHeartbeat)
+                written += (ulong)read;
+                var heartbeatDue = DateTime.UtcNow >= nextHeartbeat;
+                if (heartbeatDue || written - progress.Flushed >= FlushConfirmBytes)
+                {
+                    using (var idle = CancellationTokenSource.CreateLinkedTokenSource(guard.Token))
+                    {
+                        idle.CancelAfter(idleTimeout);
+                        await response.Body.FlushAsync(idle.Token);
+                    }
+                    // Only now are these bytes counted as delivered (see DeliveryProgress).
+                    progress.Flushed = written;
+                }
+                if (heartbeatDue)
                 {
                     nextHeartbeat = DateTime.UtcNow.Add(Heartbeat);
-                    if (!await HeartbeatAsync(leaseId, idleTimeout, guard.Token)) return false;
+                    if (!await HeartbeatAsync(leaseId, grant, idleTimeout, guard.Token))
+                    {
+                        // The lease was cancelled or the login/account behind the stream is gone: stop sending.
+                        context.Abort();
+                        return false;
+                    }
                 }
             }
             await response.Body.FlushAsync(guard.Token);
+            progress.Flushed = written;
             return true;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
@@ -260,10 +297,16 @@ public sealed class OemDeliveryService(
         }
     }
 
-    /// <summary>Extends the lease; false when the purge worker cancelled it (the stream must stop).</summary>
-    private async Task<bool> HeartbeatAsync(string leaseId, TimeSpan idleTimeout, CancellationToken ct)
+    /// <summary>
+    /// Extends the lease; false when the purge worker cancelled it or the account, its vendor or its login
+    /// session stopped being valid (the stream must stop). A stream can run for a long time, so the live
+    /// actor is re-checked here, at heartbeat pace, rather than per block.
+    /// </summary>
+    private async Task<bool> HeartbeatAsync(string leaseId, DownloadGrant grant, TimeSpan idleTimeout, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+        try { await LiveActorAsync(uow, grant, ct); }
+        catch (ApiException error) when (error.Status is 401 or 403) { return false; }
         var lease = await OemLocks.ForUpdate<OemDownloadLease>(uow.Db, leaseId).SingleOrDefaultAsync(ct);
         if (lease is null || lease.Status != DownloadLeaseStatuses.Active || lease.HardDeadline <= uow.Now) return false;
         lease.LastProgressAt = uow.Now;
@@ -273,7 +316,11 @@ public sealed class OemDeliveryService(
         return true;
     }
 
-    internal async Task FinishAsync(string leaseId, OemDownloadSession session, OemTransferFile file, ByteRange range, bool delivered, CancellationToken ct)
+    internal Task FinishAsync(string leaseId, OemDownloadSession session, OemTransferFile file, ByteRange range, bool delivered, CancellationToken ct) =>
+        FinishAsync(leaseId, session, file, delivered ? (ByteRange?)range : null, ct);
+
+    /// <param name="delivered">The part of the request that was flushed to the client, if any (see <see cref="DeliveryProgress"/>).</param>
+    internal async Task FinishAsync(string leaseId, OemDownloadSession session, OemTransferFile file, ByteRange? delivered, CancellationToken ct)
     {
         try
         {
@@ -288,7 +335,7 @@ public sealed class OemDeliveryService(
             var leaseValid = lease.Status == DownloadLeaseStatuses.Active;
             if (leaseValid) lease.Status = DownloadLeaseStatuses.Released;
             await uow.Db.SaveChangesAsync(ct);
-            if (delivered && leaseValid) await RecordDeliveryAsync(uow, lockedSession, lockedFile, range, ct);
+            if (delivered is { } range && leaseValid) await RecordDeliveryAsync(uow, lockedSession, lockedFile, range, ct);
             await dispatcher.CommitAsync(uow, ct);
         }
         catch (Exception error)

@@ -279,18 +279,116 @@ public static class ArchiveInspector
     private static bool IsEmbeddedOfficePart(string entryName) =>
         entryName.Replace('\\', '/').Contains("/embeddings/", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Unsafe names would let an extracting client write outside its target directory.</summary>
+    /// <summary>
+    /// Unsafe names would let an extracting client write outside its target directory or to a special target:
+    /// <c>..</c>, absolute paths and drive letters, any <c>:</c> (NTFS alternate data streams), Windows device
+    /// names in any segment (also with an extension, <c>con.txt</c>), and segments ending in a dot or a space
+    /// (Windows silently drops those, so <c>a.</c> and <c>a</c> are the same file there).
+    /// </summary>
     internal static bool UnsafeEntryName(string? name)
     {
         if (string.IsNullOrEmpty(name)) return false;
         if (name.Contains('\0')) return true;
         var normalized = name.Replace('\\', '/');
         if (normalized.StartsWith('/')) return true;
-        if (normalized.Length >= 2 && char.IsAsciiLetter(normalized[0]) && normalized[1] == ':') return true;
-        return normalized.Split('/').Any(segment => segment == "..");
+        if (normalized.Contains(':')) return true;
+        foreach (var segment in normalized.Split('/'))
+        {
+            // Empty segments (a trailing slash marks a directory entry) and "." change nothing.
+            if (segment.Length == 0 || segment == ".") continue;
+            if (segment == "..") return true;
+            if (segment[^1] is '.' or ' ') return true;
+            if (IsReservedDeviceName(segment)) return true;
+        }
+        return false;
     }
 
-    private static readonly ArchiveVerdict UnsafeEntry = new(ArchiveOutcome.Forbidden, "压缩包条目路径不安全（包含 ..、绝对路径或盘符）");
+    /// <summary>CON, PRN, AUX, NUL, COM1-9 and LPT1-9 (case-insensitive), with or without an extension.</summary>
+    private static bool IsReservedDeviceName(string segment)
+    {
+        var dot = segment.IndexOf('.');
+        var stem = (dot < 0 ? segment : segment[..dot]).TrimEnd(' ');
+        if (stem.Length == 3)
+            return stem.Equals("CON", StringComparison.OrdinalIgnoreCase) || stem.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+                || stem.Equals("AUX", StringComparison.OrdinalIgnoreCase) || stem.Equals("NUL", StringComparison.OrdinalIgnoreCase);
+        if (stem.Length == 4 && (stem.StartsWith("COM", StringComparison.OrdinalIgnoreCase) || stem.StartsWith("LPT", StringComparison.OrdinalIgnoreCase)))
+            return stem[3] is >= '1' and <= '9' or '¹' or '²' or '³';
+        return false;
+    }
+
+    /// <summary>
+    /// Entry names of one archive compared the way a case-insensitive, normalising file system would: two
+    /// entries that differ only by case or Unicode composition would overwrite each other on extraction,
+    /// letting a later entry replace an inspected one.
+    /// </summary>
+    private sealed class EntryNames
+    {
+        private readonly HashSet<string> seen = new(StringComparer.Ordinal);
+
+        /// <summary>False when an equivalent name was already added.</summary>
+        public bool Add(string? name)
+        {
+            var key = (name ?? string.Empty).Replace('\\', '/').TrimEnd('/')
+                .Normalize(System.Text.NormalizationForm.FormC).ToUpperInvariant();
+            return seen.Add(key);
+        }
+    }
+
+    /// <summary>
+    /// Whether the entry attributes mark a symbolic link or reparse point. ZIP and 7z keep the Unix mode in the
+    /// high 16 bits (7z flags it with 0x8000); a 7z written on Windows marks reparse points with 0x400.
+    /// </summary>
+    internal static bool IsLinkAttributes(int? attributes, bool sevenZip)
+    {
+        if (attributes is not { } value) return false;
+        var raw = unchecked((uint)value);
+        if (sevenZip)
+        {
+            if ((raw & 0x400) != 0) return true;
+            if ((raw & 0x8000) == 0) return false;
+        }
+        return ((raw >> 16) & 0xF000) == 0xA000;
+    }
+
+    /// <summary>
+    /// Largest decoder dictionary (RAR window) an archive may declare. RAR and 7z decoders allocate the declared
+    /// size up front, so a few header bytes could otherwise demand gigabytes of memory.
+    /// </summary>
+    internal const long MaxDecoderDictionaryBytes = 256L * 1024 * 1024;
+
+    /// <summary>
+    /// The window size a RAR entry header declares, or null when it cannot be read. SharpCompress 0.50.4 keeps it
+    /// on an internal header type, so it is read reflectively; a library change that removes it only disables the
+    /// check (the test suite asserts it still resolves for the pinned version). 7z coder properties are not
+    /// reachable through the library at all, so 7z dictionaries are bounded only by the existing memory handling.
+    /// </summary>
+    internal static long? RarWindowSize(IEntry entry)
+    {
+        try
+        {
+            var header = ReadMember(entry, "FileHeader");
+            return header is not null && ReadMember(header, "WindowSize") is uint size ? size : null;
+        }
+        catch (Exception error) when (error is System.Reflection.TargetInvocationException or InvalidCastException or System.Reflection.AmbiguousMatchException)
+        {
+            return null;
+        }
+
+        static object? ReadMember(object instance, string name)
+        {
+            for (var type = instance.GetType(); type is not null; type = type.BaseType)
+                if (type.GetProperty(name, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public
+                        | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly) is { } property)
+                    return property.GetValue(instance);
+            return null;
+        }
+    }
+
+    private static readonly ArchiveVerdict UnsafeEntry = new(ArchiveOutcome.Forbidden,
+        "压缩包条目路径不安全（包含 ..、绝对路径、盘符、冒号、设备保留名，或以点/空格结尾）");
+    private static readonly ArchiveVerdict LinkEntry = new(ArchiveOutcome.Forbidden, "压缩包包含符号链接或硬链接条目，禁止传递");
+    private static readonly ArchiveVerdict DuplicateEntry = new(ArchiveOutcome.Forbidden, "压缩包包含重复的条目名（忽略大小写和 Unicode 写法后相同）");
+    private static readonly ArchiveVerdict OversizedDictionary = new(ArchiveOutcome.LimitExceeded, "压缩包声明的解压字典过大，无法安全检查");
 
     /// <summary>
     /// Minimal ZIP central-directory reader used before <see cref="ZipFile"/> opens a file:
@@ -425,11 +523,14 @@ public static class ArchiveInspector
             long archiveExpanded = 0;
             var contentTypesSeen = false;
             var mainPartSeen = false;
+            var names = new EntryNames();
             foreach (var entry in archive.Entries)
             {
                 ct.ThrowIfCancellationRequested();
                 if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
                 if (UnsafeEntryName(entry.FullName)) return UnsafeEntry;
+                if (IsLinkAttributes(entry.ExternalAttributes, sevenZip: false)) return LinkEntry;
+                if (!names.Add(entry.FullName)) return DuplicateEntry;
                 var metadata = AccountMetadata(budget, entry.Length, entry.CompressedLength);
                 if (metadata is not null) return metadata;
                 archiveExpanded += entry.Length;
@@ -555,6 +656,7 @@ public static class ArchiveInspector
 
             var fileLength = Math.Max(1, new FileInfo(path).Length);
             long archiveExpanded = 0;
+            var names = new EntryNames();
             // 7z entries can share a compressed folder. Read them once in archive
             // order so later entries do not repeatedly decompress and skip all
             // preceding data outside the actual-byte budget.
@@ -566,6 +668,8 @@ public static class ArchiveInspector
                     ct.ThrowIfCancellationRequested();
                     if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
                     if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
+                    if (IsLinkAttributes(entry.Attrib, sevenZip: true) || !string.IsNullOrEmpty(entry.LinkTarget)) return LinkEntry;
+                    if (!names.Add(entry.Key)) return DuplicateEntry;
                     var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
                     if (metadata is not null) return metadata;
                     archiveExpanded += entry.Size;
@@ -619,6 +723,7 @@ public static class ArchiveInspector
 
         var fileLength = Math.Max(1, new FileInfo(path).Length);
         long archiveExpanded = 0;
+        var names = new EntryNames();
         if (archive.IsSolid)
         {
             // Solid RAR entries share one compression stream: read them once, in order,
@@ -626,7 +731,7 @@ public static class ArchiveInspector
             using var reader = archive.ExtractAllEntries();
             while (reader.MoveToNextEntry())
             {
-                var verdict = await InspectRarEntryAsync(reader.Entry, reader.OpenEntryStream, limits, depth, workDirectory, budget, ct);
+                var verdict = await InspectRarEntryAsync(reader.Entry, reader.OpenEntryStream, names, limits, depth, workDirectory, budget, ct);
                 if (verdict is not null) return verdict;
                 archiveExpanded += reader.Entry.Size;
             }
@@ -635,7 +740,7 @@ public static class ArchiveInspector
         {
             foreach (var entry in archive.Entries)
             {
-                var verdict = await InspectRarEntryAsync(entry, entry.OpenEntryStream, limits, depth, workDirectory, budget, ct);
+                var verdict = await InspectRarEntryAsync(entry, entry.OpenEntryStream, names, limits, depth, workDirectory, budget, ct);
                 if (verdict is not null) return verdict;
                 archiveExpanded += entry.Size;
             }
@@ -653,6 +758,7 @@ public static class ArchiveInspector
     private static async Task<ArchiveVerdict?> InspectRarEntryAsync(
         IEntry entry,
         Func<Stream> open,
+        EntryNames names,
         ArchiveLimits limits,
         int depth,
         string workDirectory,
@@ -662,6 +768,10 @@ public static class ArchiveInspector
         ct.ThrowIfCancellationRequested();
         if (entry.IsEncrypted) return new(ArchiveOutcome.Encrypted, "不允许传递加密的压缩包");
         if (UnsafeEntryName(entry.Key)) return UnsafeEntry;
+        // A RAR "redirect" is a symbolic link, junction, hard link or file copy.
+        if (entry is SharpCompress.Common.Rar.RarEntry { IsRedir: true } || !string.IsNullOrEmpty(entry.LinkTarget)) return LinkEntry;
+        if (!names.Add(entry.Key)) return DuplicateEntry;
+        if (RarWindowSize(entry) > MaxDecoderDictionaryBytes) return OversizedDictionary;
         var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
         if (metadata is not null) return metadata;
 

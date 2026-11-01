@@ -70,7 +70,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         }
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(transfer => transfer.Id).Page(offset, size).AsNoTracking().ToArrayAsync(ct);
-        var summaries = await SummariesAsync(uow, rows, ct);
+        var summaries = await SummariesAsync(uow, rows, current, ct);
         return new OemPageResponse<OemTransferSummaryResponse>(rows.Select(transfer => summaries[transfer.Id]).ToArray(), total, page, size);
     }
 
@@ -96,7 +96,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             && await OemAuthorizer.HasAsync(uow, current, OemPermissions.ApprovalRecover, ct))
             capabilities = new TransferCapabilities(true, false, ContentPurpose.None, RecoveryOnly: true);
         if (!capabilities.View) throw ApiException.NotFound();
-        var summary = (await SummariesAsync(uow, [transfer], ct))[transfer.Id];
+        var summary = (await SummariesAsync(uow, [transfer], current, ct))[transfer.Id];
         var files = capabilities.RecoveryOnly
             ? Array.Empty<OemTransferFile>()
             : await OemTransferFiles.Members(uow.Db, id).AsNoTracking().OrderBy(file => file.Id).ToArrayAsync(ct);
@@ -210,9 +210,15 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         _ => null,
     };
 
-    private static async Task<Dictionary<ulong, OemTransferSummaryResponse>> SummariesAsync(OemUnitOfWork uow, IReadOnlyCollection<OemTransfer> transfers, CancellationToken ct)
+    /// <param name="actor">
+    /// The caller. An OEM account only learns that a released transfer was approved (SKIPPED reads as APPROVED, the
+    /// blocked reason is dropped) and sees an internal sender's name without the employee number.
+    /// </param>
+    private static async Task<Dictionary<ulong, OemTransferSummaryResponse>> SummariesAsync(
+        OemUnitOfWork uow, IReadOnlyCollection<OemTransfer> transfers, OemActor actor, CancellationToken ct)
     {
         var db = uow.Db;
+        var forVendor = actor is OemAccountActor;
         var ids = transfers.Select(transfer => transfer.Id).ToArray();
         var companyIds = transfers.Select(transfer => transfer.OemCompanyId).Distinct().ToArray();
         var companies = await db.OemCompanies.AsNoTracking().Where(company => Enumerable.Contains(companyIds, company.Id))
@@ -238,17 +244,18 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 null => null,
                 FlowInstanceStatuses.InProgress => "PENDING",
                 FlowInstanceStatuses.Completed => "APPROVED",
+                FlowInstanceStatuses.Skipped when forVendor => "APPROVED",
                 var value => value,
             };
             var sender = transfer.InternalSenderUserId is ulong userId && users.TryGetValue(userId, out var user)
-                ? new OemPersonRefResponse(OemRealms.Internal, userId, user.EmployeeNo, user.RealName)
+                ? new OemPersonRefResponse(OemRealms.Internal, userId, forVendor ? string.Empty : user.EmployeeNo, user.RealName)
                 : transfer.OemSenderAccountId is ulong accountId && accounts.TryGetValue(accountId, out var account)
                     ? new OemPersonRefResponse(OemRealms.Oem, accountId, account.EmployeeNo, account.RealName)
                     : new OemPersonRefResponse("unknown", 0UL, "", "");
             result[transfer.Id] = new OemTransferSummaryResponse(
                 transfer.Id, transfer.Direction, transfer.OemCompanyId, companies.GetValueOrDefault(transfer.OemCompanyId),
                 transfer.Title, sender, transfer.LifecycleStatus, approvalStatus,
-                ApprovalBlockedReason: instance?.Status == FlowInstanceStatuses.ApprovalBlocked ? instance.BlockedReason : null,
+                ApprovalBlockedReason: !forVendor && instance?.Status == FlowInstanceStatuses.ApprovalBlocked ? instance.BlockedReason : null,
                 ValidationSummary: ValidationSummary(own.Select(file => file.ScanStatus).ToArray()),
                 FileCount: own.Length,
                 TotalBytes: own.Aggregate(0UL, (sum, file) => sum + file.SizeBytes),
