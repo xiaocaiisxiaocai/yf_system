@@ -204,6 +204,48 @@ public sealed class OemDeliveryTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task ASentTransferWhoseFileIsLostIsBlockedInsteadOfWaitingForever()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var oemRoot = Path.Combine(host.StorageRoot, "oem");
+
+        async Task<(ulong TransferId, ulong FileId)> SentAsync(string title)
+        {
+            var draft = await CreateOutboundAsync(world, title, ct);
+            var id = TransferId(draft);
+            var fileId = (await host.UploadAsync(world.Sender, id, "lost.pdf", OemTestHost.Pdf(title), ct)).Id();
+            draft = await world.Sender.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+            await world.Sender.PostAsync($"/api/v1/oem/transfers/{id}/send", new { version = Version(draft) }, ct).Ok();
+            return (id, fileId);
+        }
+
+        var lost = await SentAsync("发送后丢失");
+        // Left SEALED with a missing file by a run before this fix.
+        var stranded = await SentAsync("早先已标记丢失");
+        await host.RunOemJobsAsync(ct);
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            Assert.Equal("SEALED", await conn.ExecuteScalarAsync<string>("SELECT lifecycle_status FROM oem_transfers WHERE id=@id", new { id = lost.TransferId }));
+            File.Delete(Path.Combine(oemRoot, (await conn.ExecuteScalarAsync<string>("SELECT storage_path FROM oem_transfer_files WHERE id=@id", new { id = lost.FileId }))!));
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET payload_status='MISSING_UNVERIFIED' WHERE id=@id", new { id = stranded.FileId });
+        }
+
+        await host.Service<OemReconcileService>().RoutineCheckAsync(ct);
+
+        await using (var conn = await host.OpenAsync(ct))
+            foreach (var transferId in new[] { lost.TransferId, stranded.TransferId })
+            {
+                Assert.Equal("BLOCKED", await conn.ExecuteScalarAsync<string>("SELECT lifecycle_status FROM oem_transfers WHERE id=@transferId", new { transferId }));
+                Assert.Equal(OemTransferProgression.MissingFilesReason,
+                    await conn.ExecuteScalarAsync<string>("SELECT closed_reason FROM oem_transfers WHERE id=@transferId", new { transferId }));
+            }
+        // Nothing is in flight any more, so the vendor can be disabled.
+        await world.Admin.PutAsync($"/api/v1/oem/companies/{world.CompanyId}/status", new { status = "DISABLED" }, ct).Ok();
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task OrphanCleanupNeverFollowsAReparsePointIntoCollaborationStorage()
     {
         var ct = TestContext.Current.CancellationToken;

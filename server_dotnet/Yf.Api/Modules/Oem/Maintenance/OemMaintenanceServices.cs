@@ -226,6 +226,7 @@ public sealed class OemReconcileService(
     IDbContextFactory<YfDbContext> dbFactory,
     OemStorage storage,
     OemPromotionService promotions,
+    OemTransferProgression progression,
     OemEventDispatcher dispatcher,
     OemAuditWriter audit,
     ILogger<OemReconcileService> logger)
@@ -354,10 +355,37 @@ public sealed class OemReconcileService(
             await audit.WriteAsync(uow, null, status == PayloadStatuses.StorageLost ? "OEM_FILE_STORAGE_LOST" : "OEM_FILE_MISSING_UNVERIFIED",
                 "oem_file", file.Id, new { targetName = file.OriginalName, transferId, file.Sha256, file.SizeBytes }, ct);
             uow.Raise(new FileMissingEvent(transferId, file.Id, status));
+            await progression.AdvanceAsync(uow, transferId, null, ct);
             await dispatcher.CommitAsync(uow, ct);
             marked++;
         }
+        await BlockSealedTransfersWithMissingFilesAsync(ct);
         return marked;
+    }
+
+    /// <summary>
+    /// A sent transfer whose file is lost can never be released. Files marked missing above close
+    /// their transfer at once; this also catches transfers left SEALED by earlier runs.
+    /// </summary>
+    private async Task BlockSealedTransfersWithMissingFilesAsync(CancellationToken ct)
+    {
+        ulong[] stranded;
+        await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+        {
+            var missing = PayloadStatuses.Missing;
+            stranded = await read.Db.OemTransfers.AsNoTracking()
+                .Where(transfer => transfer.LifecycleStatus == TransferLifecycle.Sealed
+                    && read.Db.OemTransferFiles.Any(file => file.TransferId == transfer.Id
+                        && (file.PurgeReason == null || file.PurgeReason != PurgeReasons.FileRemoved)
+                        && Enumerable.Contains(missing, file.PayloadStatus)))
+                .Select(transfer => transfer.Id).ToArrayAsync(ct);
+        }
+        foreach (var transferId in stranded)
+        {
+            await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+            await progression.AdvanceAsync(uow, transferId, null, ct);
+            await dispatcher.CommitAsync(uow, ct);
+        }
     }
 
     /// <summary>Deletes content the database does not know about (never files referenced by any row or an active upload).</summary>

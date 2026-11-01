@@ -9,7 +9,7 @@ using Yf.Api.Modules.Oem.Validation;
 namespace Yf.Api.Modules.Oem.Transfers;
 
 /// <summary>Aggregate state of the files that belong to a transfer (removed draft files excluded).</summary>
-public sealed record TransferFilesState(int Count, bool AnyValidationFailure, bool AllReady)
+public sealed record TransferFilesState(int Count, bool AnyValidationFailure, bool AllReady, bool AnyMissing)
 {
     public static async Task<TransferFilesState> LoadAsync(YfDbContext db, ulong transferId, CancellationToken ct)
     {
@@ -19,7 +19,8 @@ public sealed record TransferFilesState(int Count, bool AnyValidationFailure, bo
             files.Length,
             files.Any(file => !ValidationStatuses.IsKnown(file.ScanStatus)
                 || file.ScanStatus is ValidationStatuses.Invalid or ValidationStatuses.Error),
-            files.Length > 0 && files.All(file => file.ScanStatus == ValidationStatuses.Valid && file.PayloadStatus == PayloadStatuses.Available));
+            files.Length > 0 && files.All(file => file.ScanStatus == ValidationStatuses.Valid && file.PayloadStatus == PayloadStatuses.Available),
+            files.Any(file => Enumerable.Contains(PayloadStatuses.Missing, file.PayloadStatus)));
     }
 }
 
@@ -48,6 +49,12 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
         if (files.AnyValidationFailure)
         {
             await CloseAsync(uow, transfer, TransferLifecycle.Blocked, "附件未通过文件校验", null, PurgeReasons.Blocked, ct);
+            return;
+        }
+        // Reconcile marks lost content STORAGE_LOST / MISSING_UNVERIFIED for good; waiting would never end.
+        if (files.AnyMissing)
+        {
+            await CloseAsync(uow, transfer, TransferLifecycle.Blocked, MissingFilesReason, null, PurgeReasons.Blocked, ct);
             return;
         }
         if (!files.AllReady) return;
@@ -94,6 +101,7 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
     }
 
     internal const string RecipientUnavailableReason = "收件厂商已停用或没有可用账号，未发布";
+    internal const string MissingFilesReason = "附件已丢失或不可用，未能发布";
 
     private static Task<bool> RecipientCanReceiveAsync(YfDbContext db, ulong companyId, CancellationToken ct) =>
         db.OemCompanies.AnyAsync(company => company.Id == companyId && company.Status == OemStatus.Active
@@ -108,7 +116,7 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
         if (!files.AllReady)
         {
             await CloseAsync(uow, transfer, TransferLifecycle.Blocked,
-                files.AnyValidationFailure ? "附件未通过文件校验" : "附件已丢失或不可用，未能发布", null, PurgeReasons.Blocked, ct);
+                files.AnyValidationFailure ? "附件未通过文件校验" : MissingFilesReason, null, PurgeReasons.Blocked, ct);
             return;
         }
         // The vendor may be disabled (or lose every enabled account) while approval runs; releasing then
