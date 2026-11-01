@@ -433,6 +433,7 @@ public static class ArchiveInspector
                 var metadata = AccountMetadata(budget, entry.Length, entry.CompressedLength);
                 if (metadata is not null) return metadata;
                 archiveExpanded += entry.Length;
+                if (archiveExpanded / fileLength > limits.MaxRatio) return new(ArchiveOutcome.LimitExceeded, "压缩包压缩比异常");
 
                 if (entry.FullName.EndsWith('/'))
                 {
@@ -568,6 +569,10 @@ public static class ArchiveInspector
                     var metadata = AccountMetadata(budget, entry.Size, entry.CompressedSize);
                     if (metadata is not null) return metadata;
                     archiveExpanded += entry.Size;
+                    // 7z reports no per-entry compressed size, so the archive-wide ratio is checked on the
+                    // declared sizes before an entry is decompressed (reads never exceed the declared size).
+                    if (archiveExpanded / fileLength > limits.MaxRatio)
+                        return new(ArchiveOutcome.LimitExceeded, "压缩包压缩比异常");
 
                     if (entry.IsDirectory)
                     {
@@ -727,6 +732,7 @@ public static class ArchiveInspector
             {
                 AccountActualBytes(budget, read);
                 total += read;
+                if (total > declaredLength) return new(ArchiveOutcome.Corrupt, "压缩包条目实际大小与记录不符");
                 probe.Append(buffer.AsSpan(0, read));
             }
             if (total != declaredLength) return new(ArchiveOutcome.Corrupt, "压缩包条目实际大小与记录不符");
@@ -748,7 +754,7 @@ public static class ArchiveInspector
             await using (output)
             {
                 await WriteWorkspaceAsync(output, buffer.AsMemory(0, headLength), ct);
-                total += await DrainAsync(input, output, buffer, budget, ct);
+                total += await DrainAsync(input, output, buffer, budget, declaredLength - total, ct);
                 try { await output.FlushAsync(ct); }
                 catch (Exception error) when (ArchiveWorkspaceException.IsWorkspaceFault(error)) { throw new ArchiveWorkspaceException(error); }
             }
@@ -781,7 +787,8 @@ public static class ArchiveInspector
         }
     }
 
-    private static async Task<long> DrainAsync(Stream input, Stream output, byte[] buffer, Budget budget, CancellationToken ct)
+    /// <summary>Copies the rest of an entry; more than <paramref name="remaining"/> bytes means its recorded size is false.</summary>
+    private static async Task<long> DrainAsync(Stream input, Stream output, byte[] buffer, Budget budget, long remaining, CancellationToken ct)
     {
         long total = 0;
         int read;
@@ -789,6 +796,7 @@ public static class ArchiveInspector
         {
             AccountActualBytes(budget, read);
             total += read;
+            if (total > remaining) throw new InvalidDataException("Entry is larger than its recorded size.");
             await WriteWorkspaceAsync(output, buffer.AsMemory(0, read), ct);
         }
         return total;

@@ -184,7 +184,14 @@ public sealed class OemFileValidationService(
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                return ValidationResult.Error("文件校验超时");
+                // The timeout scales with the file size; content that still cannot be checked in time (for
+                // example an archive that expands enormously) would only stall the single queue again on retry.
+                return ValidationResult.Invalid("文件校验超时，内容解压或检查耗时过长");
+            }
+            catch (OutOfMemoryException)
+            {
+                // Archive readers load RAR/7z headers whole; a header declaring vast numbers of entries ends here.
+                return ValidationResult.Invalid("压缩包结构过大，无法完成检查");
             }
         }
         catch (FileNotFoundException)
