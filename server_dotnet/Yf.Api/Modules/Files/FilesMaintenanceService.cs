@@ -104,9 +104,17 @@ public sealed class FilesMaintenanceService(
                         continue;
                     }
                     var dbNow = await UploadService.DbNowAsync(context, ct);
+                    // A released session advisory lock no longer proves that hashing ended:
+                    // MergeAsync intentionally has no DB connection during the file read.
+                    if (!UploadService.MergeLeaseExpired(current.UpdatedAt, dbNow))
+                    {
+                        await tx.CommitAsync(ct);
+                        continue;
+                    }
                     var nextStatus = current.ExpiresAt <= dbNow ? "EXPIRED" : "UPLOADING";
                     var updatedAt = current.UpdatedAt >= dbNow ? current.UpdatedAt.AddSeconds(1) : dbNow;
-                    var changed = await context.UploadSessions.Where(session => session.Id == current.Id && session.Status == "MERGING")
+                    var changed = await context.UploadSessions.Where(session => session.Id == current.Id
+                            && session.Status == "MERGING" && session.UpdatedAt == current.UpdatedAt)
                         .ExecuteUpdateAsync(setters => setters.SetProperty(session => session.Status, nextStatus)
                             .SetProperty(session => session.UpdatedAt, updatedAt), ct);
                     if (changed != 1)

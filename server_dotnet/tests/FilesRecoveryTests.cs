@@ -2,6 +2,7 @@ using Dapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -25,7 +26,7 @@ public sealed class FilesRecoveryTests
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task GarbageCollectionDoesNotResetALiveMergeButRecoversAfterConnectionLoss()
+    public async Task GarbageCollectionRespectsFreshMergeLeasesAndRecoversExpiredOnes()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
@@ -33,21 +34,129 @@ public sealed class FilesRecoveryTests
         await scope.InsertSessionAsync(sessionId, "MERGING", expired: false);
         Assert.False(await scope.IsExpiredByDatabaseAsync(sessionId));
 
-        await using var owner = await scope.Database.OpenAsync(ct);
-        await using var lease = await MySqlNamedLock.TryAcquireAsync(
-            owner, UploadService.MergeLockName(owner, sessionId), 0, ct);
-        Assert.NotNull(lease);
-
         await scope.Maintenance.RunGarbageCollectionAsync(ct);
         Assert.Equal("MERGING", await scope.StatusAsync(sessionId));
 
-        // Simulate an IIS worker/database connection loss. Do not release the
-        // named lease in application code: MySQL must release connection-owned
-        // locks when the owning session disappears.
-        await scope.KillConnectionAsync(owner.ServerThread, ct);
+        // A disconnected process is reclaimed only after its database-clock lease expires.
+        await scope.ExecuteAsync(
+            $"UPDATE upload_sessions SET updated_at=UTC_TIMESTAMP(6)-INTERVAL 3 MINUTE WHERE id='{sessionId}'", ct);
         await scope.Maintenance.RunGarbageCollectionAsync(ct);
         Assert.Equal("UPLOADING", await scope.StatusAsync(sessionId));
         Assert.True(Directory.Exists(FileStorage.SessionDirectory(scope.StorageRoot, sessionId)));
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task MergeHashReleasesSinglePoolConnectionAndRenewsItsLease()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct, ConfigureSingleConnectionPool);
+        var content = new byte[] { 1, 2, 3, 4 };
+        var sessionId = await CreateReadySessionAsync(scope, "pool.bin", content, ct);
+        var gate = new GatedPayloadStream(content);
+        scope.Upload.MergeChunkStreamFactory = _ => gate;
+
+        var merge = scope.Upload.MergeAsync(FilesDatabaseScope.Context(), sessionId, ct);
+        try
+        {
+            await gate.WaitUntilReadAsync(ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
+
+            // The only connection-pool slot is available while the real merge read is gated.
+            using var poolDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            poolDeadline.CancelAfter(TimeSpan.FromSeconds(5));
+            await using (var probe = await scope.Database.OpenAsync(poolDeadline.Token))
+                Assert.Equal(1, await probe.ExecuteScalarAsync<int>(new CommandDefinition(
+                    "SELECT 1", cancellationToken: poolDeadline.Token)));
+
+            var before = await scope.UpdatedAtAsync(sessionId, ct);
+            var renewed = before;
+            var deadline = Stopwatch.StartNew();
+            while (renewed == before && deadline.Elapsed < TimeSpan.FromSeconds(35))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(200), ct);
+                renewed = await scope.UpdatedAtAsync(sessionId, ct);
+            }
+            Assert.NotEqual(before, renewed);
+            Assert.Equal("MERGING", await scope.StatusAsync(sessionId));
+
+            // Both the initializer and the GC recovery path must honor the active database-clock lease.
+            var activeInit = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.InitAsync(
+                FilesDatabaseScope.Context(), UploadRequest("pool.bin", content), ct));
+            Assert.Equal(409, activeInit.Status);
+            await scope.Maintenance.RunGarbageCollectionAsync(ct);
+            Assert.Equal("MERGING", await scope.StatusAsync(sessionId));
+        }
+        finally { gate.Release(); }
+
+        var merged = await merge.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.Equal(Sha256Hex(content), merged.Sha256);
+        Assert.Equal("COMPLETED", await scope.StatusAsync(sessionId));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AbortDuringMergeHashPreventsTheFileRowAndKeepsAbortedState()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct, ConfigureSingleConnectionPool);
+        var content = new byte[] { 9, 8, 7, 6 };
+        var sessionId = await CreateReadySessionAsync(scope, "abort-during-merge.bin", content, ct);
+        var gate = new GatedPayloadStream(content);
+        scope.Upload.MergeChunkStreamFactory = _ => gate;
+
+        var merge = scope.Upload.MergeAsync(FilesDatabaseScope.Context(), sessionId, ct);
+        try
+        {
+            await gate.WaitUntilReadAsync(ct).WaitAsync(TimeSpan.FromSeconds(5), ct);
+            await scope.Upload.AbortAsync(FilesDatabaseScope.Context(), sessionId, ct);
+            Assert.Equal("ABORTED", await scope.StatusAsync(sessionId));
+        }
+        finally { gate.Release(); }
+
+        var conflict = await Assert.ThrowsAsync<ApiException>(() => merge);
+        Assert.Equal(409, conflict.Status);
+        Assert.Equal("ABORTED", await scope.StatusAsync(sessionId));
+        await using var verify = await scope.Database.OpenAsync(ct);
+        Assert.Equal(0, await verify.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM files WHERE original_name='abort-during-merge.bin'", cancellationToken: ct)));
+        Assert.False(Directory.Exists(FileStorage.SessionDirectory(scope.StorageRoot, sessionId)));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task MergeReclaimsAnExpiredMergeLeaseAndCompletesFromExistingChunks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
+        var content = new byte[] { 3, 1, 4, 1, 5 };
+        var sessionId = await CreateReadySessionAsync(scope, "orphan-merge.bin", content, ct);
+        await scope.ExecuteAsync($"""
+            UPDATE upload_sessions
+            SET status='MERGING', updated_at=UTC_TIMESTAMP(6)-INTERVAL 3 MINUTE
+            WHERE id='{sessionId}'
+            """, ct);
+
+        var merged = await scope.Upload.MergeAsync(FilesDatabaseScope.Context(), sessionId, ct);
+
+        Assert.Equal(Sha256Hex(content), merged.Sha256);
+        Assert.Equal("COMPLETED", await scope.StatusAsync(sessionId));
+    }
+
+    private static void ConfigureSingleConnectionPool(AppOptions options)
+    {
+        options.ConnectionString = new MySqlConnectionStringBuilder(options.ConnectionString)
+        {
+            MaximumPoolSize = 1,
+            MinimumPoolSize = 0,
+        }.ConnectionString;
+    }
+
+    private static async Task<string> CreateReadySessionAsync(
+        FilesDatabaseScope scope, string name, byte[] content, CancellationToken ct)
+    {
+        var initialized = await scope.Upload.InitAsync(FilesDatabaseScope.Context(), UploadRequest(name, content), ct);
+        using (var body = new MemoryStream(content))
+            await scope.Upload.PutChunkAsync(FilesDatabaseScope.ChunkContext(content), initialized.SessionId, 0, body, ct);
+        await scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), initialized.SessionId,
+            new SubmitUploadMd5Request(Md5Hex(content)), ct);
+        return initialized.SessionId;
     }
 
     [Fact(Timeout = 30_000)]
@@ -538,6 +647,8 @@ public sealed class FilesRecoveryTests
         await using var scope = await FilesDatabaseScope.CreateOrSkipAsync(ct);
         var sessionId = Guid.NewGuid().ToString("D");
         await scope.InsertSessionAsync(sessionId, "MERGING", expired: true);
+        await scope.ExecuteAsync(
+            $"UPDATE upload_sessions SET updated_at=UTC_TIMESTAMP(6)-INTERVAL 3 MINUTE WHERE id='{sessionId}'", ct);
         Assert.True(await scope.IsExpiredByDatabaseAsync(sessionId));
 
         var sessionDirectory = FileStorage.SessionDirectory(scope.StorageRoot, sessionId);
@@ -1303,6 +1414,13 @@ public sealed class FilesRecoveryTests
             await using var connection = await Database.OpenAsync();
             return await connection.QuerySingleAsync<string>(
                 "SELECT status FROM upload_sessions WHERE id=@Id", new { Id = id });
+        }
+
+        public async Task<DateTime> UpdatedAtAsync(string id, CancellationToken ct)
+        {
+            await using var connection = await Database.OpenAsync(ct);
+            return await connection.QuerySingleAsync<DateTime>(new CommandDefinition(
+                "SELECT updated_at FROM upload_sessions WHERE id=@Id", new { Id = id }, cancellationToken: ct));
         }
 
         public async Task<string?> FileMd5Async(string id)

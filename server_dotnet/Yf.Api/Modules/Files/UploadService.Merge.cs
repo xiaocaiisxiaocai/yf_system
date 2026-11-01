@@ -13,62 +13,81 @@ namespace Yf.Api.Modules.Files;
 // Merging uploaded chunks into a stored file, and recovering merges interrupted by a crash or lost commit.
 public sealed partial class UploadService
 {
+    internal static readonly TimeSpan MergeLeaseTimeout = TimeSpan.FromMinutes(2);
+    internal static readonly TimeSpan MergeLeaseRenewInterval = TimeSpan.FromSeconds(15);
+
+    /// <summary>Deterministic slow-read seam for the single-connection merge recovery tests.</summary>
+    internal Func<string, Stream>? MergeChunkStreamFactory { get; set; }
+
     public async Task<FileResponse> MergeAsync(HttpContext context, string sessionId, CancellationToken ct)
     {
         var actor = AccessService.GetCurrent(context);
-        await using var conn = await db.OpenAsync(ct);
-        var session = await LoadSessionAsync(conn, null, sessionId, false, ct);
-        if (session.UploaderId != actor.Id) throw ApiException.Forbidden();
-        await ProjectAccessService.RequireViewAsync(conn, null, actor, session.ProjectId, ct);
-        await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
-        if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
-        if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
-        if (session.Status == "UPLOADING" && session.IsExpired)
-            throw ApiException.Conflict("上传会话已过期，请重新发起");
-        if (string.IsNullOrWhiteSpace(session.FileMd5))
-            throw ApiException.Conflict("文件完整性摘要尚未提交");
+        var roots = options.StorageRoots;
+        UploadSessionRow session;
+        await using (var conn = await db.OpenAsync(ct))
+        {
+            session = await LoadSessionAsync(conn, null, sessionId, false, ct);
+            if (session.UploaderId != actor.Id) throw ApiException.Forbidden();
+            await ProjectAccessService.RequireViewAsync(conn, null, actor, session.ProjectId, ct);
+            await AccessService.RequirePermissionAsync(conn, null, actor, "file:upload", ct);
+            if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
+            if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
+            if (session.Status == "UPLOADING" && session.IsExpired)
+                throw ApiException.Conflict("上传会话已过期，请重新发起");
+            if (string.IsNullOrWhiteSpace(session.FileMd5))
+                throw ApiException.Conflict("文件完整性摘要尚未提交");
 
-        await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
-            conn, MergeLockName(conn, sessionId), 0, ct)
-            ?? throw ApiException.Conflict("正在合并中，请稍候");
-        session = await LoadSessionAsync(conn, null, sessionId, false, ct);
-        if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
-        if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
-        if (session.IsExpired)
-            throw ApiException.Conflict("上传会话已过期，请重新发起");
-        await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
-        var uploaded = await UploadedChunksAsync(session, repairMetadata: true, ct);
-        if ((uint)uploaded.Count != session.TotalChunks)
-            throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
-        FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
-        // Fail fast before hashing; the session stays UPLOADING and can be merged again or cancelled.
-        await using (var precheck = EfDb.Use(conn))
-            await EnsureMaterialForMergeAsync(precheck, actor, session, ct);
-        session = await ClaimMergeAsync(conn, actor, session, ct);
-        var lease = session.UpdatedAt;
+            // Claim and validate while serialized with initialization and abort. The
+            // connection and lock are both released before the expensive file hash.
+            await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
+                conn, MergeLockName(conn, sessionId), 0, ct)
+                ?? throw ApiException.Conflict("正在合并中，请稍候");
+            session = await LoadSessionAsync(conn, null, sessionId, false, ct);
+            if (session.Status == "COMPLETED") return await CompletedFileAsync(conn, session, actor.Id, ct);
+            if (session.Status is not ("UPLOADING" or "MERGING")) throw ApiException.Conflict("会话已失效");
+            if (session.IsExpired) throw ApiException.Conflict("上传会话已过期，请重新发起");
+            await ProjectAccessService.RequireFileUploadAsync(conn, null, actor, session.ProjectId, ct);
+            var uploaded = await UploadedChunksAsync(session, repairMetadata: true, ct);
+            if ((uint)uploaded.Count != session.TotalChunks)
+                throw ApiException.BadRequest($"分片不完整：已传 {uploaded.Count}/{session.TotalChunks}");
+            FileStorage.EnsureFreeSpace(options.StorageRoot, session.FileSize);
+            // Fail fast before claiming: rejection leaves the session UPLOADING and resumable.
+            await using (var precheck = EfDb.Use(conn))
+                await EnsureMaterialForMergeAsync(precheck, actor, session, ct);
+            session = await ClaimMergeAsync(conn, actor, session, ct);
+        }
+
+        using var hashing = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        await using var mergeHeartbeat = new MergeLeaseHeartbeat(this, session.Id, session.UpdatedAt, hashing);
         try
         {
-            var result = await DoMergeAsync(conn, context, actor, session, ct);
+            var result = await DoMergeAsync(context, actor, session, roots, mergeHeartbeat, ct);
             await TryCleanupSessionArtifactsAsync(session.Id, CancellationToken.None);
             return result;
         }
         catch
         {
-            await ResetMergeLeaseSafelyAsync(session.Id, lease, CancellationToken.None);
+            try { await mergeHeartbeat.StopAsync(CancellationToken.None); }
+            catch (Exception error) { logger.LogWarning(error, "文件合并租约已失效 {SessionId}", session.Id); }
+            await ResetMergeLeaseSafelyAsync(session.Id, mergeHeartbeat.Lease, CancellationToken.None);
+            if (await IsAbortedSafelyAsync(session.Id, CancellationToken.None))
+                await TryCleanupSessionArtifactsAsync(session.Id, CancellationToken.None);
             throw;
         }
     }
 
-    private async Task<FileResponse> DoMergeAsync(MySqlConnection conn, HttpContext context, CurrentUser actor,
-        UploadSessionRow session, CancellationToken ct)
+    private async Task<FileResponse> DoMergeAsync(HttpContext context, CurrentUser actor,
+        UploadSessionRow session, StorageRootPair roots, MergeLeaseHeartbeat mergeHeartbeat, CancellationToken ct)
     {
         var extension = ExtensionOf(session.FileName);
         var storedName = $"{Guid.NewGuid():D}.{extension}";
         // A session started before a storage migration merges in its old root; the migration copies the blob.
-        var root = FileStorage.SessionRoot(options.StorageRoots, session.Id);
+        var root = FileStorage.SessionRoot(roots, session.Id);
         var mergeTemp = FileStorage.EnsureLexicallyWithin(root,
             Path.Combine(FileStorage.SessionDirectory(root, session.Id), $"{storedName}.tmp"), false);
         TryDeleteFile(mergeTemp, "merge-staging-before-start");
+        try
+        {
         var chunks = new List<string>(checked((int)session.TotalChunks));
         for (uint index = 0; index < session.TotalChunks; index++)
         {
@@ -76,27 +95,31 @@ public sealed partial class UploadService
                 FileStorage.ChunkPath(root, session.Id, index), ct));
         }
         (string Sha256, string Md5, ulong Bytes) hash;
-        try { hash = await FileStorage.HashAndCopyAsync(chunks, mergeTemp, session.FileSize, ct); }
-        catch { TryDeleteFile(mergeTemp, "merge-staging-after-copy-failure"); throw; }
+        hash = await FileStorage.HashAndCopyAsync(
+            chunks, mergeTemp, session.FileSize, mergeHeartbeat.HashToken, MergeChunkStreamFactory);
         if (hash.Bytes != session.FileSize)
         {
-            TryDeleteFile(mergeTemp, "merge-staging-size-mismatch");
             throw ApiException.BadRequest($"合并文件大小不符：期望 {session.FileSize}，实际 {hash.Bytes}");
         }
         if (!string.IsNullOrWhiteSpace(session.FileMd5)
             && !hash.Md5.Equals(session.FileMd5.Trim(), StringComparison.OrdinalIgnoreCase))
         {
-            TryDeleteFile(mergeTemp, "merge-staging-md5-mismatch");
             throw ApiException.BadRequest("文件 MD5 校验失败，请重新上传");
         }
+        await using var conn = await db.OpenAsync(ct);
+        // The session lock again serializes the final CAS with abort/reclaim; the
+        // SHA lock remains held through blob reference-count changes and COMMIT.
+        await using var mergeLease = await MySqlNamedLock.TryAcquireAsync(
+            conn, MergeLockName(conn, session.Id), 0, ct)
+            ?? throw ApiException.Conflict("上传会话状态已变化，请重新查询");
         await using var blobLease = await FileBlobStore.AcquireAsync(conn, [hash.Sha256], ct);
-        try
-        {
+        await mergeHeartbeat.StopAsync(ct);
+        mergeHeartbeat.ThrowIfFailed();
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
             var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
             var project = await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, session.ProjectId, ct);
             var locked = await LoadSessionAsync(conn, tx, session.Id, true, ct);
-            if (locked.Status != "MERGING" || locked.UpdatedAt != session.UpdatedAt)
+            if (locked.Status != "MERGING" || locked.UpdatedAt != mergeHeartbeat.Lease)
                 throw ApiException.Conflict("上传会话状态已变化，请重新查询");
 
             var direction = current.IsInternal ? "C2S" : "S2C";
@@ -190,10 +213,12 @@ public sealed partial class UploadService
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         await using var ef = EfDb.Use(conn, tx);
         var dbNow = await DbNowAsync(ef, ct);
-        var lease = locked.UpdatedAt >= dbNow ? locked.UpdatedAt.AddSeconds(1) : dbNow;
-        var mergeable = new[] { "UPLOADING", "MERGING" };
+        if (locked.Status == "MERGING" && !MergeLeaseExpired(locked.UpdatedAt, dbNow))
+            throw ApiException.Conflict("正在合并中，请稍候");
+        var lease = NextMergeLease(locked.UpdatedAt, dbNow);
         var changed = await ef.UploadSessions
-            .Where(item => item.Id == session.Id && Enumerable.Contains(mergeable, item.Status) && item.ExpiresAt > dbNow)
+            .Where(item => item.Id == session.Id && item.Status == locked.Status
+                && item.UpdatedAt == locked.UpdatedAt && item.ExpiresAt > dbNow)
             .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "MERGING")
                 .SetProperty(item => item.UpdatedAt, lease), ct);
         if (changed != 1) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
@@ -214,9 +239,12 @@ public sealed partial class UploadService
             throw ApiException.Conflict("上传会话已过期，请重新发起");
         await using var ef = EfDb.Use(conn, tx);
         var dbNow = await DbNowAsync(ef, ct);
-        var lease = locked.UpdatedAt >= dbNow ? locked.UpdatedAt.AddSeconds(1) : dbNow;
+        if (!MergeLeaseExpired(locked.UpdatedAt, dbNow))
+            throw ApiException.Conflict("正在合并中，请稍候");
+        var lease = NextMergeLease(locked.UpdatedAt, dbNow);
         var changed = await ef.UploadSessions
-            .Where(item => item.Id == session.Id && item.Status == "MERGING" && item.ExpiresAt > dbNow)
+            .Where(item => item.Id == session.Id && item.Status == "MERGING"
+                && item.UpdatedAt == locked.UpdatedAt && item.ExpiresAt > dbNow)
             .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, "UPLOADING")
                 .SetProperty(item => item.UpdatedAt, lease), ct);
         if (changed != 1) throw ApiException.Conflict("会话已变更，请重试");
@@ -251,6 +279,115 @@ public sealed partial class UploadService
         catch (Exception error)
         {
             logger.LogWarning("恢复上传合并状态失败 {SessionId} {Failure}", id, SafeFailureCode(error));
+        }
+    }
+
+    internal static bool MergeLeaseExpired(DateTime updatedAt, DateTime dbNow) =>
+        updatedAt <= dbNow - MergeLeaseTimeout;
+
+    private static DateTime NextMergeLease(DateTime current, DateTime dbNow)
+    {
+        var next = current >= dbNow ? current.AddSeconds(1) : dbNow;
+        // upload_sessions.updated_at is MySQL DATETIME with second precision.
+        return new DateTime(next.Ticks - next.Ticks % TimeSpan.TicksPerSecond, next.Kind);
+    }
+
+    private async Task<DateTime?> RenewMergeLeaseAsync(string id, DateTime expectedLease, CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        await using var context = EfDb.Use(conn);
+        var dbNow = await DbNowAsync(context, ct);
+        var next = NextMergeLease(expectedLease, dbNow);
+        var changed = await context.UploadSessions
+            .Where(session => session.Id == id && session.Status == "MERGING" && session.UpdatedAt == expectedLease)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(session => session.UpdatedAt, next), ct);
+        return changed == 1 ? next : null;
+    }
+
+    private async Task<bool> IsAbortedSafelyAsync(string id, CancellationToken ct)
+    {
+        try
+        {
+            await using var conn = await db.OpenAsync(ct);
+            await using var context = EfDb.Use(conn);
+            return await context.UploadSessions.Where(session => session.Id == id)
+                .Select(session => session.Status).SingleOrDefaultAsync(ct) == "ABORTED";
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            logger.LogWarning("确认上传会话取消状态失败 {SessionId} {Failure}", id, SafeFailureCode(error));
+            return false;
+        }
+    }
+
+    private sealed class MergeLeaseHeartbeat : IAsyncDisposable
+    {
+        private readonly UploadService owner;
+        private readonly string sessionId;
+        private readonly CancellationTokenSource stop = new();
+        private readonly CancellationTokenSource hashCancellation;
+        private readonly Task renewal;
+        private long leaseTicks;
+        private Exception? failure;
+        private int stopped;
+
+        internal MergeLeaseHeartbeat(
+            UploadService owner, string sessionId, DateTime lease, CancellationTokenSource hashCancellation)
+        {
+            this.owner = owner;
+            this.sessionId = sessionId;
+            this.hashCancellation = hashCancellation;
+            leaseTicks = lease.Ticks;
+            renewal = RenewLoopAsync();
+        }
+
+        internal DateTime Lease => new(Interlocked.Read(ref leaseTicks), DateTimeKind.Utc);
+        internal CancellationToken HashToken => hashCancellation.Token;
+
+        internal void ThrowIfFailed()
+        {
+            if (failure is not null)
+                throw ApiException.Conflict("文件合并租约已失效，请重新查询后重试");
+        }
+
+        internal async Task StopAsync(CancellationToken ct)
+        {
+            if (Interlocked.Exchange(ref stopped, 1) == 0) stop.Cancel();
+            await renewal.WaitAsync(ct);
+            ThrowIfFailed();
+        }
+
+        private async Task RenewLoopAsync()
+        {
+            using var timer = new PeriodicTimer(MergeLeaseRenewInterval);
+            try
+            {
+                while (await timer.WaitForNextTickAsync(stop.Token))
+                {
+                    var expected = Lease;
+                    var renewed = await owner.RenewMergeLeaseAsync(sessionId, expected, stop.Token);
+                    if (renewed is not DateTime next)
+                    {
+                        failure = ApiException.Conflict("上传会话状态已变化，请重新查询");
+                        hashCancellation.Cancel();
+                        return;
+                    }
+                    Interlocked.Exchange(ref leaseTicks, next.Ticks);
+                }
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            catch (Exception error)
+            {
+                failure = error;
+                hashCancellation.Cancel();
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try { await StopAsync(CancellationToken.None); }
+            catch { }
+            stop.Dispose();
         }
     }
 

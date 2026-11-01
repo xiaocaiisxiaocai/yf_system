@@ -178,7 +178,8 @@ internal static class FileStorage
     }
 
     public static async Task<(string Sha256, string Md5, ulong Bytes)> HashAndCopyAsync(
-        IEnumerable<string> chunks, string outputPath, ulong maximumBytes, CancellationToken ct)
+        IEnumerable<string> chunks, string outputPath, ulong maximumBytes, CancellationToken ct,
+        Func<string, Stream>? openChunk = null)
     {
         const int bufferSize = 1024 * 1024;
         var buffer = ArrayPool<byte>.Shared.Rent(bufferSize);
@@ -191,8 +192,9 @@ internal static class FileStorage
             ulong total = 0;
             foreach (var chunk in chunks)
             {
-                await using var input = new FileStream(chunk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                await using var input = openChunk?.Invoke(chunk)
+                    ?? new FileStream(chunk, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
                 int read;
                 while ((read = await input.ReadAsync(buffer.AsMemory(0, bufferSize), ct)) != 0)
                 {
