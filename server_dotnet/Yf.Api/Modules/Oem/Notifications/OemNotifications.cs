@@ -102,9 +102,13 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
             case ApprovalTasksActivatedEvent activated:
                 foreach (var taskId in activated.TaskIds)
                 {
-                    var approverId = await uow.Db.OemFlowTasks.Where(task => task.Id == taskId).Select(task => task.ApproverUserId).SingleAsync(ct);
-                    if (await OemRecipients.InternalUserAsync(uow.Db, approverId, ct) is { } approver)
-                        await EnqueueAsync(uow, settings, OemMailEvents.ApprovalPending, $"oem:approval:{taskId}", approver, facts,
+                    var task = await uow.Db.OemFlowTasks.Where(item => item.Id == taskId)
+                        .Select(item => new { item.ApproverUserId, item.ActivatedAt }).SingleAsync(ct);
+                    // A task blocked and later re-activated keeps its id; the activation time keeps its new
+                    // notice from being swallowed by the earlier one's dedupe key.
+                    var activation = task.ActivatedAt?.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture) ?? "0";
+                    if (await OemRecipients.InternalUserAsync(uow.Db, task.ApproverUserId, ct) is { } approver)
+                        await EnqueueAsync(uow, settings, OemMailEvents.ApprovalPending, $"oem:approval:{taskId}:{activation}", approver, facts,
                             $"待审批：{transfer.Title}", "有一张公司发往 OEM 厂商的文件传递单等待您审批。", null, ct);
                 }
                 break;
@@ -296,7 +300,8 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
             && string.Equals(queuedAddress, currentAddress, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Task id of an approval notice key (<c>oem:approval:{taskId}</c>, optionally followed by <c>:{activation}</c>).</summary>
     private static ulong? TaskIdFrom(string? dedupeKey) =>
         dedupeKey?.StartsWith("oem:approval:", StringComparison.Ordinal) == true
-        && ulong.TryParse(dedupeKey["oem:approval:".Length..], NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : null;
+        && ulong.TryParse(dedupeKey["oem:approval:".Length..].Split(':')[0], NumberStyles.None, CultureInfo.InvariantCulture, out var id) ? id : null;
 }

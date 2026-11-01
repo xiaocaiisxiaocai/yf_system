@@ -155,7 +155,7 @@ public sealed class OemTransferService(
         if (current is InternalOemActor)
             await OemRecipientPolicy.RequireEnabledAccountAsync(uow.Db, transfer.OemCompanyId, ct);
         var activeUploads = await uow.Db.OemUploadSessions.AnyAsync(session => session.TransferId == id
-            && (session.Status == UploadStatuses.Uploading || session.Status == UploadStatuses.Merging) && session.ExpiresAt > uow.Now, ct);
+            && ((session.Status == UploadStatuses.Uploading && session.ExpiresAt > uow.Now) || session.Status == UploadStatuses.Merging), ct);
         if (activeUploads) throw ApiException.Conflict("仍有附件正在上传，请等待上传完成或取消后再发送");
         var files = await OemTransferFiles.Members(uow.Db, id).OrderBy(file => file.Id).ToArrayAsync(ct);
         if (files.Length == 0) throw ApiException.BadRequest("请至少上传一个附件");

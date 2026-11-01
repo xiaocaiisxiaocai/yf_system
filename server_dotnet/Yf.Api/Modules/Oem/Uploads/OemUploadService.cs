@@ -64,7 +64,7 @@ public sealed partial class OemUploadService(
         var onDisk = PayloadStatuses.OnDisk;
         var companyTransfers = uow.Db.OemTransfers.Where(item => item.OemCompanyId == transfer.OemCompanyId).Select(item => item.Id);
         var activeSessions = uow.Db.OemUploadSessions.Where(session => companyTransfers.Contains(session.TransferId)
-            && (session.Status == UploadStatuses.Uploading || session.Status == UploadStatuses.Merging) && session.ExpiresAt > uow.Now);
+            && ((session.Status == UploadStatuses.Uploading && session.ExpiresAt > uow.Now) || session.Status == UploadStatuses.Merging));
         if (await activeSessions.CountAsync(ct) >= settings.MaxConcurrentPerCompany)
             throw ApiException.Conflict("该厂商同时进行的上传过多，请稍后重试");
         var storedBytes = (ulong)(await uow.Db.OemTransferFiles

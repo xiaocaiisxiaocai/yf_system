@@ -36,7 +36,9 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             var userId = current.Id;
             var canView = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct);
             var canRecover = await OemAuthorizer.HasAsync(uow, current, OemPermissions.ApprovalRecover, ct);
-            var taskTransfers = db.OemFlowTasks.Where(task => task.ApproverUserId == userId)
+            var canApprove = await OemAuthorizer.HasAsync(uow, current, OemPermissions.FlowApprove, ct);
+            var taskTransfers = db.OemFlowTasks.Where(task => canApprove && task.ApproverUserId == userId
+                    && (task.Status == FlowTaskStatuses.Pending || task.Status == FlowTaskStatuses.Approved || task.Status == FlowTaskStatuses.Rejected))
                 .Join(db.OemFlowInstances, task => task.InstanceId, instance => instance.Id, (task, instance) => instance.TransferId);
             var blockedTransfers = db.OemFlowInstances.Where(instance => instance.Status == FlowInstanceStatuses.ApprovalBlocked)
                 .Select(instance => instance.TransferId);
@@ -172,8 +174,11 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     .Join(uow.Db.OemFlowInstances.Where(instance => instance.TransferId == transfer.Id), task => task.InstanceId, instance => instance.Id,
                         (task, instance) => task)
                     .Where(task => task.ApproverUserId == actor.Id).Select(task => task.Status).ToArrayAsync(ct);
-                anyTask = tasks.Length > 0;
-                activeTask = tasks.Contains(FlowTaskStatuses.Pending) && permissions.Contains(OemPermissions.FlowApprove);
+                // Only a task the user has to decide or did decide shows the transfer: one not reached yet, reassigned
+                // away or cancelled does not, and neither does any task once the approval permission is gone.
+                var canApprove = permissions.Contains(OemPermissions.FlowApprove);
+                anyTask = canApprove && tasks.Any(status => status is FlowTaskStatuses.Pending or FlowTaskStatuses.Approved or FlowTaskStatuses.Rejected);
+                activeTask = canApprove && tasks.Contains(FlowTaskStatuses.Pending);
             }
         }
         var facts = new TransferFacts(transfer.Direction, transfer.OemCompanyId, transfer.LifecycleStatus,
