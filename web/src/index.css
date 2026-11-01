@@ -745,7 +745,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .action-slot--empty { visibility: hidden; }
 /* 文字较长或带图标的操作位。 */
 .action-slots--user > .action-slot:nth-child(2),
-.action-slots--account > .action-slot:nth-child(2),
+.action-slots--account > .action-slot:nth-child(1),
 .action-slots--role > .action-slot:nth-child(1),
 .action-slots--supplier > .action-slot:nth-child(1) { --action-slot-width: 56px; }
 .action-slots--supplier > .action-slot:nth-child(2) { --action-slot-width: 44px; }
