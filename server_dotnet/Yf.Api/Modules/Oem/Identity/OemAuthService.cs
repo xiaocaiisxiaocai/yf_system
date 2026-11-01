@@ -43,13 +43,14 @@ public sealed class OemAuthService(
         if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("账号和密码不能为空");
         if (employeeNo.EnumerateRunes().Count() > 64 || System.Text.Encoding.UTF8.GetByteCount(request.Password) > PasswordService.MaxPasswordBytes)
             throw ApiException.BadRequest(InvalidCredentials);
-        if (!rateLimiter.AllowLogin(OemRealms.Oem, clientIp, employeeNo))
+        if (!rateLimiter.AllowLoginSource(clientIp))
             throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
 
         OemAccount? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             candidate = await lookup.OemAccounts.AsNoTracking().SingleOrDefaultAsync(account => account.EmployeeNo == employeeNo, ct);
-        if (!rateLimiter.AllowAccountLogin(OemRealms.Oem, candidate?.Id, employeeNo, clientIp))
+        if (!rateLimiter.AllowLoginAccount(OemRealms.Oem, clientIp, candidate?.Id, employeeNo)
+            || !rateLimiter.AllowAccountLogin(OemRealms.Oem, candidate?.Id, employeeNo, clientIp))
             throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
         // Await the same-cost dummy even when the account exists, so the first unknown-account
         // request cannot be distinguished by the one-time dummy hash calculation.

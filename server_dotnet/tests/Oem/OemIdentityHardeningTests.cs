@@ -61,6 +61,43 @@ public sealed class OemIdentityHardeningTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task OemLoginThrottleUsesAccountIdForCollationVariantsAndKeepsUnknownNamesOpaque()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        await host.CreateVendorAsync(admin, "限流变体厂商", "target", ct);
+        var service = host.Service<OemAuthService>();
+        const string source = "192.0.2.81";
+
+        // The OEM employee_no collation is accent-insensitive, so every spelling resolves to the
+        // same account and must consume the same IP+account bucket.
+        var spellings = new[] { "target", "TARGET", "tárget", "Tárget" };
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var rejected = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
+                new(spellings[attempt % spellings.Length], "Wrong#2026"), source, ct));
+            Assert.Equal(HttpStatusCode.Unauthorized, (HttpStatusCode)rejected.Status);
+        }
+        var knownThrottle = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
+            new("TÁRGET", "Wrong#2026"), source, ct));
+        Assert.Equal(429, knownThrottle.Status);
+        Assert.Equal(42902, knownThrottle.Code);
+
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            var rejected = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
+                new("ghost", "Wrong#2026"), source, ct));
+            Assert.Equal(HttpStatusCode.Unauthorized, (HttpStatusCode)rejected.Status);
+        }
+        var unknownThrottle = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
+            new(" GHOST ", "Wrong#2026"), source, ct));
+        Assert.Equal(knownThrottle.Status, unknownThrottle.Status);
+        Assert.Equal(knownThrottle.Code, unknownThrottle.Code);
+        Assert.Equal(knownThrottle.Message, unknownThrottle.Message);
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task OemAuthRejectsCrossSiteFetchWithoutOrigin()
     {
         var ct = TestContext.Current.CancellationToken;
