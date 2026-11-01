@@ -19,8 +19,6 @@ public sealed class OemIdentitySessionTests
         var accountId = (await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts", new
         {
             employeeNo = "session_vendor",
-            realName = "会话厂商",
-            email = "session-vendor@example.invalid",
             password = "Vendor#2026",
         }, ct).Ok()).Id();
 
@@ -62,8 +60,6 @@ public sealed class OemIdentitySessionTests
         var accountId = (await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts", new
         {
             employeeNo = "deadline_vendor",
-            realName = "期限厂商",
-            email = "deadline-vendor@example.invalid",
             password = "Vendor#2026",
         }, ct).Ok()).Id();
         var vendor = await host.LoginOemAsync("deadline_vendor", "Vendor#2026", ct);

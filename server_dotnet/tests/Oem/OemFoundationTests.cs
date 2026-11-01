@@ -45,7 +45,7 @@ public sealed class OemFoundationTests
         var companyId = company.Id();
         await admin.PostAsync("/api/v1/oem/companies", new { name = "精密代工一厂" }, ct).Status(HttpStatusCode.Conflict);
         var account = await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts",
-            new { employeeNo = "vendor_a", realName = "张三", email = "zhang@vendor.invalid", password = "Vendor#2026" }, ct).Ok();
+            new { employeeNo = "vendor_a", password = "Vendor#2026" }, ct).Ok();
         Assert.True(account["mustChangePassword"]!.GetValue<bool>());
 
         // First login must change the password before anything but auth/me.
@@ -118,7 +118,7 @@ public sealed class OemFoundationTests
         await manager.PostAsync("/api/v1/oem/companies", new { name = "不应创建" }, ct).Status(HttpStatusCode.Forbidden);
         var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = "厂商B" }, ct).Ok()).Id();
         await manager.PostAsync($"/api/v1/oem/companies/{companyId}/accounts",
-            new { employeeNo = "vendor_b", realName = "李四", email = "li@vendor.invalid", password = "Vendor#2026" }, ct).Ok();
+            new { employeeNo = "vendor_b", password = "Vendor#2026" }, ct).Ok();
 
         // OEM system parameters are neither listed nor editable through the collaboration settings.
         var configs = await admin.GetAsync("/api/v1/admin/system/configs", ct).Ok();

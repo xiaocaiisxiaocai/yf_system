@@ -70,32 +70,27 @@ def run_manual_supplier_role_checks(admin, conn, check):
     protected_password = _password()
     protected_employee = 'protected_' + secrets.token_hex(5)
     protected = admin.call('POST', f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
-        'employeeNo': protected_employee, 'realName': '高权限供应商账号',
-        'email': 'protected@example.invalid', 'password': protected_password, 'roleId': beyond_operator,
+        'employeeNo': protected_employee, 'password': protected_password, 'roleId': beyond_operator,
     })
     with conn.cursor() as cursor:
         cursor.execute('SELECT password_hash,status FROM users WHERE id=%s', (protected['id'],))
         protected_hash, protected_status = cursor.fetchone()
-    account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{protected['id']}", {
-        'realName': '越权修改', 'email': 'changed@example.invalid',
-    }, expected=403)
     account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{protected['id']}/status",
                           {'status': 'DISABLED'}, expected=403)
     account_operator.call('PUT', f"/api/v1/admin/supplier-accounts/{protected['id']}/password",
                           {'newPassword': _password()}, expected=403)
     account_operator.call('DELETE', f"/api/v1/admin/supplier-accounts/{protected['id']}", expected=403)
     with conn.cursor() as cursor:
-        cursor.execute('SELECT real_name,email,password_hash,status FROM users WHERE id=%s', (protected['id'],))
+        cursor.execute('SELECT employee_no,password_hash,status FROM users WHERE id=%s', (protected['id'],))
         protected_after = cursor.fetchone()
         cursor.execute('SELECT role_id FROM user_roles WHERE user_id=%s', (protected['id'],))
         protected_role_after = cursor.fetchone()[0]
     check('supplier account mutations enforce the target role delegation ceiling atomically',
-          protected_after == ('高权限供应商账号', 'protected@example.invalid', protected_hash, protected_status)
+          protected_after == (protected_employee, protected_hash, protected_status)
           and protected_role_after == beyond_operator)
 
     def create(role_id=None, expected=200):
-        body = {'employeeNo': 'manual_' + secrets.token_hex(5), 'realName': '手工角色测试',
-                'email': 'manual@example.invalid', 'password': _password()}
+        body = {'employeeNo': 'manual_' + secrets.token_hex(5), 'password': _password()}
         if role_id is not None: body['roleId'] = role_id
         return admin.call('POST', f"/api/v1/admin/suppliers/{supplier['id']}/accounts", body, expected=expected)
 

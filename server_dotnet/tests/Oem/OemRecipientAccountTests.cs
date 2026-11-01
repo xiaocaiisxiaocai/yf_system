@@ -90,7 +90,7 @@ public sealed class OemRecipientAccountTests
     private static async Task<ulong> CreateAccountAsync(ApiClient admin, ulong companyId, string employeeNo, CancellationToken ct) =>
         (await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts", new
         {
-            employeeNo, realName = "接收账号", email = employeeNo + "@example.invalid", password = "Recipient#2026",
+            employeeNo, password = "Recipient#2026",
         }, ct).Ok()).Id();
 
     private static async Task AssertOptionAsync(ApiClient sender, ulong companyId, bool canReceive, CancellationToken ct)

@@ -110,7 +110,7 @@ public sealed class OemDirectoryRulesTests
     private static async Task<ulong> CreateAccountAsync(ApiClient admin, ulong companyId, string employeeNo, CancellationToken ct) =>
         (await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts", new
         {
-            employeeNo, realName = "规则账号", email = employeeNo + "@example.invalid", password = "Account#2026",
+            employeeNo, password = "Account#2026",
         }, ct).Ok()).Id();
 
     private static async Task<string> StatusOfAsync(OemTestHost host, ulong accountId, CancellationToken ct)

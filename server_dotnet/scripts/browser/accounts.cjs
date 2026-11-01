@@ -35,8 +35,6 @@ function flattenDepartments(nodes, result = []) {
     const accountNo = 'uivendor_' + marker;
     const userEmail = userNo + '@example.invalid';
     const editedUserEmail = userNo + '.edit@example.invalid';
-    const accountEmail = accountNo + '@example.invalid';
-    const editedAccountEmail = accountNo + '.edit@example.invalid';
     const divisionName = 'UI事业部-' + marker;
     const departmentName = 'UI部门-' + marker;
     const sectionName = 'UI课别-' + marker;
@@ -224,7 +222,7 @@ function flattenDepartments(nodes, result = []) {
       await page.getByRole('button', { name: '新增用户', exact: true }).click();
       modal = currentModal();
       await modal.getByPlaceholder('3-32 位字母、数字或下划线', { exact: true }).fill(userNo);
-      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(userPassword);
+      await modal.getByPlaceholder('5-20 位', { exact: true }).fill(userPassword);
       await modal.getByPlaceholder('姓名', { exact: true }).fill('UI内部用户');
       await modal.getByPlaceholder('name@example.com', { exact: true }).fill(userEmail);
       await openChoice(modal, '选择组织');
@@ -289,7 +287,7 @@ function flattenDepartments(nodes, result = []) {
 
       await userRow().getByRole('button', { name: '重置密码', exact: true }).click();
       modal = currentModal();
-      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(userResetPassword);
+      await modal.getByPlaceholder('5-20 位', { exact: true }).fill(userResetPassword);
       const reset = await action(page, '/admin/users/' + user.id + '/password', 'PUT', () => (
         modal.getByRole('button', { name: '确认重置', exact: true }).click()
       ));
@@ -397,17 +395,15 @@ function flattenDepartments(nodes, result = []) {
       await modal.getByRole('button', { name: '创建账号', exact: true }).click();
       await modal.getByText('请输入账号', { exact: true }).waitFor();
       await modal.getByText('请输入初始密码', { exact: true }).waitFor();
-      await modal.getByText('请输入姓名', { exact: true }).waitFor();
-      await modal.getByText('请输入邮箱', { exact: true }).waitFor();
+      assert.equal(await modal.getByText('请输入姓名', { exact: true }).count(), 0);
+      assert.equal(await modal.getByText('请输入邮箱', { exact: true }).count(), 0);
       await modal.getByRole('button', { name: '取消', exact: true }).click();
       await modal.waitFor({ state: 'hidden' });
 
       await drawer.getByRole('button', { name: '新增账号', exact: true }).click();
       modal = currentModal();
       await modal.getByPlaceholder('3-32 位字母、数字或下划线', { exact: true }).fill(accountNo);
-      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(accountPassword);
-      await modal.getByPlaceholder('姓名', { exact: true }).fill('UI供应商账号');
-      await modal.getByPlaceholder('name@example.com', { exact: true }).fill(accountEmail);
+      await modal.getByPlaceholder('5-20 位', { exact: true }).fill(accountPassword);
       await openChoice(modal, '选择供应商角色');
       await pickVisibleOption(manualRoleName);
       account = await action(page, '/admin/suppliers/' + supplier.id + '/accounts', 'POST', () => (
@@ -417,27 +413,13 @@ function flattenDepartments(nodes, result = []) {
       await accountRow().waitFor();
       let saved = (await readAccounts(supplier.id)).find((item) => item.id === account.id);
       assert.equal(saved.employeeNo, accountNo);
-      assert.equal(saved.email, accountEmail);
       assert.equal(saved.roleId, manualRole.id);
       assert.equal(saved.roleName, manualRoleName);
       assert.equal(saved.status, 'ACTIVE');
 
-      await accountRow().getByRole('button', { name: '编辑', exact: true }).click();
-      modal = currentModal();
-      await modal.getByPlaceholder('姓名', { exact: true }).fill('UI供应商账号已编辑');
-      await modal.getByPlaceholder('name@example.com', { exact: true }).fill(editedAccountEmail);
-      const updated = await action(page, '/admin/supplier-accounts/' + account.id, 'PUT', () => (
-        modal.getByRole('button', { name: '保存账号', exact: true }).click()
-      ));
-      assert.equal(updated.id, account.id, 'supplier account update response id');
-      await accountRow().getByText('UI供应商账号已编辑', { exact: true }).waitFor();
-      saved = (await readAccounts(supplier.id)).find((item) => item.id === account.id);
-      assert.equal(saved.realName, 'UI供应商账号已编辑');
-      assert.equal(saved.email, editedAccountEmail);
-
       await accountRow().getByRole('button', { name: '重置密码', exact: true }).click();
       modal = currentModal();
-      await modal.getByPlaceholder('6-20 位', { exact: true }).fill(accountResetPassword);
+      await modal.getByPlaceholder('5-20 位', { exact: true }).fill(accountResetPassword);
       const reset = await action(page, '/admin/supplier-accounts/' + account.id + '/password', 'PUT', () => (
         modal.getByRole('button', { name: '确认重置', exact: true }).click()
       ));

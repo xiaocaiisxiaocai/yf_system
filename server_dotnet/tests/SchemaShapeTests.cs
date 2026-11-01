@@ -47,6 +47,7 @@ public sealed class SchemaShapeTests
         "20261031125128_AddProjectNotificationsAndDueReminders",
         "20261031152544_AddStorageLocations",
         "20261101004904_AddProjectMaterialRound",
+        "20261101120851_AddOemCompanyContacts",
     ];
 
     [Fact]
@@ -328,7 +329,7 @@ public sealed class SchemaShapeTests
             Assert.Equal(48, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
             Assert.Equal(28, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.scan.%'"));
-            Assert.Equal(19, await conn.ExecuteScalarAsync<int>(
+            Assert.Equal(20, await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'oem\\_%'"));
             Assert.Equal(6, await conn.ExecuteScalarAsync<int>(
                 """

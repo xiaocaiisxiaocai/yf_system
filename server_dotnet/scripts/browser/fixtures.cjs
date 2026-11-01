@@ -10,7 +10,7 @@ const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
  for(const [key,label] of [['a','自动验收甲公司'],['b','自动验收乙公司']]){
   const supplier=await(await api(c,'POST','/admin/suppliers',{name:label,remark:'本轮独立测试库'},s.adminToken)).json();
   fixtures.suppliers[key]=supplier;const initial=password();
- const user=await(await api(c,'POST','/admin/suppliers/'+supplier.id+'/accounts',{employeeNo:'auto_supplier_'+key,password:initial,realName:label+'代表',email:key+'@example.invalid'},s.adminToken)).json();
+ const user=await(await api(c,'POST','/admin/suppliers/'+supplier.id+'/accounts',{employeeNo:'auto_supplier_'+key,password:initial},s.adminToken)).json();
  fixtures.users[key]={id:user.id,username:user.employeeNo,password:initial,changedPassword:password()};
  }
  const division=await(await api(c,'POST','/admin/departments',{name:'自动验收事业部-'+crypto.randomBytes(4).toString('hex'),parentId:null,sortNo:900},s.adminToken)).json();

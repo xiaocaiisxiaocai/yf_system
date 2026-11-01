@@ -560,7 +560,7 @@ try:
             # Starting requires an enabled supplier account that can upload files.
             flow_password = "Yf9!" + secrets.token_urlsafe(9)
             changed_flow_password = "Yf9!" + secrets.token_urlsafe(9)
-            flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password, "realName": "验收供应商", "email": "workflow@example.invalid"})
+            flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password})
             client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
             check("supplier/project creation and project start", True)
             pdf = b"%PDF-1.4\n" + b"test data\n" * 40000 + b"%%EOF\n"

@@ -21,7 +21,7 @@ public sealed class OemRecipientPrecedenceTests
         var companyId = (await world.Admin.PostAsync("/api/v1/oem/companies", new { name = "停用且无账号厂商" }, ct).Ok()).Id();
         var accountId = (await world.Admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts", new
         {
-            employeeNo = "precedence_only", realName = "唯一账号", email = "precedence_only@example.invalid", password = "Recipient#2026",
+            employeeNo = "precedence_only", password = "Recipient#2026",
         }, ct).Ok()).Id();
         var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Ok();
         var transferId = TransferId(draft);

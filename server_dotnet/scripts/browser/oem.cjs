@@ -101,7 +101,7 @@ async function openReleasedFile(page, url, fileName) {
     fs.copyFileSync(process.env.YF_PROJECT_ROOT + '/web/test/fixtures/pdf-compatibility.pdf', outbound);
     fs.writeFileSync(inbound, '%PDF-1.4\n% OEM inbound process sheet ' + marker + '\n%%EOF\n');
     const companyName = 'UI OEM厂商-' + marker;
-    const vendor = { username: 'uioem_' + marker, password: password(), changedPassword: password(), realName: 'UI厂商联系人' };
+    const vendor = { username: 'uioem_' + marker, password: password(), changedPassword: password() };
 
     // Admin session: OEM directory management happens in the UI; roles/org/users are harness fixtures.
     const admin = await newPage('oem-admin');
@@ -147,6 +147,7 @@ async function openReleasedFile(page, url, fileName) {
       let modal = visibleModal(page);
       await modal.getByLabel('厂商名称', { exact: true }).fill(companyName);
       await modal.getByLabel('联系人', { exact: true }).fill('UI联系人');
+      await modal.getByLabel('联系邮箱', { exact: true }).fill('ui-contact-' + marker + '@vendor.invalid');
       const company = await action(page, '/oem/companies', 'POST',
         () => modal.getByRole('button', { name: '确定', exact: true }).click());
       assert.equal(company.name, companyName);
@@ -160,8 +161,6 @@ async function openReleasedFile(page, url, fileName) {
       await drawer.getByRole('button', { name: '新增账号', exact: true }).click();
       modal = visibleModal(page);
       await modal.getByLabel('登录账号', { exact: true }).fill(vendor.username);
-      await modal.getByLabel('姓名', { exact: true }).fill(vendor.realName);
-      await modal.getByLabel('邮箱', { exact: true }).fill(vendor.username + '@vendor.invalid');
       await modal.getByLabel('初始密码', { exact: true }).fill(vendor.password);
       const account = await action(page, '/oem/companies/' + company.id + '/accounts', 'POST',
         () => modal.getByRole('button', { name: '确定', exact: true }).click());
@@ -284,8 +283,8 @@ async function openReleasedFile(page, url, fileName) {
       await watermark.waitFor({ state: 'visible' });
       assert.equal(await watermark.getAttribute('aria-hidden'), 'true');
       const stamp = await watermark.locator('span').first().textContent() || '';
-      assert.match(stamp, /^\S+ .+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, 'OEM preview watermark');
-      assert.ok(stamp.startsWith(vendor.username + ' ' + vendor.realName), 'watermark names the vendor viewer');
+      assert.match(stamp, /^\S+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, 'OEM preview watermark');
+      assert.ok(stamp.startsWith(vendor.username + ' '), 'watermark identifies the shared vendor account');
       await page.screenshot({ path: OUT + '/oem-vendor-preview.png', fullPage: true });
       await dialog.getByRole('button', { name: '关闭文件预览', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });

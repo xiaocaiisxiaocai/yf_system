@@ -324,8 +324,7 @@ def run_identity_checks(client, Client, conn, check):
     supplier_password = _password()
     supplier_employee = "supplier_" + secrets.token_hex(4)
     supplier_user = client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
-        "employeeNo": supplier_employee, "password": supplier_password, "realName": "供应商会话用户",
-        "email": supplier_employee + "@example.invalid"
+        "employeeNo": supplier_employee, "password": supplier_password
     })
     check("identity supplier account creation still works after built-in deletion rejection",
           supplier_user["supplierId"] == supplier["id"])
@@ -334,8 +333,7 @@ def run_identity_checks(client, Client, conn, check):
     client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "DISABLED"})
     blocked_employee = "blocked_supplier_" + secrets.token_hex(3)
     client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
-        "employeeNo": blocked_employee, "password": _password(), "realName": "禁用角色账号",
-        "email": blocked_employee + "@example.invalid"
+        "employeeNo": blocked_employee, "password": _password()
     }, expected=400)
     client.call("PUT", f"/api/v1/admin/supplier-accounts/{supplier_user['id']}/status", {"status": "ACTIVE"}, expected=400)
     client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/status", {"status": "ACTIVE"})
@@ -344,8 +342,7 @@ def run_identity_checks(client, Client, conn, check):
     supplier_peer_password = _password()
     supplier_peer_employee = "supplier_peer_" + secrets.token_hex(4)
     supplier_peer_user = client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
-        "employeeNo": supplier_peer_employee, "password": supplier_peer_password,
-        "realName": "供应商第二会话用户", "email": supplier_peer_employee + "@example.invalid"
+        "employeeNo": supplier_peer_employee, "password": supplier_peer_password
     })
     control_supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": "会话控制供应商-" + secrets.token_hex(4), "remark": "isolated identity control"
@@ -354,8 +351,7 @@ def run_identity_checks(client, Client, conn, check):
     control_supplier_employee = "supplier_control_" + secrets.token_hex(4)
     control_supplier_user = client.call(
         "POST", f"/api/v1/admin/suppliers/{control_supplier['id']}/accounts", {
-            "employeeNo": control_supplier_employee, "password": control_supplier_password,
-            "realName": "其他供应商控制用户", "email": control_supplier_employee + "@example.invalid"
+            "employeeNo": control_supplier_employee, "password": control_supplier_password
         })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id IN (%s,%s,%s)",

@@ -65,8 +65,6 @@ def _new_supplier(client, Client, conn):
     user = client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
         "employeeNo": employee,
         "password": password,
-        "realName": "项目并发供应商",
-        "email": employee + "@example.invalid",
     })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (user["id"],))
@@ -81,8 +79,6 @@ def _new_supplier_account(client, Client, conn, supplier_id, label):
     user = client.call("POST", f"/api/v1/admin/suppliers/{supplier_id}/accounts", {
         "employeeNo": employee,
         "password": password,
-        "realName": label,
-        "email": employee + "@example.invalid",
     })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (user["id"],))

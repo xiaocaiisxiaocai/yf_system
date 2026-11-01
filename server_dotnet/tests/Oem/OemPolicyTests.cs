@@ -198,7 +198,7 @@ public sealed class OemPolicyTests
         // OEM accounts see the same single effective option.
         var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = "厂商C" }, ct).Ok()).Id();
         await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts",
-            new { employeeNo = "vendor_c", realName = "王五", email = "wang@vendor.invalid", password = "Vendor#2026" }, ct).Ok();
+            new { employeeNo = "vendor_c", password = "Vendor#2026" }, ct).Ok();
         var vendor = await host.LoginOemAsync("vendor_c", "Vendor#2026", ct);
         await vendor.PutAsync("/api/v1/oem/auth/password", new { oldPassword = "Vendor#2026", newPassword = "Vendor#2027x" }, ct).Ok();
         vendor = await host.LoginOemAsync("vendor_c", "Vendor#2027x", ct);

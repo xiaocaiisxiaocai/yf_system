@@ -350,13 +350,7 @@ def run_business_acceptance(client, Client, conn, check):
         "POST", f"/api/v1/admin/suppliers/{disposable_supplier['id']}/accounts", {
             "employeeNo": disposable_supplier_employee,
             "password": _password(),
-            "realName": "验收临时供应商账号",
-            "email": disposable_supplier_employee + "@example.invalid",
         })
-    disposable_account = client.call("PUT", f"/api/v1/admin/supplier-accounts/{disposable_account['id']}", {
-        "realName": "验收临时供应商账号更新",
-        "email": "updated." + disposable_supplier_employee + "@example.invalid",
-    })
     client.call("PUT", f"/api/v1/admin/supplier-accounts/{disposable_account['id']}/status", {
         "status": "DISABLED",
     })
@@ -369,10 +363,10 @@ def run_business_acceptance(client, Client, conn, check):
     accounts = client.call("GET", f"/api/v1/admin/suppliers/{disposable_supplier['id']}/accounts")
     detail = client.call("GET", f"/api/v1/admin/suppliers/{disposable_supplier['id']}")
     check(
-        "supplier and supplier-account CRUD updates are readable",
+        "supplier updates and account creation are readable",
         detail["name"] == disposable_supplier["name"]
         and len(accounts) == 1
-        and accounts[0]["realName"] == disposable_account["realName"],
+        and accounts[0]["employeeNo"] == disposable_supplier_employee,
     )
     part_number = "BA-" + secrets.token_hex(5).upper()
     robot_part = client.call("POST", "/api/v1/robot-parts", {
@@ -459,8 +453,6 @@ def run_business_acceptance(client, Client, conn, check):
         account = client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
             "employeeNo": employee,
             "password": initial_password,
-            "realName": f"验收供应商{label}账号",
-            "email": employee + "@example.invalid",
         })
         supplier_client = _activate_user(
             client, Client, check, employee, initial_password, account["id"], f"supplier {code.upper()}")

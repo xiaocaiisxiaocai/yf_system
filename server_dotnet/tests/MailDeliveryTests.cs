@@ -804,6 +804,8 @@ public sealed class MailDeliveryTests
                 INSERT INTO roles(id,status) VALUES(10,'ACTIVE');
                 INSERT INTO role_permissions(role_id,permission_id) VALUES(10,10);
                 INSERT INTO suppliers(id,status) VALUES(100,'ACTIVE');
+                INSERT INTO supplier_contacts(id,supplier_id,email,status)
+                VALUES(1001,100,'supplier@example.invalid','ACTIVE');
                 INSERT INTO users(id,employee_no,email,user_type,supplier_id,status,must_change_password)
                 VALUES(10,'supplier-user','supplier@example.invalid','SUPPLIER',100,'ACTIVE',0),
                       (11,'owner','owner@example.invalid','INTERNAL',NULL,'ACTIVE',1);

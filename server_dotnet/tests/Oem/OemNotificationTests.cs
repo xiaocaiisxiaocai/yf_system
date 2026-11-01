@@ -2,6 +2,7 @@ using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Approval;
+using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Notifications;
 using Yf.Api.Modules.SystemManagement;
 using static Yf.Api.Tests.Oem.OemTransferFlowTests;
@@ -29,7 +30,9 @@ public sealed class OemNotificationTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
         await world.Admin.PostAsync($"/api/v1/oem/companies/{world.CompanyId}/accounts",
-            new { employeeNo = "vendor_out2", realName = "第二人", email = "second@vendor.invalid", password = "Vendor#2026" }, ct).Ok();
+            new { employeeNo = "vendor_out2", password = "Vendor#2026" }, ct).Ok();
+        await world.Admin.PostAsync($"/api/v1/oem/companies/{world.CompanyId}/contacts",
+            new { name = "第二联系人", email = "second@vendor.invalid", phone = "13800000002" }, ct).Ok();
 
         var draft = await CreateOutboundAsync(world, "机壳图纸", ct);
         var id = TransferId(draft);
@@ -44,18 +47,20 @@ public sealed class OemNotificationTests
 
         var task = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray().Single()!;
         await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
         var mails = await MailsAsync(host, ct);
         var released = mails.Where(mail => mail.EventType == OemMailEvents.TransferReleased).ToArray();
         Assert.Equal(2, released.Length);
         Assert.All(released, mail => Assert.Equal("oem", mail.RecipientRealm));
         Assert.Equal(["second@vendor.invalid", "vendor_out@vendor.invalid"], released.Select(mail => mail.RecipientEmail).Order());
-        Assert.Single(mails, mail => mail.EventType == OemMailEvents.SenderReleased && mail.RecipientAccountId == world.SenderId);
+        Assert.DoesNotContain(mails, mail => mail.EventType == OemMailEvents.SenderReleased && mail.RecipientRealm == OemRealms.Oem);
         Assert.All(mails, mail => Assert.DoesNotContain("secret-part-name", mail.Body));
         Assert.All(released, mail => Assert.Contains($"/oem-portal/transfers/{id}", mail.Body));
-        Assert.Contains($"/oem/transfers/{id}", mails.Single(mail => mail.EventType == OemMailEvents.SenderReleased).Body);
+        Assert.All(mails.Where(mail => mail.EventType == OemMailEvents.SenderReleased),
+            mail => Assert.Contains($"/oem/transfers/{id}", mail.Body));
 
-        // A queued OEM-account address is a snapshot, not authority to send after the
-        // live account address changes.
+        // A queued contact address is a snapshot, not authority to send after the
+        // live contact address changes.
         var policy = new OemOutboxPolicy();
         await using var conn = await host.OpenAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
@@ -64,7 +69,12 @@ public sealed class OemNotificationTests
             "recipient_account_id AS AccountId, oem_transfer_id AS TransferId FROM email_outbox " +
             "WHERE event_type='OEM_TRANSFER_RELEASED' ORDER BY id LIMIT 1", transaction: tx);
         Assert.True((await policy.EvaluateAsync(conn, tx, Info(vendorMail), ct)).Allowed);
-        await conn.ExecuteAsync("UPDATE oem_accounts SET email='changed@vendor.invalid' WHERE id=@AccountId", vendorMail, tx);
+        await conn.ExecuteAsync("""
+            UPDATE oem_companies SET contact_email='changed@vendor.invalid'
+            WHERE id=@CompanyId AND contact_email=@RecipientEmail;
+            UPDATE oem_company_contacts SET email='changed@vendor.invalid'
+            WHERE oem_company_id=@CompanyId AND email=@RecipientEmail;
+            """, new { CompanyId = world.CompanyId, vendorMail.RecipientEmail }, tx);
         Assert.False((await policy.EvaluateAsync(conn, tx, Info(vendorMail), ct)).Allowed);
     }
 

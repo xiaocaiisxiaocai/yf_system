@@ -166,9 +166,12 @@ internal sealed class OemTestHost : IAsyncDisposable
 
     public async Task<ApiClient> CreateVendorAsync(ApiClient admin, string companyName, string employeeNo, CancellationToken ct)
     {
-        var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = companyName }, ct).Ok()).Id();
+        var companyId = (await admin.PostAsync("/api/v1/oem/companies", new
+        {
+            name = companyName, contactName = $"{employeeNo}联系人", contactEmail = employeeNo + "@vendor.invalid",
+        }, ct).Ok()).Id();
         await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts",
-            new { employeeNo, realName = "厂商" + employeeNo, email = employeeNo + "@vendor.invalid", password = "Vendor#2026" }, ct).Ok();
+            new { employeeNo, password = "Vendor#2026" }, ct).Ok();
         await using (var conn = await OpenAsync(ct))
             await conn.ExecuteAsync("UPDATE oem_accounts SET must_change_password=0 WHERE employee_no=@employeeNo", new { employeeNo });
         return await LoginOemAsync(employeeNo, "Vendor#2026", ct);

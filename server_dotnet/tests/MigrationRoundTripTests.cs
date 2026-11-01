@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261101004904_AddProjectMaterialRound";
+    private const string Latest = "20261101120851_AddOemCompanyContacts";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -77,7 +77,8 @@ public sealed class MigrationRoundTripTests
         // + RetireAcceptanceWorkflow (Down brings back only projects.confirm_side, not the retired permission codes)
         // + AddProjectNotificationsAndDueReminders (Down drops only the reminder columns, keeping the config rows)
         // + AddStorageLocations (Down drops storage_locations, keeping the storage:manage permission and grants)
-        // + AddProjectMaterialRound (Down drops projects.material_file_floor).
+        // + AddProjectMaterialRound (Down drops projects.material_file_floor)
+        // + AddOemCompanyContacts (Down drops the OEM additional-contact directory).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -94,6 +95,7 @@ public sealed class MigrationRoundTripTests
         Assert.Contains(rolledBack, line => line.StartsWith("column|projects|confirm_side|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|overdue_notified_for|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|material_file_floor|", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|oem_company_contacts", StringComparison.Ordinal));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
         await migrator.MigrateAsync(cancellationToken: ct);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));

@@ -181,8 +181,6 @@ def _supplier_account(admin, Client, conn, supplier_id, label):
     user = admin.call("POST", f"/api/v1/admin/suppliers/{supplier_id}/accounts", {
         "employeeNo": employee,
         "password": password,
-        "realName": label,
-        "email": employee + "@example.invalid",
     })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (user["id"],))

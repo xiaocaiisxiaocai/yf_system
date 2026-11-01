@@ -33,16 +33,19 @@ public sealed class IdentitySecurityTests
     }
 
     [Fact]
-    public void PasswordPolicyUsesSixToTwentyUnicodeScalarsAndRejectsWeakValues()
+    public void PasswordPolicyUsesFiveToTwentyUnicodeScalarsAndRejectsWeakValues()
     {
+        const string four = "😀Q7!";
         const string five = "😀Q7!x";
         const string six = "😀Q7!xz";
         const string twenty = "😀Ab1!cD2@eF3#gH4$iJ5";
 
+        Assert.Equal(4, four.EnumerateRunes().Count());
         Assert.Equal(5, five.EnumerateRunes().Count());
         Assert.Equal(6, six.EnumerateRunes().Count());
         Assert.Equal(20, twenty.EnumerateRunes().Count());
-        Assert.False(PasswordService.StrongEnough(five));
+        Assert.False(PasswordService.StrongEnough(four));
+        Assert.True(PasswordService.StrongEnough(five));
         Assert.True(PasswordService.StrongEnough(six));
         Assert.True(PasswordService.StrongEnough(twenty));
         Assert.False(PasswordService.StrongEnough(twenty + "K"));

@@ -92,8 +92,7 @@ def _check_active_upload_sessions(client, conn, check, pid, supplier_client, sup
         employee = "filepeer_" + secrets.token_hex(5)
         password = _password()
         account = client.call("POST", f"/api/v1/admin/suppliers/{supplier_id}/accounts", {
-            "employeeNo": employee, "password": password, "realName": "同供应商同事",
-            "email": employee + "@example.invalid",
+            "employeeNo": employee, "password": password,
         })
         with conn.cursor() as cursor:
             cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (account["id"],))
@@ -314,8 +313,7 @@ def run_file_checks(client, conn, check, pid, fid):
     employee = "fileperm_" + secrets.token_hex(5)
     password = _password()
     account = client.call("POST", f"/api/v1/admin/suppliers/{supplier_id}/accounts", {
-        "employeeNo": employee, "password": password, "realName": "文件权限契约用户",
-        "email": employee + "@example.invalid",
+        "employeeNo": employee, "password": password,
     })
     with conn.cursor() as cursor:
         cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (account["id"],))

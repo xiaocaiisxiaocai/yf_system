@@ -162,8 +162,6 @@ def run_workflow_acceptance(client, Client, conn, check):
         "POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
             "employeeNo": supplier_employee,
             "password": supplier_initial,
-            "realName": "工作流验收供应商",
-            "email": supplier_employee + "@example.invalid",
         })
     supplier_client = _activate_user(
         client, Client, check, supplier_employee, supplier_initial,

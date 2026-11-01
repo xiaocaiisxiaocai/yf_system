@@ -34,7 +34,8 @@ public sealed class OemDirectoryDeletionTests
                 "SELECT detail FROM audit_logs WHERE action='OEM_ACCOUNT_DELETE' AND target_id=@targetId ORDER BY id DESC LIMIT 1",
                 new { targetId = accountId.ToString(System.Globalization.CultureInfo.InvariantCulture) });
             Assert.NotNull(detail);
-            Assert.Contains("删除测试账号", detail);
+            Assert.DoesNotContain("\"realName\"", detail);
+            Assert.DoesNotContain("\"email\"", detail);
             Assert.Contains("delete_empty", detail);
         }
 
@@ -183,8 +184,6 @@ public sealed class OemDirectoryDeletionTests
         var account = await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts", new
         {
             employeeNo,
-            realName = "删除测试账号" + employeeNo,
-            email = employeeNo + "@vendor.invalid",
             password,
         }, ct).Ok();
         return account.Id();
