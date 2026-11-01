@@ -1090,6 +1090,7 @@ export interface ProjectGroupResponse {
 
 export interface ProjectGroupTransferRequest {
   responsibleUserId?: number | null
+  expectedResponsibleUserId?: number | null
 }
 
 export interface ProjectMaterialReviewRequest {
@@ -1149,6 +1150,7 @@ export interface ProjectResponse {
 
 export interface ProjectStatusRequest {
   status?: string | null
+  expectedStatus?: string | null
 }
 
 export interface ProjectSummaryResponse {

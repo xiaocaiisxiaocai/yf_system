@@ -11595,11 +11595,17 @@
       },
       "ProjectGroupTransferRequest": {
         "required": [
+          "expectedResponsibleUserId",
           "responsibleUserId"
         ],
         "type": "object",
         "properties": {
           "responsibleUserId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "expectedResponsibleUserId": {
             "type": "integer",
             "format": "int64",
             "nullable": true
@@ -11865,11 +11871,16 @@
       },
       "ProjectStatusRequest": {
         "required": [
+          "expectedStatus",
           "status"
         ],
         "type": "object",
         "properties": {
           "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "expectedStatus": {
             "type": "string",
             "nullable": true
           }
