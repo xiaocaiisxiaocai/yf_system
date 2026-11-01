@@ -142,6 +142,9 @@ function Assert-YfEffectiveConfiguration([string]$Name,[string]$Pool,[string]$Ex
         }
         $applicationPool=$manager.ApplicationPools[$Pool]
         Assert-YfApplicationPoolProcessModel ($applicationPool.ProcessModel.IdentityType.ToString()) ([bool]$applicationPool.ProcessModel.LoadUserProfile) ([int]$applicationPool.ProcessModel.MaxProcesses)
+        if (-not $applicationPool.Recycling.DisallowOverlappingRotation) {
+            Write-Warning "Application pool '$Pool' overlaps worker processes on recycle, so two processes briefly run background jobs. Set recycling.disallowOverlappingRotation=true."
+        }
         $asp=$manager.GetWebConfiguration($Name).GetSection('system.webServer/aspNetCore')
         Assert-YfLaunch ([string]$asp['processPath']) ([string]$asp['arguments']) ([string]$asp['hostingModel'])
         $variables=@($asp.GetCollection('environmentVariables'))

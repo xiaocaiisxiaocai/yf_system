@@ -181,11 +181,16 @@ try {
     Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.identityType -Value 'ApplicationPoolIdentity'
     Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.loadUserProfile -Value $false
     Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.maxProcesses -Value 1
+    # A recycle must not start the new worker before the old one exits: both would run the background jobs.
+    Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name recycling.disallowOverlappingRotation -Value $true
     Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name startMode -Value AlwaysRunning
     Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name processModel.idleTimeout -Value ([TimeSpan]::Zero)
     Set-ItemProperty "IIS:\AppPools\$AppPoolName" -Name enable32BitAppOnWin64 -Value $false
     $installedPool = Get-Item "IIS:\AppPools\$AppPoolName"
     Assert-YfApplicationPoolProcessModel ($installedPool.processModel.identityType.ToString()) ([bool]$installedPool.processModel.loadUserProfile) ([int]$installedPool.processModel.maxProcesses)
+    if (-not [bool]$installedPool.recycling.disallowOverlappingRotation) {
+        throw 'Deployment requires an application pool that does not overlap worker processes on recycle (disallowOverlappingRotation).'
+    }
     $identity = 'IIS AppPool\' + $AppPoolName
     Set-YfApplicationDirectoryReadAcl $SiteRoot $identity
     # Business storage: inheritance off; SYSTEM and Administrators FullControl, pool identity Modify.
