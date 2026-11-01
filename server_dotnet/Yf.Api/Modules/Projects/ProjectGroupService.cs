@@ -464,6 +464,9 @@ internal sealed class ProjectGroupService(
         var group = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
         var metadata = Metadata(group);
         var child = NewChild(groupId, name, request.Description, group.SupplierId, current.Id, metadata);
+        // A main project kept from before the part catalog has only a model name; the new subproject shows it too,
+        // as copies and reopened subprojects do (SyncSubprojectFromGroupAsync).
+        child.LegacyRobotModelName = group.LegacyRobotModelName;
         db.Projects.Add(child);
         try { await db.SaveChangesAsync(ct); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })

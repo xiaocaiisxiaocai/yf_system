@@ -71,6 +71,7 @@ public sealed partial class UploadService(
                         ?? throw ApiException.Conflict("该文件正在合并，请稍候");
                     existing = await ResetOrphanedMergeAsync(conn, actor, existing, ct);
                 }
+                await UpdateResumedSignerAsync(conn, actor, existing.Id, request.SignerName, ct);
                 return await InitResponseAsync(existing, resumed: true, ct);
             }
 
@@ -176,7 +177,7 @@ public sealed partial class UploadService(
             initial = await LoadSessionAsync(initialConnection, null, sessionId, false, ct);
             if (initial.UploaderId != actor.Id) throw ApiException.Forbidden();
             await ProjectAccessService.RequireFileUploadAsync(
-                initialConnection, null, actor, initial.ProjectId, ct);
+                initialConnection, null, actor, initial.ProjectId, ct, lockRows: false);
         }
         if (initial.Status != "UPLOADING") throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
         if (initial.IsExpired) throw ApiException.Conflict("上传会话已过期，请重新发起");
@@ -202,7 +203,7 @@ public sealed partial class UploadService(
             await using var conn = await db.OpenAsync(ct);
             await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
             var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
-            await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, initial.ProjectId, ct);
+            await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, initial.ProjectId, ct, lockRows: false);
             var session = await LoadSessionAsync(conn, tx, sessionId, true, ct);
             if (session.UploaderId != current.Id) throw ApiException.Forbidden();
             if (session.ProjectId != initial.ProjectId)
@@ -310,9 +311,28 @@ public sealed partial class UploadService(
                     && row.Status == ProjectUploadSessionStatuses.Uploading,
                 UploadActivity.CanAbort(
                     current, project.Status, canUpload, canDelete, canStatus,
-                    row.UploaderId, row.UploaderUserType, row.UploaderSupplierId)));
+                    row.UploaderId, row.UploaderUserType, row.UploaderSupplierId, project.ResponsibleUserId == current.Id)));
         }
         return new ProjectUploadSessionListResponse(blocking.Length, items);
+    }
+
+    /// <summary>
+    /// A resumed upload is signed by whoever resumes it: the typed signer is checked again and replaces the one
+    /// recorded when the session began, instead of being ignored.
+    /// </summary>
+    private static async Task UpdateResumedSignerAsync(
+        MySqlConnection conn, CurrentUser actor, string sessionId, string? signerName, CancellationToken ct)
+    {
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await using var ef = EfDb.Use(conn, tx);
+        var signature = await SupplierContacts.ResolveSignatureAsync(ef, current, signerName, ct);
+        await ef.UploadSessions.Where(session => session.Id == sessionId && session.Status == "UPLOADING"
+                && (session.SignerContactId != signature.ContactId || session.SignerName != signature.Name))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(session => session.SignerContactId, signature.ContactId)
+                .SetProperty(session => session.SignerName, signature.Name), ct);
+        await tx.CommitAsync(ct);
     }
 
     public async Task AbortAsync(HttpContext context, string sessionId, CancellationToken ct)
@@ -345,7 +365,7 @@ public sealed partial class UploadService(
                     .SingleAsync(ct);
                 if (!UploadActivity.CanAbort(
                         current, project.Status, canUpload, canDelete, canStatus,
-                        session.UploaderId, uploader.UserType, uploader.SupplierId))
+                        session.UploaderId, uploader.UserType, uploader.SupplierId, project.ResponsibleUserId == current.Id))
                     throw ApiException.Forbidden();
                 if (session.Status == "COMPLETED") throw ApiException.Conflict("会话已完成，不可放弃");
                 if (session.Status is not ("UPLOADING" or "MERGING" or "EXPIRED" or "ABORTED"))

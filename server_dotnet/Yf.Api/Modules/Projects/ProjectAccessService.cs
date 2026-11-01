@@ -46,18 +46,22 @@ public static class ProjectAccessService
         return project;
     }
 
+    /// <param name="lockRows">
+    /// False for chunk writes: they are ordered against merge and abort by the upload-session row lock, and terminate
+    /// refuses while a session is active, so locking the main project and subproject per chunk only serialises uploads.
+    /// </param>
     public static async Task<ProjectAccess> RequireFileUploadAsync(
         MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ulong projectId,
-        CancellationToken ct = default)
+        CancellationToken ct = default, bool lockRows = true)
     {
         if (tx is null)
         {
             await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
-            var result = await RequireFileUploadAsync(conn, owned, actor, projectId, ct);
+            var result = await RequireFileUploadAsync(conn, owned, actor, projectId, ct, lockRows);
             await owned.CommitAsync(ct);
             return result;
         }
-        var project = await RequireViewCoreAsync(conn, tx, actor, projectId, true, ct);
+        var project = await RequireViewCoreAsync(conn, tx, actor, projectId, lockRows, ct);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "file:upload", ct);
         if (project.Status != ProjectStatuses.InProgress) throw ApiException.Conflict("项目当前不可上传文件");
         return project;
@@ -215,11 +219,14 @@ internal static class UploadActivity
         bool canChangeStatus,
         ulong uploaderId,
         string uploaderUserType,
-        ulong? uploaderSupplierId)
+        ulong? uploaderSupplierId,
+        bool isResponsibleUser)
     {
         if (actor.Id == uploaderId) return canUpload;
+        // The responsible user reviews material without extra permissions, so they can also clear an abandoned
+        // supplier session that would otherwise block the review until it expires.
         if (actor.IsInternal)
-            return projectStatus == ProjectStatuses.InProgress && (canDeleteFiles || canChangeStatus);
+            return projectStatus == ProjectStatuses.InProgress && (canDeleteFiles || canChangeStatus || isResponsibleUser);
         return actor.UserType == UserTypes.Supplier
             && actor.SupplierId is ulong supplierId
             && uploaderUserType == UserTypes.Supplier

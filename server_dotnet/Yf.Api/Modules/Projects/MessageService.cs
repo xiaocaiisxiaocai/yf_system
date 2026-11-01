@@ -248,12 +248,21 @@ internal sealed class MessageService(
         var message = await LoadMessageAsync(db, messageId, false, ct);
         var images = await LoadImagesAsync(db, [messageId], ct);
         if (!string.Equals(message.Content, content, StringComparison.Ordinal) || !SameImages(incoming, images)
-            || !string.Equals(current.IsInternal ? null : SupplierContacts.NormalizeSignerName(signerName),
-                message.SignerName, StringComparison.OrdinalIgnoreCase))
+            || !SameSigner(current.IsInternal ? null : SupplierContacts.NormalizeSignerName(signerName), message.SignerName))
             throw ApiException.Conflict("clientMessageId 已用于不同的留言");
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
         return MessageJson(message, [], images, participants.Select(user => user.Id).ToHashSet(), current.Id);
     }
+
+    /// <summary>
+    /// Signers are matched against contacts by the database collation, which ignores case and full/half width, so a
+    /// retry spelling the same contact differently is still the same message.
+    /// </summary>
+    private static bool SameSigner(string? typed, string? stored) =>
+        typed is null || stored is null
+            ? typed == stored
+            : System.Globalization.CultureInfo.InvariantCulture.CompareInfo.Compare(typed, stored,
+                System.Globalization.CompareOptions.IgnoreCase | System.Globalization.CompareOptions.IgnoreWidth) == 0;
 
     private async Task<MessageResponse> ReplayAfterCollisionAsync(
         MySqlConnection conn,

@@ -409,7 +409,8 @@ public sealed class FilesRecoveryTests
         Assert.True(live.CanResume);
         Assert.True(live.CanAbort);
         Assert.False(Assert.Single(listed.Items, item => item.SessionId == merging).CanResume);
-        Assert.False(Assert.Single(listed.Items, item => item.SessionId == peerSession).CanAbort);
+        // The viewer is the subproject's responsible user, who may clear a supplier session blocking the review.
+        Assert.True(Assert.Single(listed.Items, item => item.SessionId == peerSession).CanAbort);
 
         var denied = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.AbortAsync(
             Actor(2, "T002", "INTERNAL", null), active, ct));

@@ -183,16 +183,19 @@ public sealed class ProjectsWorkflowTests
         var statusUser = new CurrentUser(3, "status", UserTypes.Internal, null);
         var peer = new CurrentUser(4, "peer", UserTypes.Supplier, 9);
         var otherSupplier = new CurrentUser(5, "other", UserTypes.Supplier, 8);
-        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.Draft, true, false, false, 1, UserTypes.Internal, null));
-        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, true, true, 1, UserTypes.Internal, null));
-        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null));
-        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, false, true, 1, UserTypes.Internal, null));
-        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, true, false, 1, UserTypes.Supplier, 9));
-        Assert.False(UploadActivity.CanAbort(statusUser, ProjectStatuses.Completed, false, true, true, 1, UserTypes.Internal, null));
-        Assert.True(UploadActivity.CanAbort(peer, ProjectStatuses.Completed, true, false, false, 6, UserTypes.Supplier, 9));
-        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null));
-        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, false, false, false, 6, UserTypes.Supplier, 9));
-        Assert.False(UploadActivity.CanAbort(otherSupplier, ProjectStatuses.InProgress, true, false, false, 6, UserTypes.Supplier, 9));
+        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.Draft, true, false, false, 1, UserTypes.Internal, null, false));
+        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, true, true, 1, UserTypes.Internal, null, false));
+        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null, false));
+        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, false, true, 1, UserTypes.Internal, null, false));
+        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, true, false, 1, UserTypes.Supplier, 9, false));
+        Assert.False(UploadActivity.CanAbort(statusUser, ProjectStatuses.Completed, false, true, true, 1, UserTypes.Internal, null, false));
+        Assert.True(UploadActivity.CanAbort(peer, ProjectStatuses.Completed, true, false, false, 6, UserTypes.Supplier, 9, false));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null, false));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, false, false, false, 6, UserTypes.Supplier, 9, false));
+        Assert.False(UploadActivity.CanAbort(otherSupplier, ProjectStatuses.InProgress, true, false, false, 6, UserTypes.Supplier, 9, false));
+        // The responsible user may clear a supplier session blocking the review, without extra permissions.
+        Assert.True(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, false, false, false, 6, UserTypes.Supplier, 9, true));
+        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.Completed, false, false, false, 6, UserTypes.Supplier, 9, true));
         Assert.NotEqual(default, now);
     }
 }

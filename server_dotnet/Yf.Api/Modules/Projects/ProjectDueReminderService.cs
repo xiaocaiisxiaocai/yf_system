@@ -37,6 +37,8 @@ public sealed class ProjectDueReminderService(
         var dueSoonEnabled = policy.Allows(EmailNotificationPolicy.ProjectDueSoonEvent, null);
         var overdueEnabled = policy.Allows(EmailNotificationPolicy.ProjectOverdueEvent, null);
         if (!dueSoonEnabled && !overdueEnabled) return 0;
+        // With no audience left to mail, claiming the per-due-date markers would only swallow the reminder for good.
+        if (!(policy.InternalEnabled && policy.DueInternalEnabled) && !(policy.SupplierEnabled && policy.DueSupplierEnabled)) return 0;
 
         DateOnly today;
         await using (var clock = EfDb.Use(conn))
