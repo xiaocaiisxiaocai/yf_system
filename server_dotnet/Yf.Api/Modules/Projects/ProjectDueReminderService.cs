@@ -78,15 +78,18 @@ public sealed class ProjectDueReminderService(
         await AccessService.LockBusinessAsync(conn, tx, ct);
         await using var context = EfDb.Use(conn, tx);
         // Compare-and-set on the row: claims the reminder for this exact due date, and skips a subproject that
-        // changed status or due date since the candidate scan. updated_at stays untouched (no business change).
+        // changed status or due date since the candidate scan. updated_at stays untouched (no business change):
+        // assigning it explicitly suppresses its ON UPDATE CURRENT_TIMESTAMP.
         var claim = context.Projects.Where(project => project.Id == candidate.ProjectId
             && project.Status == ProjectStatuses.InProgress
             && project.ExpectedCompletionDate == candidate.DueDate);
         var claimed = overdue
             ? await claim.Where(project => project.OverdueNotifiedFor == null || project.OverdueNotifiedFor != candidate.DueDate)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.OverdueNotifiedFor, candidate.DueDate), ct)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.OverdueNotifiedFor, candidate.DueDate)
+                    .SetProperty(project => project.UpdatedAt, project => project.UpdatedAt), ct)
             : await claim.Where(project => project.DueSoonNotifiedFor == null || project.DueSoonNotifiedFor != candidate.DueDate)
-                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.DueSoonNotifiedFor, candidate.DueDate), ct);
+                .ExecuteUpdateAsync(setters => setters.SetProperty(project => project.DueSoonNotifiedFor, candidate.DueDate)
+                    .SetProperty(project => project.UpdatedAt, project => project.UpdatedAt), ct);
         if (claimed == 0)
         {
             await tx.RollbackAsync(ct);

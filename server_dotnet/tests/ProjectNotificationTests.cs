@@ -137,13 +137,13 @@ public sealed class ProjectNotificationTests
         await SetDueAsync(conn, children[0], -1, ct);
         Assert.Equal(0, await reminders.RunOnceAsync(conn, ct));
         await SqlAsync(conn, "UPDATE system_configs SET cfg_value='true' WHERE cfg_key='notify.event.project_overdue'", ct);
+        // The scan never bumps updated_at, so clients keep their optimistic-concurrency baseline.
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE projects SET updated_at='2000-01-01 00:00:00.000' WHERE id=@ProjectId", new { ProjectId = children[0] }, cancellationToken: ct));
         Assert.Equal(1, await reminders.RunOnceAsync(conn, ct));
         Assert.Equal(2, await CountAsync(conn, children[0], "PROJECT_OVERDUE", ct));
-
-        // The scan never bumps updated_at, so clients keep their optimistic-concurrency baseline.
-        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM projects WHERE id=@ProjectId AND updated_at>UTC_TIMESTAMP(3)",
-            new { ProjectId = children[0] }, cancellationToken: ct)));
+        Assert.Equal(new DateTime(2000, 1, 1), await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM projects WHERE id=@ProjectId", new { ProjectId = children[0] }, cancellationToken: ct)));
     }
 
     private static async Task<(ProjectGroupService Groups, ProjectService Projects, AuditService Audit, CurrentUser Actor,
