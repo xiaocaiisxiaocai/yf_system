@@ -108,7 +108,7 @@ export const CONFIG_META: Record<string, { name: string; description: string; hi
   'upload.max_file_size': { name: '单文件大小上限', description: '单个文件允许的最大大小', numeric: { min: 1, max: 20 * 1024, unit: 'MB', scale: MB } },
   'upload.max_active_sessions_per_user': { name: '每人同时上传数', description: '每个账号未完成的上传任务上限', numeric: { min: 1, max: 1000, unit: '个' } },
   'upload.max_pending_bytes_per_user': { name: '每人未完成上传总量', description: '每个账号未完成上传的文件总大小上限', numeric: { min: 1, max: 16 * 1024, unit: 'GB', scale: GB } },
-  'retention.audit_days': { name: '操作日志保留天数', description: '超过天数的操作日志自动清理', numeric: { min: 30, max: 3650, unit: '天' } },
+  'retention.audit_days': { name: '操作日志保留天数', description: '超过天数的操作日志自动清理', numeric: { min: 1, max: 3650, unit: '天' } },
   'retention.mail_days': { name: '邮件记录保留天数', description: '已发送、失败或取消的邮件记录保留天数', numeric: { min: 1, max: 3650, unit: '天' } },
   'retention.mail_pending_days': { name: '待发送邮件有效天数', description: '超过天数仍未发出的邮件自动取消', numeric: { min: 1, max: 365, unit: '天' } },
   'retention.upload_session_days': { name: '上传记录保留天数', description: '已结束的上传会话记录及其临时目录保留天数', numeric: { min: 30, max: 3650, unit: '天' } },
