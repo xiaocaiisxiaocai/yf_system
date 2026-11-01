@@ -145,20 +145,16 @@ internal static class StorageLocationState
     internal static void Apply(AppOptions options, StorageLocation row)
     {
         var fallback = row.PreviousPath is { Length: > 0 } previous ? previous : null;
-        // Readers look in the primary root, then the fallback. Entering a migration sets the fallback first and
-        // leaving it clears the fallback last, so no reader sees the new root without the old one behind it.
+        // Readers look in the primary root, then the fallback. Root and fallback are replaced as one pair: assigning
+        // them one by one leaves a moment with both roots equal when a cancelled migration swaps them, and the
+        // root that still holds the files is then unreadable.
         switch (row.Kind)
         {
             case StorageKinds.Collaboration:
-                if (fallback is not null) options.StorageFallbackRoot = fallback;
-                options.StorageRoot = row.Path;
-                options.StorageFallbackRoot = fallback;
+                options.SetStorageRoots(new StorageRootPair(row.Path, fallback));
                 break;
             case StorageKinds.Oem:
-                var oemFallback = row.Path.Length == 0 ? null : fallback;
-                if (oemFallback is not null) options.OemStorageFallbackRoot = oemFallback;
-                options.OemStorageRoot = row.Path;
-                options.OemStorageFallbackRoot = oemFallback;
+                options.SetOemStorageRoots(new StorageRootPair(row.Path, row.Path.Length == 0 ? null : fallback));
                 break;
             case StorageKinds.Log:
                 options.LogDirectory = row.Path;

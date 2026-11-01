@@ -23,11 +23,23 @@ public sealed class LoginRateLimiter
         => AllowLogin(IdentityRealms.Internal, clientIp, employeeNo);
 
     public bool AllowLogin(string realm, string clientIp, string employeeNo)
+        => AllowLoginSource(clientIp) && AllowLoginAccount(realm, clientIp, null, employeeNo);
+
+    /// <summary>Per-source-address budget, checked before the account is looked up.</summary>
+    public bool AllowLoginSource(string clientIp) => Allow(_loginIpRates, _loginIpSync, NormalizeIp(clientIp), 60);
+
+    /// <summary>
+    /// Per source address and account budget. A known account is keyed by its database id, because the account
+    /// lookup collation (case- and accent-insensitive) treats more spellings as one account than text
+    /// normalization does; an unknown name is keyed by its normalized text, so a 429 reveals nothing.
+    /// </summary>
+    public bool AllowLoginAccount(string realm, string clientIp, ulong? accountId, string employeeNo)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(realm);
-        var normalizedIp = NormalizeIp(clientIp);
-        return Allow(_loginIpRates, _loginIpSync, normalizedIp, 60)
-            && Allow(_loginAccountRates, _loginAccountSync, $"{realm}:{normalizedIp}:{NormalizeLogin(employeeNo)}", 10);
+        var key = accountId is { } id
+            ? $"{realm}:{NormalizeIp(clientIp)}:id:{id.ToString(CultureInfo.InvariantCulture)}"
+            : $"{realm}:{NormalizeIp(clientIp)}:name:{NormalizeLogin(employeeNo)}";
+        return Allow(_loginAccountRates, _loginAccountSync, key, 10);
     }
 
     /// <summary>

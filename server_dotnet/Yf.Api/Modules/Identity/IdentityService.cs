@@ -21,12 +21,15 @@ public sealed class IdentityService(
         if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("账号和密码不能为空");
         if (employeeNo.EnumerateRunes().Count() > 64 || System.Text.Encoding.UTF8.GetByteCount(request.Password) > PasswordService.MaxPasswordBytes)
             throw ApiException.BadRequest("账号或密码错误");
-        if (!loginRateLimiter.AllowLogin(clientIp, employeeNo)) throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
+        if (!loginRateLimiter.AllowLoginSource(clientIp)) throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
 
         User? candidate;
         await using (var lookup = await dbFactory.CreateDbContextAsync(ct))
             candidate = await lookup.Users.AsNoTracking().SingleOrDefaultAsync(u => u.EmployeeNo == employeeNo, ct);
-        if (!loginRateLimiter.AllowAccountLogin(IdentityRealms.Internal, candidate?.Id, employeeNo, clientIp))
+        // Both account buckets key a known account by its id: the lookup collation folds spellings (case, accents)
+        // that the text normalization of the limiter does not.
+        if (!loginRateLimiter.AllowLoginAccount(IdentityRealms.Internal, clientIp, candidate?.Id, employeeNo)
+            || !loginRateLimiter.AllowAccountLogin(IdentityRealms.Internal, candidate?.Id, employeeNo, clientIp))
             throw ApiException.TooManyRequests("请求过于频繁，请稍后再试");
         // Initialize the same-cost dummy on the first attempt even when the account exists, so the
         // first unknown-account request cannot be distinguished by the extra Argon2 calculation.

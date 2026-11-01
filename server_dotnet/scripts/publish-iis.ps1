@@ -360,6 +360,9 @@ if (!$ExternalConfigurationTemplate) {
     $productionSettings.App.ConnectionString = $publishDefaults.App.ConnectionString
     $productionSettings.App.JwtSecret = $publishDefaults.App.JwtSecret
     $productionSettings.App.BootstrapPassword = New-RandomBase64 12
+    # The example keeps auto-initialization off so a wrong or dropped database is never recreated silently. This
+    # private package carries a bootstrap password for its own first start, so only here is it switched on.
+    $productionSettings.App.AutoInitializeDatabase = $true
     foreach ($name in @('StorageRoot', 'WebBaseUrl', 'OemStorageRoot')) {
         $override = $publishDefaults.App.PSObject.Properties[$name]
         if ($override -and ![string]::IsNullOrWhiteSpace([string]$override.Value)) {
@@ -391,6 +394,7 @@ if (!$ExternalConfigurationTemplate) {
     $productionSettings.App.ConnectionString = ''
     $productionSettings.App.JwtSecret = ''
     $productionSettings.App.BootstrapPassword = ''
+    $productionSettings.App.AutoInitializeDatabase = $false
 }
 $productionSettings.App | Add-Member -NotePropertyName AllowInsecureCookies -NotePropertyValue $insecureCookiesOverride -Force
 $storageRoot = Get-FullLocalPath ([string]$productionSettings.App.StorageRoot) 'App.StorageRoot'

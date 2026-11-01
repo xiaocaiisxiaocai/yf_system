@@ -171,8 +171,10 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
     configuration_mode = configuration.get("mode")
     if configuration_mode not in {"bundled-private", "external-template"}:
         raise RuntimeError("Release manifest has an unknown configuration mode")
-    if settings.get("AutoInitializeDatabase") is not True:
-        raise RuntimeError("Release must preserve the first-start contract")
+    # Only the private bundled package initializes its own database on first start; the external template
+    # keeps silent initialization off (the operator enables it, or runs --initialize-database, once).
+    if settings.get("AutoInitializeDatabase") is not (configuration_mode == "bundled-private"):
+        raise RuntimeError("Release must enable AutoInitializeDatabase only in the bundled private package")
     if configuration_mode == "bundled-private":
         if configuration.get("containsSecrets") is not True:
             raise RuntimeError("Private configuration mode is not marked secret-bearing")

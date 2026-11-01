@@ -35,7 +35,7 @@
 | 用户、供应商账号 | 无业务历史或引用；有关联记录时使用禁用，保留创建人、确认人和已读凭证 |
 | 供应商 | 无项目且无账号；不级联删除账号 |
 | 组织、角色 | 有下级组织或绑定用户时拒绝删除；内置角色可分配权限或禁用，不可删除，名称保持固定；已分配给公司内部账号的角色不能绑定供应商账号 |
-| 操作日志 | 不提供手动删除接口或权限。后台每小时自动删除超过 `App:AuditRetentionDays`（默认 30 天，可在系统设置页调整）的日志，并写入一条 `AUDIT_LOG_RETENTION` 汇总；历史上的 `AUDIT_LOG_DELETE` 记录只读展示，到期后同样自动清理。项目动态另存于 `project_activities`，不受影响。邮件发件箱中已发送/失败/已取消的记录由邮件后台每小时清理超过 `App:MailRetentionDays`（默认 90 天）的部分，待发送记录不受影响 |
+| 操作日志 | 不提供手动删除接口或权限。后台每小时自动删除超过 `App:AuditRetentionDays`（默认 30 天，可在系统设置页调整）的日志，并写入一条 `AUDIT_LOG_RETENTION` 汇总；OEM 范围的日志（`OEM_` 动作或 OEM 身份产生）没有独立配置，至少保留 30 天（保留天数大于 30 时与协作日志相同），调低保留天数本身记录在 `CONFIG_UPDATE` 审计中；历史上的 `AUDIT_LOG_DELETE` 记录只读展示，到期后同样自动清理。项目动态另存于 `project_activities`，不受影响。邮件发件箱中已发送/失败/已取消的记录由邮件后台每小时清理超过 `App:MailRetentionDays`（默认 90 天）的部分，待发送记录不受影响 |
 
 系统管理员角色绑定启用用户时必须保留用户管理和角色管理入口，避免管理员在权限分配时锁死系统；角色禁用和删除仍受绑定用户校验约束。删除相关的越权与保留规则回归包含在 `python scripts/test-isolated.py` 完整套件内，脚本只允许本机 MySQL，创建并清理临时测试库，不使用业务库运行删除测试。
 
@@ -132,7 +132,7 @@ dotnet run --project .\Yf.Api -- --migrate-database
 
 `Yf.Api/Infrastructure/Migrations` 及 `YfDbContextModelSnapshot` 是唯一 schema 权威。不要使用 `EnsureCreated`、手写建表脚本或直接修改 `__EFMigrationsHistory`；模型变化通过 `dotnet ef migrations add` 生成迁移并审查差异。
 
-IIS 发布包默认启用 `App.AutoInitializeDatabase=true`：首次启动自动创建不存在的数据库、对空库执行 EF 迁移并创建管理员。初始密码在发布包 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录强制修改；后续重启不会重置账号。 已初始化数据库启动时若仍配置 `App.BootstrapPassword` 或 `YF_BOOTSTRAP_PASSWORD`，仅输出不含密码值的移除提醒，不重设密码、不修改配置文件。非空数据库仍只校验，不自动执行升级迁移；必须先备份并显式执行待应用迁移。MySQL 账号必须具备目标库创建和建表权限。
+`deploy/appsettings.example.json` 与外部配置模板默认 `App.AutoInitializeDatabase=false`，避免库名写错或库被删后静默新建空库；只有默认的含凭据私有发布包由发布脚本显式启用 `App.AutoInitializeDatabase=true`，首次初始化成功后应改回 `false`（或始终使用 `--initialize-database`）。开启时首次启动自动创建不存在的数据库、对空库执行 EF 迁移并创建管理员。初始密码在发布包 `appsettings.Production.json` 的 `App.BootstrapPassword`，首次登录强制修改；后续重启不会重置账号。 已初始化数据库启动时若仍配置 `App.BootstrapPassword` 或 `YF_BOOTSTRAP_PASSWORD`，仅输出不含密码值的移除提醒，不重设密码、不修改配置文件。非空数据库仍只校验，不自动执行升级迁移；必须先备份并显式执行待应用迁移。MySQL 账号必须具备目标库创建和建表权限。
 
 不开启自动初始化时，也可由 DBA 先创建空库和专用账号，然后执行独立初始化：
 

@@ -56,6 +56,9 @@ public sealed class MailService
     private TimeSpan breakerDelay = TimeSpan.Zero;
     private string? breakerSettingsKey;
     private long nextExpirySweepTicks;
+    // Per-message run of "SMTP unavailable" failures (process memory; the site is single-instance). See RecordUnavailableFailure.
+    private readonly Dictionary<ulong, UnavailableStreak> unavailableStreaks = new();
+    private long successEpoch;
 
     /// <summary>First pause after SMTP itself is unavailable; doubles on every consecutive failure.</summary>
     internal static readonly TimeSpan BreakerInitialDelay = TimeSpan.FromMinutes(1);
@@ -64,6 +67,11 @@ public sealed class MailService
     internal const string ExpiredPendingReason = "待发送邮件超过有效期，已取消";
     internal const string ExpiredPendingAuditReason = "PENDING_EXPIRED";
     internal const string SmtpUnavailableAuditReason = "SMTP_UNAVAILABLE";
+    /// <summary>Consecutive unavailable-type failures of one message, with SMTP proven healthy in between, after which it is failed.</summary>
+    internal const int PoisonUnavailableAttempts = 3;
+    private const int MaximumTrackedUnavailableMails = 4096;
+    internal const string PoisonedSendError = "该邮件多次导致 SMTP 连接中断，已停止重试";
+    internal const string PoisonedAuditReason = "SMTP_REPEATED_DISCONNECT";
 
     public MailService(
         AppDb db,
@@ -490,6 +498,7 @@ public sealed class MailService
         var retries = mail.RetryCount;
         TimeSpan? retryDelay = null;
         var serviceUnavailable = false;
+        string? auditReason = null;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -500,6 +509,7 @@ public sealed class MailService
                 logger.LogWarning("SMTP message {OutboxId} was accepted, but connection cleanup failed ({ErrorType}).",
                     mail.Id, delivery.DisconnectFailureType);
             ResetBreaker();
+            ForgetUnavailable(mail.Id);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -511,10 +521,28 @@ public sealed class MailService
                 mail.Id, ex.GetType().Name, kind, error, SanitizedExceptionTrace(ex));
             if (kind == SmtpFailureKind.ServiceUnavailable)
             {
-                // Not this message's fault: keep its retry budget and wait for the circuit breaker.
-                serviceUnavailable = true;
-                status = MailStatuses.Pending;
-                retryDelay = TripBreaker(resolved.Options);
+                var streak = RecordUnavailableFailure(mail.Id);
+                if (streak.Poisoned)
+                {
+                    // SMTP worked for other messages in between, so this one keeps breaking the connection.
+                    // Count it against its retries and stop, instead of letting it hold the queue head forever.
+                    retries++;
+                    status = MailStatuses.Failed;
+                    error = PoisonedSendError;
+                    auditReason = PoisonedAuditReason;
+                    ForgetUnavailable(mail.Id);
+                }
+                else
+                {
+                    // Not this message's fault (as far as we can tell): keep its retry budget and wait for the circuit breaker.
+                    serviceUnavailable = true;
+                    auditReason = SmtpUnavailableAuditReason;
+                    status = MailStatuses.Pending;
+                    retryDelay = TripBreaker(resolved.Options);
+                    // A message that already failed this way is retried after the breaker closes and the messages
+                    // behind it have had their turn, so they can show whether SMTP itself works.
+                    if (streak.Repeated) retryDelay += BreakerInitialDelay;
+                }
             }
             else
             {
@@ -554,8 +582,8 @@ public sealed class MailService
         {
             var action = AuditAction(mail.EventType,
                 status == MailStatuses.Sent ? "EMAIL_SENT" : status == MailStatuses.Failed ? "EMAIL_FAILED" : "EMAIL_RETRY");
-            object detail = serviceUnavailable
-                ? new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error, reason = SmtpUnavailableAuditReason }
+            object detail = auditReason is not null
+                ? new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error, reason = auditReason }
                 : new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error };
             await audit.WriteAsync(conn, tx, null, action, "email_outbox", mail.Id, detail, null, completionToken);
         }
@@ -644,7 +672,34 @@ public sealed class MailService
         {
             breakerDelay = TimeSpan.Zero;
             breakerOpenUntil = DateTimeOffset.MinValue;
+            successEpoch++;
         }
+    }
+
+    private readonly record struct UnavailableStreak(int Count, long SuccessEpoch);
+
+    /// <summary>
+    /// Counts an unavailable-type failure (connection dropped, timeout, ...) against one message. Such failures
+    /// normally spare the message's retries and trip the breaker, but a message that itself kills the connection
+    /// is always the first due row and would keep the whole queue paused until it expires. A failure only adds to
+    /// the run when another message was delivered since this message's previous failure (SMTP demonstrably works);
+    /// during a real outage nothing is delivered, so no message is blamed for it.
+    /// </summary>
+    private (bool Poisoned, bool Repeated) RecordUnavailableFailure(ulong mailId)
+    {
+        lock (breakerGate)
+        {
+            if (unavailableStreaks.Count >= MaximumTrackedUnavailableMails) unavailableStreaks.Clear();
+            var repeated = unavailableStreaks.TryGetValue(mailId, out var previous);
+            var count = !repeated ? 1 : previous.SuccessEpoch != successEpoch ? previous.Count + 1 : previous.Count;
+            unavailableStreaks[mailId] = new(count, successEpoch);
+            return (count >= PoisonUnavailableAttempts, repeated);
+        }
+    }
+
+    private void ForgetUnavailable(ulong mailId)
+    {
+        lock (breakerGate) unavailableStreaks.Remove(mailId);
     }
 
     private static string SettingsKey(SmtpOptions value) => string.Join('\n',

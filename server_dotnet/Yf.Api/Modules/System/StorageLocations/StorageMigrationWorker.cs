@@ -15,7 +15,8 @@ namespace Yf.Api.Modules.SystemManagement;
 /// <list type="number">
 /// <item>COPYING: copies every old file through a temporary name, compares SHA-256 of source and copy, then renames it
 /// into place, repeating passes until one finds nothing left to copy;</item>
-/// <item>WAITING: keeps copying until no upload session that started in the old root is still active;</item>
+/// <item>WAITING: checks every minute (without walking the tree) whether an upload session that started in the old
+/// root is still active, then runs the final copy pass;</item>
 /// <item>DELETING: deletes an old file only when the new root holds a byte-identical copy (re-hashed right before),
 /// copying it first if it is missing; a second pass after a grace period catches late renames; files that differ or
 /// stay locked are kept and counted. Only then is the old root dropped.</item>
@@ -36,7 +37,11 @@ public sealed class StorageMigrationWorker(
     private const int MaximumPassesPerRun = 5;
     internal TimeSpan DeleteGracePeriod { get; set; } = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan IdleInterval = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan SessionWaitInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long the loop sleeps after the last <see cref="RunOnceAsync"/> (longer while only waiting for uploads).</summary>
+    internal TimeSpan NextWait { get; private set; } = IdleInterval;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -46,13 +51,14 @@ public sealed class StorageMigrationWorker(
             try { await RunOnceAsync(stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception error) { logger.LogWarning(error, "Storage migration cycle failed; retrying next cycle."); }
-            await signal.WaitAsync(IdleInterval, stoppingToken);
+            await signal.WaitAsync(NextWait, stoppingToken);
         }
     }
 
     /// <summary>Advances the running migration once; returns false when none is running.</summary>
     internal async Task<bool> RunOnceAsync(CancellationToken stoppingToken)
     {
+        NextWait = IdleInterval;
         StorageLocation? row;
         await using (var conn = await db.OpenAsync(stoppingToken))
         await using (var context = EfDb.Use(conn))
@@ -106,9 +112,9 @@ public sealed class StorageMigrationWorker(
         {
             if (await ActiveOldSessionsAsync(migration, ct) > 0)
             {
-                // Sessions that started in the old root keep writing there; copy what they produced so far.
-                await CopyPassAsync(migration, progress, ct);
-                await SaveAsync(migration, progress, phase, ct);
+                // Sessions that started in the old root keep their chunks there (never copied) and a copy pass
+                // would walk the whole tree for nothing: check again later, then do the final copy and verification.
+                NextWait = SessionWaitInterval;
                 return;
             }
             var result = await CopyPassAsync(migration, progress, ct);

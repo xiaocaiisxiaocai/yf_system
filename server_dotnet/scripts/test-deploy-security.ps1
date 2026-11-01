@@ -161,12 +161,17 @@ try {
     $expectedExample=[ordered]@{
         CookieSecure=$true; AllowInsecureCookies=$false; MaxActiveSessionsPerUser=20; UploadMaxActiveSessionsPerUser=20
         UploadMaxPendingBytesPerUser=21474836480; BlobVerifyBytesPerCycle=2147483648; BatchDownloadMinBytesPerMinute=65536
-        BatchDownloadMaxDurationMinutes=120; MailPendingTtlDays=3
+        BatchDownloadMaxDurationMinutes=120; MailPendingTtlDays=3; AutoInitializeDatabase=$false
     }
     foreach ($key in $expectedExample.Keys) {
         if (!$example.PSObject.Properties[$key] -or $example.$key -ne $expectedExample[$key]) {
             throw "Deployment example App.$key does not match the backend default."
         }
+    }
+    if ($publishScript -notmatch [regex]::Escape('$productionSettings.App.AutoInitializeDatabase = $true') -or
+        $publishScript -notmatch [regex]::Escape('$productionSettings.App.AutoInitializeDatabase = $false') -or
+        $verifyReleaseScript -notmatch [regex]::Escape('Release must enable AutoInitializeDatabase only in the bundled private package')) {
+        throw 'Silent database initialization must be enabled explicitly, and only for the bundled private package.'
     }
     if ($example.OemStorageRoot -ne '' -or $example.PSObject.Properties['OemScanner']) {
         throw 'Deployment example must keep OEM storage unconfigured and omit removed scanner settings.'

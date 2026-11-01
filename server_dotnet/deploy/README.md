@@ -13,12 +13,12 @@
 1. 将 `deloy` 下生成的整个版本文件夹复制到服务器的独立临时目录，保留其中 `manifest.json`，安装脚本会据此检查全部文件。默认不生成 ZIP；如果打包时显式使用了 `-CreateArchive`，则将 ZIP 与 `.sha256` 一并复制到服务器，核对哈希后解压。
 2. 默认发布仍将本机私有默认值写入 `appsettings.Production.json`，包括数据库连接、JWT、实际访问地址、存储目录及本次包独立生成的初始管理员密码；`appsettings.json` 仅保留日志等基础设置。发布脚本默认拒绝脏工作区、HTTP/不安全 Cookie 和 root 数据库账号，始终执行 `npm ci`，并对输出目录以及 ZIP/校验边车设置仅当前账号、SYSTEM、Administrators 可读写的 ACL。隔离环境确有需要时必须显式传 `-AllowDirty` 或 `-AllowInsecurePrivateConfiguration`，对应选择会记录在 manifest。`-AllowInsecurePrivateConfiguration` 且 `WebBaseUrl` 为非回环 HTTP、`CookieSecure=false` 时，发布脚本自动写入 `App.AllowInsecureCookies=true` 并在 manifest 记录 `configuration.insecureCookies=true`；HTTPS 包和外部配置模板一律为 `false`，`verify-release.py` 与安装/维护脚本会拒绝 HTTPS 配置中的 `true`。将默认发布包作为含凭据的私有制品保管，不要放入公开下载位置或给应用池写权限。直接把包作为现有 IIS 站点物理目录时，程序会读取包内配置；若使用正式安装脚本，则把配置复制到网站外复核后作为 `-ConfigPath` 传入。已有站点升级须保留原 JWT 和数据库配置。SMTP 在系统「系统参数」页面保存到数据库，尚未设置时不发送邮件。
    若不允许制品携带环境机密，发布时传 `-ExternalConfigurationTemplate`。该模式保留空的连接串、JWT 和初始密码，仅能配合下文正式安装脚本及一份已在服务器外部准备好的完整 `ConfigPath` 使用，不能直接绑定启动。
-3. 发布包默认开启 `App.AutoInitializeDatabase=true` 和项目复制 worker。第一次启动时，如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件和复制任务暂存目录使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。OEM 默认保持 `OemStorageRoot=""`，不影响协作站点启动；配置 OEM 时必须使用独立的 OEM 根。应用不内置病毒库或恶意软件扫描服务。
+3. `appsettings.example.json` 和外部配置模板默认 `App.AutoInitializeDatabase=false`，避免库名写错或库被删后静默新建空库并用初始密码创建 `admin`；仅默认的含凭据私有包（`bundled-private`）由发布脚本显式写入 `true` 以便直接绑定站点首次启动。首次初始化时才临时设为 `true`（初始化成功、`/health` 正常后改回 `false`），或不开启而改用 `dotnet .\Yf.Api.dll --initialize-database`。开启时，第一次启动如果配置的数据库不存在，会自动创建；如果是空库，会执行 EF Core 迁移建表并创建 `admin`。项目复制 worker 默认开启。MySQL 账号需要目标库的创建、建表及数据读写权限；协作文件和复制任务暂存目录使用网站外的 `StorageRoot`，应用池身份需要该目录的修改权限。OEM 默认保持 `OemStorageRoot=""`，不影响协作站点启动；配置 OEM 时必须使用独立的 OEM 根。应用不内置病毒库或恶意软件扫描服务。
 4. 初始登录账号为 `admin`，初始密码查看私有包 `appsettings.Production.json` 中的 `App.BootstrapPassword`。发布脚本为每个私有包独立随机生成，不写回本机默认值，也不输出到日志；首次登录必须修改。已初始化的数据库在重启或升级时不会重建、重新播种或重置管理员密码；初始化完成后应从实际部署配置中移除初始密码。外部配置模板模式由管理员在服务器外部配置中另行生成并保管该密码。
 
 自动初始化只处理不存在或完全为空的数据库，并以数据库锁协调并发启动。非空数据库只检查 EF 迁移历史和必要种子，绝不自动执行升级迁移。历史不匹配、旧版待迁移或初始化中断留下的部分表都会停止并报错，不会删除现有数据或自动重试 DDL。已有数据库升级仍需先备份，再显式运行 `dotnet .\Yf.Api.dll --migrate-database`。
 
-如果禁用 `App.AutoInitializeDatabase`，仍可先手动创建空库，设置进程环境变量 `YF_BOOTSTRAP_PASSWORD`，再执行 `dotnet .\Yf.Api.dll --initialize-database`。正式安装脚本使用的外部配置也应包含上述初始化选项；启动后已存在的数据库不会要求保留初始密码。
+未开启 `App.AutoInitializeDatabase`（外部配置模板的默认状态）时，先手动创建空库，设置进程环境变量 `YF_BOOTSTRAP_PASSWORD`，再执行 `dotnet .\Yf.Api.dll --initialize-database`；也可只在首次安装的外部配置中临时设置 `AutoInitializeDatabase=true`，安装脚本据此在启动后检查 `/health` 并提示改回 `false`。启动后已存在的数据库不会要求保留初始密码。
 
 本版本迁移链包含恢复后的 OEM 表、权限和专属配置。对已有数据库执行 `--migrate-database` 前必须完成可验证的备份，并逐条核对实际待执行迁移；只复制新程序而不迁移时，启动校验会拒绝旧的迁移状态。独立 `OemStorageRoot` 不进入本脚本的协作备份，不能用数据库/协作存储备份替代 OEM 文件保留方案。
 
@@ -50,7 +50,7 @@
 
 业务存储目录（`App.StorageRoot`）、OEM 文件目录（非空 `App.OemStorageRoot`）和日志目录（`App.LogDirectory`，见下文“日志”）使用显式 ACL：关闭继承并丢弃根目录原有的继承/显式项，只保留 `SYSTEM` 与 `BUILTIN\Administrators` 完全控制（管理员不会被锁在目录外）以及 `IIS AppPool\<应用池名>` 修改权限。新建或空目录会自动规范；非空既有目录在安装或 Upgrade/Restore 停池前递归检查根目录的有效 ACE 和全部子项显式 ACE，只允许上述三类身份。发现 `Users`、`Authenticated Users`、旧服务账号或其他主体的读写权限时，脚本在不修改任何 ACL 的情况下列出路径和 SID 并停止；管理员须先确认这些权限是否仍有业务依据，再移除或改为受控的独立备份流程后重试。脚本不会为求通过而静默删除可能属于运维流程的子项 ACE。
 
-启动站点后，脚本从配置的 HTTPS 来源（`https://<HostName>[:端口]`）检查 `/health`，要求 `status=ok, db=up`（`/health` 同时返回 `storage=up|down`，数据库和存储目录读写探测都正常时才为 200/`status=ok`，否则 503/`status=degraded`），默认最多等待 180 秒（`-HealthCheckWaitSeconds`、`-HealthRequestTimeoutSeconds` 可调）；PowerShell 5.1 会显式启用 TLS 1.2，超时报错会附带最后一次失败原因。检查失败按下述规则整体回滚，因此配置错误、数据库不可达或应用启动失败（HTTP 500.30）不会留下半安装站点。探测需要在服务器本机能按 `HostName` 解析到本站；DNS 尚未切换时可在 hosts 中临时指向本机，或传 `-SkipHealthCheck` 并在切换后人工检查。外部配置 `App.AutoInitializeDatabase` 不为 `true` 时空库需另行显式初始化，脚本跳过该检查并给出警告，初始化后必须人工检查 `/health`。
+启动站点后，脚本从配置的 HTTPS 来源（`https://<HostName>[:端口]`）检查 `/health`，要求 `status=ok, db=up`（`/health` 同时返回 `storage=up|down`，数据库和存储目录读写探测都正常时才为 200/`status=ok`，否则 503/`status=degraded`），默认最多等待 180 秒（`-HealthCheckWaitSeconds`、`-HealthRequestTimeoutSeconds` 可调）；PowerShell 5.1 会显式启用 TLS 1.2，超时报错会附带最后一次失败原因。检查失败按下述规则整体回滚，因此配置错误、数据库不可达或应用启动失败（HTTP 500.30）不会留下半安装站点。探测需要在服务器本机能按 `HostName` 解析到本站；DNS 尚未切换时可在 hosts 中临时指向本机，或传 `-SkipHealthCheck` 并在切换后人工检查。外部配置 `App.AutoInitializeDatabase` 不为 `true`（示例默认）时空库需另行显式初始化，脚本跳过该检查并给出警告，初始化后必须人工检查 `/health`；为 `true` 且检查通过后，脚本提示把它改回 `false`。
 
 脚本拒绝已存在站点/应用池和非空目标目录，不覆盖其他部署。所有预检完成后才开始写入；复制、ACL、应用池、站点、证书绑定、启动或 `/health` 检查失败时，脚本删除本次创建的站点/池和复制内容以及本次新建且仍为空的日志目录，并恢复配置、存储、已有日志目录及原有空站点目录的 ACL，随后可用原命令重跑。若警告回滚不完整，保持现场并先处理列出的准确资源。它不自动开放防火墙、不修改 DNS，也不停止现有后端服务。请按实际网络环境配置 DNS、443/TCP 与 HTTPS 证书，并在停写窗口切换入口。
 

@@ -5,10 +5,12 @@
 Install the ASP.NET Core + React package as a new HTTPS IIS site on the target server.
 .DESCRIPTION
 Fresh-site installation only. Existing IIS sites, pools and nonempty destination folders
-are refused. No data is migrated. With App.AutoInitializeDatabase=true the application creates
-and seeds an absent or empty database on first start and the installer then requires /health
-to report status=ok, db=up (otherwise it rolls back); without it, initialization is a separate
-explicit command and /health must be checked manually afterwards.
+are refused. No data is migrated. The example configuration keeps App.AutoInitializeDatabase=false so a wrong
+or dropped database is never recreated silently: initialize the database with
+`dotnet .\Yf.Api.dll --initialize-database`, or switch the option on only for the first start and off again
+afterwards. With App.AutoInitializeDatabase=true the application creates and seeds an absent or empty database on
+first start and the installer then requires /health to report status=ok, db=up (otherwise it rolls back); without
+it, /health must be checked manually after the explicit initialization.
 #>
 [CmdletBinding()]
 param(
@@ -225,6 +227,7 @@ try {
     } else {
         Wait-YfHealth $origin $HealthCheckWaitSeconds $HealthRequestTimeoutSeconds
         Write-Host "Health check passed: $origin/health reports status=ok, db=up."
+        Write-Warning "The database is initialized: set App.AutoInitializeDatabase=false in $ConfigPath before the next restart, so a wrong or dropped database is never recreated silently."
     }
     Write-Host "Installed new site: $origin"
     Write-Host "Check browser login from the target network. Existing databases were not migrated by this installer."

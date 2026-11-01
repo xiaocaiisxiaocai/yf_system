@@ -105,24 +105,27 @@ public sealed class StorageLocationService(
             .Where(row => row is not null).Select(row => ToResponse(row!)).ToArray());
     }
 
+    /// <summary>Test seam: runs after the target was validated and before the exclusive gate is taken.</summary>
+    internal Func<Task>? BeforeLocking { get; set; }
+
     public async Task<StorageLocationResponse> MigrateAsync(
         CurrentUser actor, string kindArgument, StorageMigrationRequest request, string? ip, CancellationToken ct)
     {
         var kind = StorageKinds.Normalize(kindArgument);
+        // Walking the old tree and checking, creating and probing the target can take minutes on a large store, and
+        // the exclusive management gate stalls every business write meanwhile. Both run before the gate; under it
+        // only the rows the validation depended on are compared again.
+        var (target, baseline) = await PlanMigrationAsync(actor, kind, request, ct);
+        if (BeforeLocking is { } beforeLocking) await beforeLocking();
         await using var conn = await db.OpenAsync(ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await LockAsync(conn, tx, actor, ct);
         await using var context = EfDb.Use(conn, tx);
         var rows = await LockRowsAsync(context, ct);
-        if (rows.Any(row => row.PreviousPath is not null || row.Status != StorageStatuses.Idle))
-            throw ApiException.Conflict("已有存储迁移正在进行，请等待完成或先取消");
+        RequireNoMigration(rows);
         var row = rows.SingleOrDefault(item => item.Kind == kind) ?? throw ApiException.NotFound("存储位置不存在");
-
-        var others = rows.SelectMany(item => new[] { item.Path, item.PreviousPath, item.PendingPath })
-            .Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path!).ToArray();
-        var required = row.Path.Length == 0 ? 0 : await Task.Run(() => StoragePathPolicy.Measure(row.Path, ct).Bytes, ct);
-        var target = StoragePathPolicy.ValidateTarget(
-            request.Path, environment.ContentRootPath, environment.WebRootPath, others, required);
+        if (Fingerprint(rows) != baseline)
+            throw ApiException.VersionConflict("存储位置已被修改，请刷新后重试");
         var now = await DbClock.UtcNowAsync(context, ct, 3);
         var from = row.Path;
         string action;
@@ -214,6 +217,41 @@ public sealed class StorageLocationService(
         signal.Wake();
         return ToResponse(row);
     }
+
+    private async Task<(string Target, string Baseline)> PlanMigrationAsync(
+        CurrentUser actor, string kind, StorageMigrationRequest request, CancellationToken ct)
+    {
+        StorageLocation[] rows;
+        await using (var conn = await db.OpenAsync(ct))
+        {
+            // The same actor and permission checks as under the gate, so an unauthorized caller never reaches the
+            // file system calls below. The connection is released before the long file system work.
+            var current = await AccessService.RecheckActorAsync(conn, null, actor, ct);
+            AccessService.RequireInternal(current);
+            await AccessService.RequirePermissionAsync(conn, null, current, Permission, ct);
+            await using var context = EfDb.Use(conn);
+            rows = await context.StorageLocations.AsNoTracking().ToArrayAsync(ct);
+        }
+        RequireNoMigration(rows);
+        var row = rows.SingleOrDefault(item => item.Kind == kind) ?? throw ApiException.NotFound("存储位置不存在");
+        var others = rows.SelectMany(item => new[] { item.Path, item.PreviousPath, item.PendingPath })
+            .Where(path => !string.IsNullOrWhiteSpace(path)).Select(path => path!).ToArray();
+        var required = row.Path.Length == 0 ? 0 : await Task.Run(() => StoragePathPolicy.Measure(row.Path, ct).Bytes, ct);
+        var target = StoragePathPolicy.ValidateTarget(
+            request.Path, environment.ContentRootPath, environment.WebRootPath, others, required);
+        return (target, Fingerprint(rows));
+    }
+
+    private static void RequireNoMigration(IEnumerable<StorageLocation> rows)
+    {
+        if (rows.Any(row => row.PreviousPath is not null || row.Status != StorageStatuses.Idle))
+            throw ApiException.Conflict("已有存储迁移正在进行，请等待完成或先取消");
+    }
+
+    /// <summary>The paths and state a target validation depends on (exclusivity against every location).</summary>
+    private static string Fingerprint(IEnumerable<StorageLocation> rows) => string.Join('\n',
+        rows.OrderBy(row => row.Kind, StringComparer.Ordinal)
+            .Select(row => $"{row.Kind}|{row.Path}|{row.PreviousPath}|{row.PendingPath}|{row.Status}"));
 
     /// <summary>Applies a committed row to the running process: storage roots, and the log sink for the log directory.</summary>
     internal void ApplyRuntime(StorageLocation row)

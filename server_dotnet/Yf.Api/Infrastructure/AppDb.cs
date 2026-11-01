@@ -133,6 +133,8 @@ public sealed class AccessService
     {
         await using var context = EfDb.Use(db, tx);
         var sessionId = user.SessionId;
+        // DateTime.UtcNow inside the query is translated to UTC_TIMESTAMP() and evaluated by MySQL, not by this
+        // server's clock (guarded by SessionExpiryUsesTheDatabaseClock); it must stay inside the expression.
         var row = await context.Users.Where(row => row.Id == user.Id).Select(row => new
         {
             row.Id, row.EmployeeNo, row.UserType, row.SupplierId, row.Status, row.MustChangePassword,

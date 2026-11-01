@@ -3,10 +3,17 @@ using MySqlConnector;
 
 namespace Yf.Api.Infrastructure;
 
+/// <summary>A storage root with the old root still serving reads during a migration (null when none).</summary>
+public sealed record StorageRootPair(string Root, string? Fallback);
+
 public sealed class AppOptions
 {
     public string ConnectionString { get; set; } = "";
-    public string StorageRoot { get; set; } = "";
+    public string StorageRoot
+    {
+        get => Volatile.Read(ref storageRoots).Root;
+        set => Update(ref storageRoots, current => current with { Root = value });
+    }
     public string JwtSecret { get; set; } = "";
     public bool AutoInitializeDatabase { get; set; }
     public string BootstrapPassword { get; set; } = "";
@@ -60,17 +67,50 @@ public sealed class AppOptions
     public int BatchDownloadMaxDurationMinutes { get; set; } = 120;
     public SmtpOptions Smtp { get; set; } = new();
     /// <summary>Independent local OEM content root, excluded from collaboration backups. Empty disables file transfer.</summary>
-    public string OemStorageRoot { get; set; } = "";
+    public string OemStorageRoot
+    {
+        get => Volatile.Read(ref oemStorageRoots).Root;
+        set => Update(ref oemStorageRoots, current => current with { Root = value });
+    }
 
     // Runtime-only: the effective paths come from storage_locations (system settings page) at startup and change
     // during a storage migration. The configured StorageRoot / OemStorageRoot / LogDirectory only seed that table.
     // The non-public setters keep configuration binding from ever setting the fallback roots.
 
     /// <summary>Old collaboration root still serving reads while a storage migration runs; null otherwise.</summary>
-    public string? StorageFallbackRoot { get; internal set; }
+    public string? StorageFallbackRoot
+    {
+        get => Volatile.Read(ref storageRoots).Fallback;
+        internal set => Update(ref storageRoots, current => current with { Fallback = value });
+    }
 
     /// <summary>Old OEM root still serving reads while a storage migration runs; null otherwise.</summary>
-    public string? OemStorageFallbackRoot { get; internal set; }
+    public string? OemStorageFallbackRoot
+    {
+        get => Volatile.Read(ref oemStorageRoots).Fallback;
+        internal set => Update(ref oemStorageRoots, current => current with { Fallback = value });
+    }
+
+    private StorageRootPair storageRoots = new("", null);
+    private StorageRootPair oemStorageRoots = new("", null);
+
+    /// <summary>The collaboration root and fallback as one consistent pair; read it once when both are needed.</summary>
+    public StorageRootPair StorageRoots => Volatile.Read(ref storageRoots);
+
+    /// <summary>The OEM root and fallback as one consistent pair; read it once when both are needed.</summary>
+    public StorageRootPair OemStorageRoots => Volatile.Read(ref oemStorageRoots);
+
+    /// <summary>Replaces root and fallback in one step, so no reader of <see cref="StorageRoots"/> sees a mix of old and new.</summary>
+    internal void SetStorageRoots(StorageRootPair roots) => Volatile.Write(ref storageRoots, roots);
+
+    internal void SetOemStorageRoots(StorageRootPair roots) => Volatile.Write(ref oemStorageRoots, roots);
+
+    private static void Update(ref StorageRootPair field, Func<StorageRootPair, StorageRootPair> change)
+    {
+        StorageRootPair seen;
+        do seen = Volatile.Read(ref field);
+        while (!ReferenceEquals(Interlocked.CompareExchange(ref field, change(seen), seen), seen));
+    }
 
     public void Validate()
     {

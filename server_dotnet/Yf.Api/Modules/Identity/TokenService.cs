@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,7 +11,6 @@ public sealed class TokenService(AppOptions options)
 {
     internal const string Issuer = "yf-api";
     private readonly JwtSecurityTokenHandler handler = new() { MapInboundClaims = false };
-    private readonly ConcurrentDictionary<string, SymmetricSecurityKey> realmKeys = new(StringComparer.Ordinal);
 
     /// <summary>The audience a realm's access tokens carry and must be presented with.</summary>
     internal static string AudienceFor(string realm) => "yf:" + realm;
@@ -24,8 +22,9 @@ public sealed class TokenService(AppOptions options)
     internal static byte[] SigningKeyFor(string secret, string realm) =>
         HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes("yf-access-token/" + realm));
 
-    private SymmetricSecurityKey RealmKey(string realm) =>
-        realmKeys.GetOrAdd(realm, value => new SymmetricSecurityKey(SigningKeyFor(options.JwtSecret, value)));
+    // The realm comes from the unverified payload, so keys are derived per call instead of cached:
+    // a cache keyed by it would let anonymous requests grow process memory without bound.
+    private SymmetricSecurityKey RealmKey(string realm) => new(SigningKeyFor(options.JwtSecret, realm));
     public (string Token, long ExpiresAt) IssueAccess(ulong userId, string employeeNo, string sessionId) =>
         IssueAccess(userId, employeeNo, sessionId, IdentityRealms.Internal);
 
