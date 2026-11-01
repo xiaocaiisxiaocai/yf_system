@@ -323,17 +323,22 @@ public sealed class OemReconcileService(
     /// <summary>Flags files whose content should be on disk but is absent or has the wrong size.</summary>
     private async Task<int> MarkMissingAsync(string status, CancellationToken ct)
     {
-        (ulong Id, string Path, ulong Size)[] files;
+        (ulong Id, string Path, ulong Size, string StoredName, string Sha256)[] files;
         await using (var read = await OemUnitOfWork.ReadAsync(dbFactory, ct))
             files = (await read.Db.OemTransferFiles.AsNoTracking()
                 .Where(file => file.PayloadStatus == PayloadStatuses.Quarantined || file.PayloadStatus == PayloadStatuses.Available
                     || (status == PayloadStatuses.MissingUnverified && file.PayloadStatus == PayloadStatuses.Promoting))
-                .Select(file => new { file.Id, file.StoragePath, file.SizeBytes }).ToArrayAsync(ct))
-                .Select(file => (file.Id, file.StoragePath, file.SizeBytes)).ToArray();
+                .Select(file => new { file.Id, file.StoragePath, file.SizeBytes, file.StoredName, file.Sha256 }).ToArrayAsync(ct))
+                .Select(file => (file.Id, file.StoragePath, file.SizeBytes, file.StoredName, file.Sha256)).ToArray();
         var marked = 0;
         var restoring = status == PayloadStatuses.MissingUnverified;
         foreach (var candidate in files.Where(file => !Intact(file.Path, file.Size)))
         {
+            // Hash a relocation candidate (up to the file size limit) before any lock is taken; under the
+            // locks only a cheap "still the same file" check remains.
+            var relocation = restoring
+                ? await PrepareRelocationAsync(candidate.Id, candidate.StoredName, candidate.Path, candidate.Size, candidate.Sha256, ct)
+                : null;
             await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
             var transferId = await uow.Db.OemTransferFiles.Where(item => item.Id == candidate.Id).Select(item => item.TransferId).SingleAsync(ct);
             await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
@@ -341,7 +346,7 @@ public sealed class OemReconcileService(
             // Re-check under the lock: a concurrent promotion or purge may have moved it legitimately.
             if (file.PayloadStatus is not (PayloadStatuses.Quarantined or PayloadStatuses.Available or PayloadStatuses.Promoting)
                 || Intact(file.StoragePath, file.SizeBytes)) continue;
-            if (restoring && await TryRelocateAsync(file, ct))
+            if (relocation is not null && file.StoragePath == candidate.Path && TryCompleteRelocation(file, relocation))
             {
                 await audit.WriteAsync(uow, null, "OEM_RECONCILE_FILE_RELOCATED", "oem_file", file.Id,
                     new { targetName = file.OriginalName, transferId, file.Sha256, file.SizeBytes }, ct);
@@ -570,24 +575,53 @@ public sealed class OemReconcileService(
     /// row is authoritative: identical content found under the same stored name in the other
     /// area is moved back to the recorded path instead of being declared missing.
     /// </summary>
-    private async Task<bool> TryRelocateAsync(Data.OemTransferFile file, CancellationToken ct)
+    private sealed record Relocation(string Source, long Length, DateTime LastWriteUtc);
+
+    /// <summary>Finds and hashes identical content in the other area, without holding any lock.</summary>
+    private async Task<Relocation?> PrepareRelocationAsync(
+        ulong fileId, string storedName, string storagePath, ulong size, string expectedSha256, CancellationToken ct)
     {
         try
         {
-            var recorded = OemStorage.QuarantineRelative(file.StoredName) == file.StoragePath
-                ? OemStorage.AvailableRelative(file.StoredName)
-                : OemStorage.QuarantineRelative(file.StoredName);
-            if (recorded == file.StoragePath || !Intact(recorded, file.SizeBytes)) return false;
+            var recorded = OemStorage.QuarantineRelative(storedName) == storagePath
+                ? OemStorage.AvailableRelative(storedName)
+                : OemStorage.QuarantineRelative(storedName);
+            if (recorded == storagePath || !Intact(recorded, size)) return null;
             var source = storage.Absolute(recorded);
+            var before = new FileInfo(source);
             await using (var stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
                 var sha256 = Convert.ToHexString(await System.Security.Cryptography.SHA256.HashDataAsync(stream, ct));
-                if (!sha256.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)) return false;
+                if (!sha256.Equals(expectedSha256, StringComparison.OrdinalIgnoreCase)) return null;
             }
-            var target = storage.AbsoluteBeside(file.StoragePath, source);
-            storage.EnsureParent(target, ct);
-            File.Move(source, target, overwrite: false);
+            var after = new FileInfo(source);
+            return after.Length == before.Length && after.LastWriteTimeUtc == before.LastWriteTimeUtc
+                ? new Relocation(source, after.Length, after.LastWriteTimeUtc)
+                : null;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            logger.LogWarning("OEM reconcile could not inspect file {FileId} for relocation ({ErrorType}).", fileId, error.GetType().Name);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// After a database restore onto a reused OEM root, a file may have moved between areas since the backup (a
+    /// quarantined row whose content was promoted later). The restored row is authoritative: the content hashed by
+    /// <see cref="PrepareRelocationAsync"/> is moved back to the recorded path if it is still the same file.
+    /// </summary>
+    private bool TryCompleteRelocation(Data.OemTransferFile file, Relocation relocation)
+    {
+        try
+        {
+            var current = new FileInfo(relocation.Source);
+            if (!current.Exists || current.Length != relocation.Length || current.LastWriteTimeUtc != relocation.LastWriteUtc
+                || (ulong)current.Length != file.SizeBytes) return false;
+            var target = storage.AbsoluteBeside(file.StoragePath, relocation.Source);
+            storage.EnsureParent(target, CancellationToken.None);
+            File.Move(relocation.Source, target, overwrite: false);
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
