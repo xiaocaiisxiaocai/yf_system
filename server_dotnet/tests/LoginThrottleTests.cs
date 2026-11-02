@@ -53,6 +53,20 @@ public sealed class LoginThrottleTests
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task AccountNameIsMatchedIgnoringCase()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await LoginDatabase.CreateAsync(ct);
+        // The account is stored as "target"; any capitalisation signs in to the same account.
+        foreach (var (spelling, ip) in new[] { ("target", "192.0.2.220"), ("TARGET", "192.0.2.221"), ("Target", "192.0.2.222") })
+        {
+            var login = await scope.LoginAsync(spelling, scope.Password, ip, ct);
+            Assert.Equal(1UL, login.User.Id);
+            Assert.Equal("target", login.User.EmployeeNo);
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task RepeatedOldPasswordChecksAreThrottledBeforeHashing()
     {
         var ct = TestContext.Current.CancellationToken;

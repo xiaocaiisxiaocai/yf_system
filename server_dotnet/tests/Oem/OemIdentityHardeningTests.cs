@@ -30,6 +30,9 @@ public sealed class OemIdentityHardeningTests
         var legacy = await service.LoginAsync(new("no_lock_vendor", "Vendor#2026"), "192.0.2.1", ct);
         Assert.Equal(accountId, legacy.Response.Account.Id);
         Assert.Equal((0, (DateTime?)null), await AccountLockStateAsync());
+        // Account names are matched ignoring case.
+        var capitalised = await service.LoginAsync(new("No_Lock_VENDOR", "Vendor#2026"), "192.0.2.100", ct);
+        Assert.Equal(accountId, capitalised.Response.Account.Id);
 
         for (var attempt = 2; attempt <= 11; attempt++)
         {
