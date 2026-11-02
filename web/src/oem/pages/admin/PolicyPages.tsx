@@ -10,6 +10,7 @@ import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import { AuditDetailDrawer, AuditLoadError, AuditResultBar, AuditTable } from '../../../components/AuditLogParts'
 import type { AuditLogRow } from '../../../pages/system/auditLogDetails'
 import { OEM_ACTION_GROUPS, OEM_AUDIT_PRESENTER, toAuditLogRow } from './oemAuditDetails'
+import OemMailRulesPanel from '../../components/OemMailRulesPanel'
 
 const MODES = [
   { value: 'KEEP', label: '不自动删除' },
@@ -132,6 +133,11 @@ function formatBytes(bytes: number) {
 }
 
 export function SettingsForm({ group }: { group: 'file' | 'notify' }) {
+  const { api } = useOem()
+  return group === 'notify' ? <OemMailRulesPanel api={api} /> : <PolicySettingsForm group={group} />
+}
+
+function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
   const { api } = useOem()
   const [items, setItems] = useState<SettingItem[]>([])
   const [values, setValues] = useState<Record<string, string>>({})

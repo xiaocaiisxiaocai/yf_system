@@ -110,6 +110,10 @@ export function useSystemConfig(http: HttpClient) {
     if (!notificationSaveInFlight.current) setNotificationDraft(mail?.notificationPolicy || EMPTY_NOTIFICATION_POLICY)
   }
 
+  const refreshMailStatus = async () => {
+    setMail(normalizeMailStatus((await http.get<ApiResponses['GET /admin/system/mail-status']>('/admin/system/mail-status', quietRequest)).data))
+  }
+
   const saveSmtp = async () => {
     if (smtpSaveInFlight.current || !smtpDirty) return
     if (smtp.passwordNeedsUpdate && !smtpPassword) {
@@ -253,6 +257,7 @@ export function useSystemConfig(http: HttpClient) {
     load,
     save,
     saveSmtp,
+    refreshMailStatus,
     saveNotifications,
     setValue,
   }

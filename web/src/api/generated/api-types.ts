@@ -332,6 +332,7 @@ export interface MailStatusResponse {
   missingEmailCount: number
   missingEmailAccounts: Array<MissingEmailAccount>
   recent: Array<MailAuditEntry>
+  missingOemContactCompanyCount: number
 }
 
 export interface MarkCollaborationReadRequest {
@@ -1369,6 +1370,7 @@ export interface SmtpTestRequest {
 export interface SmtpTestResponse {
   success: boolean
   message: string
+  deliveryUncertain: boolean
 }
 
 export interface StatusRequest {

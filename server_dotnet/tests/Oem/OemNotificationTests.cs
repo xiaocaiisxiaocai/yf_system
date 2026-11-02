@@ -24,6 +24,30 @@ public sealed class OemNotificationTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task MissingVendorContactsAreAuditedWithoutFallingBackToSharedAccountEmail()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        await using (var connection = await host.OpenAsync(ct))
+        {
+            await connection.ExecuteAsync("DELETE FROM oem_company_contacts WHERE oem_company_id=@CompanyId; UPDATE oem_accounts SET email='legacy-account@example.invalid' WHERE oem_company_id=@CompanyId", new { world.CompanyId });
+        }
+        var draft = await CreateOutboundAsync(world, "无联络人邮箱", ct);
+        var id = TransferId(draft);
+        await host.UploadAsync(world.Sender, id, "test.pdf", OemTestHost.Pdf("test"), ct);
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{id}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
+        var task = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray().Single()!;
+        await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
+        await using var verify = await host.OpenAsync(ct);
+        Assert.Equal(0, await verify.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM email_outbox WHERE event_type='OEM_TRANSFER_RELEASED'"));
+        Assert.Equal(1, await verify.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM audit_logs WHERE action='OEM_EMAIL_SKIPPED_MISSING_EMAIL' AND target_id=@Id", new { Id = id.ToString(System.Globalization.CultureInfo.InvariantCulture) }));
+        Assert.DoesNotContain(await MailsAsync(host, ct), mail => mail.RecipientEmail == "legacy-account@example.invalid");
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task ApproversAndEveryRecipientAreMailedIndividuallyWithoutFileNames()
     {
         var ct = TestContext.Current.CancellationToken;

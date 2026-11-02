@@ -66,6 +66,11 @@ async function openSmtp(user: ReturnType<typeof userEvent.setup>) {
   return screen.findByText('邮件发送')
 }
 
+async function openRules(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('tab', { name: '邮件提醒规则' }))
+  return screen.findByRole('button', { name: '保存邮件提醒' })
+}
+
 describe('系统参数与 SMTP 生产界面', () => {
   beforeEach(() => {
     mocks.get.mockImplementation(async (url: string) => ({
@@ -99,6 +104,9 @@ describe('系统参数与 SMTP 生产界面', () => {
     expect(await screen.findByRole('tab', { name: '系统参数' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByText('邮件发送')).not.toBeInTheDocument()
     await openSmtp(user)
+    expect(within(document.querySelector<HTMLElement>('.system-mail-editor')!).getByLabelText('SMTP 服务器')).toBeVisible()
+    expect(within(document.querySelector<HTMLElement>('.system-mail-log')!).getByText('邮件日志')).toBeVisible()
+    expect(screen.queryByRole('switch', { name: '邮件通知总开关' })).not.toBeInTheDocument()
     expect(screen.getAllByText('SMTP 未配置')).toHaveLength(2)
     expect(screen.getByText(/待发送/)).toHaveTextContent('2')
     expect(screen.getAllByText((_text, element) => element?.textContent === '失败 3')).toHaveLength(2)
@@ -138,7 +146,9 @@ describe('系统参数与 SMTP 生产界面', () => {
     const port = screen.getByRole('spinbutton', { name: 'SMTP 端口' })
     await user.clear(port)
     await user.type(port, '587')
+    await openRules(user)
     await user.click(screen.getByRole('switch', { name: '内部员工邮件通知' }))
+    await openSmtp(user)
     await user.click(screen.getByRole('button', { name: '保存邮箱设置' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '保存邮箱设置' })).not.toHaveClass('arco-btn-loading'))
     expect(port).toHaveValue('587')
@@ -149,7 +159,9 @@ describe('系统参数与 SMTP 生产界面', () => {
       url: '/admin/system/mail-settings',
       body: { password: null, security: 'StartTls', port: 587 },
     }))
+    await openRules(user)
     expect(screen.getByRole('switch', { name: '内部员工邮件通知' })).not.toBeChecked()
+    await openSmtp(user)
 
     const password = screen.getByLabelText('邮箱密码或授权码')
     fireEvent.change(password, { target: { value: 'new-fixture-code' } })
@@ -236,7 +248,7 @@ describe('系统参数与 SMTP 生产界面', () => {
     const warning = vi.spyOn(Message, 'warning')
     const user = userEvent.setup()
     renderConfig()
-    await openSmtp(user)
+    await openRules(user)
 
     const notification = screen.getByRole('switch', { name: '内部员工邮件通知' })
     await user.click(notification)
@@ -268,7 +280,7 @@ describe('系统参数与 SMTP 生产界面', () => {
     })
     const user = userEvent.setup()
     renderConfig()
-    await openSmtp(user)
+    await openRules(user)
 
     expect(screen.queryByRole('switch', { name: '提交验收邮件提醒' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('switch', { name: '终止子项目邮件提醒' }))

@@ -145,15 +145,19 @@ public sealed class MailService
     public static async Task<bool> EnabledAsync(MySqlConnection conn, CancellationToken ct)
         => (await EmailNotificationPolicy.LoadAsync(conn, null, ct)).GlobalEnabled;
 
-    public async Task<MailStatusResponse> StatusAsync(CancellationToken ct)
+    public async Task<MailStatusResponse> StatusAsync(CancellationToken ct, string scope = "collaboration")
     {
+        if (scope is not ("collaboration" or "oem" or "all")) throw ApiException.BadRequest("邮件业务范围无效");
         await using var conn = await db.OpenAsync(ct);
         var resolved = await settings.ResolveAsync(conn, null, ct);
         var notificationPolicy = await EmailNotificationPolicy.LoadAsync(conn, null, ct);
         var cfg = resolved.Options;
         var configured = resolved.Configured;
         await using var context = EfDb.Use(conn);
-        var counts = (await CollaborationOnly(context.EmailOutbox)
+        var queue = scope == "all" ? context.EmailOutbox.AsQueryable()
+            : scope == "oem" ? context.EmailOutbox.Where(mail => mail.EventType.StartsWith("OEM_"))
+            : CollaborationOnly(context.EmailOutbox);
+        var counts = (await queue
             .Where(mail => mail.EventType != "STORAGE_WARNING")
             .GroupBy(mail => mail.Status)
             .Select(group => new { Status = group.Key, Count = group.LongCount() })
@@ -170,7 +174,11 @@ public sealed class MailService
         string[] auditActions =
         [
             "EMAIL_SENT", "EMAIL_FAILED", "EMAIL_RETRY", "EMAIL_SKIPPED_MISSING_EMAIL", "EMAIL_CANCELLED_STALE",
+            "EMAIL_TEST_STARTED", "EMAIL_TEST_SENT", "EMAIL_TEST_FAILED", "EMAIL_TEST_UNKNOWN",
         ];
+        var businessActions = auditActions.Where(action => !action.StartsWith("EMAIL_TEST_", StringComparison.Ordinal)).ToArray();
+        if (scope == "oem") auditActions = auditActions.Where(action => action.StartsWith("EMAIL_TEST_", StringComparison.Ordinal)).Concat(businessActions.Select(action => "OEM_" + action)).ToArray();
+        if (scope == "all") auditActions = auditActions.Concat(businessActions.Select(action => "OEM_" + action)).ToArray();
         var recent = await context.AuditLogs
             .Where(log => Enumerable.Contains(auditActions, log.Action))
             .OrderByDescending(log => log.CreatedAt).ThenByDescending(log => log.Id)
@@ -185,10 +193,15 @@ public sealed class MailService
                 CreatedAt = log.CreatedAt,
             })
             .ToListAsync(ct);
-        var latestSentAt = await CollaborationOnly(context.EmailOutbox).Where(mail => mail.Status == MailStatuses.Sent)
+        var latestSentAt = await queue.Where(mail => mail.Status == MailStatuses.Sent)
             .Select(mail => mail.SentAt).MaxAsync(ct);
-        var latestFailedAt = await context.AuditLogs.Where(log => log.Action == "EMAIL_FAILED")
+        var failureActions = scope == "all" ? new[] { "EMAIL_FAILED", "OEM_EMAIL_FAILED" }
+            : new[] { scope == "oem" ? "OEM_EMAIL_FAILED" : "EMAIL_FAILED" };
+        var latestFailedAt = await context.AuditLogs.Where(log => failureActions.Contains(log.Action))
             .Select(log => (DateTime?)log.CreatedAt).MaxAsync(ct);
+        var missingOemContacts = scope == "collaboration" ? 0UL : checked((ulong)await context.OemCompanies.LongCountAsync(
+            company => company.Status == "ACTIVE" && !context.OemCompanyContacts.Any(contact => contact.OemCompanyId == company.Id
+                && contact.Status == "ACTIVE" && contact.Email != null && contact.Email.Trim() != ""), ct));
         return new MailStatusResponse(
             configured,
             configured ? cfg.Host : null,
@@ -202,7 +215,8 @@ public sealed class MailService
             latestFailedAt,
             missingCount,
             missing,
-            recent.Select(x => new MailAuditEntry(x.Id, x.Action, x.TargetType, x.TargetId, SafeDetail(x.Detail), x.CreatedAt)).ToArray());
+            recent.Select(x => new MailAuditEntry(x.Id, x.Action, x.TargetType, x.TargetId, SafeDetail(x.Detail), x.CreatedAt)).ToArray(),
+            missingOemContacts);
     }
 
     private static IReadOnlyDictionary<string, object?> SafeDetail(string? detail)

@@ -67,4 +67,5 @@ public sealed record MailStatusResponse(
     DateTime? LatestFailedAt,
     ulong MissingEmailCount,
     IReadOnlyList<MissingEmailAccount> MissingEmailAccounts,
-    IReadOnlyList<MailAuditEntry> Recent);
+    IReadOnlyList<MailAuditEntry> Recent,
+    ulong MissingOemContactCompanyCount = 0);

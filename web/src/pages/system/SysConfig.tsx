@@ -8,11 +8,17 @@ import { useSystemConfig } from './hooks/useSystemConfig'
 import LoadError from '../../components/LoadError'
 import { useAuth } from '../../store/auth'
 import StorageLocationsPanel from './components/StorageLocationsPanel'
+import { useMemo, useState } from 'react'
+import { OemApi } from '../../oem/api/OemApi'
+import OemMailRulesPanel from '../../oem/components/OemMailRulesPanel'
 
 export default function SysConfig() {
   const navigate = useNavigate()
   const state = useSystemConfig(http)
   const canManageStorage = useAuth().hasPerm('storage:manage')
+  const canManageOemNotify = useAuth().hasPerm('oem:notify_manage')
+  const [rulesBusiness, setRulesBusiness] = useState<'robot' | 'oem'>('robot')
+  const oemApi = useMemo(() => new OemApi(http), [])
 
   const systemPanel = renderSystemConfigTable({
     configs: state.configs,
@@ -26,7 +32,7 @@ export default function SysConfig() {
     onSetValue: state.setValue,
   })
 
-  const smtpPanel = renderMailSettingsPanel({
+  const mailPanelProps = {
     mail: state.mail,
     smtp: state.smtp,
     smtpDraft: state.smtpDraft,
@@ -47,9 +53,15 @@ export default function SysConfig() {
     },
     onCancelNotifications: state.cancelNotifications,
     onSaveSmtp: state.saveSmtp,
+    onTested: state.refreshMailStatus,
     onSaveNotifications: state.saveNotifications,
     onViewLogs: () => navigate('/logs'),
-  })
+    rulesBusiness,
+    onRulesBusinessChange: setRulesBusiness,
+    oemRules: canManageOemNotify ? <OemMailRulesPanel api={oemApi} /> : undefined,
+  }
+  const smtpPanel = renderMailSettingsPanel(mailPanelProps)
+  const reminderPanel = renderMailSettingsPanel(mailPanelProps, 'rules')
 
   return (
     <Card className="page-card page-card--table system-page">
@@ -66,6 +78,9 @@ export default function SysConfig() {
             </Tabs.TabPane>
             <Tabs.TabPane key="smtp" title="SMTP 配置">
               {smtpPanel}
+            </Tabs.TabPane>
+            <Tabs.TabPane key="mail-rules" title="邮件提醒规则">
+              {reminderPanel}
             </Tabs.TabPane>
             {canManageStorage && (
               <Tabs.TabPane key="storage" title="存储位置">

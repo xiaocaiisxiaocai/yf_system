@@ -122,7 +122,7 @@ internal static class OemRecipients
 /// pattern): one message per recipient, deduplicated by event + recipient, never
 /// carrying attachments, file names or download links — only a pointer to the page.
 /// </summary>
-public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandler
+public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter audit) : IOemEventHandler
 {
     public async Task HandleAsync(OemUnitOfWork uow, IOemEvent domainEvent, CancellationToken ct)
     {
@@ -150,6 +150,9 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
                 var recipients = transfer.Direction == TransferDirections.InternalToOem
                     ? await OemRecipients.VendorContactsAsync(uow.Db, transfer.OemCompanyId, ct)
                     : await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
+                if (transfer.Direction == TransferDirections.InternalToOem && recipients.Length == 0 && OemMailEvents.Allowed(settings, OemMailEvents.TransferReleased))
+                    await audit.WriteAsync(uow, null, "OEM_EMAIL_SKIPPED_MISSING_EMAIL", "oem_transfer", transfer.Id,
+                        new { eventType = OemMailEvents.TransferReleased, reason = "厂商没有启用的联络人邮箱，通知未入队" }, ct);
                 foreach (var recipient in recipients)
                     await EnqueueAsync(uow, settings, OemMailEvents.TransferReleased, $"oem:released:{transfer.Id}:{OemRecipients.DedupeRecipient(recipient)}",
                         recipient, facts, $"新文件已送达：{transfer.Title}", "有新的文件传递给您，请登录平台查看和下载。", null, ct);
@@ -221,7 +224,13 @@ public sealed class OemNotificationHandler(AppOptions options) : IOemEventHandle
     private async Task EnqueueAsync(OemUnitOfWork uow, OemSettings settings, string eventType, string dedupeKey, MailRecipient recipient,
         TransferFactsForMail facts, string subject, string lead, string? reason, CancellationToken ct)
     {
-        if (!OemMailEvents.Allowed(settings, eventType) || string.IsNullOrWhiteSpace(recipient.Email)) return;
+        if (!OemMailEvents.Allowed(settings, eventType)) return;
+        if (string.IsNullOrWhiteSpace(recipient.Email))
+        {
+            await audit.WriteAsync(uow, null, "OEM_EMAIL_SKIPPED_MISSING_EMAIL", "oem_transfer", facts.Transfer.Id,
+                new { eventType, reason = "收件人未填写邮箱，通知未入队" }, ct);
+            return;
+        }
         var transfer = facts.Transfer;
         var direction = transfer.Direction == TransferDirections.InternalToOem
             ? $"公司 → OEM（{facts.CompanyName}）"

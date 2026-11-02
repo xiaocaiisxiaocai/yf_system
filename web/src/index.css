@@ -1193,6 +1193,29 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 @media (max-width: 1280px) { .system-smtp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .system-notification-grid { grid-template-columns: 1fr; } }
 @media (max-width: 768px) { .system-smtp-grid { grid-template-columns: 1fr; } }
 .system-smtp-grid > label, .system-smtp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--color-text-2); }
+.system-mail-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 20px; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+.system-page.page-card--table { height: calc(100dvh - 88px); min-height: 0; overflow: hidden; }
+.system-config-tabs .system-mail-workspace > .system-mail-log { border-left: 1px solid var(--app-border); padding-left: 20px; }
+.system-mail-editor .system-smtp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.system-mail-log .arco-table-header { position: sticky; top: 0; z-index: 1; }
+.system-config-tabs .system-reminder-card > .arco-card-body { display: flex; overflow: hidden; }
+.system-reminder-card .system-notification-settings { flex: 1; min-height: 0; min-width: 0; }
+.system-reminder-card .system-notification-heading, .system-reminder-card .system-notification-settings > .arco-space { flex-shrink: 0; }
+.system-reminder-card .system-notification-grid { flex: 1; min-height: 0; overflow: auto; }
+.system-rule-business-pane { display: flex; flex: 1; height: 100%; min-height: 0; min-width: 0; }
+.system-rule-business-pane[hidden] { display: none; }
+.oem-mail-rules { flex: 1; min-height: 0; min-width: 0; }
+.oem-mail-rules-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.oem-mail-rules .system-notification-grid { flex: 1; min-height: 0; overflow: auto; align-content: start; }
+.oem-mail-rules .system-notification-heading, .oem-mail-rules > .arco-space { flex-shrink: 0; }
+.oem-mail-rules-card.page-card--table { height: calc(100dvh - 88px); min-height: 0; overflow: hidden; }
+@media (max-width: 720px) { .oem-mail-rules-grid { grid-template-columns: minmax(0, 1fr); } .oem-mail-rules-card.page-card--table { height: calc(100dvh - 76px); } }
+@media (max-width: 1100px) {
+  .system-mail-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .system-config-tabs .system-mail-workspace > .system-mail-log { border-left: 0; border-top: 1px solid var(--app-border); padding-left: 0; padding-top: 12px; }
+}
+@media (max-width: 600px) { .system-mail-editor .system-smtp-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 720px) { .system-page.page-card--table { height: calc(100dvh - 76px); } }
 
 /* 业务线切换栏：最左侧图标加短名，悬停显示全称；窄屏改为抽屉顶部的带文字切换。
    当前项只用左侧指示条和淡色图标底，实心蓝留给二级菜单的选中项。 */

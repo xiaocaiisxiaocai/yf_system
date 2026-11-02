@@ -14,6 +14,11 @@ const action = (label: string, categoryCode: string, categoryLabel: string, colo
 /** OEM 审计动作编码 → 中文名称与分类；编码取自服务端 OemAuditWriter 的全部写入点。 */
 export const OEM_ACTIONS: Record<string, ActionMeta> = {
   OEM_LOGIN: action('登录成功', 'AUTH', '认证安全', 'green'),
+  OEM_EMAIL_SENT: action('邮件发送成功', 'MAIL', '邮件通知', 'green'),
+  OEM_EMAIL_FAILED: action('邮件发送失败', 'MAIL', '邮件通知', 'red'),
+  OEM_EMAIL_RETRY: action('邮件等待重试', 'MAIL', '邮件通知', 'orange'),
+  OEM_EMAIL_CANCELLED_STALE: action('邮件已取消', 'MAIL', '邮件通知', 'gray'),
+  OEM_EMAIL_SKIPPED_MISSING_EMAIL: action('邮件未入队（缺少邮箱）', 'MAIL', '邮件通知', 'orange'),
   OEM_LOGIN_FAILED: action('登录失败', 'AUTH', '认证安全', 'red'),
   OEM_LOGOUT: action('退出登录', 'AUTH', '认证安全', 'gray'),
   OEM_PASSWORD_CHANGE: action('修改密码', 'AUTH', '认证安全', 'orange'),
@@ -64,7 +69,7 @@ export const OEM_ACTIONS: Record<string, ActionMeta> = {
 
 export const OEM_CATEGORY_LABELS: Record<string, string> = {
   AUTH: '认证安全', TRANSFER: '传递单', APPROVAL: '审批', FILE: '文件',
-  DIRECTORY: '厂商与账号', POLICY: '策略与设置', SYSTEM: '系统维护',
+  DIRECTORY: '厂商与账号', POLICY: '策略与设置', MAIL: '邮件通知', SYSTEM: '系统维护',
 }
 
 /** 「具体操作」下拉按分类分组，分类顺序与上表一致。 */
@@ -169,6 +174,7 @@ function join(...parts: (string | undefined | false)[]) {
 }
 
 export function oemDetailSummary(row: AuditLogRow): string {
+  if (row.action.startsWith('OEM_EMAIL_')) return [row.detail?.recipient ? `收件人 ${formatAuditValue(row.detail.recipient)}` : '', row.detail?.error ? formatAuditValue(row.detail.error) : row.detail?.reason ? formatAuditValue(row.detail.reason) : '', row.detail?.retryCount ? `尝试次数 ${formatAuditValue(row.detail.retryCount)}` : ''].filter(Boolean).join('；') || '邮件处理记录'
   const detail = row.detail ?? {}
   const reason = text(detail.reason)
   switch (row.action) {

@@ -7,11 +7,27 @@ using Yf.Api.Infrastructure;
 namespace Yf.Api.Modules.SystemManagement;
 
 public sealed record SmtpTestRequest(string Recipient);
-public sealed record SmtpTestResponse(bool Success, string Message);
+public sealed record SmtpTestResponse(bool Success, string Message, bool DeliveryUncertain = false);
 
-public sealed class SmtpTestService(AppDb db, SmtpSettingsService settings) : IDisposable
+public sealed class SmtpTestService : IDisposable
 {
+    private readonly AppDb db;
+    private readonly SmtpSettingsService settings;
+    private readonly AuditService audit;
+    private readonly ILogger<SmtpTestService> logger;
+    private readonly ISmtpDelivery delivery;
     private readonly SemaphoreSlim sending = new(1, 1);
+    public SmtpTestService(AppDb db, SmtpSettingsService settings, AuditService audit, ILogger<SmtpTestService> logger)
+        : this(db, settings, audit, logger, new MailKitSmtpDelivery()) { }
+
+    internal SmtpTestService(AppDb db, SmtpSettingsService settings, AuditService audit, ILogger<SmtpTestService> logger, ISmtpDelivery delivery)
+    {
+        this.db = db;
+        this.settings = settings;
+        this.audit = audit;
+        this.logger = logger;
+        this.delivery = delivery;
+    }
     public void Dispose() => sending.Dispose();
 
     public async Task<SmtpTestResponse> TestAsync(SmtpTestRequest request, CurrentUser actor, CancellationToken ct)
@@ -27,11 +43,45 @@ public sealed class SmtpTestService(AppDb db, SmtpSettingsService settings) : ID
                 AccessService.RequireInternal(actor);
                 await AccessService.RequirePermissionAsync(connection, null, actor, "config:manage", ct);
                 resolved = await settings.ResolveAsync(connection, null, ct);
+                if (!resolved.Configured) throw ApiException.BadRequest("请先填写并保存完整的 SMTP 配置；授权码无法读取时请重新填写");
+                await audit.WriteAsync(connection, null, actor.Id, "EMAIL_TEST_STARTED", "system_config", null,
+                    new { recipient = MailService.MaskEmail(recipient), reason = "管理员手动测试，立即发送，不入队且不自动重试" }, null, ct);
             }
-            if (!resolved.Configured) throw ApiException.BadRequest("请先填写并保存完整的 SMTP 配置；授权码无法读取时请重新填写");
-            return await SendAsync(new MailKitSmtpDelivery(), resolved.Options, recipient, ct);
+            SmtpTestResponse result;
+            try { result = await SendAsync(delivery, resolved.Options, recipient, ct); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                await RecordResultAsync(actor, recipient, new(false, "测试请求中断，发送结果不确定，请检查收件箱后再决定是否重试", true));
+                throw;
+            }
+            catch (Exception error)
+            {
+                logger.LogWarning("SMTP test ended unexpectedly ({ErrorType}).", error.GetType().Name);
+                result = new(false, "测试发送未完成，结果不确定，请检查收件箱后再决定是否重试", true);
+            }
+            var recorded = await RecordResultAsync(actor, recipient, result);
+            return recorded ? result : result with { Message = result.Message + " 本次结果日志写入失败，请勿仅因此重复发送。" };
         }
         finally { sending.Release(); }
+    }
+
+    private async Task<bool> RecordResultAsync(CurrentUser actor, string recipient, SmtpTestResponse result)
+    {
+        // A disconnect or audit failure after acceptance must never trigger another SMTP send.
+        using var completion = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            await using var connection = await db.OpenAsync(completion.Token);
+            var action = result.Success ? "EMAIL_TEST_SENT" : result.DeliveryUncertain ? "EMAIL_TEST_UNKNOWN" : "EMAIL_TEST_FAILED";
+            await audit.WriteAsync(connection, null, actor.Id, action, "system_config", null,
+                new { recipient = MailService.MaskEmail(recipient), reason = result.Message }, null, completion.Token);
+            return true;
+        }
+        catch (Exception error)
+        {
+            logger.LogWarning("SMTP test outcome audit could not be saved ({ErrorType}).", error.GetType().Name);
+            return false;
+        }
     }
 
     internal static string ValidateRecipient(string? value)
@@ -56,8 +106,8 @@ public sealed class SmtpTestService(AppDb db, SmtpSettingsService settings) : ID
         catch (SslHandshakeException) { return new(false, "TLS 握手失败：请检查端口、连接加密方式和服务器证书。"); }
         catch (SmtpSenderAddressException) { return new(false, "发件邮箱地址无效，请检查并重新保存 SMTP 配置。"); }
         catch (SmtpCommandException error) { return new(false, $"SMTP 服务器拒绝发送（{(int)error.StatusCode} / {error.ErrorCode}）：请检查发件权限和收件邮箱。"); }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(false, "测试发送超时：请检查 SMTP 地址、端口和网络连接。"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(false, "测试发送超时，结果不确定：请先检查收件箱，再检查 SMTP 地址、端口和网络连接。", true); }
         catch (Exception error) when (error is SocketException or IOException or SmtpProtocolException)
-        { return new(false, "无法连接或完成 SMTP 通信：请检查服务器地址、端口、网络和加密方式。"); }
+        { return new(false, "无法连接或完成 SMTP 通信：请检查服务器地址、端口、网络和加密方式；如已进入发送阶段，请先检查收件箱。", true); }
     }
 }

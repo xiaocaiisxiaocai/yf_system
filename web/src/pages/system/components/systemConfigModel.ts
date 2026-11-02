@@ -146,6 +146,7 @@ export interface MailRecent {
 }
 
 export interface MailStatus {
+  missingOemContactCompanyCount?: number
   configured: boolean
   host?: string | null
   port?: number | null
@@ -225,6 +226,15 @@ export function normalizeMailStatus(value: unknown): MailStatus {
 }
 
 export const MAIL_ACTION_LABELS: Record<string, string> = {
+  OEM_EMAIL_SENT: 'OEM 发送成功',
+  OEM_EMAIL_FAILED: 'OEM 发送失败',
+  OEM_EMAIL_RETRY: 'OEM 发送重试',
+  OEM_EMAIL_CANCELLED_STALE: 'OEM 通知已取消',
+  OEM_EMAIL_SKIPPED_MISSING_EMAIL: 'OEM 未入队：缺少邮箱',
+  EMAIL_TEST_STARTED: '测试邮件：开始发送',
+  EMAIL_TEST_SENT: '测试邮件：服务器已接受',
+  EMAIL_TEST_FAILED: '测试邮件：发送失败',
+  EMAIL_TEST_UNKNOWN: '测试邮件：结果不确定',
   EMAIL_SENT: '发送成功',
   EMAIL_FAILED: '发送失败',
   EMAIL_RETRY: '发送重试',
@@ -233,8 +243,11 @@ export const MAIL_ACTION_LABELS: Record<string, string> = {
 }
 
 export function mailRecentSummary(row: MailRecent): string {
+  if (row.action.startsWith('OEM_EMAIL_')) return mailRecentSummary({ ...row, action: row.action.slice(4) })
   const detail = row.detail || {}
+  if (row.action.startsWith('EMAIL_TEST_')) return [detail.recipient ? `收件人 ${detail.recipient}` : '', detail.reason].filter(Boolean).join('；')
   if (row.action === 'EMAIL_SKIPPED_MISSING_EMAIL') {
+    if (detail.reason) return detail.reason
     return `${detail.realName || '账号'}（${detail.employeeNo || `ID ${row.targetId || '-'}`}）未填写邮箱`
   }
   if (row.action === 'EMAIL_RETRY') {

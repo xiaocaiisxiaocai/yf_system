@@ -144,6 +144,10 @@ export const ACTIONS: Record<string, ActionMeta> = {
   STORAGE_MIGRATION_COMPLETE: action('存储迁移完成', 'SYSTEM', '系统', 'green'),
   STORAGE_MIGRATION_FAILED: action('存储迁移失败', 'SYSTEM', '系统', 'red'),
   EMAIL_SENT: action('邮件发送成功', 'SYSTEM', '系统', 'green'),
+  EMAIL_TEST_STARTED: action('测试邮件开始发送', 'SYSTEM', '系统', 'arcoblue'),
+  EMAIL_TEST_SENT: action('测试邮件服务器已接受', 'SYSTEM', '系统', 'green'),
+  EMAIL_TEST_FAILED: action('测试邮件发送失败', 'SYSTEM', '系统', 'red'),
+  EMAIL_TEST_UNKNOWN: action('测试邮件结果不确定', 'SYSTEM', '系统', 'orange'),
   EMAIL_FAILED: action('邮件发送失败', 'SYSTEM', '系统', 'red'),
   EMAIL_RETRY: action('邮件发送重试', 'SYSTEM', '系统', 'orange'),
   EMAIL_SKIPPED_MISSING_EMAIL: action('邮件未入队（缺少邮箱）', 'SYSTEM', '系统', 'orange'),
@@ -523,6 +527,7 @@ export function detailSummary(row: AuditLogRow): string {
     const person = [cleanText(detail?.realName), cleanText(detail?.employeeNo)].filter(Boolean).join(' · ')
     return `${person ? `${person}：` : ''}未填写邮箱，通知未入队`
   }
+  if (row.action.startsWith('EMAIL_TEST_')) return [detail?.recipient ? `收件人 ${formatAuditValue(detail.recipient)}` : '', detail?.reason ? formatAuditValue(detail.reason) : ''].filter(Boolean).join('；')
   if (row.action === 'EMAIL_FAILED') return `${formatAuditValue(detail?.error)}${detail?.retryCount ? `，第 ${formatAuditValue(detail.retryCount)} 次` : ''}`
   if (row.action === 'EMAIL_RETRY') return `${formatAuditValue(detail?.error)}，已安排第 ${formatAuditValue(detail?.retryCount)} 次重试`
   if (row.action === 'EMAIL_SENT') return detail?.recipient ? `收件人 ${formatAuditValue(detail.recipient)}` : '邮件已发送'

@@ -8831,6 +8831,7 @@
           "latestSentAt",
           "missingEmailAccounts",
           "missingEmailCount",
+          "missingOemContactCompanyCount",
           "notificationPolicy",
           "notificationsEnabled",
           "port",
@@ -8889,6 +8890,10 @@
             "items": {
               "$ref": "#/components/schemas/MailAuditEntry"
             }
+          },
+          "missingOemContactCompanyCount": {
+            "type": "integer",
+            "format": "int64"
           }
         },
         "additionalProperties": false
@@ -13147,6 +13152,7 @@
       },
       "SmtpTestResponse": {
         "required": [
+          "deliveryUncertain",
           "message",
           "success"
         ],
@@ -13157,6 +13163,9 @@
           },
           "message": {
             "type": "string"
+          },
+          "deliveryUncertain": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
