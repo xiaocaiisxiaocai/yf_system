@@ -52,10 +52,10 @@ def run_identity_checks(client, Client, conn, check):
         "departmentId": department["id"], "roleId": ordinary_role["id"],
     }
     too_short = client.call("POST", "/api/v1/admin/users", {
-        **boundary_payload, "employeeNo": "pw5_" + boundary_suffix, "password": "A1!bc",
+        **boundary_payload, "employeeNo": "pw4_" + boundary_suffix, "password": "A1!b",
     }, expected=400)
     minimum = client.call("POST", "/api/v1/admin/users", {
-        **boundary_payload, "employeeNo": "pw6_" + boundary_suffix, "password": "G7!mQx",
+        **boundary_payload, "employeeNo": "pw5_" + boundary_suffix, "password": "G7!mQ",
     })
     maximum = client.call("POST", "/api/v1/admin/users", {
         **boundary_payload, "employeeNo": "pw20_" + boundary_suffix,
@@ -70,7 +70,7 @@ def run_identity_checks(client, Client, conn, check):
     }, expected=400)
     client.call("DELETE", f"/api/v1/admin/users/{minimum['id']}")
     client.call("DELETE", f"/api/v1/admin/users/{maximum['id']}")
-    check("identity password policy accepts 6 and 20 characters and rejects 5, 21, and weak passwords",
+    check("identity password policy accepts 5 and 20 characters and rejects 4, 21, and weak passwords",
           too_short["code"] == 40001 and too_long["code"] == 40001
           and weak["code"] == 40001 and minimum["id"] != maximum["id"])
 

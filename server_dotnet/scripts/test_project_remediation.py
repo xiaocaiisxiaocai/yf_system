@@ -507,7 +507,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
           stale["code"] == 40903 and _assert_no_approval_side_effect(conn, newer_project))
 
     # Only the responsible user reviews material: a global viewer neither approves nor gets the task,
-    # and approval notifies every supplier account that can see the subproject.
+    # and approval mails only active supplier contacts.
     notice_project = _new_project(
         old_client, client, conn, supplier["id"], "资料确认结果通知")
     notice_file = _insert_file(conn, storage_root, notice_project, supplier_user["id"], direction="S2C")
@@ -537,7 +537,9 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
             (notice_project,),
         )
         submitted_mail = cursor.fetchone()[0]
-    check("material approval completes the subproject and notifies the supplier accounts",
+    # Supplier mail goes only to active contacts; the fixture contact is disabled here, so the shared
+    # login accounts are never mailed and nothing is queued.
+    check("material approval completes the subproject and mails no shared supplier account without contacts",
           approved["status"] == "COMPLETED"
-          and recipients == sorted([supplier_user["id"], new_supplier_user["id"]])
+          and recipients == []
           and submitted_mail == 0)

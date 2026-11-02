@@ -261,7 +261,7 @@ def run_workflow_acceptance(client, Client, conn, check):
             (project_id,),
         )
         management_history = list(cursor.fetchall())
-        # Each management transition mails the supplier side only (one switch per event).
+        # Each management transition would mail the supplier's active contacts (one switch per event).
         cursor.execute(
             "SELECT o.event_type,u.user_type FROM email_outbox o "
             "LEFT JOIN users u ON u.id=o.recipient_user_id WHERE o.project_id=%s",
@@ -281,9 +281,8 @@ def run_workflow_acceptance(client, Client, conn, check):
             ("RESTART", "TERMINATED", "IN_PROGRESS"),
         ]
         and {"PROJECT_START", "PROJECT_TERMINATE", "PROJECT_RESTART"}.issubset(project_audits)
-        and {event for event, _ in management_outbox}
-        == {"PROJECT_STARTED", "PROJECT_TERMINATED", "PROJECT_RESTARTED"}
-        and all(user_type == "SUPPLIER" for _, user_type in management_outbox),
+        # Management mail is supplier-side only and goes to active contacts; none are enabled here.
+        and management_outbox == [],
     )
 
     payload = (b"workflow-completed-read-boundary\n" * 12000) + b"EOF"
@@ -356,14 +355,14 @@ def run_workflow_acceptance(client, Client, conn, check):
     supplier_returned_tasks = supplier_client.call(
         "GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
     check(
-        "responsible user returns the material with a supplier task and notification",
+        "responsible user returns the material with a supplier task and no mail to the shared login",
         stale_material["code"] == 40903
         and (returned_material["materialReviewStatus"], returned_material["materialReviewReason"])
         == ("RETURNED", "缺少动作流程表")
         and returned_again["code"] == 40901
         and any(item["id"] == project_id and item["materialReviewStatus"] == "RETURNED"
                 for item in supplier_returned_tasks["list"])
-        and _event_count(conn, project_id, "PROJECT_MATERIAL_RETURNED", supplier_user["id"]) == 1,
+        and _event_count(conn, project_id, "PROJECT_MATERIAL_RETURNED", supplier_user["id"]) == 0,
     )
 
     second_file, _, _ = _upload_chunks(
@@ -461,8 +460,9 @@ def run_workflow_acceptance(client, Client, conn, check):
         {
             "message_internal": 1,
             "message_menuless": 0,
-            "returned_supplier": 1,
-            "approved_supplier": 2,
+            # Shared supplier logins are never mailed; only active contacts are, and none are enabled here.
+            "returned_supplier": 0,
+            "approved_supplier": 0,
             "approved_internal": 0,
             "retired_events": 0,
         },

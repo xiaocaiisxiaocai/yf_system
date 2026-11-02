@@ -377,7 +377,8 @@ def run_collaboration_checks(admin, Client, conn, check):
 
     file_id, _, _ = _upload_chunks(
         first, project_id, "协作链接.pdf", b"collaboration-link", ensure_step=True)
-    _upload_chunks(first_supplier_client, project_id, "协作回传.pdf", b"collaboration-return")
+    supplier_file_id, _, _ = _upload_chunks(
+        first_supplier_client, project_id, "协作回传.pdf", b"collaboration-return")
     supplier_before_approval = first_supplier_client.call("GET", "/api/v1/collaboration/summary")
     reviewer_before_approval = first.call("GET", "/api/v1/collaboration/summary")
     outsider_before_approval = second.call("GET", "/api/v1/collaboration/summary")
@@ -414,11 +415,11 @@ def run_collaboration_checks(admin, Client, conn, check):
             (project_id,),
         )
         outbox = cursor.fetchall()
-    check("message file and workflow emails contain precise project targets",
-          any(event == "MESSAGE_CREATED" and f"/projects/{project_id}?tab=messages&target={messages[0]['id']}" in body
+    # Supplier mail goes only to active contacts and this supplier has none enabled, so mail addressed to the
+    # supplier (company messages, company files, approval) is never queued; the supplier's own upload mails the company.
+    check("file emails contain precise project targets and shared supplier logins are never mailed",
+          any(event == "FILE_UPLOADED" and f"/projects/{project_id}?tab=files&target={supplier_file_id}" in body
               for event, body in outbox)
-          and any(event == "FILE_UPLOADED" and f"/projects/{project_id}?tab=files&target={file_id}" in body
-                  for event, body in outbox)
-          and any(event == "PROJECT_MATERIAL_APPROVED" and f"/projects/{project_id}?tab=activity" in body
-                  for event, body in outbox)
+          and not any(event == "MESSAGE_CREATED" for event, _ in outbox)
+          and not any(event == "PROJECT_MATERIAL_APPROVED" for event, _ in outbox)
           and not any(event == "PROJECT_SUBMITTED" for event, _ in outbox))

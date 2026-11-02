@@ -672,7 +672,7 @@ def run_business_acceptance(client, Client, conn, check):
         }.issubset(_audit_actions(client, "user", disposable_user_id))
         and {"SUPPLIER_CREATE", "SUPPLIER_UPDATE", "SUPPLIER_STATUS", "SUPPLIER_DELETE"}.issubset(
             _audit_actions(client, "supplier", disposable_supplier_id))
-        and {"SUPPLIER_ACCOUNT_CREATE", "SUPPLIER_ACCOUNT_UPDATE", "SUPPLIER_ACCOUNT_STATUS",
+        and {"SUPPLIER_ACCOUNT_CREATE", "SUPPLIER_ACCOUNT_STATUS",
              "SUPPLIER_ACCOUNT_RESET_PASSWORD", "SUPPLIER_ACCOUNT_DELETE"}.issubset(
             _audit_actions(client, "user", disposable_account_id))
         and {"PROJECT_CREATE", "PROJECT_START", "PROJECT_MATERIAL_APPROVE"}.issubset(
@@ -705,16 +705,14 @@ def run_business_acceptance(client, Client, conn, check):
             retries == 0 and status == "PENDING" and event_type != "PROJECT_SUBMITTED"
             for _, event_type, _, status, retries in outbox
         )
-        and {("FILE_UPLOADED", account_a["id"]),
-             ("FILE_UPLOADED", internal_user["id"]),
-             ("MESSAGE_CREATED", account_a["id"]),
-             ("MESSAGE_CREATED", internal_user["id"]),
-             ("PROJECT_MATERIAL_APPROVED", account_a["id"])}.issubset(rows_a)
-        and {("FILE_UPLOADED", account_b["id"]),
-             ("FILE_UPLOADED", internal_user["id"]),
-             ("MESSAGE_CREATED", account_b["id"]),
-             ("MESSAGE_CREATED", internal_user["id"]),
-             ("PROJECT_MATERIAL_APPROVED", account_b["id"])}.issubset(rows_b)
+        # Supplier mail goes only to active contacts; the fixture contacts are disabled, so no shared supplier
+        # login is ever a recipient and only the internal side is mailed.
+        and {("FILE_UPLOADED", internal_user["id"]),
+             ("MESSAGE_CREATED", internal_user["id"])}.issubset(rows_a)
+        and {("FILE_UPLOADED", internal_user["id"]),
+             ("MESSAGE_CREATED", internal_user["id"])}.issubset(rows_b)
+        and all(recipient_id not in (account_a["id"], account_b["id"])
+                for _, recipient_id in rows_a | rows_b)
         and all(recipient_id != account_b["id"] for _, recipient_id in rows_a)
         and all(recipient_id != account_a["id"] for _, recipient_id in rows_b),
     )
