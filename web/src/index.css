@@ -671,9 +671,11 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 }
 .system-notification-grid {
   display: grid;
-  grid-template-columns: minmax(230px, 1fr) minmax(300px, 1.4fr);
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
+  align-items: start;
   gap: 12px;
 }
+.system-notification-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .system-notification-panel {
   min-width: 0;
   padding: 10px 12px;
@@ -955,6 +957,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
   .system-notification-heading { align-items: flex-start; flex-direction: column; }
   .system-notification-grid { grid-template-columns: 1fr; }
   .system-notification-panel--events { grid-template-columns: 1fr; }
+  .system-smtp-grid { grid-template-columns: 1fr; }
   .layout-content .arco-table-col-fixed-right,
   .arco-drawer .arco-table-col-fixed-right { position: static; }
   .layout-content .arco-table-col-fixed-right-first::after,
@@ -1186,7 +1189,9 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 }
 
 .smtp-security-popup .arco-select-option { height: auto; line-height: 20px; padding-top: 8px; padding-bottom: 8px; white-space: normal; }
-.system-smtp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 16px; }
+.system-smtp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 1280px) { .system-smtp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .system-notification-grid { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .system-smtp-grid { grid-template-columns: 1fr; } }
 .system-smtp-grid > label, .system-smtp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--color-text-2); }
 
 /* 业务线切换栏：最左侧图标加短名，悬停显示全称；窄屏改为抽屉顶部的带文字切换。

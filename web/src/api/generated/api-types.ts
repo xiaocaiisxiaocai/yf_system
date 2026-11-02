@@ -519,7 +519,6 @@ export interface OemCompanyContactImportRow {
   rowNumber: number
   companyName: string
   name: string
-  phone?: string | null
   email?: string | null
   sortNo?: number | null
 }
@@ -528,7 +527,6 @@ export interface OemCompanyContactResponse {
   id: number
   companyId: number
   name: string
-  phone: string | null
   email: string | null
   sortNo: number
   status: string
@@ -538,7 +536,6 @@ export interface OemCompanyContactResponse {
 
 export interface OemCompanyContactUpsert {
   name: string
-  phone?: string | null
   email?: string | null
   sortNo?: number | null
 }
@@ -550,18 +547,12 @@ export interface OemCompanyImportRequest {
 export interface OemCompanyImportRow {
   rowNumber: number
   name: string
-  contactName?: string | null
-  contactPhone?: string | null
-  contactEmail?: string | null
   remark?: string | null
 }
 
 export interface OemCompanyListItemResponse {
   id: number
   name: string
-  contactName: string | null
-  contactPhone: string | null
-  contactEmail: string | null
   remark: string | null
   status: string
   createdAt: string
@@ -581,9 +572,6 @@ export interface OemCompanyOptionResponse {
 export interface OemCompanyResponse {
   id: number
   name: string
-  contactName: string | null
-  contactPhone: string | null
-  contactEmail: string | null
   remark: string | null
   status: string
   createdAt: string
@@ -592,9 +580,6 @@ export interface OemCompanyResponse {
 
 export interface OemCompanyUpsert {
   name: string
-  contactName?: string | null
-  contactPhone?: string | null
-  contactEmail?: string | null
   remark?: string | null
 }
 
@@ -1377,6 +1362,15 @@ export interface SmtpSettingsView {
   passwordNeedsUpdate: boolean
 }
 
+export interface SmtpTestRequest {
+  recipient: string
+}
+
+export interface SmtpTestResponse {
+  success: boolean
+  message: string
+}
+
 export interface StatusRequest {
   status: string
 }
@@ -1642,6 +1636,7 @@ export interface ApiResponses {
   "PUT /admin/system/configs": EmptyResponse
   "GET /admin/system/mail-settings": SmtpSettingsView
   "PUT /admin/system/mail-settings": SmtpSettingsView
+  "POST /admin/system/mail-settings/test": SmtpTestResponse
   "GET /admin/system/mail-status": MailStatusResponse
   "GET /admin/user-role-options": Array<RoleOption>
   "GET /admin/users": PageResponseOfUserResponse
@@ -1707,6 +1702,8 @@ export interface ApiResponses {
   "POST /oem/companies/{id}/contacts": OemCompanyContactResponse
   "POST /oem/companies/{id}/contacts/import": OemImportResponse
   "PUT /oem/companies/{id}/status": OemCompanyResponse
+  "PUT /oem/company-contacts/{id}": OemCompanyContactResponse
+  "PUT /oem/company-contacts/{id}/status": OemCompanyContactResponse
   "GET /oem/company-options": Array<OemCompanyOptionResponse>
   "GET /oem/file-policies": Array<OemSettingResponse>
   "PUT /oem/file-policies": Array<OemSettingResponse>

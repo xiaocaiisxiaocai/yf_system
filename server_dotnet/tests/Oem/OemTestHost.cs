@@ -168,8 +168,10 @@ internal sealed class OemTestHost : IAsyncDisposable
     {
         var companyId = (await admin.PostAsync("/api/v1/oem/companies", new
         {
-            name = companyName, contactName = $"{employeeNo}联系人", contactEmail = employeeNo + "@vendor.invalid",
+            name = companyName,
         }, ct).Ok()).Id();
+        await admin.PostAsync($"/api/v1/oem/companies/{companyId}/contacts",
+            new { name = $"{employeeNo}联系人", email = employeeNo + "@vendor.invalid" }, ct).Ok();
         await admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts",
             new { employeeNo, password = "Vendor#2026" }, ct).Ok();
         await using (var conn = await OpenAsync(ct))

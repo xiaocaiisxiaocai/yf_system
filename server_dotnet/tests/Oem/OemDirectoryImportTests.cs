@@ -86,25 +86,25 @@ public sealed class OemDirectoryImportTests
         var admin = await host.LoginAdminAsync(ct);
         await admin.PostAsync("/api/v1/oem/companies", new
         {
-            name = "Excel既有厂商", contactName = "原联系人", contactPhone = "", contactEmail = "", remark = "不覆盖",
+            name = "Excel既有厂商", remark = "不覆盖",
         }, ct).Ok();
 
         var imported = await admin.PostAsync("/api/v1/oem/companies/import", new
         {
             rows = new[]
             {
-                new { rowNumber = 2, name = "Excel新厂商", contactName = "联系人", contactPhone = "13800000000", contactEmail = "new-vendor@example.invalid", remark = "备注" },
-                new { rowNumber = 3, name = "Excel既有厂商", contactName = "改写尝试", contactPhone = "", contactEmail = "", remark = "不应覆盖" },
-                new { rowNumber = 4, name = "文件内重复", contactName = "", contactPhone = "", contactEmail = "", remark = "" },
-                new { rowNumber = 5, name = "文件内重复", contactName = "", contactPhone = "", contactEmail = "", remark = "" },
-                new { rowNumber = 6, name = "邮箱错误", contactName = "", contactPhone = "", contactEmail = "invalid", remark = "" },
+                new { rowNumber = 2, name = "Excel新厂商", remark = "备注" },
+                new { rowNumber = 3, name = "Excel既有厂商", remark = "不应覆盖" },
+                new { rowNumber = 4, name = "文件内重复", remark = "" },
+                new { rowNumber = 5, name = "文件内重复", remark = "" },
+                new { rowNumber = 6, name = "备注错误", remark = new string('x', 513) },
             }
         }, ct).Ok();
         Assert.Equal((1, 3, 1), Counts(imported));
 
         await using var conn = await host.OpenAsync(ct);
-        Assert.Equal("联系人", await conn.ExecuteScalarAsync<string>("SELECT contact_name FROM oem_companies WHERE name='Excel新厂商'"));
-        Assert.Equal("原联系人", await conn.ExecuteScalarAsync<string>("SELECT contact_name FROM oem_companies WHERE name='Excel既有厂商'"));
+        Assert.Equal("备注", await conn.ExecuteScalarAsync<string>("SELECT remark FROM oem_companies WHERE name='Excel新厂商'"));
+        Assert.Equal("不覆盖", await conn.ExecuteScalarAsync<string>("SELECT remark FROM oem_companies WHERE name='Excel既有厂商'"));
         Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_companies WHERE name='文件内重复'"));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_companies WHERE name='Excel新厂商'"));
         var company = await admin.GetAsync("/api/v1/oem/companies", ct).Ok();
@@ -134,6 +134,11 @@ public sealed class OemDirectoryImportTests
         }, ct).Ok();
         Assert.Equal((2, 1, 0), Counts(contactImport));
         Assert.Equal(3, (await admin.GetAsync($"/api/v1/oem/companies/{companyId}/contacts", ct).Ok()).AsArray().Count);
+        var contactId = await conn.ExecuteScalarAsync<ulong>("SELECT id FROM oem_company_contacts WHERE name='OEM联系人甲'");
+        await admin.PutAsync($"/api/v1/oem/company-contacts/{contactId}", new { name = "OEM联系人甲更新", email = "updated@example.invalid", sortNo = 4 }, ct).Ok();
+        await admin.PutAsync($"/api/v1/oem/company-contacts/{contactId}/status", new { status = "DISABLED" }, ct).Ok();
+        Assert.Equal("DISABLED", await conn.ExecuteScalarAsync<string>("SELECT status FROM oem_company_contacts WHERE id=@contactId", new { contactId }));
+        Assert.Equal("updated@example.invalid", await conn.ExecuteScalarAsync<string>("SELECT email FROM oem_company_contacts WHERE id=@contactId", new { contactId }));
     }
 
     private static (int Created, int Skipped, int Failed) Counts(JsonNode result) =>

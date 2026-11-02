@@ -207,7 +207,7 @@ describe('OEM 厂商门户登录页跳转', () => {
 describe('OEM 管理列表的过期响应', () => {
   function company(id: number, name: string): Company {
     return {
-      id, name, contactName: null, contactPhone: null, contactEmail: null, remark: null, status: 'ACTIVE',
+      id, name, remark: null, status: 'ACTIVE',
       accountCount: 0, activeAccountCount: 0, createdAt: '2026-10-05T00:00:00Z', updatedAt: '2026-10-05T00:00:00Z',
     }
   }
@@ -224,7 +224,7 @@ describe('OEM 管理列表的过期响应', () => {
       </OemProvider>,
     )
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(1))
-    const search = screen.getByPlaceholderText('搜索厂商名称')
+    const search = screen.getByPlaceholderText('厂商名称')
     await user.type(search, '新')
     fireEvent.keyDown(search, { key: 'Enter', keyCode: 13, which: 13 })
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(2))

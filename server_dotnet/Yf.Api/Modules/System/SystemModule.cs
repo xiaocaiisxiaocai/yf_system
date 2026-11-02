@@ -11,7 +11,7 @@ namespace Yf.Api.Modules.SystemManagement;
 public static class SystemModule
 {
     public static IServiceCollection AddSystemModule(this IServiceCollection services)
-        => services.AddSingleton<SystemService>().AddSingleton<SmtpSettingsService>().AddSingleton<MailService>().AddHostedService<MailWorker>()
+        => services.AddSingleton<SystemService>().AddSingleton<SmtpSettingsService>().AddSingleton<SmtpTestService>().AddSingleton<MailService>().AddHostedService<MailWorker>()
             .AddHostedService<AuditRetentionService>().AddHostedService<OperationalRetentionService>()
             .AddSingleton<StorageMigrationSignal>().AddSingleton<StorageLocationService>().AddSingleton<StorageMigrationWorker>()
             .AddSingleton<IHostedService>(provider => provider.GetRequiredService<StorageMigrationWorker>());
@@ -35,6 +35,8 @@ public static class SystemModule
             return EmptyResponse.Instance;
         });
         config.MapGet("/mail-status", (MailService service, CancellationToken ct) => service.StatusAsync(ct));
+        config.MapPost("/mail-settings/test", (SmtpTestRequest body, HttpContext ctx, SmtpTestService service, CancellationToken ct) =>
+            service.TestAsync(body, AccessService.GetCurrent(ctx), ct)).Produces<SmtpTestResponse>();
         config.MapGet("/mail-settings", (SmtpSettingsService service, CancellationToken ct) => service.GetAsync(ct));
         config.MapPut("/mail-settings", (SmtpSettingsUpdate body, HttpContext ctx, SmtpSettingsService service, CancellationToken ct) =>
             service.SaveAsync(body, AccessService.GetCurrent(ctx), ct, ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>())));

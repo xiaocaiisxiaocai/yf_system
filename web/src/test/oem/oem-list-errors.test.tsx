@@ -63,9 +63,6 @@ function company(): Company {
   return {
     id: 7,
     name: '精工制造有限公司',
-    contactName: '联系人甲',
-    contactPhone: null,
-    contactEmail: null,
     remark: null,
     status: 'ACTIVE',
     accountCount: 1,
@@ -177,7 +174,7 @@ describe('OEM 列表加载失败', () => {
       setAccountStatus: vi.fn().mockResolvedValue(undefined),
     }, ['oem:company_manage', 'oem:account_manage'])
 
-    await user.click(await screen.findByRole('button', { name: '账号' }))
+    await user.click(await screen.findByRole('button', { name: '账号管理' }))
     const drawer = document.querySelector('.oem-accounts-drawer') as HTMLElement
     expect(await within(drawer).findByRole('button', { name: '重试' })).toBeVisible()
     expect(within(drawer).getByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
@@ -186,7 +183,7 @@ describe('OEM 列表加载失败', () => {
     await user.click(within(drawer).getByRole('button', { name: '重试' }))
     expect(await within(drawer).findByText('OEM_0031')).toBeVisible()
 
-    await user.click(within(drawer).getByRole('button', { name: '停用' }))
+    await user.click(within(drawer).getByRole('button', { name: '禁用' }))
     expect(await within(drawer).findByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
     expect(within(drawer).getByText('OEM_0031')).toBeVisible()
   })

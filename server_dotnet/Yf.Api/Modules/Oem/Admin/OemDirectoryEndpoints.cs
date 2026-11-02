@@ -42,6 +42,10 @@ internal static class OemDirectoryEndpoints
             s.CreateCompanyContactAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemCompanyContactResponse>();
         oem.MapPost("/companies/{id:long}/contacts/import", (ulong id, OemCompanyContactImportRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.ImportCompanyContactsAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemImportResponse>();
+        oem.MapPut("/company-contacts/{id:long}", (ulong id, OemCompanyContactUpsert r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.UpdateCompanyContactAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemCompanyContactResponse>();
+        oem.MapPut("/company-contacts/{id:long}/status", (ulong id, OemStatusRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.SetCompanyContactStatusAsync(OemActorAccessor.Get(c), id, r.Status, ct)).Produces<OemCompanyContactResponse>();
         oem.MapGet("/accounts/{id:long}", (ulong id, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.AccountDetailAsync(OemActorAccessor.Get(c), id, ct)).Produces<OemAccountResponse>();
         oem.MapPut("/accounts/{id:long}/status", (ulong id, OemStatusRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>

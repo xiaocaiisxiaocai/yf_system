@@ -134,6 +134,8 @@ export class OemApi {
     this.post<'POST /oem/companies/{id}/accounts/import', Api.OemImportResponse>(`/oem/companies/${companyId}/accounts/import`, { rows })
   createAccount = (companyId: number, body: AccountCreate) =>
     this.post<'POST /oem/companies/{id}/accounts', VendorAccount>(`/oem/companies/${companyId}/accounts`, body)
+  updateContact = (id: number, body: Api.OemCompanyContactUpsert) => this.put<'PUT /oem/company-contacts/{id}', CompanyContact>(`/oem/company-contacts/${id}`, body)
+  setContactStatus = (id: number, status: 'ACTIVE' | 'DISABLED') => this.put<'PUT /oem/company-contacts/{id}/status', CompanyContact>(`/oem/company-contacts/${id}/status`, { status })
   contacts = (companyId: number) => this.get<'GET /oem/companies/{id}/contacts', CompanyContact[]>(`/oem/companies/${companyId}/contacts`)
   importContacts = (companyId: number, rows: Api.OemCompanyContactImportRow[]) =>
     this.post<'POST /oem/companies/{id}/contacts/import', Api.OemImportResponse>(`/oem/companies/${companyId}/contacts/import`, { rows })

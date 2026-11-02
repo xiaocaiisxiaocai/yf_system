@@ -8,9 +8,6 @@ public sealed class OemCompany
 {
     public ulong Id { get; set; }
     public string Name { get; set; } = null!;
-    public string? ContactName { get; set; }
-    public string? ContactPhone { get; set; }
-    public string? ContactEmail { get; set; }
     public string? Remark { get; set; }
     public string Status { get; set; } = null!;
     public ulong? CreatedBy { get; set; }
@@ -43,7 +40,6 @@ public sealed class OemCompanyContact
     public ulong Id { get; set; }
     public ulong OemCompanyId { get; set; }
     public string Name { get; set; } = null!;
-    public string? Phone { get; set; }
     public string? Email { get; set; }
     public int SortNo { get; set; }
     public string Status { get; set; } = null!;

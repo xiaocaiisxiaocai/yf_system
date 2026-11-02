@@ -19,9 +19,6 @@ function company(overrides: Partial<Company> = {}): Company {
   return {
     id: 7,
     name: '精工制造有限公司',
-    contactName: '联系人甲',
-    contactPhone: '13800000000',
-    contactEmail: 'contact@example.invalid',
     remark: null,
     status: 'ACTIVE',
     accountCount: 1,
@@ -77,6 +74,10 @@ function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
   return {
     companies: vi.fn().mockResolvedValue(page([company()])),
     accounts: vi.fn().mockResolvedValue([account()]),
+    contacts: vi.fn().mockResolvedValue([]),
+    createContact: vi.fn(),
+    updateContact: vi.fn(),
+    setContactStatus: vi.fn(),
     createCompany: vi.fn(),
     updateCompany: vi.fn(),
     setCompanyStatus: vi.fn(),
@@ -91,12 +92,26 @@ function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
 
 async function openAccounts(user: ReturnType<typeof userEvent.setup>) {
   const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
-  await user.click(within(row).getByRole('button', { name: '账号' }))
+  await user.click(within(row).getByRole('button', { name: '账号管理' }))
   await screen.findByText('OEM_0031')
   return document.querySelector<HTMLElement>('.oem-accounts-drawer')!
 }
 
 describe('OEM 厂商与账号目录', () => {
+  it('厂商列表和编辑资料与 Robot 一致，仅显示名称、状态、创建时间和操作', async () => {
+    const user = userEvent.setup()
+    renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
+    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
+    expect(screen.getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['名称', '状态', '创建时间', '操作'])
+    expect(screen.queryByRole('button', { name: '显示列' })).not.toBeInTheDocument()
+    await user.click(within(row).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog', { name: '编辑厂商' })
+    expect(within(dialog).getByLabelText('厂商名称')).toBeVisible()
+    expect(within(dialog).getByLabelText('备注')).toBeVisible()
+    expect(within(dialog).queryByLabelText('联系人')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('联系电话')).not.toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('联系邮箱')).not.toBeInTheDocument()
+  })
   it('账号和联络人 Excel 批量入口位于 ODM/OEM 厂商总表页', async () => {
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
 
@@ -116,7 +131,7 @@ describe('OEM 厂商与账号目录', () => {
 
     const sheets = vi.mocked(downloadExcelWorkbook).mock.calls[0][1]
     expect(sheets).toHaveLength(1)
-    expect(sheets[0].headers).toEqual(['厂商名称', '登录账号', '状态', '需改密', '锁定', '最近登录'])
+    expect(sheets[0].headers).toEqual(['厂商名称', '账号', '状态', '最近登录'])
     expect(sheets[0].headers).not.toContain('姓名')
     expect(sheets[0].headers).not.toContain('邮箱')
     expect(sheets[0].headers).not.toContain('初始密码')
@@ -131,7 +146,7 @@ describe('OEM 厂商与账号目录', () => {
     expect(within(drawer).queryByText('邮箱')).not.toBeInTheDocument()
     await user.click(within(drawer).getByRole('button', { name: '新增账号' }))
     const dialog = await screen.findByRole('dialog', { name: '新增账号' })
-    expect(within(dialog).getByLabelText('登录账号')).toBeVisible()
+    expect(within(dialog).getByLabelText('账号')).toBeVisible()
     expect(within(dialog).getByLabelText('初始密码')).toBeVisible()
     expect(within(dialog).queryByLabelText('姓名')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('邮箱')).not.toBeInTheDocument()
@@ -198,7 +213,7 @@ describe('OEM 厂商与账号目录', () => {
     confirmDialog = (await screen.findAllByText('删除账号“OEM_0031”')).at(-1)!.closest<HTMLElement>('[role="dialog"]')!
     await user.click(within(confirmDialog).getByRole('button', { name: '确认删除' }))
     await waitFor(() => expect(within(drawer).queryByText('OEM_0031')).not.toBeInTheDocument())
-    expect(await screen.findByText('0 / 0')).toBeVisible()
+    expect(screen.queryByText('0 / 0')).not.toBeInTheDocument()
     expect(accounts).toHaveBeenCalledTimes(2)
     expect(companies).toHaveBeenCalledTimes(2)
   })
@@ -212,11 +227,11 @@ describe('OEM 厂商与账号目录', () => {
     const drawer = await openAccounts(user)
     const accountRow = within(drawer).getByText('OEM_0031').closest('tr')!
 
-    await user.click(within(accountRow).getByRole('button', { name: '停用' }))
+    await user.click(within(accountRow).getByRole('button', { name: '禁用' }))
     expect(setAccountStatus).toHaveBeenCalledWith(31, 'DISABLED')
     expect(await within(drawer).findByRole('alert')).toHaveTextContent(`停用失败：${backendReason}`)
     expect(accounts).toHaveBeenCalledTimes(1)
-    expect(within(accountRow).getByRole('button', { name: '停用' })).toBeVisible()
+    expect(within(accountRow).getByRole('button', { name: '禁用' })).toBeVisible()
   })
 
   it('厂商停用被拒绝时显示进行中传递单的原因，成功后刷新列表', async () => {
@@ -231,7 +246,7 @@ describe('OEM 厂商与账号目录', () => {
     renderDirectory(baseApi({ companies, setCompanyStatus }), ['oem:company_manage', 'oem:account_manage'])
     const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
 
-    await user.click(within(row).getByRole('button', { name: '停用' }))
+    await user.click(within(row).getByRole('button', { name: '禁用' }))
     // The popconfirm is still animating in (pointer-events: none), so click it directly.
     fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
     expect(await screen.findByText(`停用失败：${backendReason}`)).toHaveAttribute('role', 'alert')
@@ -239,7 +254,7 @@ describe('OEM 厂商与账号目录', () => {
     expect(companies).toHaveBeenCalledTimes(1)
 
     shouldFail = false
-    await user.click(within(row).getByRole('button', { name: '停用' }))
+    await user.click(within(row).getByRole('button', { name: '禁用' }))
     const confirms = await screen.findAllByRole('button', { name: /确\s*定/ })
     fireEvent.click(confirms.at(-1)!)
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(2))
@@ -302,10 +317,10 @@ describe('OEM 厂商与账号目录', () => {
     renderDirectory(baseApi({ companies, accounts }), ['oem:company_manage', 'oem:account_manage', 'oem:account_delete'])
 
     const firstRow = (await screen.findByText('厂商 A')).closest('tr')!
-    fireEvent.click(within(firstRow).getByRole('button', { name: '账号' }))
+    fireEvent.click(within(firstRow).getByRole('button', { name: '账号管理' }))
     await waitFor(() => expect(accounts).toHaveBeenCalledWith(first.id))
     const secondRow = screen.getByText('厂商 B').closest('tr')!
-    fireEvent.click(within(secondRow).getByRole('button', { name: '账号' }))
+    fireEvent.click(within(secondRow).getByRole('button', { name: '账号管理' }))
     expect(await screen.findByText('OEM_B')).toBeVisible()
 
     await act(async () => firstAccounts.resolve([account({ employeeNo: 'OEM_A' })]))

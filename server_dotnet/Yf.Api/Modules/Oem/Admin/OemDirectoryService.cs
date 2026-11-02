@@ -10,14 +10,13 @@ using Yf.Api.Modules.Oem.Transfers;
 
 namespace Yf.Api.Modules.Oem.Admin;
 
-public sealed record OemCompanyUpsert(string Name, string? ContactName, string? ContactPhone, string? ContactEmail, string? Remark);
+public sealed record OemCompanyUpsert(string Name, string? Remark);
 public sealed record OemStatusRequest(string Status);
 public sealed record OemAccountCreate(
     [property: JsonRequired] string EmployeeNo,
     [property: JsonRequired] string Password);
 public sealed record OemCompanyContactUpsert(
     [property: JsonRequired] string Name,
-    string? Phone,
     string? Email,
     int? SortNo = null);
 public sealed record OemAccountImportRow(
@@ -30,7 +29,6 @@ public sealed record OemCompanyContactImportRow(
     int RowNumber,
     [property: JsonRequired] string CompanyName,
     [property: JsonRequired] string Name,
-    string? Phone,
     string? Email,
     int? SortNo = null);
 public sealed record OemCompanyContactImportRequest([property: JsonRequired] OemCompanyContactImportRow[] Rows);
@@ -38,9 +36,6 @@ public sealed record OemPasswordReset(string NewPassword);
 public sealed record OemCompanyImportRow(
     int RowNumber,
     [property: JsonRequired] string Name,
-    string? ContactName,
-    string? ContactPhone,
-    string? ContactEmail,
     string? Remark);
 public sealed record OemCompanyImportRequest([property: JsonRequired] OemCompanyImportRow[] Rows);
 public sealed record OemImportRowResult(int RowNumber, string Key, string Status, string? Message);
@@ -84,7 +79,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(company => company.Id).Page(offset, size)
             .Select(company => new OemCompanyListItemResponse(
-                company.Id, company.Name, company.ContactName, company.ContactPhone, company.ContactEmail, company.Remark,
+                company.Id, company.Name, company.Remark,
                 company.Status, company.CreatedAt, company.UpdatedAt,
                 uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id),
                 uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active),
@@ -127,7 +122,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         if (await uow.Db.OemCompanies.AnyAsync(company => company.Name == input.Name, ct)) throw ApiException.Conflict("厂商名称已存在");
         var company = new OemCompany
         {
-            Name = input.Name, ContactName = input.ContactName, ContactPhone = input.ContactPhone, ContactEmail = input.ContactEmail,
+            Name = input.Name,
             Remark = input.Remark, Status = OemStatus.Active, CreatedBy = current.User.Id, CreatedAt = uow.Now, UpdatedAt = uow.Now,
         };
         uow.Db.OemCompanies.Add(company);
@@ -155,12 +150,12 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             {
                 var row = request.Rows[index] ?? throw ApiException.BadRequest("厂商名称不能为空");
                 normalized[index] = ValidateCompany(new OemCompanyUpsert(
-                    row.Name, row.ContactName, row.ContactPhone, row.ContactEmail, row.Remark));
+                    row.Name, row.Remark));
             }
             catch (ApiException error) when (error.Status == 400)
             {
                 validationErrors[index] = error.Message;
-                normalized[index] = new OemCompanyUpsert("", null, null, null, null);
+                normalized[index] = new OemCompanyUpsert("", null);
             }
         }
 
@@ -240,14 +235,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         if (await uow.Db.OemCompanies.AnyAsync(item => item.Name == input.Name && item.Id != id, ct)) throw ApiException.Conflict("厂商名称已存在");
         var changes = AuditChange.OnlyChanged(
             new AuditChange("name", "厂商名称", company.Name, input.Name),
-            new AuditChange("contactName", "联系人", company.ContactName, input.ContactName),
-            new AuditChange("contactPhone", "联系电话", company.ContactPhone, input.ContactPhone),
-            new AuditChange("contactEmail", "联系邮箱", company.ContactEmail, input.ContactEmail),
             new AuditChange("remark", "备注", company.Remark, input.Remark));
         company.Name = input.Name;
-        company.ContactName = input.ContactName;
-        company.ContactPhone = input.ContactPhone;
-        company.ContactEmail = input.ContactEmail;
         company.Remark = input.Remark;
         company.UpdatedAt = uow.Now;
         await uow.Db.SaveChangesAsync(ct);
@@ -333,14 +322,47 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             throw ApiException.Conflict("该厂商下已有同名联络人");
         var contact = new OemCompanyContact
         {
-            OemCompanyId = companyId, Name = input.Name, Phone = input.Phone, Email = input.Email,
+            OemCompanyId = companyId, Name = input.Name, Email = input.Email,
             SortNo = input.SortNo, Status = OemStatus.Active, CreatedBy = current.User.Id,
             CreatedAt = uow.Now, UpdatedAt = uow.Now,
         };
         uow.Db.OemCompanyContacts.Add(contact);
         await uow.Db.SaveChangesAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_COMPANY_CONTACT_CREATE", "oem_company_contact", contact.Id,
-            new { companyId, companyName = company.Name, contact.Name, contact.Phone, contact.Email }, ct);
+            new { companyId, companyName = company.Name, contact.Name, contact.Email }, ct);
+        await uow.CommitAsync(ct);
+        return ContactJson(contact);
+    }
+
+    public async Task<OemCompanyContactResponse> UpdateCompanyContactAsync(
+        OemActor actor, ulong id, OemCompanyContactUpsert request, CancellationToken ct)
+    {
+        var input = ValidateCompanyContact(request);
+        await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
+        var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+        var contact = await OemLocks.ForUpdate<OemCompanyContact>(uow.Db, id).SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        if (await uow.Db.OemCompanyContacts.AnyAsync(item => item.OemCompanyId == contact.OemCompanyId && item.Id != id && item.Name == input.Name, ct))
+            throw ApiException.Conflict("该厂商下已有同名联络人");
+        contact.Name = input.Name;
+        contact.Email = input.Email;
+        contact.SortNo = input.SortNo;
+        contact.UpdatedAt = uow.Now;
+        await uow.Db.SaveChangesAsync(ct);
+        await audit.WriteAsync(uow, current, "OEM_COMPANY_CONTACT_UPDATE", "oem_company_contact", id, new { contact.Name, contact.Email }, ct);
+        await uow.CommitAsync(ct);
+        return ContactJson(contact);
+    }
+
+    public async Task<OemCompanyContactResponse> SetCompanyContactStatusAsync(OemActor actor, ulong id, string status, CancellationToken ct)
+    {
+        var target = OemStatus.Normalize(status);
+        await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
+        var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+        var contact = await OemLocks.ForUpdate<OemCompanyContact>(uow.Db, id).SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        contact.Status = target;
+        contact.UpdatedAt = uow.Now;
+        await uow.Db.SaveChangesAsync(ct);
+        await audit.WriteAsync(uow, current, "OEM_COMPANY_CONTACT_STATUS", "oem_company_contact", id, new { contact.Name, status = target }, ct);
         await uow.CommitAsync(ct);
         return ContactJson(contact);
     }
@@ -389,7 +411,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             try
             {
                 await CreateCompanyContactAsync(actor, companyId,
-                    new OemCompanyContactUpsert(name, row.Phone, row.Email, row.SortNo), ct);
+                    new OemCompanyContactUpsert(name, row.Email, row.SortNo), ct);
                 existing.Add(name);
                 results.Add(new(rowNumber, name, "CREATED", null));
             }
@@ -420,19 +442,18 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         results.Count(row => row.Status == "CREATED"), results.Count(row => row.Status == "SKIPPED"),
         results.Count(row => row.Status == "FAILED"), results);
 
-    private static (string Name, string? Phone, string? Email, int SortNo) ValidateCompanyContact(OemCompanyContactUpsert request)
+    private static (string Name, string? Email, int SortNo) ValidateCompanyContact(OemCompanyContactUpsert request)
     {
         var name = OemValidation.RequiredText(request.Name, "联络人姓名", 64);
-        var phone = OemValidation.OptionalText(request.Phone, "联系电话", 32);
         var email = OemValidation.OptionalEmail(request.Email);
-        if (phone is null && email is null) throw ApiException.BadRequest("请至少填写联系电话或联系邮箱");
+        if (email is null) throw ApiException.BadRequest("请输入邮箱");
         var sortNo = request.SortNo ?? 0;
         if (sortNo is < 0 or > 9999) throw ApiException.BadRequest("排序需为 0–9999");
-        return (name, phone, email, sortNo);
+        return (name, email, sortNo);
     }
 
     private static OemCompanyContactResponse ContactJson(OemCompanyContact contact) => new(
-        contact.Id, contact.OemCompanyId, contact.Name, contact.Phone, contact.Email, contact.SortNo,
+        contact.Id, contact.OemCompanyId, contact.Name, contact.Email, contact.SortNo,
         contact.Status, contact.CreatedAt, contact.UpdatedAt);
 
     public async Task<IReadOnlyList<OemAccountResponse>> ListAccountsAsync(OemActor actor, ulong companyId, CancellationToken ct)
@@ -678,13 +699,10 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
 
     private static OemCompanyUpsert ValidateCompany(OemCompanyUpsert request) => new(
         OemValidation.RequiredText(request.Name, "厂商名称", 128),
-        OemValidation.OptionalText(request.ContactName, "联系人", 64),
-        OemValidation.OptionalText(request.ContactPhone, "联系电话", 32),
-        OemValidation.OptionalEmail(request.ContactEmail),
         OemValidation.OptionalText(request.Remark, "备注", 512));
 
     private static OemCompanyResponse CompanyJson(OemCompany company) => new(
-        company.Id, company.Name, company.ContactName, company.ContactPhone, company.ContactEmail, company.Remark,
+        company.Id, company.Name, company.Remark,
         company.Status, company.CreatedAt, company.UpdatedAt);
 
     /// <param name="now">The unit of work's database clock, which is also what login lockout compares against.</param>

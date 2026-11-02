@@ -4573,6 +4573,45 @@
         }
       }
     },
+    "/api/v1/admin/system/mail-settings/test": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmtpTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpTestResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/system/mail-settings": {
       "get": {
         "tags": [
@@ -5600,6 +5639,106 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OemImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oem/company-contacts/{id}": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OemCompanyContactUpsert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OemCompanyContactResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oem/company-contacts/{id}/status": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OemStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OemCompanyContactResponse"
                 }
               }
             }
@@ -9478,7 +9617,6 @@
           "companyName",
           "email",
           "name",
-          "phone",
           "rowNumber",
           "sortNo"
         ],
@@ -9493,10 +9631,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "phone": {
-            "type": "string",
-            "nullable": true
           },
           "email": {
             "type": "string",
@@ -9517,7 +9651,6 @@
           "email",
           "id",
           "name",
-          "phone",
           "sortNo",
           "status",
           "updatedAt"
@@ -9534,10 +9667,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "phone": {
-            "type": "string",
-            "nullable": true
           },
           "email": {
             "type": "string",
@@ -9565,17 +9694,12 @@
         "required": [
           "email",
           "name",
-          "phone",
           "sortNo"
         ],
         "type": "object",
         "properties": {
           "name": {
             "type": "string"
-          },
-          "phone": {
-            "type": "string",
-            "nullable": true
           },
           "email": {
             "type": "string",
@@ -9606,9 +9730,6 @@
       },
       "OemCompanyImportRow": {
         "required": [
-          "contactEmail",
-          "contactName",
-          "contactPhone",
           "name",
           "remark",
           "rowNumber"
@@ -9622,18 +9743,6 @@
           "name": {
             "type": "string"
           },
-          "contactName": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactPhone": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactEmail": {
-            "type": "string",
-            "nullable": true
-          },
           "remark": {
             "type": "string",
             "nullable": true
@@ -9646,9 +9755,6 @@
           "accountCount",
           "activeAccountCount",
           "contactCount",
-          "contactEmail",
-          "contactName",
-          "contactPhone",
           "createdAt",
           "id",
           "name",
@@ -9664,18 +9770,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "contactName": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactPhone": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactEmail": {
-            "type": "string",
-            "nullable": true
           },
           "remark": {
             "type": "string",
@@ -9735,9 +9829,6 @@
       },
       "OemCompanyResponse": {
         "required": [
-          "contactEmail",
-          "contactName",
-          "contactPhone",
           "createdAt",
           "id",
           "name",
@@ -9753,18 +9844,6 @@
           },
           "name": {
             "type": "string"
-          },
-          "contactName": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactPhone": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactEmail": {
-            "type": "string",
-            "nullable": true
           },
           "remark": {
             "type": "string",
@@ -9786,9 +9865,6 @@
       },
       "OemCompanyUpsert": {
         "required": [
-          "contactEmail",
-          "contactName",
-          "contactPhone",
           "name",
           "remark"
         ],
@@ -9796,18 +9872,6 @@
         "properties": {
           "name": {
             "type": "string"
-          },
-          "contactName": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactPhone": {
-            "type": "string",
-            "nullable": true
-          },
-          "contactEmail": {
-            "type": "string",
-            "nullable": true
           },
           "remark": {
             "type": "string",
@@ -13065,6 +13129,34 @@
           },
           "passwordNeedsUpdate": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SmtpTestRequest": {
+        "required": [
+          "recipient"
+        ],
+        "type": "object",
+        "properties": {
+          "recipient": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SmtpTestResponse": {
+        "required": [
+          "message",
+          "success"
+        ],
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
           }
         },
         "additionalProperties": false

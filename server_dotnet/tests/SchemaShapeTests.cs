@@ -48,6 +48,7 @@ public sealed class SchemaShapeTests
         "20261031152544_AddStorageLocations",
         "20261101004904_AddProjectMaterialRound",
         "20261101120851_AddOemCompanyContacts",
+        "20261102012333_RemoveOemCompanyPrimaryContact",
     ];
 
     [Fact]

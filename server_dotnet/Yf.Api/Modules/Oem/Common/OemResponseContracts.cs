@@ -12,9 +12,6 @@ public sealed record OemCompanyOptionResponse(ulong Id, string Name, bool CanRec
 public sealed record OemCompanyListItemResponse(
     ulong Id,
     string Name,
-    string? ContactName,
-    string? ContactPhone,
-    string? ContactEmail,
     string? Remark,
     string Status,
     DateTime CreatedAt,
@@ -26,9 +23,6 @@ public sealed record OemCompanyListItemResponse(
 public sealed record OemCompanyResponse(
     ulong Id,
     string Name,
-    string? ContactName,
-    string? ContactPhone,
-    string? ContactEmail,
     string? Remark,
     string Status,
     DateTime CreatedAt,
@@ -49,7 +43,6 @@ public sealed record OemCompanyContactResponse(
     ulong Id,
     ulong CompanyId,
     string Name,
-    string? Phone,
     string? Email,
     int SortNo,
     string Status,

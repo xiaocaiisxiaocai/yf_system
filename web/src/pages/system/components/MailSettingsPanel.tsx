@@ -1,5 +1,6 @@
 import { Button, Card, Input, InputNumber, Select, Space, Switch, Table, Tag, Typography } from '@arco-design/web-react'
 import PasswordInput from '../../../components/PasswordInput'
+import SmtpTestPanel from './SmtpTestPanel'
 import {
   DUE_REMIND_DAYS,
   MAIL_ACTION_LABELS,
@@ -74,7 +75,6 @@ export function renderMailSettingsPanel({
       }
     >
       <div className="system-mail-body">
-        <Typography.Text type="secondary">配置系统通知的发件邮箱，保存后用于后续邮件发送。邮箱服务商要求授权码时，请填写授权码。</Typography.Text>
         {smtp.passwordNeedsUpdate && <Typography.Text type="warning">已保存的授权码无法读取，请重新填写并保存。</Typography.Text>}
         <div className="system-smtp-grid">
           <label>SMTP 服务器<Input aria-label="SMTP 服务器" placeholder="例如 smtp.example.com" value={smtpDraft.host} maxLength={253} disabled={smtpSaving} onChange={(host) => onSmtpDraftChange((current) => ({ ...current, host }))} /></label>
@@ -92,8 +92,9 @@ export function renderMailSettingsPanel({
         <Space wrap>
           <Button type="primary" disabled={!smtpDirty} loading={smtpSaving} onClick={onSaveSmtp}>保存邮箱设置</Button>
           <Button disabled={!smtpDirty || smtpSaving} onClick={onCancelSmtp}>取消修改</Button>
-          <Typography.Text type="secondary">授权码不回显；邮件是否发送由下方“邮件通知”开关控制。</Typography.Text>
+          <Typography.Text type="secondary">授权码不回显</Typography.Text>
         </Space>
+        <SmtpTestPanel configured={smtp.configured} dirty={smtpDirty} saving={smtpSaving} configuration={smtp} />
         <div className="system-notification-settings">
           <div className="system-notification-heading">
             <div>
@@ -111,6 +112,7 @@ export function renderMailSettingsPanel({
             </Space>
           </div>
           <div className="system-notification-grid">
+            <div className="system-notification-side">
             <div className="system-notification-panel">
               <div className="system-notification-panel-title">通知对象</div>
               <div className="system-notification-row">
@@ -118,18 +120,9 @@ export function renderMailSettingsPanel({
                 <Switch aria-label="内部员工邮件通知" checked={notificationDraft.internalEnabled} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, internalEnabled: checked }))} />
               </div>
               <div className="system-notification-row">
-                <div><Typography.Text>外部企业（供应商）</Typography.Text><Typography.Text type="secondary">项目关联供应商的启用账号</Typography.Text></div>
+                <div><Typography.Text>外部企业（供应商）</Typography.Text><Typography.Text type="secondary">厂商的启用联络人</Typography.Text></div>
                 <Switch aria-label="外部企业邮件通知" checked={notificationDraft.supplierEnabled} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, supplierEnabled: checked }))} />
               </div>
-            </div>
-            <div className="system-notification-panel system-notification-panel--events">
-              <div className="system-notification-panel-title">提醒消息</div>
-              {NOTIFICATION_EVENT_ITEMS.map((item) => (
-                <div className="system-notification-row" key={item.key}>
-                  <div><Typography.Text>{item.title}</Typography.Text><Typography.Text type="secondary">{item.description}</Typography.Text></div>
-                  <Switch aria-label={`${item.title}邮件提醒`} checked={notificationDraft.events[item.key]} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, events: { ...current.events, [item.key]: checked } }))} />
-                </div>
-              ))}
             </div>
             <div className="system-notification-panel">
               <div className="system-notification-panel-title">到期提醒</div>
@@ -160,11 +153,21 @@ export function renderMailSettingsPanel({
                 <Switch aria-label="到期提醒发给厂商" checked={notificationDraft.due.supplierEnabled} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, due: { ...current.due, supplierEnabled: checked } }))} />
               </div>
             </div>
+            </div>
+            <div className="system-notification-panel system-notification-panel--events">
+              <div className="system-notification-panel-title">提醒消息</div>
+              {NOTIFICATION_EVENT_ITEMS.map((item) => (
+                <div className="system-notification-row" key={item.key}>
+                  <div><Typography.Text>{item.title}</Typography.Text><Typography.Text type="secondary">{item.description}</Typography.Text></div>
+                  <Switch aria-label={`${item.title}邮件提醒`} checked={notificationDraft.events[item.key]} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, events: { ...current.events, [item.key]: checked } }))} />
+                </div>
+              ))}
+            </div>
           </div>
           <Space wrap>
             <Button type="primary" size="small" loading={notificationSaving} disabled={!notificationDirty || notificationSaving} onClick={onSaveNotifications}>保存邮件提醒</Button>
             <Button size="small" disabled={!notificationDirty || notificationSaving} onClick={onCancelNotifications}>取消修改</Button>
-            <Typography.Text type="secondary">关闭后不会创建新的对应邮件；已入队邮件会在发送前再次按规则检查。</Typography.Text>
+            <Typography.Text type="secondary">关闭后不再创建对应邮件；已入队的邮件发送前会再次检查。</Typography.Text>
           </Space>
         </div>
         <Space wrap size={20}>

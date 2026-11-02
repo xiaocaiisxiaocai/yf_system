@@ -47,9 +47,6 @@ public sealed class OemCompanyConfig : IEntityTypeConfiguration<OemCompany>
     {
         b.Table("oem_companies").HasKey(x => x.Id);
         b.Property(x => x.Name).Text("name", 128);
-        b.Property(x => x.ContactName).OptionalText("contact_name", 64);
-        b.Property(x => x.ContactPhone).OptionalText("contact_phone", 32);
-        b.Property(x => x.ContactEmail).OptionalText("contact_email", 128);
         b.Property(x => x.Remark).OptionalText("remark", 512);
         b.Property(x => x.Status).Text("status", 16).HasDefaultValue("ACTIVE");
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
@@ -92,7 +89,6 @@ public sealed class OemCompanyContactConfig : IEntityTypeConfiguration<OemCompan
         b.Table("oem_company_contacts").HasKey(x => x.Id);
         b.Property(x => x.OemCompanyId).HasColumnName("oem_company_id");
         b.Property(x => x.Name).Text("name", 64);
-        b.Property(x => x.Phone).OptionalText("phone", 32);
         b.Property(x => x.Email).OptionalText("email", 128);
         b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
         b.Property(x => x.Status).Text("status", 16).HasDefaultValue("ACTIVE");

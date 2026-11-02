@@ -70,8 +70,6 @@ public sealed class OemNotificationTests
             "WHERE event_type='OEM_TRANSFER_RELEASED' ORDER BY id LIMIT 1", transaction: tx);
         Assert.True((await policy.EvaluateAsync(conn, tx, Info(vendorMail), ct)).Allowed);
         await conn.ExecuteAsync("""
-            UPDATE oem_companies SET contact_email='changed@vendor.invalid'
-            WHERE id=@CompanyId AND contact_email=@RecipientEmail;
             UPDATE oem_company_contacts SET email='changed@vendor.invalid'
             WHERE oem_company_id=@CompanyId AND email=@RecipientEmail;
             """, new { CompanyId = world.CompanyId, vendorMail.RecipientEmail }, tx);

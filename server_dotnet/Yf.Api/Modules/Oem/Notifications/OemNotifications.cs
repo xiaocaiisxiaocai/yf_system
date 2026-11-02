@@ -66,7 +66,7 @@ internal static class OemRecipients
     {
         var company = await db.OemCompanies.AsNoTracking()
             .Where(item => item.Id == companyId && item.Status == OemStatus.Active)
-            .Select(item => new { item.Name, item.ContactName, item.ContactEmail })
+            .Select(item => new { item.Name })
             .SingleOrDefaultAsync(ct);
         if (company is null) return [];
 
@@ -82,9 +82,6 @@ internal static class OemRecipients
 
         var result = new List<MailRecipient>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!string.IsNullOrWhiteSpace(company.ContactEmail) && seen.Add(company.ContactEmail.Trim()))
-            result.Add(new(OemRealms.Oem, anchor, company.ContactEmail.Trim(), company.ContactName?.Trim() is { Length: > 0 } name ? name : company.Name, 0));
-
         var contacts = await db.OemCompanyContacts.AsNoTracking()
             .Where(contact => contact.OemCompanyId == companyId && contact.Status == OemStatus.Active && contact.Email != null)
             .OrderBy(contact => contact.SortNo).ThenBy(contact => contact.Id)
@@ -294,9 +291,7 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
                     && account.OemCompanyId == transfer.OemCompanyId)
                 .Select(account => (ulong?)account.OemCompanyId).SingleOrDefaultAsync(ct);
             if (companyId is null || !System.Net.Mail.MailAddress.TryCreate(mail.RecipientEmail.Trim(), out _)) return Stale();
-            var emailIsCurrentContact = await db.OemCompanies.AnyAsync(company => company.Id == companyId
-                    && company.Status == OemStatus.Active && company.ContactEmail == mail.RecipientEmail.Trim(), ct)
-                || await db.OemCompanyContacts.AnyAsync(contact => contact.OemCompanyId == companyId
+            var emailIsCurrentContact = await db.OemCompanyContacts.AnyAsync(contact => contact.OemCompanyId == companyId
                     && contact.Status == OemStatus.Active && contact.Email == mail.RecipientEmail.Trim(), ct);
             if (!emailIsCurrentContact) return Stale();
             if (mail.EventType == OemMailEvents.TransferReleased
