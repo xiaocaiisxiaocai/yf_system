@@ -177,17 +177,18 @@ internal sealed partial class ProjectService(
         {
             throw ApiException.Forbidden();
         }
-        // A copy target's files share blobs with its source. Like copy and upload, take the SHA named
-        // locks before the transaction, so releasing the last reference cannot race a new reference.
-        string[] copiedBlobShas;
+        // Scope is checked before any blob lookup or lock, so an outsider learns nothing and never waits.
+        await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
+        // Deleting a subproject deletes its files, whose blobs may be shared with other files (copies, re-uploads
+        // of the same content). Like copy and upload, take the SHA named locks before the transaction, so
+        // releasing the last reference cannot race a new reference.
+        string[] blobShas;
         await using (var lookup = EfDb.Use(conn))
-            copiedBlobShas = await lookup.ProjectCopies.AnyAsync(copy => copy.TargetProjectId == projectId, ct)
-                ? await (from file in lookup.Files
-                    join blob in lookup.FileBlobs on file.BlobId equals blob.Id
-                    where file.ProjectId == projectId
-                    select blob.Sha256).Distinct().ToArrayAsync(ct)
-                : [];
-        await using var blobLeases = await Files.FileBlobStore.AcquireAsync(conn, copiedBlobShas, ct);
+            blobShas = await (from file in lookup.Files
+                join blob in lookup.FileBlobs on file.BlobId equals blob.Id
+                where file.ProjectId == projectId
+                select blob.Sha256).Distinct().ToArrayAsync(ct);
+        await using var blobLeases = await Files.FileBlobStore.AcquireAsync(conn, blobShas, ct);
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
@@ -204,30 +205,34 @@ internal sealed partial class ProjectService(
             throw ApiException.Conflict("该子项目已被复制出副本，请先删除副本");
         var copyRecord = await db.ProjectCopies.AsNoTracking()
             .SingleOrDefaultAsync(copy => copy.TargetProjectId == projectId, ct);
-        // Only a never-started (DRAFT) copy may discard the files the copy brought in; once started, a copy
-        // follows the ordinary rule and any file or message blocks deletion. Uploads after the copy
-        // (even soft-deleted) always block.
-        var copyId = project.Status == ProjectStatuses.Draft ? copyRecord?.Id : null;
-        ProjectWorkflowRules.EnsureNoDeletionDependencies(
-            await db.Files.AnyAsync(file => file.ProjectId == projectId
-                    && !db.FileCopyRefs.Any(reference => reference.CopyId == copyId && reference.TargetFileId == file.Id), ct)
-                || await db.Messages.AnyAsync(message => message.ProjectId == projectId, ct),
-            await db.UploadSessions.AnyAsync(upload => upload.ProjectId == projectId, ct));
-        ulong[] releasedBlobIds = [];
+        // Deleting a subproject deletes everything in it: files, messages (their images and read receipts
+        // cascade), upload records, activity and status history. Only an upload still in flight blocks, as it
+        // does for terminate; uploads cannot start afterwards because they require an in-progress subproject.
+        if (await CountActiveUploadsAsync(conn, tx, projectId, supplierOnly: false, ct) != 0)
+            throw ApiException.Conflict("子项目仍有进行中的上传，请等待上传完成或取消后再删除");
+        var releasedBlobIds = await db.Files.Where(file => file.ProjectId == projectId && file.BlobId != null)
+            .Select(file => file.BlobId!.Value).Distinct().OrderBy(id => id).ToArrayAsync(ct);
+        var leased = blobShas.ToHashSet(StringComparer.Ordinal);
+        var currentShas = await db.FileBlobs.Where(blob => releasedBlobIds.Contains(blob.Id))
+            .Select(blob => blob.Sha256).ToArrayAsync(ct);
+        if (currentShas.Any(sha => !leased.Contains(sha)))
+            throw ApiException.Conflict("文件内容引用已变化，请刷新后重试");
+        var fileCount = await db.Files.LongCountAsync(file => file.ProjectId == projectId, ct);
+        var messageCount = await db.Messages.LongCountAsync(message => message.ProjectId == projectId, ct);
         if (copyRecord is not null)
         {
-            releasedBlobIds = await db.Files.Where(file => file.ProjectId == projectId && file.BlobId != null)
-                .Select(file => file.BlobId!.Value).Distinct().OrderBy(id => id).ToArrayAsync(ct);
-            var leased = copiedBlobShas.ToHashSet(StringComparer.Ordinal);
-            var currentShas = await db.FileBlobs.Where(blob => releasedBlobIds.Contains(blob.Id))
-                .Select(blob => blob.Sha256).ToArrayAsync(ct);
-            if (currentShas.Any(sha => !leased.Contains(sha)))
-                throw ApiException.Conflict("文件内容引用已变化，请刷新后重试");
             // file_copy_refs cascade with the copy row; the jobs only point at the result for navigation.
             await db.ProjectCopyJobs.Where(job => job.ResultProjectId == projectId || job.ResultCopyId == copyRecord.Id)
                 .ExecuteDeleteAsync(ct);
             await db.ProjectCopies.Where(copy => copy.Id == copyRecord.Id).ExecuteDeleteAsync(ct);
-            await db.Files.Where(file => file.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        }
+        // Chunk directories of finished or abandoned sessions and message image files left on disk have no row
+        // any more; FilesMaintenanceService removes them as orphans after its grace period.
+        await db.UploadSessions.Where(upload => upload.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        await db.Messages.Where(message => message.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        await db.Files.Where(file => file.ProjectId == projectId).ExecuteDeleteAsync(ct);
+        if (releasedBlobIds.Length > 0)
+        {
             var now = await DbClock.UtcNowAsync(db, ct);
             foreach (var blobId in releasedBlobIds)
             {
@@ -253,10 +258,12 @@ internal sealed partial class ProjectService(
             .ExecuteUpdateAsync(setters => setters.SetProperty(mail => mail.ProjectId, (ulong?)null), ct);
         await db.ProjectStatusLogs.Where(log => log.ProjectId == projectId).ExecuteDeleteAsync(ct);
         object auditDetails = copyRecord is null
-            ? new { name = project.Name }
+            ? new { name = project.Name, deletedFileCount = fileCount, deletedMessageCount = messageCount }
             : new
             {
                 name = project.Name,
+                deletedFileCount = fileCount,
+                deletedMessageCount = messageCount,
                 copiedFromProjectId = copyRecord.SourceProjectId,
                 copiedFromProjectName = copyRecord.SourceProjectName,
                 copiedFileCount = copyRecord.FileCount,

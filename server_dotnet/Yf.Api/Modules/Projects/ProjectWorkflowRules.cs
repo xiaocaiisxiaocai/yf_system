@@ -15,18 +15,6 @@ internal static class ProjectWorkflowRules
             _ => throw ApiException.BadRequest("仅允许开始、终止或重新开始项目"),
         };
 
-    internal static void EnsureNoDeletionDependencies(bool hasContent, bool hasUploads)
-    {
-        if (hasContent)
-        {
-            throw ApiException.BadRequest("项目内仍有文件或留言，不能直接删除");
-        }
-        if (hasUploads)
-        {
-            throw ApiException.BadRequest("项目仍有上传记录，不能删除");
-        }
-    }
-
     internal static void EnsureDeletable(string status)
     {
         if (status is not (ProjectStatuses.Draft or ProjectStatuses.Terminated))

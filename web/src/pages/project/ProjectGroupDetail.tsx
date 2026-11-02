@@ -215,7 +215,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
         {canCreateChild && <Button size="mini" type="text" disabled={!copyReady} onClick={() => openCopy(project)}>复制</Button>}
         {canUpdateChild && ['DRAFT', 'IN_PROGRESS'].includes(project.status) && <Button size="mini" type="text" onClick={() => openEdit(project)}>编辑</Button>}
         {canDeleteChild && ['DRAFT', 'TERMINATED'].includes(project.status) && (
-          <Popconfirm title={`确认删除子项目“${project.name}”？仅草稿或已终止且无文件、留言、上传和复制履历时可删除。`} onOk={() => remove(project)}>
+          <Popconfirm title={`确认删除子项目“${project.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={() => remove(project)}>
             <Button size="mini" type="text" status="danger">删除</Button>
           </Popconfirm>
         )}

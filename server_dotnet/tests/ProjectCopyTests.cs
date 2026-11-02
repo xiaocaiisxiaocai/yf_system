@@ -325,30 +325,27 @@ public sealed class ProjectCopyTests
             Assert.Equal("该子项目已被复制出副本，请先删除副本", nestedSource.Message);
             await projects.DeleteAsync(conn, actor, nestedId, null, ct);
 
-            // Anything added after the copy (even a soft-deleted upload or a message) still blocks deletion.
+            // Content added after the copy (a soft-deleted upload, a message, an abandoned upload) is deleted with
+            // the copy, also once it has been started (here: terminated). An upload still in flight blocks.
             await conn.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,deleted_at,created_at)
-                VALUES(98102,@CopyId,1,'C2S','后传.txt','later-upload.txt','txt',1,'text/plain',REPEAT('1',64),'files/2026/09/later-upload.txt','DELETED',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))
+                VALUES(98102,@CopyId,1,'C2S','后传.txt','later-upload.txt','txt',1,'text/plain',REPEAT('1',64),'files/2026/09/later-upload.txt','DELETED',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+                INSERT INTO messages(id,project_id,sender_id,content,status,created_at) VALUES(98201,@CopyId,1,'副本留言','NORMAL',UTC_TIMESTAMP(3));
+                INSERT INTO message_reads(message_id,user_id,read_at) VALUES(98201,1,UTC_TIMESTAMP(3));
+                INSERT INTO upload_sessions(id,project_id,uploader_id,file_name,file_size,file_last_modified,file_fingerprint,chunk_size,total_chunks,temp_dir,status,expires_at,created_at,updated_at)
+                VALUES('00000000-0000-0000-0000-000000098301',@CopyId,1,'进行中.txt',1,0,REPEAT('a',64),1,1,'tmp/98301','UPLOADING',UTC_TIMESTAMP(3)+INTERVAL 1 DAY,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+                UPDATE projects SET status='TERMINATED' WHERE id=@CopyId;
                 """, new { CopyId = copyId }, cancellationToken: ct));
-            Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
-                projects.DeleteAsync(conn, actor, copyId, null, ct))).Status);
-            await conn.ExecuteAsync(new CommandDefinition("DELETE FROM files WHERE id=98102", cancellationToken: ct));
+            var inFlight = await Assert.ThrowsAsync<ApiException>(() => projects.DeleteAsync(conn, actor, copyId, null, ct));
+            Assert.Equal(409, inFlight.Status);
             await conn.ExecuteAsync(new CommandDefinition(
-                "INSERT INTO messages(id,project_id,sender_id,content,status,created_at) VALUES(98201,@CopyId,1,'副本留言','NORMAL',UTC_TIMESTAMP(3))",
-                new { CopyId = copyId }, cancellationToken: ct));
-            Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
-                projects.DeleteAsync(conn, actor, copyId, null, ct))).Status);
-            await conn.ExecuteAsync(new CommandDefinition("DELETE FROM messages WHERE id=98201", cancellationToken: ct));
-            // Once started (here: terminated), even the copied files block deletion like any other project.
-            await conn.ExecuteAsync(new CommandDefinition(
-                "UPDATE projects SET status='TERMINATED' WHERE id=@CopyId", new { CopyId = copyId }, cancellationToken: ct));
-            Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
-                projects.DeleteAsync(conn, actor, copyId, null, ct))).Status);
-            await conn.ExecuteAsync(new CommandDefinition(
-                "UPDATE projects SET status='DRAFT' WHERE id=@CopyId", new { CopyId = copyId }, cancellationToken: ct));
+                "UPDATE upload_sessions SET status='ABORTED' WHERE id='00000000-0000-0000-0000-000000098301'", cancellationToken: ct));
 
             await projects.DeleteAsync(conn, actor, copyId, null, ct);
             Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM projects WHERE id IN (@CopyId,@NestedId)", new { CopyId = copyId, NestedId = nestedId }));
+            Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM messages WHERE id=98201"));
+            Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM message_reads WHERE message_id=98201"));
+            Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM upload_sessions WHERE project_id=@CopyId", new { CopyId = copyId }));
             Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM project_copies"));
             Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM file_copy_refs"));
             Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM files"));
@@ -362,10 +359,9 @@ public sealed class ProjectCopyTests
             {
                 Assert.Equal(7101UL, detail.RootElement.GetProperty("copiedFromProjectId").GetUInt64());
                 Assert.Equal(1UL, detail.RootElement.GetProperty("copiedFileCount").GetUInt64());
+                Assert.Equal(2UL, detail.RootElement.GetProperty("deletedFileCount").GetUInt64());
+                Assert.Equal(1UL, detail.RootElement.GetProperty("deletedMessageCount").GetUInt64());
             }
-            // With no copies left, the source falls back to the ordinary rule (it still has its own file).
-            Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
-                projects.DeleteAsync(conn, actor, 7101, null, ct))).Status);
 
             // When the copy holds the last reference to the content, deleting it hands the blob to GC.
             var lastCopyId = await CopyAsync(7101, "最后引用副本");
@@ -386,6 +382,15 @@ public sealed class ProjectCopyTests
             await conn.OpenAsync(ct);
             Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM file_blobs WHERE id=@BlobId", new { BlobId = blobId }));
             Assert.False(File.Exists(blobPath));
+
+            // With no copies left, a terminated source is deleted together with its files and messages,
+            // including file rows kept only as purged copy history.
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE projects SET status='TERMINATED' WHERE id=7101", cancellationToken: ct));
+            await projects.DeleteAsync(conn, actor, 7101, null, ct);
+            Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM projects WHERE id=7101"));
+            Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM files WHERE project_id=7101"));
+            Assert.Equal(0, await CountAsync("SELECT COUNT(*) FROM messages WHERE project_id=7101"));
         }
         finally
         {

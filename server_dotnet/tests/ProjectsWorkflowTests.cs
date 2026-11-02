@@ -104,22 +104,6 @@ public sealed class ProjectsWorkflowTests
         Assert.Equal("仅允许开始、终止或重新开始项目", error.Message);
     }
 
-    [Fact]
-    public void ProjectsWithoutDeletionDependenciesCanBeDeleted()
-    {
-        ProjectWorkflowRules.EnsureNoDeletionDependencies(false, false);
-    }
-
-    [Fact]
-    public void ContentAndUploadHistoryBlockDeletionWithDistinctErrors()
-    {
-        var content = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureNoDeletionDependencies(true, false));
-        Assert.Equal("项目内仍有文件或留言，不能直接删除", content.Message);
-
-        var upload = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureNoDeletionDependencies(false, true));
-        Assert.Equal("项目仍有上传记录，不能删除", upload.Message);
-    }
-
     [Theory]
     [InlineData("DRAFT")]
     [InlineData("TERMINATED")]
