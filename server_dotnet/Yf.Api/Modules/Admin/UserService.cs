@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Identity;
+using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Modules.Admin;
 
@@ -277,9 +278,9 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             || await context.CollaborationReads.AnyAsync(x => x.UserId == id, ct)
             || await context.Suppliers.AnyAsync(x => x.CreatedBy == id, ct)
             || await context.Users.AnyAsync(x => x.CreatedBy == id, ct)
-            || await context.EmailOutbox.AnyAsync(x => x.RecipientUserId == id
-                || (x.RecipientRealm == IdentityRealms.Internal && x.RecipientAccountId == id), ct)
-            || await context.AuditLogs.AnyAsync(x => x.UserId == id, ct)
+            // Mail delivery records and audit logs are logs, not business references: they keep their own
+            // recipient-address / employee-number snapshots and have no foreign key to users, so they never
+            // block deletion (RemoveAsync cancels undelivered mail instead).
             || await context.ProjectActivities.AnyAsync(x => x.ActorId == id, ct)
             || await context.ProjectCopies.AnyAsync(x => x.CopiedBy == id, ct)
             || await context.ProjectCopyJobs.AnyAsync(x => x.RequestedBy == id, ct)
@@ -301,6 +302,14 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     internal static async Task RemoveAsync(YfDbContext context, ulong id, CancellationToken ct)
     {
+        // Delivery history stays; mail not yet sent to (or anchored on) the deleted account is cancelled.
+        await context.EmailOutbox.Where(mail => (mail.RecipientUserId == id
+                    || (mail.RecipientRealm == IdentityRealms.Internal && mail.RecipientAccountId == id))
+                && (mail.Status == MailStatuses.Pending || mail.Status == MailStatuses.Sending))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(mail => mail.Status, MailStatuses.Cancelled)
+                .SetProperty(mail => mail.NextAttemptAt, (DateTime?)null)
+                .SetProperty(mail => mail.LastError, "账号已删除，邮件已取消"), ct);
         await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);
         await context.RefreshTokens.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);
         await context.Users.Where(x => x.Id == id).ExecuteDeleteAsync(ct);
