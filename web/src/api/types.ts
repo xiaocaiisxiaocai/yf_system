@@ -86,7 +86,7 @@ export const PROJECT_STATUS: Record<ProjectStatus, ProjectStatusView> & Partial<
 
 export const MATERIAL_REVIEW: Record<MaterialReviewStatus, ProjectStatusView> = {
   NO_MATERIAL: { text: '待回传资料', color: 'gray' },
-  PENDING: { text: '资料待确认', color: 'orange' },
+  PENDING: { text: '资料待审核', color: 'orange' },
   RETURNED: { text: '资料已退回', color: 'red' },
 }
 

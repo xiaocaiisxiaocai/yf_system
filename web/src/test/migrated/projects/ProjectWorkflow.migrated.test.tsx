@@ -57,7 +57,7 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     mocks.auth.user = { id: 2, userType: 'SUPPLIER' }
     mocks.auth.permissions = ['file:upload', 'project:list']
     const { rerender } = render(<ProjectWorkflowPanel project={reviewProject(5, 'PENDING', 1)} onChanged={() => undefined} />)
-    expect(screen.getByText('资料待确认')).toBeInTheDocument()
+    expect(screen.getByText('资料待审核')).toBeInTheDocument()
     expect(screen.queryByRole('button')).not.toBeInTheDocument()
 
     rerender(<ProjectWorkflowPanel project={completedProject()} onChanged={() => undefined} />)
@@ -123,7 +123,7 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
 
   it.each([
     ['NO_MATERIAL', '待回传资料'],
-    ['PENDING', '资料待确认'],
+    ['PENDING', '资料待审核'],
     ['RETURNED', '资料已退回'],
   ])('the %s material state shows its tag and return reason to the supplier', (materialReviewStatus, tag) => {
     mocks.auth.user = { id: 2, userType: 'SUPPLIER' }

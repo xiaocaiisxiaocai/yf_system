@@ -347,7 +347,7 @@ describe('ProjectList migrated behavior', () => {
     renderList()
     const row = await screen.findByRole('row', { name: /资料待确认主项目/ })
     expect(within(row).getByRole('button', { name: '编辑' })).toBeEnabled()
-    expect(within(row).getByText('资料待确认 1')).toBeInTheDocument()
+    expect(within(row).getByText('待审核 1')).toBeInTheDocument()
   })
 
   it('filters by material state and overdue through the address bar and marks overdue main projects', async () => {

@@ -39,6 +39,7 @@ import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validatePassword 
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
 import EnterSubmit from '../../../components/EnterSubmit'
+import ToolbarMenuButton from '../../../components/ToolbarMenuButton'
 
 function EllipsisText({ value }: { value: string | null | undefined }) {
   const text = value || '-'
@@ -810,20 +811,16 @@ export default function CompaniesPage() {
           </Select>
         </Space>
         <Space wrap>
-          {can.manageAccounts && <>
-            <Button size="small" onClick={() => setAccountImportOpen(true)}>导入账号</Button>
-            <Button size="small" loading={accountExporting} onClick={() => void exportAllAccounts()}>导出账号</Button>
-          </>}
-          {can.manageCompanies && <>
-            <Button size="small" onClick={() => setContactImportOpen(true)}>导入联络人</Button>
-            <Button size="small" loading={contactExporting} onClick={() => void exportAllContacts()}>导出联络人</Button>
-          </>}
-          {(can.manageCompanies || can.manageAccounts) && (
-            <Button size="small" loading={exporting} onClick={() => void exportCompanies()}>导出厂商</Button>
-          )}
-          {can.manageCompanies && (
-            <Button size="small" onClick={() => setImportOpen(true)}>导入厂商</Button>
-          )}
+          <ToolbarMenuButton label="导入" items={[
+            can.manageCompanies && { key: 'companies', label: '导入厂商', onClick: () => setImportOpen(true) },
+            can.manageAccounts && { key: 'accounts', label: '导入账号', onClick: () => setAccountImportOpen(true) },
+            can.manageCompanies && { key: 'contacts', label: '导入联络人', onClick: () => setContactImportOpen(true) },
+          ]} />
+          <ToolbarMenuButton label="导出" items={[
+            (can.manageCompanies || can.manageAccounts) && { key: 'companies', label: '导出厂商', loading: exporting, onClick: () => void exportCompanies() },
+            can.manageAccounts && { key: 'accounts', label: '导出账号', loading: accountExporting, onClick: () => void exportAllAccounts() },
+            can.manageCompanies && { key: 'contacts', label: '导出联络人', loading: contactExporting, onClick: () => void exportAllContacts() },
+          ]} />
           {can.manageCompanies && (
             <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
           )}

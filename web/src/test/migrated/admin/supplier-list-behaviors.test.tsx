@@ -103,17 +103,24 @@ describe('供应商与分页列表行为', () => {
   it('账号和联络人 Excel 批量入口位于供应商总表页', async () => {
     render(<MemoryRouter><SupplierList /></MemoryRouter>)
 
-    expect(await screen.findByRole('button', { name: '导入账号' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '导出账号' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '导入联络人' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '导出联络人' })).toBeVisible()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: '导入' }))
+    expect(await screen.findByRole('menuitem', { name: '导入账号' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: '导入联络人' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '导出' }))
+    expect(await screen.findByRole('menuitem', { name: '导出账号' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: '导出联络人' })).toBeVisible()
   })
 
   it('供应商账号导出不包含姓名、邮箱或任何密码列', async () => {
     const user = userEvent.setup()
     render(<MemoryRouter><SupplierList /></MemoryRouter>)
 
-    await user.click(await screen.findByRole('button', { name: '导出账号' }))
+    await user.click(await screen.findByRole('button', { name: '导出' }))
+    const exportAccounts = await screen.findByRole('menuitem', { name: '导出账号' })
+    // 下拉菜单展开动画期间菜单不接收指针事件，等动画结束再点击。
+    await waitFor(() => expect(getComputedStyle(exportAccounts.closest('.arco-dropdown') ?? exportAccounts).pointerEvents).not.toBe('none'))
+    await user.click(exportAccounts)
     await waitFor(() => expect(mocks.downloadExcelWorkbook).toHaveBeenCalledTimes(1))
 
     const sheets = mocks.downloadExcelWorkbook.mock.calls[0][1] as Array<{ headers: string[]; rows: string[][] }>

@@ -363,7 +363,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
               <dt>完成进度</dt>
               <dd>
                 <strong>{group.completedCount}/{group.subprojectCount}</strong>
-                {group.materialPendingCount > 0 && <Tag size="small" color="orange">资料待确认 {group.materialPendingCount}</Tag>}
+                {group.materialPendingCount > 0 && <Tag size="small" color="orange">待审核 {group.materialPendingCount}</Tag>}
                 {group.terminatedCount > 0 && <Tag size="small" color="red">已终止 {group.terminatedCount}</Tag>}
               </dd>
             </div>

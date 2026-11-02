@@ -123,4 +123,6 @@ function track(p,label){
   if(r.status()>=500&&!p.expectedServerErrors?.has(entry.path))fs.appendFileSync(OUT+'/http-errors.jsonl',JSON.stringify(entry)+'\n');
  });
 }
-module.exports={fs,path,assert,OUT,s,f,save,record,login,reserveLoginBudget,api,projectMetadata,withRobotOwnerFixture,navigate,action,track};
+// Import/export actions live in the toolbar's "导入" / "导出" dropdowns; open the menu, then pick the item.
+async function toolbarMenu(p,name){await p.getByRole('button',{name:name.startsWith('导入')?'导入':'导出',exact:true}).click();await p.getByRole('menuitem',{name,exact:true}).click();}
+module.exports={fs,path,assert,OUT,s,f,save,record,login,reserveLoginBudget,api,projectMetadata,withRobotOwnerFixture,navigate,action,track,toolbarMenu};

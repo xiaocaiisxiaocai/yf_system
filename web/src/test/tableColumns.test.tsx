@@ -199,9 +199,9 @@ describe('project list columns', () => {
 
     await waitFor(() => {
       const widths = [...document.querySelectorAll('col')].map((col) => (col as HTMLElement).style.width)
-      // 表头、表体各一份。只有工令号从 96 变成 176；剩下的 96 是状态列，Robot 厂商、Robot 类型和子项目进度仍是默认的 112。
+      // 表头、表体各一份。只有工令号从 96 变成 176；剩下的 96 是机型和状态列，Robot 厂商、Robot 类型和子项目进度仍是默认的 112。
       expect(widths.filter((width) => width === '176px')).toHaveLength(2)
-      expect(widths.filter((width) => width === '96px')).toHaveLength(2)
+      expect(widths.filter((width) => width === '96px')).toHaveLength(4)
       expect(widths.filter((width) => width === '112px')).toHaveLength(6)
     })
     expect(savedLayout()?.widths).toEqual({ workOrderNos: 176 })
@@ -220,7 +220,7 @@ describe('project list columns', () => {
     const handle = await screen.findByRole('separator', { name: '调整机型列宽' })
     handle.focus()
     fireEvent.keyDown(handle, { key: 'ArrowRight' })
-    await waitFor(() => expect(savedLayout()?.widths.machineModel).toBe(96))
+    await waitFor(() => expect(savedLayout()?.widths.machineModel).toBe(112))
     fireEvent.keyDown(handle, { key: 'Home' })
     await waitFor(() => expect(savedLayout()).toBeNull())
   })

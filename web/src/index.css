@@ -83,8 +83,6 @@ html, body, #root {
 .auth-heading { margin: 0 0 20px; color: #17243a; font-size: 20px; font-weight: 600; line-height: 30px; text-align: center; }
 .oem-setting-size { line-height: 32px; }
 .drawer-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
-.oem-account { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
-.oem-account-avatar { flex: 0 0 auto; background: rgb(var(--primary-6)); }
 .auth-form .arco-form-item { margin-bottom: 20px; }
 .auth-form .arco-form-label-item { margin-bottom: 6px; }
 .auth-form .arco-input-inner-wrapper { height: 50px; border-radius: 6px; background: #fff; border-color: #d9e1ec; box-shadow: 0 8px 24px rgba(27, 64, 114, .05); }
@@ -465,6 +463,8 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .section-heading > .arco-typography { flex-basis: 100%; }
 .section-heading > .arco-typography-secondary { font-size: 13px; }
 .responsive-toolbar { flex-wrap: wrap; row-gap: 12px; }
+/* 筛选项过多换行时，操作按钮组仍靠右，主要操作保持在固定位置。 */
+.responsive-toolbar > :last-child:not(:first-child) { margin-left: auto; }
 .responsive-toolbar .arco-space { flex-wrap: wrap; row-gap: 8px; }
 /* Arco 换行 Space 给每项写行内 margin-bottom，单行时会把工具栏撑高 8px、让右侧按钮下沉；换行间距已由 row-gap 负责。 */
 .responsive-toolbar .arco-space-wrap > .arco-space-item { margin-bottom: 0 !important; }
@@ -487,7 +487,9 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .arco-input-inner-wrapper:not(.arco-input-inner-wrapper-disabled),
 .arco-textarea:not(.arco-textarea-disabled),
 .arco-textarea-wrapper:not(.arco-textarea-disabled),
-.arco-select-view:not(.arco-select-view-disabled) { background-color: #fff; }
+.arco-select-view:not(.arco-select-view-disabled),
+.arco-picker:not(.arco-picker-disabled),
+.arco-input-number:not(.arco-input-number-disabled) .arco-input-inner-wrapper { background-color: #fff; }
 .arco-input, .arco-input-inner-wrapper, .arco-textarea, .arco-textarea-wrapper,
 .arco-select .arco-select-view, .arco-picker { border-color: var(--color-border-2); }
 .arco-input-inner-wrapper .arco-input { border: 0; background: transparent; }

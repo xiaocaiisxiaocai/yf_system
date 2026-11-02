@@ -6,6 +6,7 @@ import {
   type ActionMeta, type AuditLogRow, type DetailNote, type DisplayIdentity,
 } from '../../../pages/system/auditLogDetails'
 import type { AuditPresenter } from '../../../components/AuditLogParts'
+import { mailReasonText } from '../../../utils/mailReasons'
 
 const action = (label: string, categoryCode: string, categoryLabel: string, color: string): ActionMeta => ({
   label, categoryCode, categoryLabel, color,
@@ -174,7 +175,7 @@ function join(...parts: (string | undefined | false)[]) {
 }
 
 export function oemDetailSummary(row: AuditLogRow): string {
-  if (row.action.startsWith('OEM_EMAIL_')) return [row.detail?.recipient ? `收件人 ${formatAuditValue(row.detail.recipient)}` : '', row.detail?.error ? formatAuditValue(row.detail.error) : row.detail?.reason ? formatAuditValue(row.detail.reason) : '', row.detail?.retryCount ? `尝试次数 ${formatAuditValue(row.detail.retryCount)}` : ''].filter(Boolean).join('；') || '邮件处理记录'
+  if (row.action.startsWith('OEM_EMAIL_')) return [row.detail?.recipient ? `收件人 ${formatAuditValue(row.detail.recipient)}` : '', row.detail?.error ? formatAuditValue(row.detail.error) : row.detail?.reason ? mailReasonText(row.detail.reason) || formatAuditValue(row.detail.reason) : '', row.detail?.retryCount ? `尝试次数 ${formatAuditValue(row.detail.retryCount)}` : ''].filter(Boolean).join('；') || '邮件处理记录'
   const detail = row.detail ?? {}
   const reason = text(detail.reason)
   switch (row.action) {
@@ -274,7 +275,7 @@ export function oemDetailNotes(row: AuditLogRow): DetailNote[] {
   const reason = text(detail.reason)
   if (reason && reason !== SESSION_CAP) {
     const title = row.action === 'OEM_PURGE' ? '删除原因' : DANGER_ACTIONS.has(row.action) ? '原因' : '说明'
-    notes.push({ label: title, value: label(PURGE_REASON_LABELS, reason) ?? reason, tone: DANGER_ACTIONS.has(row.action) ? 'danger' : 'normal' })
+    notes.push({ label: title, value: label(PURGE_REASON_LABELS, reason) ?? mailReasonText(reason), tone: DANGER_ACTIONS.has(row.action) ? 'danger' : 'normal' })
   }
   return notes
 }

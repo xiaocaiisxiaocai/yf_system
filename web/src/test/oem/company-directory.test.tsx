@@ -115,10 +115,14 @@ describe('OEM 厂商与账号目录', () => {
   it('账号和联络人 Excel 批量入口位于 ODM/OEM 厂商总表页', async () => {
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
 
-    expect(await screen.findByRole('button', { name: '导入账号' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '导出账号' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '导入联络人' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '导出联络人' })).toBeVisible()
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: '导入' }))
+    expect(await screen.findByRole('menuitem', { name: '导入账号' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: '导入联络人' })).toBeVisible()
+    expect(await screen.findByRole('menuitem', { name: '导入厂商' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '导出' }))
+    expect(await screen.findByRole('menuitem', { name: '导出账号' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: '导出联络人' })).toBeVisible()
   })
 
   it('ODM/OEM账号导出不包含姓名、邮箱或任何密码列', async () => {
@@ -126,7 +130,11 @@ describe('OEM 厂商与账号目录', () => {
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
 
-    await user.click(await screen.findByRole('button', { name: '导出账号' }))
+    await user.click(await screen.findByRole('button', { name: '导出' }))
+    const exportAccounts = await screen.findByRole('menuitem', { name: '导出账号' })
+    // 下拉菜单展开动画期间菜单不接收指针事件，等动画结束再点击。
+    await waitFor(() => expect(getComputedStyle(exportAccounts.closest('.arco-dropdown') ?? exportAccounts).pointerEvents).not.toBe('none'))
+    await user.click(exportAccounts)
     await waitFor(() => expect(downloadExcelWorkbook).toHaveBeenCalledTimes(1))
 
     const sheets = vi.mocked(downloadExcelWorkbook).mock.calls[0][1]

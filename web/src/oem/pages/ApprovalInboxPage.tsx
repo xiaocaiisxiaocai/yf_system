@@ -38,7 +38,7 @@ export default function ApprovalInboxPage() {
     {
       key: 'title', title: '传递单', dataIndex: 'title',
       render: (value: string, row: PendingTask) => (
-        <Link to={`${base}/transfers/${row.transferId}`} onClick={(event) => event.stopPropagation()}>{value}</Link>
+        <Link className="table-link" to={`${base}/transfers/${row.transferId}`} onClick={(event) => event.stopPropagation()}>{value}</Link>
       ),
     },
     { key: 'companyName', title: '目标厂商', dataIndex: 'companyName' },

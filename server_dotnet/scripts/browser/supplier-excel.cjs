@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
-const { fs, assert, OUT, s, record, login, api, navigate, action, track } =
+const { fs, assert, OUT, s, record, login, api, navigate, action, track, toolbarMenu } =
   require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const marker = require('node:crypto').randomBytes(5).toString('hex');
@@ -47,7 +47,7 @@ let accountSpecs = [];
         return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
       };
       const openAccountImport = async () => {
-        await page.getByRole('button', { name: '导入账号', exact: true }).click();
+        await toolbarMenu(page, '导入账号');
         const modal = page.locator('.arco-modal:visible').last();
         await modal.getByText('导入 Robot 供应商账号', { exact: true }).waitFor();
         return modal;
@@ -115,7 +115,7 @@ let accountSpecs = [];
         ]), '数据');
         return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
       };
-      await page.getByRole('button', { name: '导入联络人', exact: true }).click();
+      await toolbarMenu(page, '导入联络人');
       let modal = page.locator('.arco-modal:visible').last();
       await modal.getByText('导入 Robot 供应商联络人', { exact: true }).waitFor();
       const templateDownload = page.waitForEvent('download');
@@ -152,7 +152,7 @@ let accountSpecs = [];
 
       const exportWorkbook = async buttonName => {
         const ready = page.waitForEvent('download');
-        await page.getByRole('button', { name: buttonName, exact: true }).click();
+        await toolbarMenu(page, buttonName);
         const file = await ready;
         assert.equal(await file.failure(), null);
         const target = OUT + '/robot-' + buttonName + '.xlsx';

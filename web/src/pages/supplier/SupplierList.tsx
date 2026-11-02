@@ -18,6 +18,7 @@ import type { Account, RoleOption, Supplier } from './components/supplierTypes'
 import { useSupplierListState } from './hooks/useSupplierListState'
 import LoadError from '../../components/LoadError'
 import { validatePassword } from '../../utils/password'
+import ToolbarMenuButton from '../../components/ToolbarMenuButton'
 
 const SUPPLIER_ACCOUNT_HEADERS = ['供应商名称', '账号', '角色', '初始密码'] as const
 const SUPPLIER_ACCOUNT_EXPORT_HEADERS = ['供应商名称', '账号', '角色', '状态', '最近登录'] as const
@@ -366,14 +367,14 @@ export default function SupplierList() {
           </Select>
         </Space>
         <Space wrap>
-          {canManageAccounts && <>
-            <Button size="small" onClick={() => setAccountImportOpen(true)}>导入账号</Button>
-            <Button size="small" loading={accountExporting} onClick={() => void exportSupplierAccounts()}>导出账号</Button>
-          </>}
-          {canManageSuppliers && <>
-            <Button size="small" onClick={() => setContactImportOpen(true)}>导入联络人</Button>
-            <Button size="small" loading={contactExporting} onClick={() => void exportSupplierContacts()}>导出联络人</Button>
-          </>}
+          <ToolbarMenuButton label="导入" items={[
+            canManageAccounts && { key: 'accounts', label: '导入账号', onClick: () => setAccountImportOpen(true) },
+            canManageSuppliers && { key: 'contacts', label: '导入联络人', onClick: () => setContactImportOpen(true) },
+          ]} />
+          <ToolbarMenuButton label="导出" items={[
+            canManageAccounts && { key: 'accounts', label: '导出账号', loading: accountExporting, onClick: () => void exportSupplierAccounts() },
+            canManageSuppliers && { key: 'contacts', label: '导出联络人', loading: contactExporting, onClick: () => void exportSupplierContacts() },
+          ]} />
           {canManageSuppliers && <Button
             type="primary"
             icon={<IconPlus />}

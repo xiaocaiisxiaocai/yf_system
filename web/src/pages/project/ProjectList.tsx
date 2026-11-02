@@ -65,17 +65,17 @@ function cellText(value?: string | null) {
   return <span className="table-cell-text" title={text}>{text}</span>
 }
 
-// 默认列宽合计 1572，1920 视口下状态和未读仍在首屏。用户可隐藏列或拖动列宽，偏好按账号记在本机。
+// 默认列宽合计 1572。名称列固定在左侧、操作列固定在右侧，横向滚动时两者始终可见。用户可隐藏列或拖动列宽，偏好按账号记在本机。
 // 容器还有剩余宽度时主项目名称保持设定宽度，其余列平分，避免名称列被拉得很宽。
 const PROJECT_LIST_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'name', title: '主项目名称', defaultWidth: 120, minWidth: 96, locked: true },
   { key: 'workOrderNos', title: '工令号', defaultWidth: 96, minWidth: 72 },
-  { key: 'machineModel', title: '机型', defaultWidth: 80, minWidth: 64 },
+  { key: 'machineModel', title: '机型', defaultWidth: 96, minWidth: 64 },
   { key: 'supplierName', title: 'Robot 厂商', defaultWidth: 112, minWidth: 104 },
   { key: 'robotTypeName', title: 'Robot 类型', defaultWidth: 112, minWidth: 104 },
-  { key: 'robotPartNumber', title: 'Robot 料号', defaultWidth: 128, minWidth: 104 },
-  { key: 'robotModelName', title: 'Robot 型号', defaultWidth: 168, minWidth: 104 },
-  { key: 'responsibleUserName', title: '负责人', defaultWidth: 84, minWidth: 72 },
+  { key: 'robotPartNumber', title: 'Robot 料号', defaultWidth: 120, minWidth: 104 },
+  { key: 'robotModelName', title: 'Robot 型号', defaultWidth: 140, minWidth: 104 },
+  { key: 'responsibleUserName', title: '负责人', defaultWidth: 104, minWidth: 72 },
   { key: 'robotOwnerName', title: 'Robot 负责人', defaultWidth: 124, minWidth: 116 },
   { key: 'sectionName', title: '课别', defaultWidth: 72, minWidth: 64 },
   { key: 'priorityName', title: '优先级', defaultWidth: 76, minWidth: 72 },
@@ -434,12 +434,12 @@ export default function ProjectList() {
     { key: 'progress', title: '子项目进度', align: 'center' as const, render: (_: unknown, row: ProjectGroup) => (
       <div className="project-group-progress" title={`已完成 ${row.completedCount} / ${row.subprojectCount}`}>
         <span>{row.completedCount}/{row.subprojectCount}</span>
-        {row.materialPendingCount > 0 && <Tag size="small" color="orange">资料待确认 {row.materialPendingCount}</Tag>}
+        {row.materialPendingCount > 0 && <Tag size="small" color="orange">待审核 {row.materialPendingCount}</Tag>}
       </div>
     ) },
     { key: 'status', title: '状态', dataIndex: 'status', align: 'center' as const, render: (value: string) => <Tag color={PROJECT_STATUS[value]?.color}>{PROJECT_STATUS[value]?.text || value}</Tag> },
     { key: 'unreadMessages', title: '未读留言', dataIndex: 'unreadMessages', align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
-    { key: 'actions', title: '操作', render: (_: unknown, row: ProjectGroup) => actionSlots([
+    { key: 'actions', title: '操作', fixed: 'right' as const, render: (_: unknown, row: ProjectGroup) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/project-groups/${row.id}`)}>进入</Button>,
       isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status)
         && <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>,

@@ -112,7 +112,7 @@ describe('协作通知行为', () => {
     await user.click(screen.getByRole('button', { name: '协作动态通知，1 条未查看' }))
 
     expect(await screen.findByTitle('发送留言')).toHaveTextContent('留言')
-    expect(screen.getByText(/不等同于留言已读/)).toBeVisible()
+    expect(screen.queryByText(/不等同于留言已读/)).toBeNull()
     expect(screen.getByText('主项目 A / 协作项目')).toBeVisible()
 
     const title = screen.getByRole('button', { name: '查看通知：新增留言' })

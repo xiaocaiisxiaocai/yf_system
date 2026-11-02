@@ -1,3 +1,5 @@
+import { mailReasonText } from '../../../utils/mailReasons'
+
 export const MB = 1024 * 1024
 
 export type NotificationEventKey =
@@ -247,7 +249,7 @@ export function mailRecentSummary(row: MailRecent): string {
   const detail = row.detail || {}
   if (row.action.startsWith('EMAIL_TEST_')) return [detail.recipient ? `收件人 ${detail.recipient}` : '', detail.reason].filter(Boolean).join('；')
   if (row.action === 'EMAIL_SKIPPED_MISSING_EMAIL') {
-    if (detail.reason) return detail.reason
+    if (detail.reason) return mailReasonText(detail.reason)
     return `${detail.realName || '账号'}（${detail.employeeNo || `ID ${row.targetId || '-'}`}）未填写邮箱`
   }
   if (row.action === 'EMAIL_RETRY') {
@@ -257,10 +259,10 @@ export function mailRecentSummary(row: MailRecent): string {
     return `${detail.error || '发送失败'}${detail.retryCount ? `，第 ${detail.retryCount} 次` : ''}`
   }
   if (row.action === 'EMAIL_CANCELLED_STALE') {
-    return detail.reason || '通知事件已失效，邮件发送已取消'
+    return mailReasonText(detail.reason) || '通知事件已失效，邮件发送已取消'
   }
   if (row.action === 'EMAIL_SENT') {
     return detail.recipient ? `收件人 ${detail.recipient}` : '邮件已发送'
   }
-  return detail.reason || detail.error || (detail.recipient ? `处理对象 ${detail.recipient}` : '邮件处理结果未识别')
+  return mailReasonText(detail.reason) || detail.error || (detail.recipient ? `处理对象 ${detail.recipient}` : '邮件处理结果未识别')
 }

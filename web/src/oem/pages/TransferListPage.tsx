@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table } from '@arco-design/web-react'
 import { IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
@@ -352,9 +352,7 @@ export default function TransferListPage() {
     {
       key: 'title', title: '文件', dataIndex: 'title', ellipsis: true,
       render: (value: string, row: TransferSummary) => (
-        <Link to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>
-          <Typography.Text bold>{value}</Typography.Text>
-        </Link>
+        <Link className="table-link" to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>{value}</Link>
       ),
     },
     { key: 'direction', title: '方向', dataIndex: 'direction', render: (value: TransferSummary['direction']) => DIRECTION_LABEL[value] },

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Avatar, Button, Drawer, Dropdown, Layout, Menu, Result, Space, Spin } from '@arco-design/web-react'
+import { Button, Drawer, Dropdown, Layout, Menu, Result, Spin } from '@arco-design/web-react'
 import {
   IconCheckCircle, IconDown, IconFile, IconHistory, IconPoweroff, IconSettings,
   IconMenu, IconUserGroup,
@@ -17,6 +17,7 @@ import {
 import { OEM_SETTINGS_PERMISSIONS, oemHome } from '../oemNavigation'
 import { OemProvider } from '../OemContext'
 import AppRail, { type BusinessLine } from '../../layouts/AppRail'
+import AccountMenu from '../../components/AccountMenu'
 import './OemLayouts.css'
 
 const { Header, Sider, Content } = Layout
@@ -105,14 +106,7 @@ export function OemInternalLayout() {
   if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 ODM/OEM 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
   return (
     <OemProvider value={{ api: internalApi, realm: 'internal', base: '/oem', permissions: set, userId: user?.id ?? null, queryScope: ['internal', ...sessionScope] }}>
-      <Shell title="ODM/OEM 文件传递" menu={menu} line="oem" account={
-        <Space>
-          <span className="oem-account">
-            <Avatar size={28} className="oem-account-avatar">{user?.realName?.slice(0, 1)}</Avatar>
-            <span className="oem-account-name" title={user?.realName}>{user?.realName}</span>
-          </span>
-        </Space>
-      } />
+      <Shell title="ODM/OEM 文件传递" menu={menu} line="oem" account={<AccountMenu />} />
     </OemProvider>
   )
 }

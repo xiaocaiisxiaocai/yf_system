@@ -237,11 +237,6 @@ export default function CollaborationNotifications() {
         onCancel={closeDrawer}
       >
         <div className="collaboration-drawer-content" data-collaboration-drawer="true">
-          <Alert
-            className="collaboration-meaning-note"
-            type="info"
-            content="通知“已查看”仅表示已查看这条协作动态，不等同于留言已读；留言需进入项目后查看。未查看通知仅统计近30天。"
-          />
           {newContentAvailable && (
             <Alert
               className="collaboration-new-content"

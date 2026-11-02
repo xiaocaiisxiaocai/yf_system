@@ -9,7 +9,7 @@ const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
 const {
-  fs, assert, OUT, s, f, save, record, login, reserveLoginBudget, api, action, track,
+  fs, assert, OUT, s, f, save, record, login, reserveLoginBudget, api, action, track, toolbarMenu,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const sha = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -213,7 +213,7 @@ async function openReleasedFile(page, url, fileName) {
         return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
       };
       const upload = async (page, buttonName, title, fileName, headers, values) => {
-        await page.getByRole('button', { name: buttonName, exact: true }).click();
+        await toolbarMenu(page, buttonName);
         const modal = visibleModal(page);
         await modal.getByText(title, { exact: true }).waitFor();
         const templateReady = page.waitForEvent('download');
@@ -268,7 +268,7 @@ async function openReleasedFile(page, url, fileName) {
 
       const exportAndRead = async buttonName => {
         const ready = page.waitForEvent('download');
-        await page.getByRole('button', { name: buttonName, exact: true }).click();
+        await toolbarMenu(page, buttonName);
         const file = await ready;
         assert.equal(await file.failure(), null);
         const target = OUT + '/browser-' + buttonName + '.xlsx';
@@ -291,7 +291,7 @@ async function openReleasedFile(page, url, fileName) {
     await record('OEM 厂商 Excel 模板只接收名称备注，重复厂商跳过，新公司默认启用且可导出', async () => {
       const page = admin.page;
       const importedCompanyName = 'OEM Excel 厂商-' + marker;
-      await page.getByRole('button', { name: '导入厂商', exact: true }).click();
+      await toolbarMenu(page, '导入厂商');
       let modal = visibleModal(page);
       await modal.getByText('导入 ODM/OEM 厂商资料', { exact: true }).waitFor();
       const templateReady = page.waitForEvent('download');
@@ -332,7 +332,7 @@ async function openReleasedFile(page, url, fileName) {
       await page.getByRole('row').filter({ hasText: importedCompanyName }).waitFor();
 
       const ready = page.waitForEvent('download');
-      await page.getByRole('button', { name: '导出厂商', exact: true }).click();
+      await toolbarMenu(page, '导出厂商');
       const download = await ready;
       assert.equal(await download.failure(), null);
       const exportPath = OUT + '/oem-companies-export.xlsx';

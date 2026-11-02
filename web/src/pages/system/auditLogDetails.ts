@@ -1,3 +1,5 @@
+import { mailReasonText } from '../../utils/mailReasons'
+
 export type NameSource = 'snapshot' | 'current' | 'unknown'
 
 export interface AuditContext {
@@ -447,7 +449,7 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
   // 会话撤销原因是服务端的内部代码，显示为中文说明。
   const reason = reasonCode && SESSION_REVOKE_REASONS[reasonCode]
     ? SESSION_REVOKE_REASONS[reasonCode](detail)
-    : reasonCode
+    : mailReasonText(reasonCode)
   if (reason) {
     const label = row.action === 'PROJECT_REJECT' ? '驳回原因'
       : row.action === 'PROJECT_TERMINATE' ? '终止原因'

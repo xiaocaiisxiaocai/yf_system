@@ -102,16 +102,14 @@ export default function Dashboard() {
     cardTitle: '待回传资料子项目',
     cardAction: '查看待回传',
     heading: '待回传资料子项目',
-    headingEmpty: '尚未回传或被退回的资料',
     error: '待回传资料子项目加载失败',
     empty: '暂无待回传资料的子项目',
   } : {
-    cardTitle: '资料待确认子项目',
-    cardAction: '查看待确认',
-    heading: '资料待确认子项目',
-    headingEmpty: '厂商已回传、等待你确认的资料',
-    error: '资料待确认子项目加载失败',
-    empty: '暂无待确认的资料',
+    cardTitle: '待审核资料子项目',
+    cardAction: '查看待审核',
+    heading: '待审核资料子项目',
+    error: '待审核资料子项目加载失败',
+    empty: '暂无待审核的资料',
   }
 
   const summaryQuery = useQuery({
@@ -284,7 +282,6 @@ export default function Dashboard() {
         <div className="dashboard-overview-heading">
           <div>
             <h2 id="dashboard-overview-title">业务概览</h2>
-            <span>主项目与子项目协作状态汇总</span>
           </div>
           <div className="dashboard-overview-actions">
             {summaryRefreshError && data && (
@@ -335,7 +332,6 @@ export default function Dashboard() {
               <div className="dashboard-section-title">
                 <div>
                   <h2>{taskCopy.heading}</h2>
-                  <span>{pendingData.total > 0 ? `共 ${pendingData.total} 项` : taskCopy.headingEmpty}</span>
                 </div>
                 {pendingData.total > 0 && <Tag color="orange">{pendingData.total}</Tag>}
               </div>

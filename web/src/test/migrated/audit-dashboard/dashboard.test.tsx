@@ -321,14 +321,14 @@ describe('工作台协作生产界面', () => {
     expect(pendingRequests[0].params).toEqual({ page: 1, pageSize: 10 })
 
     await act(async () => pendingRequests[0].request.reject(new Error('pending projects unavailable')))
-    expect(await screen.findByText('资料待确认子项目加载失败')).toBeVisible()
+    expect(await screen.findByText('待审核资料子项目加载失败')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '重试' }))
     await waitFor(() => expect(pendingRequests).toHaveLength(2))
 
     const firstPage = [{ id: 11, name: '待确认项目 A', projectGroupId: 2, projectGroupName: '主项目 A', materialReviewStatus: 'PENDING', updatedAt: '2026-09-10T01:00:00Z' }]
     await act(async () => pendingRequests[1].request.resolve({ data: { list: firstPage, total: 11, page: 1, pageSize: 10 } }))
     expect(await screen.findByRole('link', { name: '主项目 A / 待确认项目 A' })).toHaveAttribute('href', '/projects/11')
-    expect(screen.getByText('资料待确认')).toBeVisible()
+    expect(screen.getByText('资料待审核')).toBeVisible()
 
     await user.click(screen.getByLabelText('第 2 页'))
     await waitFor(() => expect(pendingRequests).toHaveLength(3))
@@ -342,7 +342,7 @@ describe('工作台协作生产界面', () => {
     await user.click(screen.getByRole('button', { name: '刷新工作台' }))
     await waitFor(() => expect(pendingRequests).toHaveLength(5))
     await act(async () => pendingRequests[4].request.resolve({ data: emptyPage }))
-    expect(await screen.findByText('暂无待确认的资料')).toBeVisible()
+    expect(await screen.findByText('暂无待审核的资料')).toBeVisible()
   })
 
   it('supplier dashboard lists material to send back while internal wording stays role-specific', async () => {
