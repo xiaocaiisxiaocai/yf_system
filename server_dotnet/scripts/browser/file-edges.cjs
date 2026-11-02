@@ -63,7 +63,7 @@ async function assertExcelGrid(dialog, expectedRows) {
 (async () => {
   let browser, page;
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     const admin = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
     });

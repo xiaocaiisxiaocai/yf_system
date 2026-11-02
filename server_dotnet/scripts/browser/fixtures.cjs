@@ -3,7 +3,7 @@ const crypto=require('node:crypto');
 const {fs,OUT,s,api}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
 const XLSX=require(process.env.YF_PROJECT_ROOT+'/web/node_modules/xlsx');
 (async()=>{let b;try{
- b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext();
+ b=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);const c=await b.newContext();
  const roles=(await(await api(c,'GET','/admin/roles',undefined,s.adminToken)).json()).list;
  const fixtures={users:{},suppliers:{},roles:Object.fromEntries(roles.map(r=>[r.name,r.id]))};
  const password=()=> 'Browser!'+crypto.randomBytes(6).toString('base64url');

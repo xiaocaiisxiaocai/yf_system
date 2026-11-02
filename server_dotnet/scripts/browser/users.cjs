@@ -1,7 +1,7 @@
 const {chromium}=require('playwright');
 const {assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
 (async()=>{let b,p;try{
- b=await chromium.launch({channel:'chrome',headless:true});
+ b=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
  for(const [key,u] of Object.entries(f.users)){
   if(u.uiFirstChanged)continue;
   const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,key);
@@ -24,7 +24,7 @@ const {assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BROWSE
  await record('普通改密表单弱密码/不一致/相同密码校验阻止提交',async()=>{
   let requests=0;const handler=r=>{if(r.method()==='PUT'&&r.url().endsWith('/auth/password'))requests++;};p.on('request',handler);
   await p.getByLabel('当前密码',{exact:true}).fill(u.changedPassword);
-  await p.getByLabel('新密码',{exact:true}).fill('short');await p.getByLabel('确认新密码',{exact:true}).fill('short');
+  await p.getByLabel('新密码',{exact:true}).fill('four');await p.getByLabel('确认新密码',{exact:true}).fill('four');
   await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('密码需 5-20 个字符，不能使用常见弱密码或简单重复序列',{exact:true}).waitFor();
   await p.getByLabel('新密码',{exact:true}).fill('123456');await p.getByLabel('确认新密码',{exact:true}).fill('123456');
   await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.getByText('密码需 5-20 个字符，不能使用常见弱密码或简单重复序列',{exact:true}).waitFor();

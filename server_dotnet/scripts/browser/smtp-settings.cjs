@@ -29,7 +29,7 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
   let browser;
   let page;
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await context.newPage();
     track(page, 'smtp-settings');
@@ -430,9 +430,15 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
     });
 
     await record('SMTP 页面内容保持在视口内，超长内容只在卡片内部滚动', async () => {
+      await selectTab('SMTP 配置');
+      await fields.host().waitFor();
       const metrics = await page.evaluate(() => {
         const tabs = document.querySelector('.system-config-tabs');
-        const card = document.querySelector('.system-mail-card');
+        const card = document.querySelector('.system-mail-editor');
+        const workspace = document.querySelector('.system-mail-workspace');
+        const logs = document.querySelector('.system-mail-log');
+        const editorRect = card?.getBoundingClientRect();
+        const logsRect = logs?.getBoundingClientRect();
         const body = card?.querySelector('.arco-card-body');
         const tabsRect = tabs?.getBoundingClientRect();
         const cardRect = card?.getBoundingClientRect();
@@ -460,6 +466,9 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
           cardBottom: cardRect?.bottom ?? Number.POSITIVE_INFINITY,
           bodyClientHeight: body?.clientHeight ?? 0,
           bodyScrollHeight: body?.scrollHeight ?? 0,
+          workspaceColumns: workspace ? getComputedStyle(workspace).gridTemplateColumns : '',
+          editorLeft: editorRect?.left ?? Number.POSITIVE_INFINITY,
+          logsLeft: logsRect?.left ?? Number.NEGATIVE_INFINITY,
           elements: {
             tabs: describe(tabs),
             content: describe(tabs?.querySelector(':scope > .arco-tabs-content')),
@@ -475,9 +484,11 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
       assert(metrics.cardBottom <= metrics.viewportHeight + 1, `SMTP card must stay inside the viewport: ${metricSummary}`);
       assert(metrics.documentScrollHeight <= metrics.viewportHeight + 1, `SMTP must not create outer page overflow: ${metricSummary}`);
       assert(metrics.bodyScrollHeight >= metrics.bodyClientHeight, 'SMTP card body must own any overflow');
+      assert(metrics.workspaceColumns.split(' ').length === 2, `wide SMTP view must put settings and logs side by side: ${metricSummary}`);
+      assert(metrics.editorLeft < metrics.logsLeft, `SMTP settings must be left of the log: ${metricSummary}`);
     });
 
-    await record('SMTP 窄屏布局不撑高页面且提醒消息自动改为单列', async () => {
+    await record('SMTP 与 Robot/OEM 提醒规则在窄屏内滚动且不撑高页面', async () => {
       const previousViewport = page.viewportSize();
       await page.setViewportSize({ width: 390, height: 600 });
       try {
@@ -485,8 +496,8 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
         await fields.host().waitFor();
         const metrics = await page.evaluate(() => {
           const tabs = document.querySelector('.system-config-tabs');
-          const card = document.querySelector('.system-mail-card');
-          const eventPanel = document.querySelector('.system-notification-panel--events');
+          const card = document.querySelector('.system-mail-editor');
+          const workspace = document.querySelector('.system-mail-workspace');
           const body = card?.querySelector('.arco-card-body');
           const tabsRect = tabs?.getBoundingClientRect();
           const cardRect = card?.getBoundingClientRect();
@@ -498,14 +509,34 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
             cardBottom: cardRect?.bottom ?? Number.POSITIVE_INFINITY,
             bodyClientHeight: body?.clientHeight ?? 0,
             bodyScrollHeight: body?.scrollHeight ?? 0,
-            eventColumns: eventPanel ? getComputedStyle(eventPanel).gridTemplateColumns : '',
+            workspaceRows: workspace ? getComputedStyle(workspace).gridTemplateRows : '',
           };
         });
         assert(metrics.tabsBottom <= metrics.viewportHeight + 1, `窄屏 SMTP tabs 必须在视口内: ${JSON.stringify(metrics)}`);
         assert(metrics.cardBottom <= metrics.viewportHeight + 1, `窄屏 SMTP 卡片必须在视口内: ${JSON.stringify(metrics)}`);
         assert(metrics.documentScrollHeight <= metrics.viewportHeight + 1, `窄屏 SMTP 不得产生外层滚动: ${JSON.stringify(metrics)}`);
         assert(metrics.bodyScrollHeight >= metrics.bodyClientHeight, '窄屏 SMTP 卡片 body 必须承载溢出');
-        assert.equal(metrics.eventColumns.split(' ').length, 1, '窄屏提醒消息必须为单列');
+        assert.equal(metrics.workspaceRows.split(' ').length, 2, '窄屏设置与日志应上下排列');
+        await selectTab('邮件提醒规则');
+        await page.getByRole('switch', { name: '邮件通知总开关', exact: true }).waitFor();
+        const reminder = await page.evaluate(() => {
+          const tabs = document.querySelector('.system-config-tabs');
+          const card = document.querySelector('.system-reminder-card');
+          const grid = card?.querySelector('.system-notification-grid');
+          return { viewportHeight: innerHeight, documentScrollHeight: document.documentElement.scrollHeight,
+            tabsBottom: tabs?.getBoundingClientRect().bottom ?? Infinity,
+            cardBottom: card?.getBoundingClientRect().bottom ?? Infinity,
+            gridColumns: grid ? getComputedStyle(grid).gridTemplateColumns : '',
+            gridClientHeight: grid?.clientHeight ?? 0, gridScrollHeight: grid?.scrollHeight ?? 0 };
+        });
+        assert(reminder.tabsBottom <= reminder.viewportHeight + 1, `窄屏提醒页签必须在视口内: ${JSON.stringify(reminder)}`);
+        assert(reminder.cardBottom <= reminder.viewportHeight + 1, `窄屏提醒卡片必须在视口内: ${JSON.stringify(reminder)}`);
+        assert(reminder.documentScrollHeight <= reminder.viewportHeight + 1, `窄屏提醒页不得产生外层滚动: ${JSON.stringify(reminder)}`);
+        assert.equal(reminder.gridColumns.split(' ').length, 1, '窄屏 Robot 提醒规则必须为单列');
+        assert(reminder.gridScrollHeight >= reminder.gridClientHeight, '窄屏提醒规则在卡片内部承载溢出');
+        await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEM' })
+          .evaluate(element => element.click());
+        await page.getByRole('button', { name: '保存 OEM 邮件提醒', exact: true }).waitFor();
       } finally {
         await page.setViewportSize(previousViewport);
         await page.reload();

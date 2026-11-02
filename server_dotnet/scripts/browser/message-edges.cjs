@@ -2,14 +2,15 @@ const { chromium } = require('playwright');
 const crypto = require('node:crypto');
 const { assert, OUT, s, f, record, login, api, projectMetadata, action, track } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
-async function createProjectGroup(context, token, supplierId, name) {
+async function createProjectGroup(context, token, supplierId, name, projectMetadataOptions) {
+  const metadata = projectMetadataOptions ?? await projectMetadata(context, token, supplierId);
   const group = await (await api(context, 'POST', '/project-groups', {
     name,
     description: '独立留言边界浏览器验收夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '留言边界机型',
-    ...await projectMetadata(context, token, supplierId),
+    ...metadata,
     subprojectNames: [name + ' 子项目'],
   }, token)).json();
   const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
@@ -18,17 +19,31 @@ async function createProjectGroup(context, token, supplierId, name) {
 }
 
 (async () => {
-  let browser, page;
+  let browser, page, context, token, activeContactId, originalNotificationItems;
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
+    context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await context.newPage(); track(page, 'message-edges');
     const admin = await login(page, 'admin', s.adminPassword); await page.waitForURL(s.base + '/');
+    token = admin.accessToken;
     const request = async (method, path, body, expected = 200) =>
       (await api(context, method, path, body, admin.accessToken, expected)).json();
+    const notificationKeys = ['notify.enabled', 'notify.supplier.enabled', 'notify.event.message_created'];
+    const configs = await request('GET', '/admin/system/configs');
+    originalNotificationItems = notificationKeys.map(key => {
+      const item = configs.find(config => config.key === key);
+      assert(item, 'notification config exists: ' + key);
+      return { key, value: item.value };
+    });
+    await request('PUT', '/admin/system/configs', {
+      items: notificationKeys.map(key => ({ key, value: 'true' })),
+    });
+    const supplierMetadata = await projectMetadata(context, admin.accessToken, f.suppliers.a.id);
+    activeContactId = supplierMetadata.robotOwnerContactIds[0];
     const project = await createProjectGroup(
       context, admin.accessToken, f.suppliers.a.id,
-      '留言边界-' + crypto.randomBytes(5).toString('hex'));
+      '留言边界-' + crypto.randomBytes(5).toString('hex'), supplierMetadata);
+    await request('PUT', '/admin/supplier-contacts/' + activeContactId + '/status', { status: 'ACTIVE' });
     await request('PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' });
     const endpoint = '/api/v1/projects/' + project.id + '/messages';
     const relative = '/projects/' + project.id + '/messages';
@@ -45,6 +60,7 @@ async function createProjectGroup(context, token, supplierId, name) {
       const raceProject = await createProjectGroup(
         context, admin.accessToken, f.suppliers.a.id,
         '未读摘要竞态-' + crypto.randomBytes(4).toString('hex'));
+      await request('PUT', '/admin/supplier-contacts/' + activeContactId + '/status', { status: 'ACTIVE' });
       await request('PUT', '/projects/' + raceProject.id + '/status', { status: 'IN_PROGRESS' });
       const supplierContext = await browser.newContext();
       let release;
@@ -66,7 +82,7 @@ async function createProjectGroup(context, token, supplierId, name) {
         const supplierPage = await supplierContext.newPage(); track(supplierPage, 'summary-race-supplier');
         const supplier = await login(supplierPage, f.users.a.username, f.users.a.changedPassword);
         await api(supplierContext, 'POST', '/projects/' + raceProject.id + '/messages',
-          { content: '等待管理员实际阅读的摘要竞态留言' }, supplier.accessToken);
+          { content: '等待管理员实际阅读的摘要竞态留言', signerName: '浏览器 Robot 负责人' }, supplier.accessToken);
         await page.route('**' + summaryPath, handler);
         await page.goto(s.base + '/projects/' + raceProject.id);
         await firstArrived;
@@ -290,5 +306,12 @@ async function createProjectGroup(context, token, supplierId, name) {
   } catch (error) {
     if (page) { await page.screenshot({ path: OUT + '/message-edges-failure.png', fullPage: true }).catch(() => {}); console.log((await page.locator('body').innerText()).slice(-4000)); }
     console.error(error.stack); process.exitCode = 1;
-  } finally { if (browser) await browser.close(); }
+  } finally {
+    if (context && token && originalNotificationItems)
+      await api(context, 'PUT', '/admin/system/configs', { items: originalNotificationItems }, token).catch(() => {});
+    if (context && token && activeContactId)
+      await api(context, 'PUT', '/admin/supplier-contacts/' + activeContactId + '/status',
+        { status: 'DISABLED' }, token).catch(() => {});
+    if (browser) await browser.close();
+  }
 })();

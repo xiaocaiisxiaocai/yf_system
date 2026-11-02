@@ -76,7 +76,7 @@ async function choose(page, placeholder, optionName) {
       'run users before business-controls: supplier A must have completed first password change');
     assert(f.suppliers?.a?.id, 'fixtures must contain supplier A');
 
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     const adminContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await adminContext.newPage();
     track(page, 'business-controls-admin');

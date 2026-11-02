@@ -1,6 +1,6 @@
 const {chromium}=require('playwright');
 const {assert,OUT,s,record,login,api,navigate,action,track}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
-(async()=>{let b,p;try{b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'management');const auth=await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
+(async()=>{let b,p;try{b=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'management');const auth=await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
 const roleName='UI自动验收角色-'+Date.now();let role;
 await navigate(p,'/rbac/roles');
 await record('内置角色隐藏删除入口且直接删除请求被拒绝',async()=>{

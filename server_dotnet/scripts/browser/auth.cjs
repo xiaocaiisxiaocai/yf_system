@@ -10,7 +10,7 @@ async function check(name,action){await action();checks.push({name,status:'pass'
 const {login}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
 (async()=>{
  try{
-  browser=await chromium.launch({channel:'chrome',headless:true});
+  browser=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
   const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true});
   page=await context.newPage();
   const errors=[];page.on('pageerror',e=>errors.push(e.message));

@@ -81,6 +81,7 @@ public sealed class SmtpTestServiceTests
         var network = await SmtpTestService.SendAsync(new Delivery(new SocketException()), new(), "r@example.invalid", TestContext.Current.CancellationToken);
         Assert.False(network.Success);
         Assert.Contains("连接", network.Message);
+        Assert.Contains("结果不确定", network.Message);
     }
 
     private sealed class Delivery(Exception? failure, Action? beforeSend = null) : ISmtpDelivery

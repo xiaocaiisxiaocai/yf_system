@@ -40,6 +40,7 @@ public sealed class ConnectionLifecycleTests
         builder.Services.AddSingleton<AuditService>();
         builder.Services.AddSingleton<SystemService>();
         builder.Services.AddSingleton<SmtpSettingsService>();
+        builder.Services.AddSingleton<SmtpTestService>();
         builder.Services.AddSingleton<MailService>();
         await using var application = builder.Build();
         application.MapSystemModule();

@@ -27,6 +27,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
 
 $scriptFile = [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
 $scriptDirectory = Split-Path -Parent $scriptFile

@@ -29,7 +29,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
   let browser;
   let page;
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await context.newPage();
     track(page, 'project-edges');

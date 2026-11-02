@@ -108,6 +108,6 @@ public sealed class SmtpTestService : IDisposable
         catch (SmtpCommandException error) { return new(false, $"SMTP 服务器拒绝发送（{(int)error.StatusCode} / {error.ErrorCode}）：请检查发件权限和收件邮箱。"); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(false, "测试发送超时，结果不确定：请先检查收件箱，再检查 SMTP 地址、端口和网络连接。", true); }
         catch (Exception error) when (error is SocketException or IOException or SmtpProtocolException)
-        { return new(false, "无法连接或完成 SMTP 通信：请检查服务器地址、端口、网络和加密方式；如已进入发送阶段，请先检查收件箱。", true); }
+        { return new(false, "无法连接或完成 SMTP 通信，发送结果不确定：请检查服务器地址、端口、网络和加密方式；如已进入发送阶段，请先检查收件箱。", true); }
     }
 }

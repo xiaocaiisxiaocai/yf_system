@@ -129,7 +129,7 @@ async function assertInsideViewport(locator, page, label) {
   const cleanupSessions = new Set();
   try {
     assert(f.suppliers?.a?.id, 'fixture supplier A is required');
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     context = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
       acceptDownloads: true,

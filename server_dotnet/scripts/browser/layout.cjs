@@ -1,7 +1,7 @@
 const {chromium}=require('playwright');
 const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
 (async()=>{let b,p;try{
- b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'layout');
+ b=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'layout');
  await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
  const detail=f.uiProjects?.a?.id;assert(detail,'Run business before layout to cover a real detail route');
  const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','Robot仿真协作'],['detail','/projects/'+detail,'/ 子项目'],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];

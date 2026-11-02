@@ -31,7 +31,7 @@ async function assertExcelGrid(dialog, expectedRows) {
   let browser;
   let page;
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     fs.writeFileSync(OUT + '/browser-environment.json', JSON.stringify({
       browser: browser.version(),
       mode: 'headless desktop Chrome',

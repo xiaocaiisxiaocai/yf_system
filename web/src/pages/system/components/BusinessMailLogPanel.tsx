@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { Alert, Button, Card, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http from '../../../api/client'
+import type { ApiResponses } from '../../../api/generated/api-types'
 import { useAuth } from '../../../store/auth'
 import { useLatestRequest, useLoadEffect } from '../../../oem/useLoadEffect'
 import { MAIL_ACTION_LABELS, mailRecentSummary, normalizeMailStatus, type MailStatus, type MailRecent } from './systemConfigModel'
@@ -28,7 +29,7 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
     setLoading(true)
     setError('')
     try {
-      const response = await http.get('/admin/system/mail-status', { params: { scope } })
+      const response = await http.get<ApiResponses['GET /admin/system/mail-status']>('/admin/system/mail-status', { params: { scope } })
       if (isLatest()) setSnapshot({ scope, data: normalizeMailStatus(response.data), source: mail })
     } catch { if (isLatest()) setError('邮件状态加载失败，请重试') }
     finally { if (isLatest()) setLoading(false) }

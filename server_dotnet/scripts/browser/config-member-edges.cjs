@@ -51,7 +51,7 @@ const normalizeExtensions = value => Array.from(new Set(String(value).split(',')
   let context;
   let token;
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await context.newPage();
     track(page, 'config-edges');

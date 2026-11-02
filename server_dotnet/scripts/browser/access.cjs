@@ -54,7 +54,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
   let browser;
   let page;
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     const adminContext = await browser.newContext();
     const adminPage = await adminContext.newPage();
     const adminAuth = await login(adminPage, 'admin', s.adminPassword);

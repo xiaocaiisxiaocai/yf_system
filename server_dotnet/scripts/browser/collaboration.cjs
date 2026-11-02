@@ -109,7 +109,7 @@ async function chooseNotificationTab(drawer, name) {
     assert(f.users?.b?.uiFirstChanged && f.users?.b?.token, 'supplier B must complete users step');
     assert(f.suppliers?.a?.id && f.suppliers?.b?.id, 'supplier fixtures A and B are required');
 
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     adminContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     supplierContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     adminPage = await adminContext.newPage();

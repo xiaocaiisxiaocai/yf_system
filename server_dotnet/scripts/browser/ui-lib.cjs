@@ -46,8 +46,8 @@ async function reserveLoginBudget(user,count=1){
   return;
  }
 }
-// Robot owners must be supplier contacts. The fixture contact stays DISABLED (so suppliers keep sending unsigned
-// messages/uploads and mail still goes to their accounts) and is enabled only around the POST that selects it.
+// Robot owners must be supplier contacts. Keep the synthetic fixture contact DISABLED outside
+// scenarios that require it; supplier notifications go to active contact emails, never shared logins.
 const ROBOT_OWNER_FIXTURE='浏览器 Robot 负责人';
 const robotOwnerFixtureIds=new Set();
 // Contact maintenance needs supplier:manage; use the admin session when the script signed in as admin.

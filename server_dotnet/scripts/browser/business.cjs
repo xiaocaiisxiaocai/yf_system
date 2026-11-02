@@ -144,7 +144,7 @@ async function preview(page, name, kind, label) {
   await watermark.waitFor({ state: 'visible' });
   assert.equal(await watermark.getAttribute('aria-hidden'), 'true');
   assert.match(await watermark.locator('span').first().textContent() || '',
-    /^\S+ .+ \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
+    /^\S+(?:\s+\S+)*\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/,
     kind + ' preview watermark');
   await page.screenshot({ path: OUT + '/' + label + '.png', fullPage: true });
   await modal.getByRole('button', { name: '关闭文件预览', exact: true }).click();
@@ -153,7 +153,7 @@ async function preview(page, name, kind, label) {
 
 (async () => {
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     adminPage = await openUser('admin');
     const admin = sessions.admin;
     const priorities = await json(admin.context, admin.token, 'GET', '/project-dictionaries?type=PRIORITY&enabledOnly=true');
@@ -267,10 +267,14 @@ async function preview(page, name, kind, label) {
         await internal.reload();
         await internal.getByText(response, { exact: true }).waitFor();
         await internal.getByRole('button', { name: '回执详情', exact: true }).click();
-        await internal.locator('.arco-drawer').getByText(f.suppliers[key].name + '代表', { exact: false }).waitFor();
-        await internal.locator('.arco-drawer').getByRole('button', { name: '关闭抽屉', exact: true }).click();
         const reads = await json(admin.context, admin.token, 'GET', '/messages/' + sent.id + '/reads');
         assert(reads.readers.some(reader => reader.userId === f.users[key].id));
+        const reader = reads.readers.find(item => item.userId === f.users[key].id);
+        assert.equal(reader.realName, f.users[key].username,
+          'supplier read receipts identify the shared login account without personal name or email');
+        await internal.locator('.arco-drawer').getByRole('listitem')
+          .filter({ hasText: f.users[key].username }).waitFor();
+        await internal.locator('.arco-drawer').getByRole('button', { name: '关闭抽屉', exact: true }).click();
       });
     }
 

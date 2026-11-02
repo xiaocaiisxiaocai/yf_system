@@ -2,7 +2,7 @@ const {chromium}=require('playwright');
 const {assert,OUT,s,record,login,api,navigate,action,track}=require(process.env.YF_BROWSER_SUPPORT_DIR+'/ui-lib.cjs');
 const pathOf=r=>new URL(r.url()).pathname;
 (async()=>{let b,p;try{
- b=await chromium.launch({channel:'chrome',headless:true});const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'system');
+ b=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'system');
  const auth=await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
  const configs=async()=>Object.fromEntries((await(await api(c,'GET','/admin/system/configs',undefined,auth.accessToken)).json()).map(x=>[x.key,x.value]));
  const mailStatus=async()=>await(await api(c,'GET','/admin/system/mail-status',undefined,auth.accessToken)).json();
@@ -36,10 +36,12 @@ const pathOf=r=>new URL(r.url()).pathname;
   await p.getByLabel('允许上传类型',{exact:true}).waitFor();assert.equal(await p.getByLabel('允许上传类型',{exact:true}).inputValue(),original['upload.allowed_exts']);p.expectedServerErrors.clear();
  });
  const originalNotificationPolicy=(await mailStatus()).notificationPolicy;
- await p.getByRole('tab',{name:'SMTP 配置',exact:true}).click();
+ await p.getByRole('tab',{name:'邮件提醒规则',exact:true}).click();
+ await p.locator('.system-reminder-card .arco-radio-button').filter({hasText:'Robot 仿真协作'}).first().waitFor();
+ await p.locator('.system-reminder-card .arco-radio-button').filter({hasText:'Robot 仿真协作'}).first().evaluate(element=>element.click());
  const setSwitch=async(label,target)=>{const control=p.getByRole('switch',{name:label,exact:true});const current=(await control.getAttribute('aria-checked'))==='true';if(current!==target)await control.click();};
  await record('邮件提醒对象和消息规则独立保存并恢复',async()=>{
-  await p.getByText('邮件提醒规则',{exact:true}).waitFor();
+  await p.getByRole('switch',{name:'邮件通知总开关',exact:true}).waitFor();
   await setSwitch('内部员工邮件通知',false);
   await setSwitch('新留言邮件提醒',false);
   await action(p,'/admin/system/configs','PUT',()=>p.getByRole('button',{name:'保存邮件提醒',exact:true}).click());

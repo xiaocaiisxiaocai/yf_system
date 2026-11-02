@@ -7,6 +7,7 @@
 // (YF_TESTHOST_OEM_PROCESS=1 + App__OemStorageRoot set by test-browser.py).
 const { chromium } = require('playwright');
 const crypto = require('node:crypto');
+const XLSX = require(process.env.YF_PROJECT_ROOT + '/web/node_modules/xlsx');
 const {
   fs, assert, OUT, s, f, save, record, login, reserveLoginBudget, api, action, track,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
@@ -93,7 +94,7 @@ async function openReleasedFile(page, url, fileName) {
 
 (async () => {
   try {
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);
     const outboundName = 'oem-outbound-' + marker + '.pdf';
     const inboundName = 'oem-inbound-' + marker + '.pdf';
     const outbound = OUT + '/' + outboundName;
@@ -146,33 +147,205 @@ async function openReleasedFile(page, url, fileName) {
       await page.getByRole('button', { name: '新增厂商', exact: true }).click();
       let modal = visibleModal(page);
       await modal.getByLabel('厂商名称', { exact: true }).fill(companyName);
-      await modal.getByLabel('联系人', { exact: true }).fill('UI联系人');
-      await modal.getByLabel('联系邮箱', { exact: true }).fill('ui-contact-' + marker + '@vendor.invalid');
       const company = await action(page, '/oem/companies', 'POST',
         () => modal.getByRole('button', { name: '确定', exact: true }).click());
       assert.equal(company.name, companyName);
+      assert.equal(Object.hasOwn(company, 'contactName'), false, 'company profile must not store a primary contact');
+      assert.equal(Object.hasOwn(company, 'contactEmail'), false, 'company profile must not store a primary email');
+      assert.equal(Object.hasOwn(company, 'contactPhone'), false, 'company profile must not store a primary phone');
       f.oem.companyId = company.id;
       save();
       const row = page.getByRole('row').filter({ hasText: companyName });
       await row.waitFor();
-      await row.getByRole('button', { name: '账号', exact: true }).click();
+      await row.getByRole('button', { name: '联络人', exact: true }).click();
+      let contacts = page.locator('.arco-drawer:visible').last();
+      await contacts.getByText('联络人 · ' + companyName, { exact: true }).waitFor();
+      const contactRows = [];
+      for (const index of [1, 2]) {
+        await contacts.getByRole('button', { name: '新增联络人', exact: true }).click();
+        modal = visibleModal(page);
+        const name = `OEM 联络人 ${index}-${marker}`;
+        const email = `oem-contact-${index}-${marker}@vendor.invalid`;
+        await modal.getByLabel('姓名', { exact: true }).fill(name);
+        await modal.getByLabel('邮箱', { exact: true }).fill(email);
+        const created = await action(page, `/oem/companies/${company.id}/contacts`, 'POST',
+          () => modal.getByRole('button', { name: '确定', exact: true }).click());
+        assert.equal(created.name, name);
+        assert.equal(created.email, email);
+        contactRows.push({ id: created.id, name, email });
+      }
+      f.oem.contacts = contactRows;
+      save();
+      await contacts.getByRole('row').filter({ hasText: contactRows[1].email }).waitFor();
+      await contacts.locator('.arco-drawer-close-icon').click();
+      await page.getByRole('row').filter({ hasText: companyName }).getByRole('button', { name: '账号管理', exact: true }).click();
       const drawer = page.locator('.oem-accounts-drawer .arco-drawer:visible');
-      await drawer.getByText(companyName + ' · 登录账号', { exact: true }).waitFor();
+      await drawer.getByText('账号管理 · ' + companyName, { exact: true }).waitFor();
+      const headers = await drawer.getByRole('row').first().innerText();
+      assert.match(headers, /账号/);
+      assert.doesNotMatch(headers, /姓名|邮箱/);
       await drawer.getByRole('button', { name: '新增账号', exact: true }).click();
       modal = visibleModal(page);
-      await modal.getByLabel('登录账号', { exact: true }).fill(vendor.username);
+      await modal.getByLabel('账号', { exact: true }).fill(vendor.username);
       await modal.getByLabel('初始密码', { exact: true }).fill(vendor.password);
       const account = await action(page, '/oem/companies/' + company.id + '/accounts', 'POST',
-        () => modal.getByRole('button', { name: '确定', exact: true }).click());
+        () => modal.getByRole('button', { name: '创建账号', exact: true }).click());
       assert.equal(account.employeeNo, vendor.username);
+      assert.equal(account.status, 'ACTIVE');
       assert.equal(account.mustChangePassword, true);
+      assert.equal(account.lastLoginAt, null);
       const accountRow = drawer.getByRole('row').filter({ hasText: vendor.username });
-      await accountRow.getByText('待改密', { exact: true }).waitFor();
+      await accountRow.waitFor();
+      assert.doesNotMatch(await accountRow.innerText(), /姓名|邮箱|待改密/);
       await page.screenshot({ path: OUT + '/oem-admin-vendor-account.png', fullPage: true });
       await drawer.locator('.arco-drawer-close-icon').click();
       await drawer.waitFor({ state: 'hidden' });
       await page.reload();
-      await page.getByRole('row').filter({ hasText: companyName }).getByText('1 / 1', { exact: true }).waitFor();
+      await page.getByRole('row').filter({ hasText: companyName }).getByRole('button', { name: '账号管理', exact: true }).waitFor();
+    });
+
+    await record('OEM 账号与联络人 Excel 导入重复厂商绑定、密码不导出且多联络人可导出', async () => {
+      const page = admin.page;
+      const companyId = f.oem.companyId;
+      const workbook = (headers, values) => {
+        const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([headers, values]), '数据');
+        return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
+      };
+      const upload = async (page, buttonName, title, fileName, headers, values) => {
+        await page.getByRole('button', { name: buttonName, exact: true }).click();
+        const modal = visibleModal(page);
+        await modal.getByText(title, { exact: true }).waitFor();
+        const templateReady = page.waitForEvent('download');
+        await modal.getByRole('button', { name: '下载模板', exact: true }).click();
+        const templateDownload = await templateReady;
+        assert.equal(await templateDownload.failure(), null);
+        const templatePath = OUT + '/template-' + fileName;
+        await templateDownload.saveAs(templatePath);
+        const templateBook = XLSX.read(fs.readFileSync(templatePath), { type: 'buffer' });
+        assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 })[0], headers,
+          'ODM/OEM template fields must match the import contract');
+        await modal.getByLabel('选择 Excel 文件', { exact: true }).setInputFiles({
+          name: fileName,
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          buffer: workbook(headers, values),
+        });
+        return modal;
+      };
+
+      const shortAccount = 'oem_short_' + marker;
+      let modal = await upload(page, '导入账号', '导入 ODM/OEM 厂商账号', 'oem-short-password.xlsx',
+        ['厂商名称', '账号', '初始密码'], [companyName, shortAccount, 'Ab1!']);
+      await modal.getByRole('row').filter({ hasText: shortAccount }).getByText('有错误', { exact: true }).waitFor();
+      assert.equal(await modal.getByRole('button', { name: '确认导入', exact: true }).isDisabled(), true,
+        'four-character initial passwords must be rejected before import');
+      await modal.getByRole('button', { name: '关闭', exact: true }).click();
+
+      const importedAccount = { employeeNo: 'oem_import_' + marker, password: 'T3st#A9q' };
+      modal = await upload(page, '导入账号', '导入 ODM/OEM 厂商账号', 'oem-accounts.xlsx',
+        ['厂商名称', '账号', '初始密码'], [companyName, importedAccount.employeeNo, importedAccount.password]);
+      await modal.getByRole('row').filter({ hasText: importedAccount.employeeNo }).getByText('待导入', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).click();
+      await modal.getByRole('row').filter({ hasText: importedAccount.employeeNo }).getByText('已导入', { exact: true }).waitFor();
+      const accounts = await json(admin.context, adminToken, 'GET', `/oem/companies/${companyId}/accounts`);
+      const savedAccount = accounts.find(item => item.employeeNo === importedAccount.employeeNo);
+      assert(savedAccount);
+      assert.equal(savedAccount.status, 'ACTIVE');
+      assert.equal(savedAccount.mustChangePassword, true);
+      assert.equal(savedAccount.lastLoginAt, null);
+      await modal.getByRole('button', { name: '关闭', exact: true }).click();
+
+      const importedContact = { name: 'Excel 联络人-' + marker, email: 'excel-oem-' + marker + '@vendor.invalid' };
+      modal = await upload(page, '导入联络人', '导入 ODM/OEM 厂商联络人', 'oem-contacts.xlsx',
+        ['厂商名称', '联络人姓名', '邮箱', '排序'], [companyName, importedContact.name, importedContact.email, '3']);
+      await modal.getByRole('row').filter({ hasText: importedContact.email }).getByText('待导入', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).click();
+      await modal.getByRole('row').filter({ hasText: importedContact.email }).getByText('已导入', { exact: true }).waitFor();
+      const contacts = await json(admin.context, adminToken, 'GET', `/oem/companies/${companyId}/contacts`);
+      assert.equal(contacts.length, 3);
+      assert(contacts.some(item => item.name === importedContact.name && item.email === importedContact.email));
+      await modal.getByRole('button', { name: '关闭', exact: true }).click();
+
+      const exportAndRead = async buttonName => {
+        const ready = page.waitForEvent('download');
+        await page.getByRole('button', { name: buttonName, exact: true }).click();
+        const file = await ready;
+        assert.equal(await file.failure(), null);
+        const target = OUT + '/browser-' + buttonName + '.xlsx';
+        await file.saveAs(target);
+        const bytes = fs.readFileSync(target);
+        return XLSX.read(bytes, { type: 'buffer' });
+      };
+      const accountBook = await exportAndRead('导出账号');
+      const accountRows = XLSX.utils.sheet_to_json(accountBook.Sheets.数据, { header: 1 });
+      assert.deepEqual(accountRows[0], ['厂商名称', '账号', '状态', '最近登录']);
+      assert.equal(accountRows.some(row => row.some(value => String(value).includes(importedAccount.password))), false,
+        'account exports must never include initial passwords');
+      const contactBook = await exportAndRead('导出联络人');
+      const contactRows = XLSX.utils.sheet_to_json(contactBook.Sheets.数据, { header: 1 });
+      assert.deepEqual(contactRows[0], ['厂商名称', '联络人姓名', '邮箱', '排序', '状态']);
+      assert.equal(contactRows.filter(row => String(row[0]) === companyName).length, 3);
+      assert(contactRows.some(row => row.includes(importedContact.email)));
+    });
+
+    await record('OEM 厂商 Excel 模板只接收名称备注，重复厂商跳过，新公司默认启用且可导出', async () => {
+      const page = admin.page;
+      const importedCompanyName = 'OEM Excel 厂商-' + marker;
+      await page.getByRole('button', { name: '导入厂商', exact: true }).click();
+      let modal = visibleModal(page);
+      await modal.getByText('导入 ODM/OEM 厂商资料', { exact: true }).waitFor();
+      const templateReady = page.waitForEvent('download');
+      await modal.getByRole('button', { name: '下载模板', exact: true }).click();
+      const template = await templateReady;
+      const templatePath = OUT + '/oem-company-template.xlsx';
+      await template.saveAs(templatePath);
+      const templateBook = XLSX.read(fs.readFileSync(templatePath), { type: 'buffer' });
+      assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 })[0], ['厂商名称', '备注']);
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+        ['厂商名称', '备注'],
+        [importedCompanyName, 'Excel 主档测试'],
+        [companyName, '既有厂商不覆盖'],
+      ]), '数据');
+      const companyFile = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+      await modal.getByLabel('选择 Excel 文件', { exact: true }).setInputFiles({
+        name: 'oem-companies.xlsx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        buffer: companyFile,
+      });
+      await modal.getByRole('row').filter({ hasText: importedCompanyName }).getByText('待导入', { exact: true }).waitFor();
+      await modal.getByRole('row').filter({ hasText: companyName }).getByText('跳过', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).click();
+      await modal.getByRole('row').filter({ hasText: importedCompanyName }).getByText('已导入', { exact: true }).waitFor();
+      await modal.getByRole('row').filter({ hasText: companyName }).getByText('跳过', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '关闭', exact: true }).click();
+
+      const companies = await json(admin.context, adminToken, 'GET', '/oem/companies?page=1&pageSize=100');
+      const importedCompany = companies.list.find(item => item.name === importedCompanyName);
+      assert(importedCompany);
+      assert.equal(importedCompany.status, 'ACTIVE');
+      assert.equal(importedCompany.accountCount, 0);
+      assert.equal(importedCompany.contactCount, 0);
+      assert.equal(Object.hasOwn(importedCompany, 'contactName'), false);
+      assert.equal(Object.hasOwn(importedCompany, 'contactEmail'), false);
+      await page.getByRole('row').filter({ hasText: importedCompanyName }).waitFor();
+
+      const ready = page.waitForEvent('download');
+      await page.getByRole('button', { name: '导出厂商', exact: true }).click();
+      const download = await ready;
+      assert.equal(await download.failure(), null);
+      const exportPath = OUT + '/oem-companies-export.xlsx';
+      await download.saveAs(exportPath);
+      const exportedBook = XLSX.read(fs.readFileSync(exportPath), { type: 'buffer' });
+      const exportedRows = XLSX.utils.sheet_to_json(exportedBook.Sheets.数据, { header: 1 });
+      assert.deepEqual(exportedRows[0], ['厂商名称', '备注', '状态', '账号数', '启用账号数', '联络人']);
+      const exportedCompany = exportedRows.find(row => row[0] === importedCompanyName);
+      assert(exportedCompany);
+      assert.equal(exportedCompany[2], 'ACTIVE');
+      assert.equal(exportedCompany[3], '0');
+      assert.equal(exportedCompany[4], '0');
+      assert.equal(exportedCompany[5], '0');
     });
     await admin.context.close();
 

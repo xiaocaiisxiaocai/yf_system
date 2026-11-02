@@ -23,6 +23,13 @@ import urllib.request
 import zipfile
 
 import pymysql
+
+# Windows PowerShell may use GBK for child-process output. Browser-runner banners contain
+# emoji, so replace characters the active terminal cannot display instead of aborting QA.
+for output_stream in (sys.stdout, sys.stderr):
+    if hasattr(output_stream, 'reconfigure'):
+        output_stream.reconfigure(errors='backslashreplace')
+
 from browser_step_evidence import (
     BrowserStepEvidenceError,
     snapshot_browser_evidence,
@@ -31,6 +38,7 @@ from browser_step_evidence import (
 from test_host_artifacts import verify_test_host_artifacts
 from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
 from script_safety import clean_dotnet_config_environment
+from smtp_capture import SmtpCapture
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = Path(__file__).resolve().parent / 'browser'
@@ -40,8 +48,8 @@ TEST_TEMP_ROOT = TEST_ROOT / 'tmp'
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path)
 parser.add_argument('--continue-on-failure', action='store_true', help='Collect independent step failures; the run still fails if any step fails.')
-parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'oem'],
-    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras', 'oem'])
+parser.add_argument('--steps', nargs='+', default=['auth', 'fixtures', 'users', 'management', 'accounts', 'supplier-excel', 'internal-excel', 'business', 'dictionaries', 'preview-extras', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'oem', 'mail-notifications'],
+    choices=['auth', 'fixtures', 'users', 'management', 'accounts', 'supplier-excel', 'internal-excel', 'business', 'system', 'smtp-settings', 'final', 'layout', 'project-edges', 'access', 'auth-edges', 'file-edges', 'config-member-edges', 'message-edges', 'file-controls', 'business-controls', 'collaboration', 'dictionaries', 'preview-extras', 'oem', 'mail-notifications'])
 args = parser.parse_args()
 if not __debug__:
     raise SystemExit('Do not run the browser suite with Python assertions disabled (-O/PYTHONOPTIMIZE).')
@@ -51,8 +59,11 @@ if len(args.steps) != len(set(args.steps)):
     raise SystemExit('Run each browser step at most once.')
 for step, dependencies in {'business': ['users'], 'final': ['business'], 'layout': ['business'],
                            'dictionaries': ['users'], 'preview-extras': ['users'],
+                           'supplier-excel': ['accounts'],
+                           'internal-excel': ['users'],
                            'project-edges': ['users'], 'file-edges': ['users'], 'message-edges': ['users'],
-                           'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users']}.items():
+                           'smtp-settings': ['system'], 'business-controls': ['users'], 'collaboration': ['users'],
+                           'mail-notifications': ['system', 'smtp-settings', 'oem']}.items():
     if step in args.steps and any(required not in args.steps[:args.steps.index(step)] for required in dependencies):
         raise SystemExit(f'{step} requires earlier steps: {", ".join(dependencies)}')
 output = (args.output or TEST_ROOT / 'browser' / ('browser-' + time.strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(4))).resolve()
@@ -146,10 +157,13 @@ connection = pymysql.connect(host=url.hostname, port=url.port or 3306,
     user=urllib.parse.unquote(url.username or ''), password=urllib.parse.unquote(url.password or ''), autocommit=True)
 created = False
 process = None
+browser_process = None
 storage_path = None
 oem_storage_path = None
+smtp_capture = None
 result = {'status': 'fail', 'steps': args.steps, 'stepEvidence': [],
-          'stepFailures': [], 'businessDatabaseTouched': False, 'smtpUsed': False}
+          'stepFailures': [], 'businessDatabaseTouched': False, 'smtpUsed': False,
+          'localSmtpAttempts': 0, 'localSmtpCaptured': 0, 'externalMailSent': False}
 try:
     with connection.cursor() as cursor:
         cursor.execute(f'CREATE DATABASE `{schema}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')
@@ -163,6 +177,13 @@ try:
         oem_storage_path = Path(temporary).resolve() / 'oem-storage'
         oem_storage_path.mkdir()
         content_root = prepare_content_root(Path(temporary).resolve())
+        if 'mail-notifications' in args.steps:
+            pfx_path = os.environ.get('YF_BROWSER_SMTP_PFX')
+            pfx_password = os.environ.get('YF_BROWSER_SMTP_PFX_PASSWORD')
+            if not pfx_path or not pfx_password:
+                raise RuntimeError('Real local SMTP acceptance requires an existing trusted localhost certificate export; no trust settings are changed.')
+            smtp_capture = scope.enter_context(SmtpCapture(pfx_path, pfx_password, TEST_TEMP_ROOT))
+
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
             port = probe.getsockname()[1]
@@ -171,6 +192,8 @@ try:
         # The node/Playwright steps only need the evidence/support/project paths; they must not
         # inherit the owned database administration connection string or the JWT secret.
         node_env = clean_dotnet_config_environment()
+        for private_key in ('YF_TEST_DATABASE_URL', 'YF_BROWSER_SMTP_PFX', 'YF_BROWSER_SMTP_PFX_PASSWORD'):
+            node_env.pop(private_key, None)
         node_env.update({
             'YF_PROJECT_ROOT': str(ROOT), 'YF_BROWSER_SUPPORT_DIR': str(SCRIPTS),
             'YF_BROWSER_EVIDENCE_DIR': str(output),
@@ -190,6 +213,9 @@ try:
             'ASPNETCORE_CONTENTROOT': str(content_root),
             'YF_BOOTSTRAP_PASSWORD': initial, 'Logging__LogLevel__Default': 'Warning',
         })
+        if smtp_capture:
+            env['YF_TESTHOST_MAIL_CONTROL'] = smtp_capture.token
+            env['YF_TESTHOST_SMTP_PORT'] = str(smtp_capture.smtp.server_address[1])
         initialized = subprocess.run(['dotnet', str(dll), '--initialize-database'], cwd=content_root, env=env,
                                      capture_output=True, timeout=300)
         if initialized.returncode:
@@ -206,8 +232,30 @@ try:
             scope.callback(stop_owned, process)
             wait_for_health(process, base)
             (output / 'state.private.json').write_text(json.dumps({'base': base,
-                'initialPassword': initial, 'adminChangedPassword': 'Yf9!' + secrets.token_urlsafe(9)}), encoding='utf-8')
+                'initialPassword': initial, 'adminChangedPassword': 'Yf9!' + secrets.token_urlsafe(9),
+                'smtpCapture': smtp_capture.browser_settings if smtp_capture else None}), encoding='utf-8')
             print(f'Owned browser host ready: {base}; no business data or SMTP', flush=True)
+            browser_log = scope.enter_context((output / 'browser-host.log').open('wb'))
+            browser_process = subprocess.Popen(['node', str(runner.resolve()), str(SCRIPTS / 'browser-host.cjs')],
+                cwd=ROOT, env=node_env, stdin=subprocess.PIPE, stdout=browser_log, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            def stop_browser():
+                if browser_process.poll() is None:
+                    browser_process.stdin.close()
+                    try:
+                        browser_process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        stop_owned(browser_process)
+            scope.callback(stop_browser)
+            endpoint_file = output / 'browser-host.private.json'
+            deadline = time.monotonic() + 45
+            while not endpoint_file.is_file():
+                if browser_process.poll() is not None or time.monotonic() > deadline:
+                    raise RuntimeError('Owned browser did not become ready; see browser-host.log')
+                time.sleep(.1)
+            node_env['YF_BROWSER_WS_ENDPOINT'] = json.loads(endpoint_file.read_text(encoding='utf-8'))['endpoint']
+            print('PASS one owned Chrome process; per-step contexts and no Windows integrated authentication', flush=True)
+
             for script in args.steps:
                 print('RUN browser ' + script, flush=True)
                 step_log_path = output / (script + '.log')
@@ -263,7 +311,10 @@ try:
             for name in ('page-errors.jsonl', 'http-errors.jsonl'):
                 assert not (output / name).exists() or not (output / name).read_text(encoding='utf-8').strip(), name
             result.update(status='pass', browserOperationGroups=len(operations) + len(bootstrap),
-                persisted=persisted, zipIntegrity=zip_integrity, sourceHashes=before, artifactHashes=artifact_hashes)
+                persisted=persisted, zipIntegrity=zip_integrity, sourceHashes=before, artifactHashes=artifact_hashes,
+                smtpUsed=bool(smtp_capture and smtp_capture.attempts),
+                localSmtpAttempts=smtp_capture.attempts if smtp_capture else 0,
+                localSmtpCaptured=len(smtp_capture.messages) if smtp_capture else 0, externalMailSent=False)
 finally:
     # Every cleanup step runs on its own: one failure must not skip dropping the database,
     # deleting private state (passwords) or writing results.json.
@@ -288,6 +339,9 @@ finally:
     if created:
         cleanup_step('drop owned database', drop_database)
     cleanup_step('close database connection', connection.close)
+    if smtp_capture is not None:
+        result.update(smtpUsed=smtp_capture.attempts > 0, localSmtpAttempts=smtp_capture.attempts,
+            localSmtpCaptured=len(smtp_capture.messages), externalMailSent=False)
     def remove_private(private):
         if private.resolve().parent != output:
             raise RuntimeError('private state escaped the evidence directory')
@@ -298,7 +352,8 @@ finally:
     if cleanup_errors:
         result['status'] = 'fail'
         result['cleanupErrors'] = cleanup_errors
-    result['cleanup'] = {'ownedProcessExited': process is None or process.poll() is not None,
+    result['cleanup'] = {'ownedBrowserExited': browser_process is None or browser_process.poll() is not None,
+        'ownedProcessExited': process is None or process.poll() is not None,
         'ownedDatabaseDropped': database_dropped or not created,
         'ownedStorageRemoved': storage_path is None or not storage_path.exists(),
         'ownedOemStorageRemoved': oem_storage_path is None or not oem_storage_path.exists(),
