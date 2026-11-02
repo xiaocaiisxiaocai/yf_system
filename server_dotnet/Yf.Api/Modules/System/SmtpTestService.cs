@@ -1,5 +1,6 @@
 using System.Net.Mail;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using Yf.Api.Infrastructure;
@@ -92,6 +93,29 @@ public sealed class SmtpTestService : IDisposable
         return recipient;
     }
 
+    /// <summary>
+    /// The server's rejection text is never echoed (it may carry arbitrary content); only its SMTP status code and
+    /// a fixed explanation for well-known Microsoft 365 reasons are shown, e.g. "（5.7.139，被组织安全默认值阻止）".
+    /// </summary>
+    internal static string AuthenticationDiagnosis(string? serverText)
+    {
+        var text = serverText ?? "";
+        var code = Regex.Match(text, @"\b[45]\.\d{1,3}\.\d{1,3}\b").Value;
+        if (code.Length == 0) code = Regex.Match(text, @"\b5\d\d\b").Value;
+        var reason = text switch
+        {
+            _ when text.Contains("security defaults", StringComparison.OrdinalIgnoreCase) => "被组织的安全默认值阻止，需管理员为该账号放行 SMTP AUTH",
+            _ when text.Contains("SmtpClientAuthentication is disabled", StringComparison.OrdinalIgnoreCase) => "该邮箱已禁用 SMTP AUTH，需管理员在 Exchange 中开启",
+            _ when text.Contains("did not meet the criteria", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("conditional access", StringComparison.OrdinalIgnoreCase) => "被组织的登录策略（如条件访问、受信任位置）阻止",
+            _ when text.Contains("credentials were incorrect", StringComparison.OrdinalIgnoreCase)
+                || text.Contains("invalid credentials", StringComparison.OrdinalIgnoreCase) => "账号或密码错误；已开启多重验证时需使用应用密码",
+            _ => "",
+        };
+        var parts = new[] { code, reason }.Where(part => part.Length > 0).ToArray();
+        return parts.Length == 0 ? "" : "（" + string.Join("，", parts) + "）";
+    }
+
     internal static async Task<SmtpTestResponse> SendAsync(ISmtpDelivery delivery, SmtpOptions options, string recipient, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -102,7 +126,7 @@ public sealed class SmtpTestService : IDisposable
                 "这是一封 SMTP 配置测试邮件。收到此邮件说明当前配置已成功完成邮件发送。\n此邮件由管理员手动触发，请勿回复。"), timeout.Token);
             return new(true, "SMTP 服务器已接受测试邮件，请检查收件箱或垃圾邮件；最终送达以实际收件为准。");
         }
-        catch (MailKit.Security.AuthenticationException) { return new(false, "SMTP 认证失败：请检查登录账号、密码或授权码，以及邮箱是否允许 SMTP AUTH；当前支持账号密码认证。"); }
+        catch (MailKit.Security.AuthenticationException error) { return new(false, "SMTP 认证失败" + AuthenticationDiagnosis(error.Message) + "：请检查登录账号、密码或授权码，以及邮箱是否允许 SMTP AUTH；当前支持账号密码认证。"); }
         catch (SslHandshakeException) { return new(false, "TLS 握手失败：请检查端口、连接加密方式和服务器证书。"); }
         catch (SmtpSenderAddressException) { return new(false, "发件邮箱地址无效，请检查并重新保存 SMTP 配置。"); }
         catch (SmtpCommandException error) { return new(false, $"SMTP 服务器拒绝发送（{(int)error.StatusCode} / {error.ErrorCode}）：请检查发件权限和收件邮箱。"); }

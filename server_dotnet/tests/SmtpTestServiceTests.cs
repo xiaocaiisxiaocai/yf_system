@@ -78,6 +78,18 @@ public sealed class SmtpTestServiceTests
         Assert.False(auth.Success);
         Assert.Contains("认证失败", auth.Message);
         Assert.DoesNotContain("secret", auth.Message);
+        var blocked = await SmtpTestService.SendAsync(new Delivery(new MailKit.Security.AuthenticationException(
+            "5.7.139 Authentication unsuccessful, user is locked by your organization's security defaults policy. secret=abc")),
+            new(), "r@example.invalid", TestContext.Current.CancellationToken);
+        Assert.Contains("5.7.139", blocked.Message);
+        Assert.Contains("安全默认值", blocked.Message);
+        Assert.DoesNotContain("secret", blocked.Message);
+        Assert.DoesNotContain("locked", blocked.Message);
+        Assert.Equal("（5.7.3，账号或密码错误；已开启多重验证时需使用应用密码）",
+            SmtpTestService.AuthenticationDiagnosis("535 5.7.3 Authentication unsuccessful: user credentials were incorrect"));
+        Assert.Equal("（5.7.139，该邮箱已禁用 SMTP AUTH，需管理员在 Exchange 中开启）",
+            SmtpTestService.AuthenticationDiagnosis("5.7.139 Authentication unsuccessful, SmtpClientAuthentication is disabled for the Mailbox."));
+        Assert.Equal("", SmtpTestService.AuthenticationDiagnosis("credential=secret"));
         var network = await SmtpTestService.SendAsync(new Delivery(new SocketException()), new(), "r@example.invalid", TestContext.Current.CancellationToken);
         Assert.False(network.Success);
         Assert.Contains("连接", network.Message);
