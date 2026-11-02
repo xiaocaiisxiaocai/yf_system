@@ -11,7 +11,8 @@ public sealed record ProjectAccess(
     ulong SupplierId,
     ulong CreatedBy,
     string Status,
-    ulong? ResponsibleUserId = null);
+    ulong? ResponsibleUserId = null,
+    ulong? SectionId = null);
 
 public static class ProjectAccessService
 {
@@ -31,8 +32,10 @@ public static class ProjectAccessService
         if (await HasPermissionAsync(db, current.Id, "project:view_all", ct)) return db.Projects;
         var userId = current.Id;
         var createdGroupIds = db.ProjectGroups.Where(group => group.CreatedBy == userId).Select(group => group.Id);
+        var supervisedSections = ProjectDeletionAuthorization.SectionsLedBy(db, userId);
         return db.Projects.Where(project => project.ResponsibleUserId == userId
-            || createdGroupIds.Contains(project.ProjectGroupId));
+            || createdGroupIds.Contains(project.ProjectGroupId)
+            || project.SectionId.HasValue && supervisedSections.Contains(project.SectionId.Value));
     }
 
     public static async Task<ProjectAccess> RequireViewAsync(
@@ -131,7 +134,7 @@ public static class ProjectAccessService
         await using var db = EfDb.Use(conn, tx);
         var row = await db.Projects.Where(item => item.Id == projectId).Select(item => new ProjectAccess(
             item.Id, (ulong?)item.ProjectGroupId, item.SupplierId, item.CreatedBy, item.Status,
-            item.ResponsibleUserId)).SingleOrDefaultAsync(ct);
+            item.ResponsibleUserId, item.SectionId)).SingleOrDefaultAsync(ct);
         if (row is null) throw ApiException.NotFound();
         // Scope is checked on an unlocked read first: a caller outside the project's scope must not be
         // able to queue behind, or hold, the row locks of a project it cannot see.
@@ -146,14 +149,14 @@ public static class ProjectAccessService
         var locked = await db.Database.SqlQuery<LockedProjectAccess>($"""
             SELECT id AS Id,project_group_id AS ProjectGroupId,supplier_id AS SupplierId,
                    created_by AS CreatedBy,status AS Status,
-                   responsible_user_id AS ResponsibleUserId
+                   responsible_user_id AS ResponsibleUserId,section_id AS SectionId
             FROM projects WHERE id={projectId} FOR UPDATE
             """).SingleOrDefaultAsync(ct);
         if (locked is null) throw ApiException.NotFound();
         // Ownership can change between the unlocked read and the lock, so authorise the locked values again.
         return await AuthorizeAsync(db, current, new ProjectAccess(
             locked.Id, locked.ProjectGroupId, locked.SupplierId, locked.CreatedBy,
-            locked.Status, locked.ResponsibleUserId), ct);
+            locked.Status, locked.ResponsibleUserId, locked.SectionId), ct);
     }
 
     private static async Task<ProjectAccess> AuthorizeAsync(
@@ -168,7 +171,9 @@ public static class ProjectAccessService
         if (access.ResponsibleUserId == current.Id
             || await HasPermissionAsync(db, current.Id, "project:view_all", ct)
             || access.ProjectGroupId is ulong groupId
-                && await db.ProjectGroups.AnyAsync(group => group.Id == groupId && group.CreatedBy == current.Id, ct))
+                && await db.ProjectGroups.AnyAsync(group => group.Id == groupId && group.CreatedBy == current.Id, ct)
+            || access.SectionId is ulong sectionId
+                && await ProjectDeletionAuthorization.SectionsLedBy(db, current.Id).AnyAsync(id => id == sectionId, ct))
             return access;
         throw ApiException.OutOfScope();
     }
@@ -181,6 +186,7 @@ public static class ProjectAccessService
         public ulong CreatedBy { get; init; }
         public string Status { get; init; } = "";
         public ulong? ResponsibleUserId { get; init; }
+        public ulong? SectionId { get; init; }
     }
 }
 

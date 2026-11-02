@@ -191,9 +191,9 @@ internal sealed partial class ProjectService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
+        await ProjectDeletionAuthorization.RequireAsync(conn, tx, current, project.SectionId, ct);
         ProjectWorkflowRules.EnsureDeletable(project.Status);
         await using var db = EfDb.Use(conn, tx);
         if (await db.ProjectCopyJobs.AnyAsync(job => job.SourceProjectId == projectId

@@ -62,9 +62,11 @@ internal sealed class ProjectGroupService(
             .Page(offset, size).ToArrayAsync(ct);
         await LoadWorkOrdersAsync(db, rows, ct);
         await LoadGroupUnreadAsync(db, rows, current.Id, ct);
+        var deletionScope = await ProjectDeletionAuthorization.LoadScopeAsync(conn, tx, current, ct);
         await tx.CommitAsync(ct);
         return ProjectJson.Page(
-            rows.Select(row => ProjectJson.ProjectGroup(row, current.IsInternal)).ToArray(), total, actualPage, size);
+            rows.Select(row => ProjectJson.ProjectGroup(
+                row, current.IsInternal, deletionScope.CanDelete(row.SectionId))).ToArray(), total, actualPage, size);
     }
 
     internal async Task<ProjectGroupDetailResponse> DetailAsync(
@@ -81,9 +83,10 @@ internal sealed class ProjectGroupService(
         var projects = await ProjectQueries.Rows(db).Where(project => project.ProjectGroupId == groupId)
             .OrderBy(project => project.Id).ToArrayAsync(ct);
         await LoadProjectExtrasAsync(db, projects, current.Id, ct);
+        var deletionScope = await ProjectDeletionAuthorization.LoadScopeAsync(conn, tx, current, ct);
         await tx.CommitAsync(ct);
         return new ProjectGroupDetailResponse(
-            ProjectJson.ProjectGroup(group, current.IsInternal),
+            ProjectJson.ProjectGroup(group, current.IsInternal, deletionScope.CanDelete(group.SectionId)),
             projects.Select(project => ProjectJson.Project(project, current.IsInternal)).ToArray());
     }
 
@@ -504,9 +507,9 @@ internal sealed class ProjectGroupService(
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, true, ct);
-        await AccessService.RequirePermissionAsync(conn, tx, current, "project:delete", ct);
         await using var db = EfDb.Use(conn, tx);
         var group = await LoadGroupAsync(db, groupId, current.Id, ct, loadUnread: false);
+        await ProjectDeletionAuthorization.RequireAsync(conn, tx, current, group.SectionId, ct);
         if (group.SubprojectCount > 0) throw ApiException.Conflict("主项目仍有子项目，请先逐个处理子项目");
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_GROUP_DELETE", "project_group", groupId,
             new { name = group.Name }, ip, ct);

@@ -1160,6 +1160,7 @@ export interface ProjectGroupResponse {
   materialPendingCount: number
   terminatedCount: number
   unreadMessages: number
+  canDelete: boolean
 }
 
 export interface ProjectGroupTransferRequest {

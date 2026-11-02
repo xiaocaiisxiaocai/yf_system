@@ -12109,6 +12109,7 @@
       },
       "ProjectGroupResponse": {
         "required": [
+          "canDelete",
           "completedAt",
           "completedCount",
           "createdAt",
@@ -12285,6 +12286,9 @@
           "unreadMessages": {
             "type": "integer",
             "format": "int64"
+          },
+          "canDelete": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

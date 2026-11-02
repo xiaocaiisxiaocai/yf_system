@@ -188,7 +188,7 @@ function ProjectGroupDetailContent({ id }: { id?: string }) {
   }, [editConflict, editing, projectMap])
   const canCreateChild = Boolean(canWrite && hasPerm('project:create'))
   const canUpdateChild = Boolean(canWrite && hasPerm('project:update'))
-  const canDeleteChild = Boolean(isInternal && hasPerm('project:delete'))
+  const canDeleteChild = Boolean(isInternal && (hasPerm('project:delete') || data?.group.canDelete))
   const copyReady = copyJobs.ready
   // 面板中的管理按钮复用本页的弹窗、复制幂等键和防重状态；这些处理函数不依赖主项目数据，可在加载前定义。
   const openEdit = useCallback((project: ProjectSummary) => {

@@ -313,6 +313,28 @@ describe('主项目刷新范围', () => {
     expect(screen.getByRole('button', { name: '复制' })).toBeEnabled()
   })
 
+  it('allows an organization supervisor to delete a draft subproject using the scoped group capability', async () => {
+    mocks.perms = ['project:create']
+    mocks.delete.mockResolvedValue({ data: {} })
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/project-groups/3') return Promise.resolve({ data: {
+        ...draftDetail,
+        group: { ...draftDetail.group, canDelete: true },
+      } })
+      if (url === '/project-groups/3/copy-jobs') return Promise.resolve({ data: { jobs: [] } })
+      const pane = subprojectGet(url)
+      if (pane) return pane
+      throw new Error(`unexpected GET ${url}`)
+    })
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.click(await screen.findByRole('button', { name: '删除' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/projects/9'))
+    expect(mocks.perms).not.toContain('project:delete')
+  })
+
   it('reacts only to realtime signals for projects of this group', async () => {
     const view = renderPage()
     await screen.findByRole('heading', { name: '主项目 A' })

@@ -10,7 +10,8 @@ internal sealed record ProjectGroupAccess(
     ulong SupplierId,
     ulong CreatedBy,
     string Status,
-    ulong? ResponsibleUserId);
+    ulong? ResponsibleUserId,
+    ulong? SectionId = null);
 
 internal static class ProjectGroupAccessService
 {
@@ -30,7 +31,9 @@ internal static class ProjectGroupAccessService
         if (await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct))
             return db.ProjectGroups;
         var userId = current.Id;
-        return db.ProjectGroups.Where(group => group.ResponsibleUserId == userId || group.CreatedBy == userId);
+        var supervisedSections = ProjectDeletionAuthorization.SectionsLedBy(db, userId);
+        return db.ProjectGroups.Where(group => group.ResponsibleUserId == userId || group.CreatedBy == userId
+            || group.SectionId.HasValue && supervisedSections.Contains(group.SectionId.Value));
     }
 
     internal static async Task<ProjectGroupAccess> RequireViewAsync(
@@ -48,20 +51,20 @@ internal static class ProjectGroupAccessService
             // Scope is checked on an unlocked read first: a caller outside the main project's scope must not be
             // able to queue behind, or hold, its row lock. The locked values are authorized again below.
             var unlocked = await db.ProjectGroups.Where(group => group.Id == groupId).Select(group => new ProjectGroupAccess(
-                group.Id, group.SupplierId, group.CreatedBy, group.Status, group.ResponsibleUserId)).SingleOrDefaultAsync(ct)
+                group.Id, group.SupplierId, group.CreatedBy, group.Status, group.ResponsibleUserId, group.SectionId)).SingleOrDefaultAsync(ct)
                 ?? throw ApiException.NotFound();
             await AuthorizeAsync(db, current, unlocked, ct);
             var locked = await db.Database.SqlQuery<LockedGroupAccess>($"""
                 SELECT id AS Id,supplier_id AS SupplierId,created_by AS CreatedBy,status AS Status,
-                       responsible_user_id AS ResponsibleUserId
+                       responsible_user_id AS ResponsibleUserId,section_id AS SectionId
                 FROM project_groups WHERE id={groupId} FOR UPDATE
                 """).SingleOrDefaultAsync(ct);
             if (locked is null) throw ApiException.NotFound();
             return await AuthorizeAsync(db, current,
-                new ProjectGroupAccess(locked.Id, locked.SupplierId, locked.CreatedBy, locked.Status, locked.ResponsibleUserId), ct);
+                new ProjectGroupAccess(locked.Id, locked.SupplierId, locked.CreatedBy, locked.Status, locked.ResponsibleUserId, locked.SectionId), ct);
         }
         var access = await db.ProjectGroups.Where(group => group.Id == groupId).Select(group => new ProjectGroupAccess(
-            group.Id, group.SupplierId, group.CreatedBy, group.Status, group.ResponsibleUserId)).SingleOrDefaultAsync(ct)
+            group.Id, group.SupplierId, group.CreatedBy, group.Status, group.ResponsibleUserId, group.SectionId)).SingleOrDefaultAsync(ct)
             ?? throw ApiException.NotFound();
         return await AuthorizeAsync(db, current, access, ct);
     }
@@ -78,7 +81,9 @@ internal static class ProjectGroupAccessService
             return access;
         }
         if (access.ResponsibleUserId == current.Id || access.CreatedBy == current.Id
-            || await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct))
+            || await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct)
+            || access.SectionId is ulong sectionId
+                && await ProjectDeletionAuthorization.SectionsLedBy(db, current.Id).AnyAsync(id => id == sectionId, ct))
             return access;
         throw ApiException.OutOfScope();
     }
@@ -90,5 +95,6 @@ internal static class ProjectGroupAccessService
         public ulong CreatedBy { get; init; }
         public string Status { get; init; } = "";
         public ulong? ResponsibleUserId { get; init; }
+        public ulong? SectionId { get; init; }
     }
 }

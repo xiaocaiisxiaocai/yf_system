@@ -544,6 +544,85 @@ public sealed class ProjectGroupTests
         Assert.Contains("待删除空主项目", detail, StringComparison.Ordinal);
     }
 
+    [Fact(Timeout = 90_000)]
+    public async Task OrganizationLeadersCanDeleteProjectsOnlyInsideTheirOrganizationScope()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_delete_leader", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(8701,'组织主管删除供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO departments(id,parent_id,name,kind,leader_account_id,created_at,updated_at)
+            VALUES(8705,NULL,'删除验收事业部','DIVISION',8702,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8706,8705,'删除验收部门','DEPARTMENT',8730,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8707,8706,'删除验收课别','SECTION',8731,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8720,NULL,'无关事业部','DIVISION',NULL,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8721,8720,'无关部门','DEPARTMENT',NULL,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8722,8721,'无关课别','SECTION',NULL,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(8702,'delete-division-leader','unused','删除验收主管','delete-leader@example.test','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8703,'delete-project-owner','unused','项目负责人','delete-owner@example.test','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8704,'delete-unrelated-user','unused','普通员工','delete-employee@example.test','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8730,'delete-department-leader','unused','部门主管','delete-department@example.test','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8731,'delete-section-leader','unused','课别主管','delete-section@example.test','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO roles(id,name,is_built_in,status)
+            VALUES(6001,'组织主管项目列表',0,'ACTIVE'),(6002,'普通员工项目列表',0,'ACTIVE'),
+                  (6003,'部门主管项目列表',0,'ACTIVE'),(6004,'课别主管项目列表',0,'ACTIVE');
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT r.id,p.id FROM roles r CROSS JOIN permissions p
+            WHERE r.id IN (6001,6002,6003,6004) AND p.code='project:list';
+            INSERT INTO user_roles(user_id,role_id) VALUES(8702,6001),(8704,6002),(8730,6003),(8731,6004);
+            INSERT INTO project_groups(id,name,supplier_id,status,created_by,machine_model,responsible_user_id,section_id,created_at,updated_at)
+            VALUES(8710,'主管范围内的空主项目',8701,'DRAFT',8703,'删除验收机型',8703,8707,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (8723,'无关组织的空主项目',8701,'DRAFT',8703,'删除验收机型',8703,8722,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,machine_model,responsible_user_id,section_id,created_at,updated_at)
+            VALUES(8711,8710,'主管范围内的草稿子项目',8701,'DRAFT',8703,'删除验收机型',8703,8707,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            """, ct);
+
+        var leader = new CurrentUser(8702, "delete-division-leader", "INTERNAL", null);
+        var unrelated = new CurrentUser(8704, "delete-unrelated-user", "INTERNAL", null);
+        var departmentLeader = new CurrentUser(8730, "delete-department-leader", "INTERNAL", null);
+        var sectionLeader = new CurrentUser(8731, "delete-section-leader", "INTERNAL", null);
+        var audit = new AuditService([]);
+        var groupStatus = new ProjectGroupStatusService(audit);
+        var groups = new ProjectGroupService(audit, groupStatus);
+        var projects = new ProjectService(audit, new AppOptions(), groupStatus);
+        await using var conn = await database.Database.OpenAsync(ct);
+
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition("""
+            SELECT COUNT(*) FROM user_roles ur JOIN role_permissions rp ON rp.role_id=ur.role_id
+            JOIN permissions p ON p.id=rp.permission_id
+            WHERE ur.user_id=8702 AND p.code='project:delete'
+            """, cancellationToken: ct)));
+        var page = await groups.ListAsync(conn, leader, 1, 20, null, null, null, null, false, ct);
+        var group = Assert.Single(page.List);
+        Assert.Equal(8710UL, group.Id);
+        Assert.True(group.CanDelete);
+        Assert.True(Assert.Single((await groups.ListAsync(conn, departmentLeader, 1, 20, null, null, null, null, false, ct)).List).CanDelete);
+        Assert.True(Assert.Single((await groups.ListAsync(conn, sectionLeader, 1, 20, null, null, null, null, false, ct)).List).CanDelete);
+        var detail = await groups.DetailAsync(conn, leader, group.Id, ct);
+        Assert.True(detail.Group.CanDelete);
+        Assert.Single(detail.Projects);
+
+        await Assert.ThrowsAsync<ApiException>(() => groups.DeleteAsync(conn, leader, group.Id, null, ct));
+        await Assert.ThrowsAsync<ApiException>(() => groups.DeleteAsync(conn, unrelated, group.Id, null, ct));
+        await Assert.ThrowsAsync<ApiException>(() => projects.DeleteAsync(conn, unrelated, 8711, null, ct));
+        await Assert.ThrowsAsync<ApiException>(() => groups.DeleteAsync(conn, leader, 8723, null, ct));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM project_groups WHERE id=8710", cancellationToken: ct)));
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM projects WHERE id=8711", cancellationToken: ct)));
+
+        await projects.DeleteAsync(conn, leader, 8711, null, ct);
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM projects WHERE id=8711", cancellationToken: ct)));
+        await groups.DeleteAsync(conn, leader, group.Id, null, ct);
+        Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM project_groups WHERE id=8710", cancellationToken: ct)));
+    }
+
     [Theory(Timeout = 90_000)]
     [InlineData(ProjectStatuses.Terminated, ProjectStatuses.Terminated)]
     [InlineData(ProjectStatuses.Draft, ProjectStatuses.InProgress)]

@@ -410,7 +410,7 @@ internal static class ProjectJson
         UpdatedAt = Utc(row.UpdatedAt),
     };
 
-    internal static ProjectGroupResponse ProjectGroup(ProjectGroupRow row, bool includeEmployeeNo = true) => new(
+    internal static ProjectGroupResponse ProjectGroup(ProjectGroupRow row, bool includeEmployeeNo = true, bool canDelete = false) => new(
         row.Id,
         row.Name,
         row.Description,
@@ -443,7 +443,8 @@ internal static class ProjectJson
         row.CompletedCount,
         row.MaterialPendingCount,
         row.TerminatedCount,
-        row.UnreadMessages);
+        row.UnreadMessages,
+        canDelete);
 
     internal static PageResponse<T> Page<T>(IReadOnlyList<T> list, ulong total, ulong page, ulong pageSize) =>
         new(list, total, page, pageSize);

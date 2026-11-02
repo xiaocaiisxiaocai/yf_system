@@ -178,7 +178,8 @@ public sealed record ProjectGroupResponse(
     ulong CompletedCount,
     ulong MaterialPendingCount,
     ulong TerminatedCount,
-    ulong UnreadMessages);
+    ulong UnreadMessages,
+    bool CanDelete = false);
 
 public sealed record ProjectGroupDetailResponse(ProjectGroupResponse Group, IReadOnlyList<ProjectResponse> Projects);
 

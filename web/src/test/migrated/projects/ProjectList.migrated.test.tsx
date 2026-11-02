@@ -112,6 +112,36 @@ describe('ProjectList migrated behavior', () => {
     mocks.delete.mockResolvedValue({ data: {} })
   })
 
+  it('shows main-project deletion to a supervisor with scoped API capability but no global delete grant', async () => {
+    mocks.get.mockImplementation((url: string, config?: GetConfig) => {
+      if (url === '/project-groups') return Promise.resolve({ data: page([{
+        id: 77, name: '主管辖区空主项目', supplierId: 8, supplierName: '厂商甲', status: 'DRAFT',
+        workOrderNos: [], unreadMessages: 0, subprojectCount: 0, completedCount: 0,
+        materialPendingCount: 0, terminatedCount: 0, canDelete: true,
+      }, {
+        id: 78, name: '主管辖区含子项目主项目', supplierId: 8, supplierName: '厂商甲', status: 'IN_PROGRESS',
+        workOrderNos: [], unreadMessages: 0, subprojectCount: 1, completedCount: 0,
+        materialPendingCount: 0, terminatedCount: 0, canDelete: true,
+      }]) })
+      return successfulGet(url, config)
+    })
+    const user = userEvent.setup()
+    renderList()
+
+    expect(await screen.findByText('主管辖区空主项目')).toBeInTheDocument()
+    expect(await screen.findByText('主管辖区含子项目主项目')).toBeInTheDocument()
+    const emptyProjectRow = screen.getByText('主管辖区空主项目').closest('tr')!
+    const nonEmptyProjectRow = screen.getByText('主管辖区含子项目主项目').closest('tr')!
+    const emptyProjectDelete = within(emptyProjectRow).getByRole('button', { name: '删除' })
+    const nonEmptyProjectDelete = within(nonEmptyProjectRow).getByRole('button', { name: '删除' })
+    expect(nonEmptyProjectDelete).toBeDisabled()
+    await user.click(emptyProjectDelete)
+    expect(await screen.findByText(/确认删除空主项目/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/project-groups/77'))
+    expect(mocks.auth.permissions).not.toContain('project:delete')
+  })
+
   it('robot part selection ignores late vendors, rejects stale parts, and submits only the new contract', async () => {
     // The date picker opens the current month; keep the selected September date deterministic.
     vi.useFakeTimers({ toFake: ['Date'] })

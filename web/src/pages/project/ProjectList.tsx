@@ -443,7 +443,9 @@ export default function ProjectList() {
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/project-groups/${row.id}`)}>进入</Button>,
       isInternal && hasPerm('project:update') && ['DRAFT', 'IN_PROGRESS'].includes(row.status)
         && <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>,
-      canDelete && row.subprojectCount === 0 && <Popconfirm key="delete" title={`确认删除空主项目“${row.name}”？`} onOk={() => remove(row)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>,
+      isInternal && (canDelete || row.canDelete) && (row.subprojectCount === 0
+        ? <Popconfirm key="delete" title={`确认删除空主项目“${row.name}”？`} onOk={() => remove(row)}><Button size="mini" type="text" status="danger">删除</Button></Popconfirm>
+        : <Tooltip key="delete-blocked" content="请先逐个删除符合条件的子项目；主项目不会级联删除。"><Button size="mini" type="text" status="danger" disabled>删除</Button></Tooltip>),
     ], 'project-group') },
   ]), tableWidth, 'name')
 
