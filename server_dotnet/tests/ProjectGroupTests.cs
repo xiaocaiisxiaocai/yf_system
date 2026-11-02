@@ -606,6 +606,16 @@ public sealed class ProjectGroupTests
         Assert.True(detail.Group.CanDelete);
         Assert.Single(detail.Projects);
 
+        // A disabled level between the section and the leader's organization removes that leader's authority.
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE departments SET status='DISABLED' WHERE id=8706", cancellationToken: ct));
+        Assert.Empty((await groups.ListAsync(conn, leader, 1, 20, null, null, null, null, false, ct)).List);
+        Assert.Empty((await groups.ListAsync(conn, departmentLeader, 1, 20, null, null, null, null, false, ct)).List);
+        Assert.True(Assert.Single((await groups.ListAsync(conn, sectionLeader, 1, 20, null, null, null, null, false, ct)).List).CanDelete);
+        await Assert.ThrowsAsync<ApiException>(() => projects.DeleteAsync(conn, leader, 8711, null, ct));
+        await conn.ExecuteAsync(new CommandDefinition(
+            "UPDATE departments SET status='ACTIVE' WHERE id=8706", cancellationToken: ct));
+
         await Assert.ThrowsAsync<ApiException>(() => groups.DeleteAsync(conn, leader, group.Id, null, ct));
         await Assert.ThrowsAsync<ApiException>(() => groups.DeleteAsync(conn, unrelated, group.Id, null, ct));
         await Assert.ThrowsAsync<ApiException>(() => projects.DeleteAsync(conn, unrelated, 8711, null, ct));

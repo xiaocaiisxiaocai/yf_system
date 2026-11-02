@@ -16,16 +16,21 @@ internal sealed record ProjectDeletionScope(bool HasExplicitPermission, IReadOnl
 /// </summary>
 internal static class ProjectDeletionAuthorization
 {
+    /// <summary>
+    /// Sections whose own leader, or whose parent department's or division's leader, is <paramref name="userId"/>.
+    /// A disabled organization grants no authority: every level from the section up to the leader's must be active.
+    /// </summary>
     internal static IQueryable<ulong> SectionsLedBy(YfDbContext db, ulong userId)
     {
         var departments = db.Departments;
-        return departments.Where(section => section.Kind == "SECTION"
+        return departments.Where(section => section.Kind == "SECTION" && section.Status == AccountStatuses.Active
                 && (section.LeaderAccountId == userId
                     || departments.Any(department => department.Id == section.ParentId
-                        && department.Kind == "DEPARTMENT"
+                        && department.Kind == "DEPARTMENT" && department.Status == AccountStatuses.Active
                         && (department.LeaderAccountId == userId
                             || departments.Any(division => division.Id == department.ParentId
-                                && division.Kind == "DIVISION" && division.LeaderAccountId == userId)))))
+                                && division.Kind == "DIVISION" && division.Status == AccountStatuses.Active
+                                && division.LeaderAccountId == userId)))))
             .Select(section => section.Id);
     }
 

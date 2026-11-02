@@ -46,10 +46,15 @@ internal static class HandwrittenTestSchemas
             supplier_id BIGINT UNSIGNED NOT NULL,
             created_by BIGINT UNSIGNED NOT NULL, status VARCHAR(30) NOT NULL,
             name VARCHAR(100) NOT NULL,
-            responsible_user_id BIGINT UNSIGNED NULL,
+            responsible_user_id BIGINT UNSIGNED NULL, section_id BIGINT UNSIGNED NULL,
             material_review_status VARCHAR(16) NULL, material_review_file_id BIGINT UNSIGNED NULL,
             material_review_reason VARCHAR(500) NULL, material_file_floor BIGINT UNSIGNED NULL,
             due_soon_notified_for DATE NULL, overdue_notified_for DATE NULL
+        );
+        CREATE TABLE departments(
+            id BIGINT UNSIGNED PRIMARY KEY, parent_id BIGINT UNSIGNED NULL,
+            kind VARCHAR(16) NOT NULL, leader_account_id BIGINT UNSIGNED NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
         );
         CREATE TABLE audit_logs(
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -208,10 +213,15 @@ internal static class HandwrittenTestSchemas
             supplier_id BIGINT UNSIGNED NOT NULL,
             created_by BIGINT UNSIGNED NOT NULL,
             responsible_user_id BIGINT UNSIGNED NULL,
-            status VARCHAR(32) NOT NULL,
+            status VARCHAR(32) NOT NULL, section_id BIGINT UNSIGNED NULL,
             material_review_status VARCHAR(16) NULL, material_review_file_id BIGINT UNSIGNED NULL,
             material_review_reason VARCHAR(500) NULL, material_file_floor BIGINT UNSIGNED NULL,
             due_soon_notified_for DATE NULL, overdue_notified_for DATE NULL
+        );
+        CREATE TABLE departments(
+            id BIGINT UNSIGNED PRIMARY KEY, parent_id BIGINT UNSIGNED NULL,
+            kind VARCHAR(16) NOT NULL, leader_account_id BIGINT UNSIGNED NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE'
         );
         """;
 
