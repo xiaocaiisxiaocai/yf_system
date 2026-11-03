@@ -216,6 +216,22 @@ describe('管理员表单契约', () => {
     expect(screen.getByPlaceholderText('选择组织')).not.toHaveAttribute('allowclear')
   })
 
+  it('internal user form allows an empty email and a department-level organization', async () => {
+    mocks.post.mockResolvedValue({ data: {} })
+    const user = userEvent.setup()
+    render(<UserList />)
+    await user.click(await screen.findByRole('button', { name: '新增用户' }))
+    await user.type(screen.getByPlaceholderText('3-32 位字母、数字、下划线或点'), 'zhuhui.cai')
+    await user.type(screen.getByPlaceholderText('5-20 位'), 'Strong#2026')
+    await user.type(screen.getByPlaceholderText('姓名'), '部门主管')
+    await openArcoSelect('选择组织', '研发部（部门）')
+    await openArcoSelect('选择角色', '内部成员')
+    await user.click(screen.getByRole('button', { name: '创建用户' }))
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1))
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ employeeNo: 'zhuhui.cai', email: '' })
+  })
+
   it('password change rejects same-render duplicate submissions and unlocks after completion', async () => {
     const first = deferred<{ data: Record<string, never> }>()
     mocks.put.mockImplementationOnce(() => first.promise).mockResolvedValue({ data: {} })

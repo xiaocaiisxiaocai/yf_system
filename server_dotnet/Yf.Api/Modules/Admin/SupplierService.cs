@@ -175,12 +175,16 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         return await query.OrderBy(role => role.Id).Select(role => new RoleOption(role.Id, role.Name)).ToArrayAsync(ct);
     }
 
-    public async Task<SupplierAccountResponse> CreateAccountAsync(CurrentUser actor, ulong supplierId, SupplierAccountCreate request, CancellationToken ct)
+    /// <param name="importedInitialPassword">Batch import: the initial password is only length-checked (see PasswordService.ValidateInitial).</param>
+    public async Task<SupplierAccountResponse> CreateAccountAsync(CurrentUser actor, ulong supplierId, SupplierAccountCreate request, CancellationToken ct, bool importedInitialPassword = false)
     {
-        AccessService.RequireInternal(actor); AdminValidation.EmployeeNo(request.EmployeeNo); PasswordService.Validate(request.Password);
+        AccessService.RequireInternal(actor); AdminValidation.EmployeeNo(request.EmployeeNo);
+        if (importedInitialPassword) PasswordService.ValidateInitial(request.Password); else PasswordService.Validate(request.Password);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await ManagementAuthorization.PrecheckAsync(context, actor, "supplier:account", ct);
-        var passwordHash = await PasswordService.HashAsync(request.Password, ct);
+        var passwordHash = importedInitialPassword
+            ? await PasswordService.HashInitialAsync(request.Password, ct)
+            : await PasswordService.HashAsync(request.Password, ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await GateAsync(context, actor, "supplier:account", ct);
         var supplier = await FindAsync(context, supplierId, ct) ?? throw ApiException.NotFound();

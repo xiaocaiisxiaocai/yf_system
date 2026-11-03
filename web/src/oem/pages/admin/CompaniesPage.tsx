@@ -35,7 +35,7 @@ interface OemCompanyImportPayload {
   remark: string
 }
 
-import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validatePassword } from '../../../utils/password'
+import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validateInitialPassword, validatePassword } from '../../../utils/password'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
 import EnterSubmit from '../../../components/EnterSubmit'
@@ -495,8 +495,9 @@ export default function CompaniesPage() {
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: ACCOUNT_NAME_MESSAGE }
       if (row.numericCells.has('登录账号'))
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号列请设置为文本格式，以保留前导零' }
-      if (validatePassword(initialPassword))
-        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '初始密码不符合密码规则' }
+      const passwordError = validateInitialPassword(initialPassword)
+      if (passwordError)
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: passwordError }
       payload.push({ rowNumber: row.rowNumber, companyId: company.id, companyName, employeeNo, initialPassword })
       return { rowNumber: row.rowNumber, key, detail, status: 'READY' }
     })

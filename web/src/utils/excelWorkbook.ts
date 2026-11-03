@@ -8,6 +8,8 @@ export interface ExcelTableOptions {
   sheetName?: string
   requiredHeaders: readonly string[]
   optionalHeaders?: readonly string[]
+  /** Header names from older templates, mapped to the current name, so files filled in earlier still import. */
+  headerAliases?: Readonly<Record<string, string>>
   maxRows: number
   maxBytes?: number
 }
@@ -68,7 +70,7 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
 
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' })
   const stringCell = (value: unknown) => typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim()
-  const headers = (matrix[0] ?? []).map(stringCell)
+  const headers = (matrix[0] ?? []).map(stringCell).map(header => options.headerAliases?.[header] ?? header)
   const allowed = new Set([...options.requiredHeaders, ...(options.optionalHeaders ?? [])])
   if (options.requiredHeaders.some((header, index) => headers[index] !== header))
     throw new Error(`表头不匹配，请使用系统模板：${options.requiredHeaders.join('、')}`)

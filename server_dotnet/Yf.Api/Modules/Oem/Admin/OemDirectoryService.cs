@@ -510,7 +510,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             try
             {
                 await CreateAccountAsync(actor, companyId,
-                    new OemAccountCreate(employeeNo, row.InitialPassword ?? ""), ct);
+                    new OemAccountCreate(employeeNo, row.InitialPassword ?? ""), ct, importedInitialPassword: true);
                 existing.Add(employeeNo);
                 results.Add(new(rowNumber, employeeNo, "CREATED", null));
             }
@@ -541,12 +541,15 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         return AccountJson(account, uow.Now);
     }
 
-    public async Task<OemAccountResponse> CreateAccountAsync(OemActor actor, ulong companyId, OemAccountCreate request, CancellationToken ct)
+    /// <param name="importedInitialPassword">Batch import: the initial password is only length-checked (see PasswordService.ValidateInitial).</param>
+    public async Task<OemAccountResponse> CreateAccountAsync(OemActor actor, ulong companyId, OemAccountCreate request, CancellationToken ct, bool importedInitialPassword = false)
     {
         var employeeNo = OemValidation.EmployeeNo(request.EmployeeNo);
-        PasswordService.Validate(request.Password);
+        if (importedInitialPassword) PasswordService.ValidateInitial(request.Password); else PasswordService.Validate(request.Password);
         await PrecheckAccountManageAsync(actor, ct);
-        var hash = await PasswordService.HashAsync(request.Password, ct);
+        var hash = importedInitialPassword
+            ? await PasswordService.HashInitialAsync(request.Password, ct)
+            : await PasswordService.HashAsync(request.Password, ct);
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
         var company = await LockCompanyAsync(uow, companyId, ct);

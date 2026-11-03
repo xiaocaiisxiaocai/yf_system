@@ -17,7 +17,7 @@ import { SupplierEditModal } from './components/SupplierEditModal'
 import type { Account, RoleOption, Supplier } from './components/supplierTypes'
 import { useSupplierListState } from './hooks/useSupplierListState'
 import LoadError from '../../components/LoadError'
-import { validatePassword } from '../../utils/password'
+import { validateInitialPassword } from '../../utils/password'
 import ToolbarMenuButton from '../../components/ToolbarMenuButton'
 import { ACCOUNT_NAME_MESSAGE, isValidAccountName } from '../../utils/accountName'
 
@@ -158,8 +158,9 @@ export default function SupplierList() {
       const roleId = roleName ? rolesByName.get(roleName.toLowerCase()) : defaultRoleId
       if (roleName && !roleId) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '角色不存在或当前账号不可授予' }
       if (!roleId) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '角色选项不可用，请先设置供应商角色' }
-      if (validatePassword(initialPassword))
-        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '初始密码不符合密码规则' }
+      const passwordError = validateInitialPassword(initialPassword)
+      if (passwordError)
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: passwordError }
       payload.push({ rowNumber: row.rowNumber, supplierId: supplier.id, employeeNo, roleId, initialPassword })
       return { rowNumber: row.rowNumber, key, detail, status: 'READY' }
     })

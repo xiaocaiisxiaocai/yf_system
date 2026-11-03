@@ -42,7 +42,7 @@ public sealed class AdminImportService(
             {
                 await users.CreateAsync(actor, new UserCreate(
                     employeeNo, row.InitialPassword ?? "", row.RealName ?? "", row.Email ?? "",
-                    row.DepartmentId, row.RoleId, null), ct);
+                    row.DepartmentId, row.RoleId, null), ct, importedInitialPassword: true);
                 results.Add(new(rowNumber, employeeNo, "CREATED", null));
             }
             catch (ApiException error) when (error.Status is 400 or 409)
@@ -89,7 +89,7 @@ public sealed class AdminImportService(
             try
             {
                 await suppliers.CreateAccountAsync(actor, supplierId, new SupplierAccountCreate(
-                    employeeNo, row.InitialPassword ?? "", row.RoleId), ct);
+                    employeeNo, row.InitialPassword ?? "", row.RoleId), ct, importedInitialPassword: true);
                 results.Add(new(rowNumber, employeeNo, "CREATED", null));
             }
             catch (ApiException error) when (error.Status is 400 or 409)

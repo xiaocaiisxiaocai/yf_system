@@ -33,7 +33,7 @@ const marker = crypto.randomBytes(5).toString('hex');
     const initialPassword = 'I5nt#A9q';
     const roleName = '内部成员';
 
-    await record('公司内部账号模板只按课别名称和角色选择组织，不含课别路径或课别编号', async () => {
+    await record('公司内部账号模板按组织名称（任一层级）和角色选择组织，不含路径或编号', async () => {
       division = await read('POST', '/admin/departments', {
         name: 'Excel 验收事业部-' + marker, parentId: null, sortNo: 970,
       });
@@ -58,14 +58,10 @@ const marker = crypto.randomBytes(5).toString('hex');
       await file.saveAs(target);
       const workbook = XLSX.read(require('node:fs').readFileSync(target), { type: 'buffer' });
       const dataHeaders = XLSX.utils.sheet_to_json(workbook.Sheets.数据, { header: 1 })[0];
-      assert.deepEqual(dataHeaders, ['账号', '姓名', '邮箱', '课别', '角色', '初始密码']);
-      assert.equal(dataHeaders.some(value => /课别编号|事业部|部门/.test(String(value))), false,
-        'import data names only the course section');
+      assert.deepEqual(dataHeaders, ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码']);
       const optionRows = XLSX.utils.sheet_to_json(workbook.Sheets.选项, { header: 1 });
-      assert.deepEqual(optionRows[0], ['课别', '角色名称']);
-      assert(optionRows.some(row => row[0] === sectionName));
-      assert.equal(optionRows.some(row => String(row[0]).includes('事业部') || String(row[0]).includes('部门')), false,
-        'section options list section names, not division paths');
+      assert.deepEqual(optionRows[0], ['所属组织', '组织层级', '角色名称']);
+      assert(optionRows.some(row => row[0] === sectionName && row[1] === '课别'));
       await modal.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
@@ -73,11 +69,11 @@ const marker = crypto.randomBytes(5).toString('hex');
       const makeWorkbook = password => {
         const book = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
-          ['账号', '姓名', '邮箱', '课别', '角色', '初始密码'],
+          ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码'],
           [employeeNo, userName, email, sectionName, roleName, password],
         ]), '数据');
         XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([
-          ['课别', '角色名称'], [sectionName, roleName],
+          ['所属组织', '组织层级', '角色名称'], [sectionName, '课别', roleName],
         ]), '选项');
         return XLSX.write(book, { type: 'buffer', bookType: 'xlsx' });
       };
@@ -116,7 +112,7 @@ const marker = crypto.randomBytes(5).toString('hex');
       await modal.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
-    await record('内部账号导出包含状态结果但不含初始密码，并且导出组织仍为课别', async () => {
+    await record('内部账号导出包含状态结果但不含初始密码，并按所属组织名称导出', async () => {
       const ready = page.waitForEvent('download');
       await page.getByRole('button', { name: '导出 Excel', exact: true }).click();
       const file = await ready;
@@ -126,7 +122,7 @@ const marker = crypto.randomBytes(5).toString('hex');
       const book = XLSX.read(require('node:fs').readFileSync(target), { type: 'buffer' });
       const rows = XLSX.utils.sheet_to_json(book.Sheets.数据, { header: 1 });
       assert.deepEqual(rows[0], [
-        '账号', '姓名', '邮箱', '课别', '角色', '初始密码', '状态', '需改密', '最近登录',
+        '账号', '姓名', '邮箱', '所属组织', '角色', '初始密码', '状态', '需改密', '最近登录',
       ]);
       const exported = rows.find(row => row[0] === employeeNo);
       assert(exported);

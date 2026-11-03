@@ -55,14 +55,18 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         return await query.OrderBy(role => role.Id).Select(role => new RoleOption(role.Id, role.Name)).ToArrayAsync(ct);
     }
 
-    public async Task<UserResponse> CreateAsync(CurrentUser actor, UserCreate request, CancellationToken ct)
+    /// <param name="importedInitialPassword">Batch import: the initial password is only length-checked (see PasswordService.ValidateInitial).</param>
+    public async Task<UserResponse> CreateAsync(CurrentUser actor, UserCreate request, CancellationToken ct, bool importedInitialPassword = false)
     {
-        AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.Email(request.Email); PasswordService.Validate(request.Password);
+        AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.OptionalEmail(request.Email);
+        if (importedInitialPassword) PasswordService.ValidateInitial(request.Password); else PasswordService.Validate(request.Password);
         var roleId = AdminValidation.OneRole(request.RoleId, request.RoleIds, true);
         if (request.DepartmentId is not ulong departmentId) throw ApiException.BadRequest("请选择所属组织");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await ManagementAuthorization.PrecheckAsync(context, actor, "user:manage", ct);
-        var passwordHash = await PasswordService.HashAsync(request.Password, ct);
+        var passwordHash = importedInitialPassword
+            ? await PasswordService.HashInitialAsync(request.Password, ct)
+            : await PasswordService.HashAsync(request.Password, ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await ManagementAsync(context, actor, "user:manage", ct);
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
@@ -74,7 +78,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var user = new User
         {
             EmployeeNo = employeeNo, PasswordHash = passwordHash, RealName = request.RealName.Trim(),
-            Email = request.Email.Trim(), UserType = UserTypes.Internal, DepartmentId = departmentId, Status = AccountStatuses.Active,
+            Email = request.Email?.Trim() ?? "", UserType = UserTypes.Internal, DepartmentId = departmentId, Status = AccountStatuses.Active,
             MustChangePassword = true, FailedLoginAttempts = 0, CreatedBy = actor.Id
         };
         context.Users.Add(user); await context.SaveChangesAsync(ct);
@@ -97,7 +101,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     public async Task<UserResponse> UpdateAsync(CurrentUser actor, ulong id, UserUpdate request, CancellationToken ct)
     {
         if (request.RealName is not null) ValidateName(request.RealName);
-        if (request.Email is not null) AdminValidation.Email(request.Email);
+        if (request.Email is not null) AdminValidation.OptionalEmail(request.Email);
         var departmentSpecified = request.DepartmentId.ValueKind != System.Text.Json.JsonValueKind.Undefined;
         ulong? departmentId = request.DepartmentId.ValueKind switch
         {

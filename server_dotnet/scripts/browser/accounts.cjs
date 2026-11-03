@@ -213,7 +213,6 @@ function flattenDepartments(nodes, result = []) {
       await modal.getByText('请输入账号', { exact: true }).waitFor();
       await modal.getByText('请输入初始密码', { exact: true }).waitFor();
       await modal.getByText('请输入姓名', { exact: true }).waitFor();
-      await modal.getByText('请输入邮箱', { exact: true }).waitFor();
       await modal.getByText('请选择所属组织', { exact: true }).waitFor();
       await modal.getByText('请选择角色', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '取消', exact: true }).click();

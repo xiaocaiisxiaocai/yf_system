@@ -1,4 +1,4 @@
-import { textLengthRule } from '../../utils/textRules'
+import { optionalTextLengthRule, textLengthRule } from '../../utils/textRules'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
@@ -12,7 +12,7 @@ import PasswordInput from '../../components/PasswordInput'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
-import { passwordRule, validatePassword } from '../../utils/password'
+import { passwordRule, validateInitialPassword } from '../../utils/password'
 import type { ApiResponses } from '../../api/types'
 import type { DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
@@ -53,9 +53,11 @@ type DeptNode = Omit<ApiDepartmentTreeNode, 'kind' | 'children'> & {
 }
 
 const ORG_KIND_LABEL = { DIVISION: '事业部', DEPARTMENT: '部门', SECTION: '课别' } as const
-const USER_IMPORT_HEADERS = ['账号', '姓名', '邮箱', '课别', '角色', '初始密码'] as const
+const USER_IMPORT_HEADERS = ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码'] as const
+// 2026-11 之前的模板第 4 列叫“课别”，旧文件仍可导入。
+const USER_IMPORT_HEADER_ALIASES = { 课别: '所属组织' } as const
 const USER_EXPORT_HEADERS = ['状态', '需改密', '最近登录'] as const
-const USER_OPTION_HEADERS = ['课别', '角色名称'] as const
+const USER_OPTION_HEADERS = ['所属组织', '组织层级', '角色名称'] as const
 
 interface DepartmentSectionOption { id: number; name: string; active: boolean; kind: string }
 interface InternalUserImportPayload {
@@ -175,22 +177,26 @@ export default function UserList() {
   const optionsError = optionsQuery.isError && !optionsQuery.isFetching
   const loadedDepts = authorizationError ? undefined : optionsQuery.data?.depts
   const deptTreeData = useMemo(() => toTreeData(loadedDepts ?? []), [loadedDepts])
-  const activeSections = useMemo(() => departmentSections(loadedDepts ?? [])
-    .filter(item => item.active && item.kind === 'SECTION'), [loadedDepts])
+  // 账号可以挂在事业部、部门或课别任一层级（如部门主管只属于部门）。
+  const activeOrganizations = useMemo(() => departmentSections(loadedDepts ?? [])
+    .filter(item => item.active), [loadedDepts])
   const userWorkbookSheets = useMemo<ExcelWorkbookSheet[]>(() => {
-    const optionRows = Array.from({ length: Math.max(activeSections.length, roles.length) }, (_, index) => [
-      activeSections[index]?.name ?? '', roles[index]?.name ?? '',
+    const optionRows = Array.from({ length: Math.max(activeOrganizations.length, roles.length) }, (_, index) => [
+      activeOrganizations[index]?.name ?? '',
+      activeOrganizations[index] ? ORG_KIND_LABEL[activeOrganizations[index].kind as keyof typeof ORG_KIND_LABEL] ?? '' : '',
+      roles[index]?.name ?? '',
     ])
     return [
       { name: '数据', headers: [...USER_IMPORT_HEADERS], rows: [] },
       { name: '选项', headers: USER_OPTION_HEADERS, rows: optionRows },
       { name: '说明', headers: ['说明'], rows: [
         ['仅新增账号；已存在账号会跳过，不会覆盖。'],
-        ['课别名称、角色必须来自“选项”工作表；如果课别名称重名，请先区分课别名称再导入。'],
-        ['新增账号必须填写初始密码，首次登录须修改；导出文件不包含密码。'],
+        ['所属组织可填事业部、部门或课别名称，必须来自“选项”工作表；组织名称重名时请先区分名称再导入。角色必须来自“选项”工作表。'],
+        ['邮箱可留空；未填邮箱的账号不会收到邮件通知。'],
+        ['必须填写初始密码（5–20 个字符，如 123456 也可）；新账号首次登录须修改为符合密码规则的新密码。导出文件不包含密码。'],
       ] },
     ]
-  }, [activeSections, roles])
+  }, [activeOrganizations, roles])
   const editingRoleId = editing?.roleId ?? editing?.roleIds?.[0]
   const editingRoleUnavailable = editingRoleId != null
     && !optionsLoading
@@ -219,10 +225,10 @@ export default function UserList() {
       throw new Error('组织或角色选项暂不可用，请刷新后重试')
     const allUsers = await fetchAllUsers()
     const existingEmployees = new Set(allUsers.map(user => user.employeeNo.trim().toUpperCase()))
-    const sectionsByName = new Map<string, DepartmentSectionOption[]>()
-    for (const section of activeSections) {
-      const key = section.name.trim().toLowerCase()
-      sectionsByName.set(key, [...(sectionsByName.get(key) ?? []), section])
+    const organizationsByName = new Map<string, DepartmentSectionOption[]>()
+    for (const organization of activeOrganizations) {
+      const key = organization.name.trim().toLowerCase()
+      organizationsByName.set(key, [...(organizationsByName.get(key) ?? []), organization])
     }
     const roleByName = new Map(roles.map(role => [role.name.trim().toLowerCase(), role.id]))
     const sourceCounts = new Map<string, number>()
@@ -235,7 +241,7 @@ export default function UserList() {
       const employeeNo = row.values['账号']?.trim() ?? ''
       const realName = row.values['姓名']?.trim() ?? ''
       const email = row.values['邮箱']?.trim() ?? ''
-      const departmentName = row.values['课别']?.trim() ?? ''
+      const departmentName = row.values['所属组织']?.trim() ?? ''
       const roleName = row.values['角色']?.trim() ?? ''
       const initialPassword = row.values['初始密码'] ?? ''
       const key = employeeNo || `第 ${row.rowNumber} 行`
@@ -251,18 +257,18 @@ export default function UserList() {
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号列请设置为文本格式，以保留前导零' }
       if (!realName || Array.from(realName).length > 64)
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '姓名不能为空且不能超过 64 个字符' }
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '邮箱格式不正确' }
-      const sections = sectionsByName.get(departmentName.toLowerCase()) ?? []
-      if (sections.length > 1)
-        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '课别名称重名，请先区分课别名称再导入' }
-      const selectedSection = sections[0]
-      if (!selectedSection) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '课别不存在或已停用' }
-      const departmentId = selectedSection.id
+      const organizations = organizationsByName.get(departmentName.toLowerCase()) ?? []
+      if (organizations.length > 1)
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '组织名称重名，请先区分组织名称再导入' }
+      const organization = organizations[0]
+      if (!organization) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '所属组织不存在或已停用' }
+      const departmentId = organization.id
       const roleId = roleByName.get(roleName.toLowerCase())
       if (!roleId) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '角色不存在或当前账号不可授予' }
-      const passwordError = validatePassword(initialPassword)
-      if (passwordError) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '初始密码不符合密码规则' }
+      const passwordError = validateInitialPassword(initialPassword)
+      if (passwordError) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: passwordError }
       payload.push({ rowNumber: row.rowNumber, employeeNo, realName, email, departmentId, roleId, initialPassword })
       return { rowNumber: row.rowNumber, key, detail, status: 'READY' }
     })
@@ -343,6 +349,8 @@ export default function UserList() {
       const { roleId, ...values } = v
       const payload = {
         ...values,
+        // 邮箱可选；留空时提交空字符串（清空已有邮箱），该账号不再收到邮件通知。
+        email: typeof values.email === 'string' ? values.email.trim() : '',
         departmentId: selectedDepartmentId,
         roleId: Number(roleId),
       }
@@ -594,6 +602,7 @@ export default function UserList() {
         templateName="公司内部账号导入模板.xlsx"
         requiredHeaders={USER_IMPORT_HEADERS}
         optionalHeaders={USER_EXPORT_HEADERS}
+        headerAliases={USER_IMPORT_HEADER_ALIASES}
         templateSheets={userWorkbookSheets}
         maxRows={100}
         prepare={prepareUserImport}
@@ -634,7 +643,7 @@ export default function UserList() {
             <Form.Item label="姓名" field="realName" rules={[{ required: true, message: '请输入姓名' }, textLengthRule('姓名', 32)]}>
               <Input placeholder="姓名" />
             </Form.Item>
-            <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }, textLengthRule('邮箱', 128)]}>
+            <Form.Item label="邮箱" field="email" rules={[{ type: 'email', message: '邮箱格式不正确' }, optionalTextLengthRule('邮箱', 128)]}>
               <Input placeholder="name@example.com" />
             </Form.Item>
             <Form.Item label="所属组织" field="departmentId" rules={[{ required: true, message: '请选择所属组织' }]}>

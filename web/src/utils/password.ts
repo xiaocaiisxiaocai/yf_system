@@ -19,14 +19,25 @@ function utf8ByteLength(value: string): number {
   return length
 }
 
+function withinLength(value: string): boolean {
+  const characterCount = Array.from(value).length
+  return characterCount >= PASSWORD_MIN_CHARS && characterCount <= PASSWORD_MAX_CHARS
+    && utf8ByteLength(value) <= PASSWORD_MAX_BYTES
+}
+
+export const INITIAL_PASSWORD_MESSAGE = `初始密码需为 ${PASSWORD_MIN_CHARS}–${PASSWORD_MAX_CHARS} 个字符`
+
+/**
+ * 批量导入的初始密码只校验长度（如 123456 可用）：新账号首次登录必须改密，改密时仍按完整密码规则校验。
+ * 与后端 PasswordService.ValidateInitial 一致。
+ */
+export function validateInitialPassword(value: string): string | undefined {
+  return withinLength(value) ? undefined : INITIAL_PASSWORD_MESSAGE
+}
+
 export function validatePassword(value: string): string | undefined {
   const characters = Array.from(value)
-  const characterCount = characters.length
-  if (
-    characterCount < PASSWORD_MIN_CHARS
-    || characterCount > PASSWORD_MAX_CHARS
-    || utf8ByteLength(value) > PASSWORD_MAX_BYTES
-  ) {
+  if (!withinLength(value)) {
     return PASSWORD_VALIDATION_MESSAGE
   }
   const substitutions: Record<string, string> = { '@': 'a', '4': 'a', '$': 's', '5': 's', '0': 'o', '1': 'i', '!': 'i', '3': 'e', '7': 't' }

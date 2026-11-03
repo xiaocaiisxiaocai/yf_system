@@ -11,6 +11,7 @@ public static class PasswordService
     public const int MaxPasswordChars = 20;
     public const int MaxPasswordBytes = 256;
     public const string PolicyMessage = "密码需 5-20 个字符，不能使用常见弱密码或简单重复序列";
+    public const string InitialPolicyMessage = "初始密码需为 5-20 个字符";
     private const int MemoryKb = 19_456;
     private const int Iterations = 2;
     private const int Parallelism = 1;
@@ -27,6 +28,20 @@ public static class PasswordService
         "asdfghjkl", "letmein", "welcome", "changeme", "iloveyou", "monkey", "dragon",
         "football", "baseball", "abc", "abcd", "abcdef", "login", "test", "secret"
     ];
+
+    /// <summary>
+    /// Initial passwords of batch-imported accounts are only length-checked (123456 is allowed): every new account
+    /// must change its password at first login, and that change goes through <see cref="Validate"/>.
+    /// The frontend mirror is <c>validateInitialPassword</c> in <c>web/src/utils/password.ts</c>.
+    /// </summary>
+    public static void ValidateInitial(string password)
+    {
+        if (!WithinLength(password)) throw ApiException.BadRequest(InitialPolicyMessage);
+    }
+
+    private static bool WithinLength(string? password) =>
+        password is not null && password.EnumerateRunes().Count() is >= MinPasswordChars and <= MaxPasswordChars
+        && Encoding.UTF8.GetByteCount(password) <= MaxPasswordBytes;
 
     public static void Validate(string password)
     {
@@ -54,9 +69,21 @@ public static class PasswordService
         return !Enumerable.Range(1, 4).Any(period => runes.Select((r, i) => (r, i)).All(x => x.r == runes[x.i % period]));
     }
 
-    public static async Task<string> HashAsync(string password, CancellationToken cancellationToken = default)
+    public static Task<string> HashAsync(string password, CancellationToken cancellationToken = default)
     {
         Validate(password);
+        return HashUncheckedAsync(password, cancellationToken);
+    }
+
+    /// <summary>Hashes an import's initial password, which only has to pass <see cref="ValidateInitial"/>.</summary>
+    public static Task<string> HashInitialAsync(string password, CancellationToken cancellationToken = default)
+    {
+        ValidateInitial(password);
+        return HashUncheckedAsync(password, cancellationToken);
+    }
+
+    private static async Task<string> HashUncheckedAsync(string password, CancellationToken cancellationToken)
+    {
         var salt = RandomNumberGenerator.GetBytes(16);
         var hash = await DeriveAsync("argon2id", password, salt, MemoryKb, Iterations, Parallelism, HashBytes,
             PasswordWorkload.Management, cancellationToken);

@@ -37,6 +37,7 @@ interface ExcelImportDialogProps<T> {
   templateName: string
   requiredHeaders: readonly string[]
   optionalHeaders?: readonly string[]
+  headerAliases?: Readonly<Record<string, string>>
   templateSheets?: readonly ExcelWorkbookSheet[]
   maxRows: number
   prepare: (rows: ExcelImportRow[]) => Promise<PreparedImport<T>> | PreparedImport<T>
@@ -54,7 +55,7 @@ const STATUS_LABEL: Record<ImportPreviewStatus, string> = {
 }
 
 export default function ExcelImportDialog<T>({
-  visible, title, templateName, requiredHeaders, optionalHeaders = [], templateSheets = [], maxRows,
+  visible, title, templateName, requiredHeaders, optionalHeaders = [], headerAliases, templateSheets = [], maxRows,
   prepare, commit, onImported, onClose,
 }: ExcelImportDialogProps<T>) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -94,7 +95,7 @@ export default function ExcelImportDialog<T>({
     setPreviewError('')
     setParsing(true)
     try {
-      const source = await readExcelTable(file, { requiredHeaders, optionalHeaders, maxRows })
+      const source = await readExcelTable(file, { requiredHeaders, optionalHeaders, headerAliases, maxRows })
       const next = await prepare(source)
       if (next.preview.length !== source.length) throw new Error('预览结果与源文件行数不一致，请重新生成文件')
       setPrepared(next)

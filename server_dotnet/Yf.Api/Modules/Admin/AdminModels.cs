@@ -91,6 +91,11 @@ internal static class AdminValidation
         var v = value?.Trim() ?? "";
         if (v.EnumerateRunes().Count() > 128 || !System.Net.Mail.MailAddress.TryCreate(v, out _)) throw Yf.Api.Infrastructure.ApiException.BadRequest("邮箱格式不正确或超过 128 字符");
     }
+    /// <summary>Internal accounts may have no email address; they then receive no mail notifications.</summary>
+    public static void OptionalEmail(string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value)) Email(value);
+    }
     public static ulong OneRole(ulong? roleId, IReadOnlyList<ulong>? roleIds, bool required)
     {
         var legacy = roleIds?.Distinct().ToArray();
