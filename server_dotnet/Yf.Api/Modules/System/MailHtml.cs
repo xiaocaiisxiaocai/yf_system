@@ -23,6 +23,7 @@ internal static partial class MailHtml
         var details = new List<(string Label, string Value)>();
         ListItem? item = null;
         var items = new List<ListItem>();
+        var actions = new List<(string Label, string Url)>();
 
         void FlushDetails()
         {
@@ -47,16 +48,42 @@ internal static partial class MailHtml
                     .Append("<div style=\"color:#1d2129;font-size:14px;font-weight:600;word-break:break-all\">").Append(Encode(entry.Title)).Append("</div>");
                 foreach (var (label, value) in entry.Details)
                     content.Append("<div style=\"margin-top:4px;color:#4e5969;font-size:13px\">").Append(Encode(label)).Append("：").Append(Encode(value)).Append("</div>");
-                if (entry.Url is { } url)
-                    content.Append("<div style=\"margin-top:6px\"><a href=\"").Append(Encode(url)).Append("\" style=\"color:").Append(Primary)
-                        .Append(";font-size:13px;text-decoration:none\">查看 →</a></div>");
+                if (entry.Links.Count > 0)
+                {
+                    content.Append("<div style=\"margin-top:6px\">");
+                    for (var index = 0; index < entry.Links.Count; index++)
+                    {
+                        if (index > 0) content.Append("<span style=\"color:#c9cdd4\">&nbsp;&nbsp;|&nbsp;&nbsp;</span>");
+                        content.Append("<a href=\"").Append(Encode(entry.Links[index].Url)).Append("\" style=\"color:").Append(Primary)
+                            .Append(";font-size:13px;text-decoration:none\">").Append(Encode(entry.Links[index].Label)).Append(" →</a>");
+                    }
+                    content.Append("</div>");
+                }
                 content.Append("</td></tr>");
             }
             content.Append("</table>");
             items.Clear();
         }
 
-        void FlushAll() { FlushItems(); FlushDetails(); }
+        void FlushActions()
+        {
+            if (actions.Count == 0) return;
+            content.Append("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 16px\"><tr>");
+            for (var index = 0; index < actions.Count; index++)
+            {
+                var (label, url) = actions[index];
+                var filled = index == 0;
+                if (index > 0) content.Append("<td style=\"width:8px\"></td>");
+                content.Append("<td style=\"border-radius:6px;border:1px solid ").Append(Primary).Append(";background:").Append(filled ? Primary : "#ffffff")
+                    .Append("\"><a href=\"").Append(Encode(url))
+                    .Append("\" style=\"display:inline-block;padding:9px 18px;color:").Append(filled ? "#ffffff" : Primary)
+                    .Append(";font-size:14px;font-weight:600;text-decoration:none\">").Append(Encode(label)).Append("</a></td>");
+            }
+            content.Append("</tr></table>");
+            actions.Clear();
+        }
+
+        void FlushAll() { FlushItems(); FlushDetails(); FlushActions(); }
 
         foreach (var raw in body.Replace("\r\n", "\n").Split('\n'))
         {
@@ -64,7 +91,9 @@ internal static partial class MailHtml
             if (item is not null && raw.StartsWith("  ", StringComparison.Ordinal) && line.Trim().Length > 0)
             {
                 var inner = line.Trim();
-                if (IsHttpUrl(inner)) item.Url = inner;
+                if (IsHttpUrl(inner)) item.Links.Add(("查看", inner));
+                else if (DetailLine().Match(inner) is { Success: true } innerLink && IsHttpUrl(innerLink.Groups[2].Value))
+                    item.Links.Add((innerLink.Groups[1].Value, innerLink.Groups[2].Value));
                 else if (DetailLine().Match(inner) is { Success: true } innerDetail) item.Details.Add((innerDetail.Groups[1].Value, innerDetail.Groups[2].Value));
                 else item.Details.Add(("", inner));
                 continue;
@@ -84,12 +113,10 @@ internal static partial class MailHtml
                 FlushDetails();
                 var label = action.Groups[1].Value.Trim();
                 if (label.StartsWith('请')) label = label[1..];
-                content.Append("<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 16px\"><tr><td style=\"border-radius:6px;background:")
-                    .Append(Primary).Append("\"><a href=\"").Append(Encode(action.Groups[2].Value))
-                    .Append("\" style=\"display:inline-block;padding:10px 20px;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none\">")
-                    .Append(Encode(label.Length > 0 ? label : "登录平台查看")).Append("</a></td></tr></table>");
+                actions.Add((label.Length > 0 ? label : "登录平台查看", action.Groups[2].Value));
                 continue;
             }
+            FlushActions();
             if (IsFooter(trimmed)) { FlushDetails(); footer.Add(trimmed.Trim('（', '）', '(', ')')); continue; }
             if (!trimmed.EndsWith('：') && DetailLine().Match(trimmed) is { Success: true } detail)
             {
@@ -148,7 +175,7 @@ internal static partial class MailHtml
     private sealed class ListItem(string title)
     {
         public string Title { get; } = title;
-        public string? Url { get; set; }
+        public List<(string Label, string Url)> Links { get; } = [];
         public List<(string Label, string Value)> Details { get; } = [];
     }
 }

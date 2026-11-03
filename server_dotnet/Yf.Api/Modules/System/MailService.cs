@@ -518,7 +518,8 @@ public sealed class MailService
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromSeconds(60));
             var delivery = await batch.SendAsync(resolved.Options,
-                new(mail.RecipientEmail, mail.Subject, mail.Body), timeout.Token);
+                new(mail.RecipientEmail, mail.Subject, MailLinks.ForRecipient(mail.Body, options,
+                    MailLinks.IsInternalStaff(mail.RecipientUserType, mail.RecipientRealm, mail.OemTransferId))), timeout.Token);
             if (delivery.DisconnectFailureType is not null)
                 logger.LogWarning("SMTP message {OutboxId} was accepted, but connection cleanup failed ({ErrorType}).",
                     mail.Id, delivery.DisconnectFailureType);

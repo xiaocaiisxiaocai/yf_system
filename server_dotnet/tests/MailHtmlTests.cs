@@ -49,8 +49,64 @@ public sealed class MailHtmlTests
         {
             Directory.CreateDirectory(directory);
             foreach (var (name, subject, body) in Samples)
+            {
                 File.WriteAllText(Path.Combine(directory, name + ".html"), MailHtml.Render(subject, body));
+                File.WriteAllText(Path.Combine(directory, name + "-internal.html"),
+                    MailHtml.Render(subject, MailLinks.ForRecipient(body, Deployment(), internalStaff: true)));
+            }
         }
+    }
+
+    private static Yf.Api.Infrastructure.AppOptions Deployment() => new()
+    {
+        WebBaseUrl = "https://yf.example.test",
+        AdditionalWebOrigins = ["http://192.168.7.102:3340"],
+    };
+
+    [Fact]
+    public void InternalStaffGetIntranetAndInternetLinksWhileVendorsKeepTheExternalOne()
+    {
+        var options = Deployment();
+        var status = Samples[2].Body;
+        var internalBody = MailLinks.ForRecipient(status, options, internalStaff: true);
+        Assert.Contains("外网访问：https://yf.example.test/projects/5?tab=activity", internalBody);
+        Assert.Contains("内网访问：http://192.168.7.102:3340/projects/5?tab=activity", internalBody);
+        Assert.DoesNotContain("请登录平台查看", internalBody);
+        Assert.Equal(status, MailLinks.ForRecipient(status, options, internalStaff: false));
+
+        var file = MailLinks.ForRecipient(Samples[1].Body, options, internalStaff: true);
+        Assert.Contains("  外网访问：https://yf.example.test/projects/5?tab=files&target=31", file);
+        Assert.Contains("  内网访问：http://192.168.7.102:3340/projects/5?tab=files&target=31", file);
+        var html = MailHtml.Render(Samples[1].Subject, file);
+        Assert.Contains(">外网访问 →</a>", html);
+        Assert.Contains(">内网访问 →</a>", html);
+        var buttons = MailHtml.Render(Samples[2].Subject, internalBody);
+        Assert.Contains(">外网访问</a>", buttons);
+        Assert.Contains(">内网访问</a>", buttons);
+
+        // No private origin, or a site that is itself on the private network: one link, unchanged.
+        Assert.Equal(status, MailLinks.ForRecipient(status, new() { WebBaseUrl = "https://yf.example.test", AdditionalWebOrigins = ["https://other.example.test"] }, true));
+        Assert.Equal(status, MailLinks.ForRecipient(status, new() { WebBaseUrl = "http://192.168.7.102:3340", AdditionalWebOrigins = ["http://10.0.0.5"] }, true));
+    }
+
+    [Theory]
+    [InlineData("http://192.168.7.102:3340", true)]
+    [InlineData("http://10.1.2.3", true)]
+    [InlineData("http://172.20.0.1", true)]
+    [InlineData("http://127.0.0.1:5180", true)]
+    [InlineData("http://intranet-host", true)]
+    [InlineData("http://183.238.37.108:8090", false)]
+    [InlineData("https://yf.example.test", false)]
+    [InlineData("http://172.32.0.1", false)]
+    public void PrivateOriginsAreRecognised(string origin, bool expected) => Assert.Equal(expected, MailLinks.IsPrivate(origin));
+
+    [Fact]
+    public void OnlyInternalStaffRecipientsAreTreatedAsInternal()
+    {
+        Assert.True(MailLinks.IsInternalStaff("INTERNAL", "internal", null));
+        Assert.False(MailLinks.IsInternalStaff("SUPPLIER", "internal", null));
+        Assert.True(MailLinks.IsInternalStaff(null, "internal", 7));
+        Assert.False(MailLinks.IsInternalStaff(null, "oem", 7));
     }
 
     [Fact]
