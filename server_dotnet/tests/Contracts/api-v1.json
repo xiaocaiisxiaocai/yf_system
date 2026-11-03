@@ -95,6 +95,7 @@
   "POST /api/v1/admin/storage-locations/{}/cancel",
   "POST /api/v1/admin/storage-locations/{}/migrate",
   "POST /api/v1/admin/storage-locations/{}/retry",
+  "POST /api/v1/admin/system/mail-settings/diagnose",
   "POST /api/v1/admin/system/mail-settings/test",
   "POST /api/v1/admin/suppliers",
   "POST /api/v1/admin/suppliers/{}/accounts",

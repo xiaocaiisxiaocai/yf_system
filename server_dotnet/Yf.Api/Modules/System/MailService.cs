@@ -174,7 +174,7 @@ public sealed class MailService
         string[] auditActions =
         [
             "EMAIL_SENT", "EMAIL_FAILED", "EMAIL_RETRY", "EMAIL_SKIPPED_MISSING_EMAIL", "EMAIL_CANCELLED_STALE",
-            "EMAIL_TEST_STARTED", "EMAIL_TEST_SENT", "EMAIL_TEST_FAILED", "EMAIL_TEST_UNKNOWN",
+            "EMAIL_TEST_STARTED", "EMAIL_TEST_SENT", "EMAIL_TEST_FAILED", "EMAIL_TEST_UNKNOWN", "EMAIL_TEST_DIAGNOSE",
         ];
         var businessActions = auditActions.Where(action => !action.StartsWith("EMAIL_TEST_", StringComparison.Ordinal)).ToArray();
         if (scope == "oem") auditActions = auditActions.Where(action => action.StartsWith("EMAIL_TEST_", StringComparison.Ordinal)).Concat(businessActions.Select(action => "OEM_" + action)).ToArray();
@@ -231,7 +231,7 @@ public sealed class MailService
             if (parsed.RootElement.ValueKind != JsonValueKind.Object) return output;
             foreach (var property in parsed.RootElement.EnumerateObject())
             {
-                if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
+                if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId", "failedStep" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
                 if (property.Value.ValueKind == JsonValueKind.String && property.Name == "recipient") output[property.Name] = MaskEmail(property.Value.GetString()!);
                 if (property.Value.ValueKind == JsonValueKind.String && property.Name == "error") output[property.Name] = SanitizeError(property.Value.GetString()!);
             }
@@ -980,6 +980,14 @@ internal sealed class MailKitSmtpDelivery : ISmtpDelivery
 
     public ISmtpBatch OpenBatch() => new MailKitSmtpBatch();
 
+    /// <summary>"Auto" uses implicit TLS on 465 and STARTTLS elsewhere.</summary>
+    internal static SecureSocketOptions SocketOptionsFor(SmtpOptions options) => options.Security switch
+    {
+        "SslOnConnect" => SecureSocketOptions.SslOnConnect,
+        "StartTls" => SecureSocketOptions.StartTls,
+        _ => options.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls,
+    };
+
     internal static MimeMessage BuildMessage(SmtpOptions options, SmtpEnvelope envelope)
     {
         if (!MailboxAddress.TryParse(options.From, out var from)
@@ -1074,12 +1082,7 @@ internal sealed class MailKitSmtpBatch : ISmtpBatch
                 try
                 {
                     stage = SmtpStage.Connect;
-                    await fresh.ConnectAsync(options.Host, options.Port, options.Security switch
-                    {
-                        "SslOnConnect" => SecureSocketOptions.SslOnConnect,
-                        "StartTls" => SecureSocketOptions.StartTls,
-                        _ => options.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls
-                    }, ct);
+                    await fresh.ConnectAsync(options.Host, options.Port, MailKitSmtpDelivery.SocketOptionsFor(options), ct);
                     stage = SmtpStage.Authenticate;
                     await fresh.AuthenticateAsync(options.Username, options.Password, ct);
                 }

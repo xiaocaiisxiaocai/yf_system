@@ -17,19 +17,57 @@ public sealed class SmtpTestService : IDisposable
     private readonly AuditService audit;
     private readonly ILogger<SmtpTestService> logger;
     private readonly ISmtpDelivery delivery;
+    private readonly ISmtpDiagnoser diagnoser;
+    // One SMTP test or connection check at a time: both log in to the real mailbox.
     private readonly SemaphoreSlim sending = new(1, 1);
     public SmtpTestService(AppDb db, SmtpSettingsService settings, AuditService audit, ILogger<SmtpTestService> logger)
         : this(db, settings, audit, logger, new MailKitSmtpDelivery()) { }
 
-    internal SmtpTestService(AppDb db, SmtpSettingsService settings, AuditService audit, ILogger<SmtpTestService> logger, ISmtpDelivery delivery)
+    internal SmtpTestService(AppDb db, SmtpSettingsService settings, AuditService audit, ILogger<SmtpTestService> logger, ISmtpDelivery delivery,
+        ISmtpDiagnoser? diagnoser = null)
     {
         this.db = db;
         this.settings = settings;
         this.audit = audit;
         this.logger = logger;
         this.delivery = delivery;
+        this.diagnoser = diagnoser ?? new MailKitSmtpDiagnoser();
     }
     public void Dispose() => sending.Dispose();
+
+    /// <summary>
+    /// Checks connection, TLS and login with the saved settings without sending mail, enqueueing anything or
+    /// consulting notification switches. It logs in once, like a test send, and records one audit event.
+    /// </summary>
+    public async Task<SmtpDiagnosisResponse> DiagnoseAsync(CurrentUser actor, CancellationToken ct)
+    {
+        if (!await sending.WaitAsync(0, ct)) throw ApiException.Conflict("正在检测或发送测试邮件，请稍后再试");
+        try
+        {
+            ResolvedSmtpSettings resolved;
+            await using (var connection = await db.OpenAsync(ct))
+            {
+                actor = await AccessService.RecheckActorAsync(connection, null, actor, ct);
+                AccessService.RequireInternal(actor);
+                await AccessService.RequirePermissionAsync(connection, null, actor, "config:manage", ct);
+                resolved = await settings.ResolveAsync(connection, null, ct);
+                if (!resolved.Configured) throw ApiException.BadRequest("请先填写并保存完整的 SMTP 配置；授权码无法读取时请重新填写");
+            }
+            var steps = await diagnoser.RunAsync(resolved.Options, logger, ct);
+            var failed = steps.FirstOrDefault(step => step.Status == "FAILED");
+            try
+            {
+                using var completion = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await using var connection = await db.OpenAsync(completion.Token);
+                await audit.WriteAsync(connection, null, actor.Id, "EMAIL_TEST_DIAGNOSE", "system_config", null,
+                    new { result = failed is null ? "OK" : "FAILED", failedStep = failed?.Name, reason = failed?.Detail ?? "连接、加密和登录均正常（未发送邮件）" },
+                    null, completion.Token);
+            }
+            catch (Exception error) { logger.LogWarning("SMTP diagnosis audit could not be saved ({ErrorType}).", error.GetType().Name); }
+            return new(failed is null, steps);
+        }
+        finally { sending.Release(); }
+    }
 
     public async Task<SmtpTestResponse> TestAsync(SmtpTestRequest request, CurrentUser actor, CancellationToken ct)
     {

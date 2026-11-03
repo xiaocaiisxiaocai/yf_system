@@ -136,6 +136,7 @@ export interface MailDetail {
   recipient?: string
   retryCount?: number
   error?: string
+  failedStep?: string
 }
 
 export interface MailRecent {
@@ -237,6 +238,7 @@ export const MAIL_ACTION_LABELS: Record<string, string> = {
   EMAIL_TEST_SENT: '测试邮件：服务器已接受',
   EMAIL_TEST_FAILED: '测试邮件：发送失败',
   EMAIL_TEST_UNKNOWN: '测试邮件：结果不确定',
+  EMAIL_TEST_DIAGNOSE: 'SMTP 连接检测',
   EMAIL_SENT: '发送成功',
   EMAIL_FAILED: '发送失败',
   EMAIL_RETRY: '发送重试',
@@ -247,6 +249,7 @@ export const MAIL_ACTION_LABELS: Record<string, string> = {
 export function mailRecentSummary(row: MailRecent): string {
   if (row.action.startsWith('OEM_EMAIL_')) return mailRecentSummary({ ...row, action: row.action.slice(4) })
   const detail = row.detail || {}
+  if (row.action === 'EMAIL_TEST_DIAGNOSE') return detail.failedStep ? `${detail.failedStep}失败：${detail.reason ?? ''}` : detail.reason || '连接、加密和登录均正常'
   if (row.action.startsWith('EMAIL_TEST_')) return [detail.recipient ? `收件人 ${detail.recipient}` : '', detail.reason].filter(Boolean).join('；')
   if (row.action === 'EMAIL_SKIPPED_MISSING_EMAIL') {
     if (detail.reason) return mailReasonText(detail.reason)

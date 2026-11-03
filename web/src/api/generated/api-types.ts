@@ -1344,6 +1344,18 @@ export interface RoleUpsert {
   description?: string | null
 }
 
+export interface SmtpDiagnosisResponse {
+  success: boolean
+  steps: Array<SmtpDiagnosisStep>
+}
+
+export interface SmtpDiagnosisStep {
+  name: string
+  status: string
+  elapsedMs: number
+  detail: string | null
+}
+
 export interface SmtpSettingsUpdate {
   host: string
   port: number
@@ -1639,6 +1651,7 @@ export interface ApiResponses {
   "PUT /admin/system/configs": EmptyResponse
   "GET /admin/system/mail-settings": SmtpSettingsView
   "PUT /admin/system/mail-settings": SmtpSettingsView
+  "POST /admin/system/mail-settings/diagnose": SmtpDiagnosisResponse
   "POST /admin/system/mail-settings/test": SmtpTestResponse
   "GET /admin/system/mail-status": MailStatusResponse
   "GET /admin/user-role-options": Array<RoleOption>

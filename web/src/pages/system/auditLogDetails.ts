@@ -150,6 +150,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   EMAIL_TEST_SENT: action('测试邮件服务器已接受', 'SYSTEM', '系统', 'green'),
   EMAIL_TEST_FAILED: action('测试邮件发送失败', 'SYSTEM', '系统', 'red'),
   EMAIL_TEST_UNKNOWN: action('测试邮件结果不确定', 'SYSTEM', '系统', 'orange'),
+  EMAIL_TEST_DIAGNOSE: action('SMTP 连接检测', 'SYSTEM', '系统', 'arcoblue'),
   EMAIL_FAILED: action('邮件发送失败', 'SYSTEM', '系统', 'red'),
   EMAIL_RETRY: action('邮件发送重试', 'SYSTEM', '系统', 'orange'),
   EMAIL_SKIPPED_MISSING_EMAIL: action('邮件未入队（缺少邮箱）', 'SYSTEM', '系统', 'orange'),

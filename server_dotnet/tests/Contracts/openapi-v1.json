@@ -4612,6 +4612,35 @@
         }
       }
     },
+    "/api/v1/admin/system/mail-settings/diagnose": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SmtpDiagnosisResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/system/mail-settings": {
       "get": {
         "tags": [
@@ -13061,6 +13090,51 @@
             "type": "string"
           },
           "description": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SmtpDiagnosisResponse": {
+        "required": [
+          "steps",
+          "success"
+        ],
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SmtpDiagnosisStep"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "SmtpDiagnosisStep": {
+        "required": [
+          "detail",
+          "elapsedMs",
+          "name",
+          "status"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "elapsedMs": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "detail": {
             "type": "string",
             "nullable": true
           }

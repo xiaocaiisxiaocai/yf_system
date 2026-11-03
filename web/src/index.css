@@ -606,6 +606,17 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .dashboard-message-extra { display: flex; align-items: center; gap: 12px; color: var(--app-text-muted); white-space: nowrap; }
 .dashboard-message-extra > svg { color: #98a2b3; }
 .system-mail-card { margin-bottom: 16px; }
+/* SMTP 连接检测：每步一行，图标颜色表示通过、失败或未检查。 */
+.smtp-diagnosis { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.smtp-diagnosis-step { display: grid; grid-template-columns: 16px 48px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; background: var(--color-fill-1); }
+.smtp-diagnosis-step > .arco-icon { font-size: 16px; }
+.smtp-diagnosis-step--ok > .arco-icon { color: rgb(var(--green-6)); }
+.smtp-diagnosis-step--failed { background: rgb(var(--red-1)); }
+.smtp-diagnosis-step--failed > .arco-icon { color: rgb(var(--red-6)); }
+.smtp-diagnosis-step--skipped { color: var(--color-text-3); }
+.smtp-diagnosis-name { font-weight: 600; }
+.smtp-diagnosis-detail { min-width: 0; overflow-wrap: anywhere; }
+.smtp-diagnosis-time { color: var(--color-text-3); white-space: nowrap; }
 .system-page { min-height: 0; }
 .system-config-tabs {
   display: flex;
