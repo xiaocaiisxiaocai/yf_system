@@ -19,6 +19,7 @@ import { useSupplierListState } from './hooks/useSupplierListState'
 import LoadError from '../../components/LoadError'
 import { validatePassword } from '../../utils/password'
 import ToolbarMenuButton from '../../components/ToolbarMenuButton'
+import { ACCOUNT_NAME_MESSAGE, isValidAccountName } from '../../utils/accountName'
 
 const SUPPLIER_ACCOUNT_HEADERS = ['供应商名称', '账号', '角色', '初始密码'] as const
 const SUPPLIER_ACCOUNT_EXPORT_HEADERS = ['供应商名称', '账号', '角色', '状态', '最近登录'] as const
@@ -150,8 +151,8 @@ export default function SupplierList() {
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '文件内账号重复，本重复组未导入' }
       if (employeeNo && existingEmployees.has(employeeNo.toUpperCase()))
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '账号已存在，不会覆盖现有资料' }
-      if (!employeeNo || !/^[A-Za-z0-9_]{3,32}$/.test(employeeNo))
-        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号需为 3–32 位字母、数字或下划线' }
+      if (!employeeNo || !isValidAccountName(employeeNo))
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: ACCOUNT_NAME_MESSAGE }
       if (row.numericCells.has('账号'))
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号列请设置为文本格式，以保留前导零' }
       const roleId = roleName ? rolesByName.get(roleName.toLowerCase()) : defaultRoleId

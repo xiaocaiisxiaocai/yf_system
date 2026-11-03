@@ -84,7 +84,7 @@ internal static class AdminValidation
     public static void EmployeeNo(string? value)
     {
         var v = value?.Trim() ?? "";
-        if (v.Length is < 3 or > 32 || v.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')) throw Yf.Api.Infrastructure.ApiException.BadRequest("账号需为 3~32 位字母/数字/下划线");
+        if (!AccountNameRule.IsValid(v)) throw Yf.Api.Infrastructure.ApiException.BadRequest(AccountNameRule.Message);
     }
     public static void Email(string? value)
     {

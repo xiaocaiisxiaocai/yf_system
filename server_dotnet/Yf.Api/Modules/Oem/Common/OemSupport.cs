@@ -35,8 +35,7 @@ internal static class OemValidation
     public static string EmployeeNo(string? value)
     {
         var text = value?.Trim() ?? string.Empty;
-        if (text.Length is < 3 or > 32 || text.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_'))
-            throw ApiException.BadRequest("登录账号需为 3~32 位字母/数字/下划线");
+        if (!AccountNameRule.IsValid(text)) throw ApiException.BadRequest(AccountNameRule.Message);
         return text;
     }
 

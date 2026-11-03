@@ -19,6 +19,7 @@ import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../components/ExcelImportDialog'
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../utils/excelWorkbook'
+import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../utils/accountName'
 
 interface UserRow {
   id: number
@@ -244,8 +245,8 @@ export default function UserList() {
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '文件内账号重复，本重复组未导入' }
       if (employeeNo && existingEmployees.has(normalizedEmployeeNo))
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '账号已存在，不会覆盖现有资料' }
-      if (!employeeNo || !/^[A-Za-z0-9_]{3,32}$/.test(employeeNo))
-        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号需为 3–32 位字母、数字或下划线' }
+      if (!employeeNo || !isValidAccountName(employeeNo))
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: ACCOUNT_NAME_MESSAGE }
       if (row.numericCells.has('账号'))
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号列请设置为文本格式，以保留前导零' }
       if (!realName || Array.from(realName).length > 64)
@@ -618,8 +619,8 @@ export default function UserList() {
           <div className="form-grid">
             {!editing && (
               <>
-                <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
-                  <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
+                <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
+                  <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
                 </Form.Item>
                 <Form.Item
                   label="初始密码"

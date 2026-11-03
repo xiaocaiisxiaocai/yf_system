@@ -40,6 +40,7 @@ import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
 import EnterSubmit from '../../../components/EnterSubmit'
 import ToolbarMenuButton from '../../../components/ToolbarMenuButton'
+import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../../utils/accountName'
 
 function EllipsisText({ value }: { value: string | null | undefined }) {
   const text = value || '-'
@@ -380,8 +381,8 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
         unmountOnExit
       >
         <Form onSubmit={() => void save()} form={form} layout="vertical">
-          <Form.Item field="employeeNo" label="账号" rules={[{ required: true }, { match: /^[A-Za-z0-9_]{3,32}$/, message: '3~32 位字母/数字/下划线' }]}>
-            <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
+          <Form.Item field="employeeNo" label="账号" rules={[{ required: true }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
+            <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
           </Form.Item>
           <Form.Item field="password" label="初始密码" extra="首次登录需改密" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><Input.Password placeholder="5-20 位" /></Form.Item>
         <EnterSubmit /></Form>
@@ -490,8 +491,8 @@ export default function CompaniesPage() {
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '文件内账号重复，本重复组未导入' }
       if (employeeNo && existing.has(employeeNo.toUpperCase()))
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '登录账号已存在，不会覆盖现有资料' }
-      if (!employeeNo || !/^[A-Za-z0-9_]{3,32}$/.test(employeeNo))
-        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号需为 3–32 位字母、数字或下划线' }
+      if (!employeeNo || !isValidAccountName(employeeNo))
+        return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: ACCOUNT_NAME_MESSAGE }
       if (row.numericCells.has('登录账号'))
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号列请设置为文本格式，以保留前导零' }
       if (validatePassword(initialPassword))

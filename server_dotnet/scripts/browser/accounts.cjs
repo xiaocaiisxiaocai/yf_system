@@ -221,7 +221,7 @@ function flattenDepartments(nodes, result = []) {
 
       await page.getByRole('button', { name: '新增用户', exact: true }).click();
       modal = currentModal();
-      await modal.getByPlaceholder('3-32 位字母、数字或下划线', { exact: true }).fill(userNo);
+      await modal.getByPlaceholder('3-32 位字母、数字、下划线或点', { exact: true }).fill(userNo);
       await modal.getByPlaceholder('5-20 位', { exact: true }).fill(userPassword);
       await modal.getByPlaceholder('姓名', { exact: true }).fill('UI内部用户');
       await modal.getByPlaceholder('name@example.com', { exact: true }).fill(userEmail);
@@ -402,7 +402,7 @@ function flattenDepartments(nodes, result = []) {
 
       await drawer.getByRole('button', { name: '新增账号', exact: true }).click();
       modal = currentModal();
-      await modal.getByPlaceholder('3-32 位字母、数字或下划线', { exact: true }).fill(accountNo);
+      await modal.getByPlaceholder('3-32 位字母、数字、下划线或点', { exact: true }).fill(accountNo);
       await modal.getByPlaceholder('5-20 位', { exact: true }).fill(accountPassword);
       await openChoice(modal, '选择供应商角色');
       await pickVisibleOption(manualRoleName);

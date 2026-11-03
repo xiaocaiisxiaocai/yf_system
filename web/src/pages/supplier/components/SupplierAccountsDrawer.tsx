@@ -11,6 +11,7 @@ import { type ApiResponses, fmtTime } from '../../../api/types'
 import { passwordRule } from '../../../utils/password'
 import type { Account, RoleOption, Supplier } from './supplierTypes'
 import EnterSubmit from '../../../components/EnterSubmit'
+import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER } from '../../../utils/accountName'
 
 const builtInSupplierRoleName = '供应商人员'
 
@@ -305,8 +306,8 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
       >
         <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
-            <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: /^[a-zA-Z0-9_]{3,32}$/, message: '3-32 位字母/数字/下划线' }]}>
-              <Input autoFocus placeholder="3-32 位字母、数字或下划线" />
+            <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
+              <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
             </Form.Item>
             <Form.Item
               label="初始密码"
