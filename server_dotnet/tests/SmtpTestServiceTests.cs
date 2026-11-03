@@ -90,6 +90,19 @@ public sealed class SmtpTestServiceTests
         Assert.Equal("（5.7.139，该邮箱已禁用 SMTP AUTH，需管理员在 Exchange 中开启）",
             SmtpTestService.AuthenticationDiagnosis("5.7.139 Authentication unsuccessful, SmtpClientAuthentication is disabled for the Mailbox."));
         Assert.Equal("", SmtpTestService.AuthenticationDiagnosis("credential=secret"));
+        // A disconnect during login reports the step on screen; the log line keeps only types and status codes.
+        var dropped = new MailKit.Net.Smtp.SmtpProtocolException("421 4.7.66 secret=abc server closed",
+            new IOException("reset", new SocketException((int)SocketError.ConnectionReset)));
+        SmtpStage.Tag(dropped, SmtpStage.Authenticate);
+        var stageResult = await SmtpTestService.SendAsync(new Delivery(dropped), new(), "r@example.invalid", TestContext.Current.CancellationToken);
+        Assert.Contains("在登录阶段中断", stageResult.Message);
+        var diagnostic = SmtpStage.Describe(dropped);
+        Assert.Contains("stage=登录", diagnostic);
+        Assert.Contains("SmtpProtocolException", diagnostic);
+        Assert.Contains("SocketException(ConnectionReset)", diagnostic);
+        Assert.Contains("enhanced=4.7.66", diagnostic);
+        Assert.DoesNotContain("secret", diagnostic);
+        Assert.DoesNotContain("server closed", diagnostic);
         var network = await SmtpTestService.SendAsync(new Delivery(new SocketException()), new(), "r@example.invalid", TestContext.Current.CancellationToken);
         Assert.False(network.Success);
         Assert.Contains("连接", network.Message);

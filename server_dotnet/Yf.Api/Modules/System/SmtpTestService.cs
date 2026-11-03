@@ -49,7 +49,7 @@ public sealed class SmtpTestService : IDisposable
                     new { recipient = MailService.MaskEmail(recipient), reason = "管理员手动测试，立即发送，不入队且不自动重试" }, null, ct);
             }
             SmtpTestResponse result;
-            try { result = await SendAsync(delivery, resolved.Options, recipient, ct); }
+            try { result = await SendAsync(delivery, resolved.Options, recipient, ct, logger); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 await RecordResultAsync(actor, recipient, new(false, "测试请求中断，发送结果不确定，请检查收件箱后再决定是否重试", true));
@@ -116,7 +116,8 @@ public sealed class SmtpTestService : IDisposable
         return parts.Length == 0 ? "" : "（" + string.Join("，", parts) + "）";
     }
 
-    internal static async Task<SmtpTestResponse> SendAsync(ISmtpDelivery delivery, SmtpOptions options, string recipient, CancellationToken ct)
+    internal static async Task<SmtpTestResponse> SendAsync(
+        ISmtpDelivery delivery, SmtpOptions options, string recipient, CancellationToken ct, ILogger? logger = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
@@ -126,12 +127,22 @@ public sealed class SmtpTestService : IDisposable
                 "这是一封 SMTP 配置测试邮件。收到此邮件说明当前配置已成功完成邮件发送。\n此邮件由管理员手动触发，请勿回复。"), timeout.Token);
             return new(true, "SMTP 服务器已接受测试邮件，请检查收件箱或垃圾邮件；最终送达以实际收件为准。");
         }
+        // Logs which SMTP step failed and why (types and status codes only); never catches, so the mapping below applies.
+        catch (Exception error) when (Diagnose(error, logger)) { throw; }
         catch (MailKit.Security.AuthenticationException error) { return new(false, "SMTP 认证失败" + AuthenticationDiagnosis(error.Message) + "：请检查登录账号、密码或授权码，以及邮箱是否允许 SMTP AUTH；当前支持账号密码认证。"); }
         catch (SslHandshakeException) { return new(false, "TLS 握手失败：请检查端口、连接加密方式和服务器证书。"); }
         catch (SmtpSenderAddressException) { return new(false, "发件邮箱地址无效，请检查并重新保存 SMTP 配置。"); }
         catch (SmtpCommandException error) { return new(false, $"SMTP 服务器拒绝发送（{(int)error.StatusCode} / {error.ErrorCode}）：请检查发件权限和收件邮箱。"); }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return new(false, "测试发送超时，结果不确定：请先检查收件箱，再检查 SMTP 地址、端口和网络连接。", true); }
         catch (Exception error) when (error is SocketException or IOException or SmtpProtocolException)
-        { return new(false, "无法连接或完成 SMTP 通信，发送结果不确定：请检查服务器地址、端口、网络和加密方式；如已进入发送阶段，请先检查收件箱。", true); }
+        { return new(false, "无法连接或完成 SMTP 通信" + StageNote(error) + "，发送结果不确定：请检查服务器地址、端口、网络和加密方式；如已进入发送阶段，请先检查收件箱。", true); }
     }
+
+    private static bool Diagnose(Exception error, ILogger? logger)
+    {
+        logger?.LogWarning("SMTP test failed: {Diagnostic}", SmtpStage.Describe(error));
+        return false;
+    }
+
+    private static string StageNote(Exception error) => SmtpStage.Of(error) is { } stage ? $"（在{stage}阶段中断）" : "";
 }

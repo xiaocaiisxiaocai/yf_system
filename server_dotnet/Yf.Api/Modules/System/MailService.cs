@@ -1016,6 +1016,45 @@ internal sealed class MailKitSmtpDelivery : ISmtpDelivery
 /// Keeps one authenticated connection for the messages of a single flush. Any failure drops the
 /// connection so the next message starts fresh; the connection is closed (QUIT) when the batch ends.
 /// </summary>
+/// <summary>
+/// The SMTP step a delivery failed in, attached to the exception so callers can report it. The diagnostic never
+/// contains credentials or the server's raw reply text: only exception types, socket error codes and SMTP status codes.
+/// </summary>
+internal static class SmtpStage
+{
+    internal const string Connect = "连接与加密";
+    internal const string Authenticate = "登录";
+    internal const string Send = "发送";
+    private const string Key = "yf.smtp.stage";
+
+    internal static bool Tag(Exception error, string stage)
+    {
+        if (!error.Data.Contains(Key)) error.Data[Key] = stage;
+        return false;
+    }
+
+    internal static string? Of(Exception error) => error.Data[Key] as string;
+
+    internal static string Describe(Exception error)
+    {
+        var parts = new List<string> { "stage=" + (Of(error) ?? "unknown") };
+        var chain = new List<string>();
+        for (var current = error; current is not null; current = current.InnerException)
+        {
+            var name = current.GetType().FullName ?? current.GetType().Name;
+            if (current is System.Net.Sockets.SocketException socket) name += $"({socket.SocketErrorCode})";
+            if (current is SmtpCommandException command) name += $"({(int)command.StatusCode}/{command.ErrorCode})";
+            chain.Add(name);
+            var enhanced = System.Text.RegularExpressions.Regex.Match(current.Message, @"\b[245]\.\d{1,3}\.\d{1,3}\b").Value;
+            var basic = System.Text.RegularExpressions.Regex.Match(current.Message, @"\b[245]\d\d\b").Value;
+            if (enhanced.Length > 0) parts.Add("enhanced=" + enhanced);
+            else if (basic.Length > 0) parts.Add("smtp=" + basic);
+        }
+        parts.Insert(1, "type=" + string.Join(" <- ", chain));
+        return string.Join("; ", parts.Distinct());
+    }
+}
+
 internal sealed class MailKitSmtpBatch : ISmtpBatch
 {
     private SmtpClient? client;
@@ -1025,6 +1064,7 @@ internal sealed class MailKitSmtpBatch : ISmtpBatch
     {
         var message = MailKitSmtpDelivery.BuildMessage(options, envelope);
         var key = string.Join('\n', options.Host, options.Port, options.Security, options.Username, options.Password);
+        var stage = SmtpStage.Send;
         try
         {
             if (client is null || clientKey != key || !client.IsConnected)
@@ -1033,12 +1073,14 @@ internal sealed class MailKitSmtpBatch : ISmtpBatch
                 var fresh = new SmtpClient { Timeout = 60000 };
                 try
                 {
+                    stage = SmtpStage.Connect;
                     await fresh.ConnectAsync(options.Host, options.Port, options.Security switch
                     {
                         "SslOnConnect" => SecureSocketOptions.SslOnConnect,
                         "StartTls" => SecureSocketOptions.StartTls,
                         _ => options.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls
                     }, ct);
+                    stage = SmtpStage.Authenticate;
                     await fresh.AuthenticateAsync(options.Username, options.Password, ct);
                 }
                 catch
@@ -1049,9 +1091,12 @@ internal sealed class MailKitSmtpBatch : ISmtpBatch
                 client = fresh;
                 clientKey = key;
             }
+            stage = SmtpStage.Send;
             await client.SendAsync(message, ct);
             return new(null);
         }
+        // Only records which step failed on the exception; never catches.
+        catch (Exception error) when (SmtpStage.Tag(error, stage)) { throw; }
         catch (SmtpCommandException) when (client is { IsConnected: true })
         {
             // A rejected recipient or message leaves the session usable (MailKit resets it).
