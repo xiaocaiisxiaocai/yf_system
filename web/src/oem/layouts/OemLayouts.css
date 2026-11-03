@@ -17,3 +17,11 @@
 .oem-flow-nodes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .oem-flow-arrow { color: var(--color-text-3); }
 .oem-flow-node--skipped { color: var(--color-text-3); }
+
+/* 往来对象：方向箭头 + 动词 + 加粗名称，发出为蓝色、收到为绿色。 */
+.oem-counterpart { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; }
+.oem-counterpart > .arco-icon { flex-shrink: 0; }
+.oem-counterpart-verb { flex-shrink: 0; color: var(--color-text-3); }
+.oem-counterpart-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--color-text-1); }
+.oem-counterpart--out > .arco-icon { color: rgb(var(--primary-6)); }
+.oem-counterpart--in > .arco-icon { color: rgb(var(--green-6)); }

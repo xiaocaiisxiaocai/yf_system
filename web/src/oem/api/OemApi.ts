@@ -17,6 +17,7 @@ export interface TransferQuery {
   status?: string
   approvalStatus?: ApprovalStatus
   keyword?: string
+  companyId?: number
   mine?: boolean
 }
 

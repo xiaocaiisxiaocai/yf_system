@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Alert, Button, Card, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
@@ -392,7 +393,8 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
 }
 
 export default function CompaniesPage() {
-  const { api } = useOem()
+  const { api, base } = useOem()
+  const navigate = useNavigate()
   const can = useCan()
   const [rows, setRows] = useState<Company[]>([])
   const [total, setTotal] = useState(0)
@@ -775,9 +777,10 @@ export default function CompaniesPage() {
     { key: 'status', title: '状态', width: 70, align: 'center' as const, render: (_: unknown, row: Company) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
     {
-      key: 'actions', title: '操作', width: 300, fixed: 'right' as const,
+      key: 'actions', title: '操作', width: 370, fixed: 'right' as const,
       render: (_: unknown, row: Company) => (
         <Space size={4}>
+          {can.viewTransfers && <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers?companyId=${row.id}`)}>传递记录</Button>}
           {can.manageAccounts && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号管理</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => setContactsOf(row)}>联络人</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}

@@ -76,11 +76,11 @@ function LocationProbe() {
   return <output aria-label="当前路径">{useLocation().pathname}</output>
 }
 
-function renderList(api: OemApi, realm: Realm = 'internal') {
+function renderList(api: OemApi, realm: Realm = 'internal', search = '') {
   const base = realm === 'internal' ? '/oem' : '/oem-portal'
   return render(
     <QueryClientProvider client={createAppQueryClient()}>
-      <MemoryRouter initialEntries={[`${base}/transfers`]}>
+      <MemoryRouter initialEntries={[`${base}/transfers${search}`]}>
         <OemProvider value={{
           api,
           realm,
@@ -322,7 +322,9 @@ describe('OEM 一键发送文件', () => {
 
   it('已有草稿的厂商不再可接收时给出打开或删除草稿的出路，删除后可重新选择厂商', async () => {
     const user = userEvent.setup()
+    // 第一次调用来自列表的厂商筛选，第二次是打开发送对话框，之后才是提交前的重新核对。
     const companyOptions = vi.fn()
+      .mockResolvedValueOnce([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }])
       .mockResolvedValueOnce([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }])
       .mockResolvedValue([
         { id: 9, name: '甲厂', canReceive: false, unavailableReason: '甲厂账号已停用' },
@@ -340,7 +342,7 @@ describe('OEM 一键发送文件', () => {
     await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
 
     expect(await within(dialog).findByText('草稿的目标厂商当前无法接收文件：甲厂账号已停用')).toBeInTheDocument()
-    expect(companyOptions).toHaveBeenCalledTimes(2)
+    expect(companyOptions).toHaveBeenCalledTimes(3)
     expect(merge).toHaveBeenCalledTimes(1)
     expect(api.send).not.toHaveBeenCalled()
     expect(within(dialog).getByRole('button', { name: '提交审批' })).toBeDisabled()
@@ -356,7 +358,9 @@ describe('OEM 一键发送文件', () => {
 
   it('已有草稿重新核对厂商失败时保留原选项，只在厂商区域提示一次且不继续上传', async () => {
     const user = userEvent.setup()
+    // 第一次调用来自列表的厂商筛选，第二次是打开发送对话框，之后才是提交前的重新核对。
     const companyOptions = vi.fn()
+      .mockResolvedValueOnce([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }])
       .mockResolvedValueOnce([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }])
       .mockRejectedValueOnce({ response: { data: { message: '厂商服务暂不可用' } } })
     const merge = vi.fn().mockRejectedValueOnce(new Error('merge failed')).mockResolvedValue({})
@@ -376,6 +380,29 @@ describe('OEM 一键发送文件', () => {
     expect(dialog.querySelector('.arco-select-view-value')).toHaveTextContent('甲厂')
     expect(merge).toHaveBeenCalledTimes(1)
     expect(api.send).not.toHaveBeenCalled()
+  })
+
+  it('列表用往来厂商列标明发给谁或来自谁，并可按厂商筛选', async () => {
+    const incoming = { ...detail(42, 'RELEASED').summary, id: 42, direction: 'OEM_TO_INTERNAL' as const, title: '回传.zip' }
+    const listTransfers = vi.fn().mockResolvedValue({ list: [detail(41, 'SEALED').summary, incoming], total: 2, page: 1, pageSize: 20 })
+    renderList(createApi({ listTransfers } as Partial<OemApi>), 'internal', '?companyId=9')
+
+    const outRow = (await screen.findByRole('link', { name: '图纸.zip' })).closest('tr')!
+    expect(within(outRow).getByTitle('发给 甲厂')).toBeInTheDocument()
+    const inRow = screen.getByRole('link', { name: '回传.zip' }).closest('tr')!
+    expect(within(inRow).getByTitle('来自 甲厂')).toBeInTheDocument()
+    expect(listTransfers).toHaveBeenCalledWith(expect.objectContaining({ companyId: 9 }))
+    expect(screen.getByPlaceholderText('搜索文件或厂商')).toBeInTheDocument()
+  })
+
+  it('厂商门户看到的往来对象是公司', async () => {
+    const outgoing = { ...detail(43, 'RELEASED').summary, id: 43, direction: 'OEM_TO_INTERNAL' as const, title: '厂商回传.zip' }
+    renderList(createApi({
+      listTransfers: vi.fn().mockResolvedValue({ list: [outgoing], total: 1, page: 1, pageSize: 20 }),
+    } as Partial<OemApi>), 'oem')
+    const row = (await screen.findByRole('link', { name: '厂商回传.zip' })).closest('tr')!
+    expect(within(row).getByTitle('发给 公司')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: '往来厂商' })).not.toBeInTheDocument()
   })
 
   it('标题单元格是指向详情的链接，键盘也能进入', async () => {

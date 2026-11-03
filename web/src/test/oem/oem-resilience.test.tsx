@@ -220,7 +220,7 @@ describe('OEM 管理列表的过期响应', () => {
       .mockResolvedValue({ list: [company(2, '新结果厂')], total: 1, page: 1, pageSize: 20 })
     render(
       <OemProvider value={context({ companies } as Partial<OemApi>, ['oem:company_manage'])}>
-        <CompaniesPage />
+        <MemoryRouter><CompaniesPage /></MemoryRouter>
       </OemProvider>,
     )
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(1))
@@ -245,7 +245,7 @@ describe('OEM 管理列表的过期响应', () => {
       .mockResolvedValue({ list: [company(3, '重试厂')], total: 1, page: 1, pageSize: 20 })
     render(
       <OemProvider value={context({ companies } as Partial<OemApi>, ['oem:company_manage'])}>
-        <CompaniesPage />
+        <MemoryRouter><CompaniesPage /></MemoryRouter>
       </OemProvider>,
     )
     expect(await screen.findByText('厂商列表加载失败：数据库忙')).toBeInTheDocument()

@@ -435,6 +435,12 @@ public sealed class OemTransferFlowTests
         Assert.Contains(notSent, item => item!.Id() == id);
         var sentOrPending = (await world.Admin.GetAsync("/api/v1/oem/transfers?status=SEALED,RELEASED", ct).Ok())["list"]!.AsArray();
         Assert.DoesNotContain(sentOrPending, item => item!.Id() == id);
+
+        // The search box also finds transfers by the vendor's name, not only by title.
+        var companyName = cancelled["summary"]!["companyName"]!.GetValue<string>();
+        var byVendor = (await world.Admin.GetAsync("/api/v1/oem/transfers?keyword=" + Uri.EscapeDataString(companyName), ct).Ok())["list"]!.AsArray();
+        Assert.Contains(byVendor, item => item!.Id() == id);
+        Assert.Empty((await world.Admin.GetAsync("/api/v1/oem/transfers?keyword=" + Uri.EscapeDataString("不存在的厂商名"), ct).Ok())["list"]!.AsArray());
     }
 
     [Fact(Timeout = 240_000)]

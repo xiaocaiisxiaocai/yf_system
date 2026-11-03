@@ -2,14 +2,15 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table } from '@arco-design/web-react'
 import { IconUpload } from '@arco-design/web-react/icon'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import { oemRequestError } from '../api/requestError'
 import type { CompanyOption, TransferSummary } from '../api/types'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
-import { DIRECTION_LABEL, LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
+import { LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
+import Counterpart from '../components/Counterpart'
 import { useCan, useOem } from '../OemContext'
 import { useLatestRequest, useLoadEffect } from '../useLoadEffect'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
@@ -19,13 +20,16 @@ import EnterSubmit from '../../components/EnterSubmit'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
-  { key: 'direction', title: '方向', defaultWidth: 96, minWidth: 88 },
-  { key: 'companyName', title: '厂商', defaultWidth: 160, minWidth: 96 },
+  // 往来对象：内部看到厂商名称，厂商门户看到“公司”；箭头和动词表示发出或收到。
+  { key: 'counterpart', title: '往来厂商', defaultWidth: 240, minWidth: 140 },
   { key: 'sender', title: '发送人', defaultWidth: 104, minWidth: 88 },
   { key: 'status', title: '状态', defaultWidth: 180, minWidth: 140 },
   { key: 'files', title: '附件', defaultWidth: 120, minWidth: 96 },
   { key: 'sentAt', title: '提交时间', defaultWidth: 170, minWidth: 140 },
 ]
+// 厂商门户里往来对象总是“公司”，列名不写“厂商”。
+const PORTAL_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = OEM_TRANSFER_COLUMNS
+  .map((spec) => spec.key === 'counterpart' ? { ...spec, title: '往来' } : spec)
 
 const NO_RECEIVING_ACCOUNT_REASON = '该厂商没有启用的登录账号，请先新增或启用账号后再发送'
 
@@ -336,6 +340,18 @@ export default function TransferListPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [direction, setDirection] = useState('')
+  // 从“厂商与账号”页的“传递记录”进入时带 ?companyId=，列表只显示与该厂商的往来。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const companyParam = Number(searchParams.get('companyId'))
+  const companyId = realm === 'internal' && Number.isSafeInteger(companyParam) && companyParam > 0 ? companyParam : undefined
+  const changeCompany = (value: number | undefined) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (value) next.set('companyId', String(value)); else next.delete('companyId')
+      return next
+    }, { replace: true })
+    setPage(1)
+  }
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [mine, setMine] = useState(false)
@@ -343,10 +359,23 @@ export default function TransferListPage() {
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
-    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine }],
-    queryFn: () => api.listTransfers({ page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine }),
+    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId }],
+    queryFn: () => api.listTransfers({ page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, companyId }),
+  })
+  const companyOptions = useQuery({
+    queryKey: ['oem', ...queryScope, 'company-options'],
+    queryFn: () => api.companyOptions(),
+    enabled: realm === 'internal',
+    retry: false,
   })
   const rows: TransferSummary[] = transfers.data?.list ?? []
+  // 选项只含启用的厂商；从已停用厂商的“传递记录”进入时，用列表里的厂商名补一个选项，避免只显示编号。
+  const companyFilterOptions = useMemo(() => {
+    const options = companyOptions.data ?? []
+    if (!companyId || options.some((company) => company.id === companyId)) return options
+    const name = transfers.data?.list.find((row) => row.companyId === companyId)?.companyName ?? `厂商 #${companyId}`
+    return [...options, { id: companyId, name, canReceive: false }]
+  }, [companyId, companyOptions.data, transfers.data])
   const total = transfers.data?.total ?? 0
   const transferColumns = useMemo(() => [
     {
@@ -355,8 +384,10 @@ export default function TransferListPage() {
         <Link className="table-link" to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>{value}</Link>
       ),
     },
-    { key: 'direction', title: '方向', dataIndex: 'direction', render: (value: TransferSummary['direction']) => DIRECTION_LABEL[value] },
-    { key: 'companyName', title: '厂商', dataIndex: 'companyName' },
+    {
+      key: 'counterpart', title: realm === 'internal' ? '往来厂商' : '往来',
+      render: (_: unknown, row: TransferSummary) => <Counterpart direction={row.direction} companyName={row.companyName} realm={realm} />,
+    },
     { key: 'sender', title: '发送人', render: (_: unknown, row: TransferSummary) => row.sender.realName },
     {
       key: 'status', title: '状态',
@@ -370,9 +401,10 @@ export default function TransferListPage() {
     },
     { key: 'files', title: '附件', render: (_: unknown, row: TransferSummary) => `${row.fileCount} 个 / ${fmtSize(row.totalBytes)}` },
     { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
-  ], [base])
+  ], [base, realm])
   const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
-  const table = useAdjustableColumns(tableId, userId, OEM_TRANSFER_COLUMNS, transferColumns, 'title', tableHostRef)
+  const columnSpecs = realm === 'internal' ? OEM_TRANSFER_COLUMNS : PORTAL_TRANSFER_COLUMNS
+  const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef)
 
   return (
     <Card
@@ -381,6 +413,14 @@ export default function TransferListPage() {
     >
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
+          {realm === 'internal' && !companyOptions.isError && (
+            <Select allowClear showSearch aria-label="往来厂商" placeholder="全部厂商" style={{ width: 200 }}
+              loading={companyOptions.isFetching} value={companyId}
+              filterOption={(input, option) => String((option as { props?: { children?: unknown } })?.props?.children ?? '').toLowerCase().includes(input.toLowerCase())}
+              onChange={(value) => changeCompany(value as number | undefined)}>
+              {companyFilterOptions.map((company) => <Select.Option key={company.id} value={company.id}>{company.name}</Select.Option>)}
+            </Select>
+          )}
           {realm === 'internal' && (
             <Radio.Group type="button" value={direction} onChange={(value) => { setDirection(value); setPage(1) }}>
               <Radio value="">全部</Radio>
@@ -390,10 +430,10 @@ export default function TransferListPage() {
           )}
           <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
             onChange={(value) => { setStatus(value); setPage(1) }} />
-          <Input.Search allowClear placeholder="搜索传递记录" style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+          <Input.Search allowClear placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'} style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
           <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
           <ColumnVisibilityPicker
-            specs={OEM_TRANSFER_COLUMNS}
+            specs={columnSpecs}
             hidden={table.hidden}
             onToggle={table.toggle}
             onShowAll={table.showAll}

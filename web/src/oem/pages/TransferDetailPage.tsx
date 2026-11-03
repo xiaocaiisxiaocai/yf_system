@@ -14,7 +14,8 @@ import OemFilePreview from '../components/OemFilePreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { oemPreviewKind } from '../components/oemPreview'
 import { ApprovalTag, LifecycleTag, PayloadTag, ValidationTag } from '../components/StatusTags'
-import { DIRECTION_LABEL, transferClosedNotice } from '../components/statusLabels'
+import { transferClosedNotice } from '../components/statusLabels'
+import Counterpart from '../components/Counterpart'
 import { useCan, useOem } from '../OemContext'
 import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
@@ -454,6 +455,7 @@ export default function TransferDetailPage() {
     <div>
       <Card
         title={<Space><Button type="text" icon={<IconLeft />} onClick={() => navigate(`${base}/transfers`)} />{summary.title}
+          <Counterpart direction={summary.direction} companyName={summary.companyName} realm={realm} />
           <LifecycleTag value={summary.lifecycleStatus} />
           {summary.direction === 'INTERNAL_TO_OEM' && realm === 'internal' && <ApprovalTag value={summary.approvalStatus} />}</Space>}
         extra={
@@ -482,8 +484,6 @@ export default function TransferDetailPage() {
         )}
         {detail.closedReason && <Alert type="warning" style={{ marginBottom: 12 }} content={`结束原因：${detail.closedReason}`} />}
         <Descriptions column={2} data={[
-          { label: '方向', value: DIRECTION_LABEL[summary.direction] },
-          { label: 'OEM 厂商', value: summary.companyName },
           { label: '发送人', value: summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName },
           { label: '删除策略', value: detail.retention.summary ?? '-' },
           { label: '提交时间', value: summary.sentAt ? fmtTime(summary.sentAt) : '-' },

@@ -13,6 +13,7 @@ vi.mock('../../utils/excelWorkbook', () => ({
   readExcelTable: vi.fn(),
 }))
 import { downloadExcelWorkbook } from '../../utils/excelWorkbook'
+import { MemoryRouter } from 'react-router-dom'
 
 
 function company(overrides: Partial<Company> = {}): Company {
@@ -65,7 +66,7 @@ function renderDirectory(api: Partial<OemApi>, permissions: string[]) {
       userId: 1,
       queryScope: ['test'],
     }}>
-      <CompaniesPage />
+      <MemoryRouter><CompaniesPage /></MemoryRouter>
     </OemProvider>,
   )
 }

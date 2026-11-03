@@ -66,7 +66,10 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         if (keyword.Length > 0)
         {
             var pattern = QueryValues.ContainsPattern(keyword);
-            query = query.Where(transfer => EF.Functions.Like(transfer.Title, pattern, QueryValues.LikeEscape));
+            // Internal staff also find transfers by vendor name; a vendor account only ever sees its own company.
+            query = query.Where(transfer => EF.Functions.Like(transfer.Title, pattern, QueryValues.LikeEscape)
+                || db.OemCompanies.Any(company => company.Id == transfer.OemCompanyId
+                    && EF.Functions.Like(company.Name, pattern, QueryValues.LikeEscape)));
         }
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(transfer => transfer.Id).Page(offset, size).AsNoTracking().ToArrayAsync(ct);
