@@ -1000,7 +1000,8 @@ internal sealed class MailKitSmtpDelivery : ISmtpDelivery
         message.From.Add(from);
         message.To.Add(to);
         message.Subject = envelope.Subject;
-        message.Body = new TextPart("plain") { Text = envelope.Body };
+        // Plain text stays the source of truth; the HTML alternative is rendered from it for richer clients.
+        message.Body = new BodyBuilder { TextBody = envelope.Body, HtmlBody = MailHtml.Render(envelope.Subject, envelope.Body) }.ToMessageBody();
         return message;
     }
 
