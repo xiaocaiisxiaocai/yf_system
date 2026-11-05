@@ -151,7 +151,7 @@ const captured = async () => {
 
       const oemStart = originalOem.find(item => item.key === 'oem.notify.event.transfer_released');
       assert(oemStart, 'OEM transfer release rule exists');
-      await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEM' })
+      await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEMA' })
         .evaluate(element => element.click());
       await page.getByRole('switch', { name: '文件送达提醒', exact: true }).waitFor();
       const oemToggle = page.getByRole('switch', { name: '文件送达提醒', exact: true });
@@ -169,7 +169,7 @@ const captured = async () => {
       await switchTo('开始子项目邮件提醒', originalRobot.events.projectStarted);
       await page.getByRole('button', { name: '保存邮件提醒', exact: true }).click();
       await page.getByText('邮件提醒设置已保存', { exact: true }).waitFor();
-      await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEM' })
+      await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEMA' })
         .evaluate(element => element.click());
       const restoreOem = page.getByRole('switch', { name: '文件送达提醒', exact: true });
       if ((await restoreOem.getAttribute('aria-checked')) !== String(oemStart.value === 'true')) await restoreOem.click();
@@ -190,7 +190,7 @@ const captured = async () => {
       assert(oem.queue && both.queue, 'each business has queue counts');
       const scope = page.getByRole('combobox', { name: '邮件日志业务', exact: true });
       await scope.click();
-      await page.getByRole('option', { name: 'ODM/OEM', exact: true }).click();
+      await page.getByRole('option', { name: 'ODM/OEMA', exact: true }).click();
       await page.getByRole('button', { name: 'ODM/OEMA 日志', exact: true }).waitFor();
       await scope.click();
       await page.getByRole('option', { name: 'Robot 仿真协作', exact: true }).click();

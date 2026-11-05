@@ -534,7 +534,7 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
         assert(reminder.documentScrollHeight <= reminder.viewportHeight + 1, `窄屏提醒页不得产生外层滚动: ${JSON.stringify(reminder)}`);
         assert.equal(reminder.gridColumns.split(' ').length, 1, '窄屏 Robot 提醒规则必须为单列');
         assert(reminder.gridScrollHeight >= reminder.gridClientHeight, '窄屏提醒规则在卡片内部承载溢出');
-        await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEM' })
+        await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEMA' })
           .evaluate(element => element.click());
         await page.getByRole('button', { name: '保存 ODM/OEMA 邮件提醒', exact: true }).waitFor();
       } finally {

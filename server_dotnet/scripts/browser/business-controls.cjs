@@ -171,7 +171,7 @@ async function choose(page, placeholder, optionName) {
       const pendingFirst = await (await pendingFirstPromise).json();
       assert(summary.pendingTasks >= 11);
       assert(summary.unreadMessages >= 1);
-      for (const [title, value] of [['资料待确认子项目', summary.pendingTasks], ['未读留言', summary.unreadMessages]]) {
+      for (const [title, value] of [['待审核资料子项目', summary.pendingTasks], ['未读留言', summary.unreadMessages]]) {
         const card = page.locator('.dashboard-stat-card').filter({ hasText: title });
         await card.getByText(String(value), { exact: true }).waitFor();
       }

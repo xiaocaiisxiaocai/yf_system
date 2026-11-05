@@ -297,7 +297,7 @@ async function preview(page, name, kind, label) {
     await record('负责人退回资料、确认 OK 即完成，重开后再次确认', async () => {
       const project = projects.a;
       await navigate(vendorA, '/projects/' + project.id);
-      await vendorA.getByText('资料待确认', { exact: true }).waitFor();
+      await vendorA.getByText('资料待审核', { exact: true }).waitFor();
       for (const name of ['资料确认 OK', '退回资料', '重开', '提交公司验收']) {
         assert.equal(await vendorA.getByRole('button', { name, exact: true }).count(), 0);
       }
@@ -334,7 +334,7 @@ async function preview(page, name, kind, label) {
     await record('负责人确认资料完成子项目及公司项目动态', async () => {
       const project = projects.b;
       await navigate(vendorB, '/projects/' + project.id);
-      await vendorB.getByText('资料待确认', { exact: true }).waitFor();
+      await vendorB.getByText('资料待审核', { exact: true }).waitFor();
       assert.equal(await vendorB.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
       await navigate(internal, '/projects/' + project.id);
       await approveMaterial(internal, project.id);

@@ -273,7 +273,7 @@ async function chooseNotificationTab(drawer, name) {
         `/projects/${project.id}/files?keyword=${encodeURIComponent(uploadName)}&page=1&pageSize=10`);
       assert.equal(stored.total, 1);
       // The returned material now waits for the responsible user; the supplier has no workflow command.
-      await supplierPage.getByText('资料待确认', { exact: true }).waitFor();
+      await supplierPage.getByText('资料待审核', { exact: true }).waitFor();
       assert.equal(await supplierPage.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
       await json(adminContext, adminToken, 'POST', `/projects/${project.id}/materials/return`, {
         expectedSupplierFileId: stored.list[0].id,
@@ -285,7 +285,7 @@ async function chooseNotificationTab(drawer, name) {
     await record('供应商补传资料后管理员工作台待确认区自动出现项目', async () => {
       await adminPage.goto(s.base + '/');
       await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
-      await adminPage.getByRole('heading', { name: '资料待确认子项目', exact: true }).waitFor();
+      await adminPage.getByRole('heading', { name: '待审核资料子项目', exact: true }).waitFor();
       const beforePending = await json(adminContext, adminToken, 'GET',
         '/dashboard/pending-projects?page=1&pageSize=100');
       assert(!beforePending.list.some(item => item.id === project.id), 'returned material is not the owner\'s task');
@@ -309,7 +309,7 @@ async function chooseNotificationTab(drawer, name) {
       const projectLabel = project.projectGroupName
         ? `${project.projectGroupName} / ${projectName}` : projectName;
       await adminPage.getByRole('link', { name: projectLabel, exact: true }).waitFor();
-      await supplierPage.getByText('资料待确认', { exact: true }).first().waitFor();
+      await supplierPage.getByText('资料待审核', { exact: true }).first().waitFor();
       assert.equal(await supplierPage.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
       assert.equal(await supplierPage.getByRole('button', { name: '退回资料', exact: true }).count(), 0);
     });
