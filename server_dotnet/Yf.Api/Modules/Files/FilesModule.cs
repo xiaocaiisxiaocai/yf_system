@@ -10,6 +10,7 @@ public static class FilesModule
         services.AddSingleton<BatchDownloadLimiter>();
         services.AddSingleton<MediaGrantService>();
         services.AddSingleton<DownloadGrantService>();
+        services.AddSingleton<FileRateLimiter>();
         services.AddScoped<FileService>();
         services.AddSingleton<IStoredUploadNotifier>(provider =>
             new UploadChangeNotifier(provider.GetRequiredService<IProjectRealtimePublisher>()));
@@ -30,8 +31,11 @@ public static class FilesModule
             await service.ListActiveAsync(context, projectId, ct));
 
         api.MapPost("/uploads/init", async (
-            HttpContext context, InitUploadRequest request, UploadService service, CancellationToken ct) =>
-            await service.InitAsync(context, request, ct));
+            HttpContext context, InitUploadRequest request, UploadService service, FileRateLimiter limiter, CancellationToken ct) =>
+        {
+            limiter.Require(AccessService.GetCurrent(context).Id, FileRateLimiter.FileUploadScope);
+            return await service.InitAsync(context, request, ct);
+        });
         api.MapGet("/uploads/{sessionId}", async (
             HttpContext context, string sessionId, UploadService service, CancellationToken ct) =>
             await service.GetAsync(context, sessionId, ct));
@@ -59,12 +63,18 @@ public static class FilesModule
         });
 
         api.MapGet("/files/{id:long}/download", async (
-            HttpContext context, ulong id, FileService service, CancellationToken ct) =>
-            await service.StreamAsync(context, id, inline: false, ct))
+            HttpContext context, ulong id, FileService service, FileRateLimiter limiter, CancellationToken ct) =>
+        {
+            limiter.Require(AccessService.GetCurrent(context).Id, FileRateLimiter.DownloadScope);
+            return await service.StreamAsync(context, id, inline: false, ct);
+        })
             .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream");
         api.MapPost("/files/{id:long}/download-grant", async (
-            HttpContext context, ulong id, FileService service, CancellationToken ct) =>
-            await service.CreateDownloadGrantAsync(context, id, ct));
+            HttpContext context, ulong id, FileService service, FileRateLimiter limiter, CancellationToken ct) =>
+        {
+            limiter.Require(AccessService.GetCurrent(context).Id, FileRateLimiter.DownloadScope);
+            return await service.CreateDownloadGrantAsync(context, id, ct);
+        });
         api.MapGet("/files/{id:long}/native-download/{handle}", async (
             HttpContext context, ulong id, string handle, FileService service, CancellationToken ct) =>
             await service.StreamNativeAsync(context, id, handle, ct))
@@ -87,12 +97,18 @@ public static class FilesModule
             return EmptyResponse.Instance;
         });
         api.MapPost("/files/batch-download", async (
-            HttpContext context, BatchDownloadRequest request, FileService service, CancellationToken ct) =>
-            await service.BatchDownloadAsync(context, request, ct))
+            HttpContext context, BatchDownloadRequest request, FileService service, FileRateLimiter limiter, CancellationToken ct) =>
+        {
+            limiter.Require(AccessService.GetCurrent(context).Id, FileRateLimiter.DownloadScope);
+            return await service.BatchDownloadAsync(context, request, ct);
+        })
             .Produces(StatusCodes.Status200OK, contentType: "application/zip");
         api.MapPost("/files/batch-download-grant", async (
-            HttpContext context, BatchDownloadRequest request, FileService service, CancellationToken ct) =>
-            await service.CreateBatchDownloadGrantAsync(context, request, ct));
+            HttpContext context, BatchDownloadRequest request, FileService service, FileRateLimiter limiter, CancellationToken ct) =>
+        {
+            limiter.Require(AccessService.GetCurrent(context).Id, FileRateLimiter.DownloadScope);
+            return await service.CreateBatchDownloadGrantAsync(context, request, ct);
+        });
         api.MapGet("/files/batch-download/{handle}", async (
             HttpContext context, string handle, FileService service, CancellationToken ct) =>
             await service.BatchDownloadNativeAsync(context, handle, ct))

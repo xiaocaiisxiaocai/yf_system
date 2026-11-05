@@ -172,12 +172,15 @@ public sealed class OemDownloadRateLimiter
     /// <summary>Budget of those entry points per account and minute: far above normal use, but bounded.</summary>
     public const int EntryPerMinute = 120;
 
+    /// <summary>Upload and download starts per account and minute; the same budget as collaboration transfers.</summary>
+    public const int TransferStartPerMinute = 60;
+
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime Start, int Count)> windows = new();
 
     /// <summary>Counts one call of <paramref name="actor"/> in <paramref name="scope"/>; 429/42902 once the entry-point budget is spent.</summary>
     public void Require(OemActor actor, string scope)
     {
-        if (!Allow(actor.Realm, actor.Id, EntryPerMinute, scope))
+        if (!Allow(actor.Realm, actor.Id, scope is UploadInitScope or DownloadStartScope ? TransferStartPerMinute : EntryPerMinute, scope))
             throw ApiException.TooManyRequests("操作过于频繁，请稍后再试");
     }
 

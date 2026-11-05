@@ -57,6 +57,8 @@ public sealed class AppOptions
     public int UploadMaxActiveSessionsPerUser { get; set; } = 20;
     /// <summary>Maximum declared bytes of one account's unexpired, not yet merged upload sessions.</summary>
     public long UploadMaxPendingBytesPerUser { get; set; } = 20L * 1024 * 1024 * 1024;
+    /// <summary>Upload starts, image messages and download starts (each counted separately) one account may make per minute; 429/42902 above it.</summary>
+    public int FileTransferStartsPerMinutePerUser { get; set; } = 60;
     /// <summary>Maximum bytes the files maintenance worker re-hashes per cycle while verifying referenced blobs.</summary>
     public long BlobVerifyBytesPerCycle { get; set; } = 2L * 1024 * 1024 * 1024;
     /// <summary>Copy throughput cap of an online storage migration, so it never crowds out live transfers.</summary>
@@ -147,6 +149,8 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:UploadMaxActiveSessionsPerUser must be between 1 and 1000.");
         if (UploadMaxPendingBytesPerUser is < 1024L * 1024 * 1024 or > 16L * 1024 * 1024 * 1024 * 1024)
             throw new InvalidOperationException("App:UploadMaxPendingBytesPerUser must be between 1 GiB and 16 TiB.");
+        if (FileTransferStartsPerMinutePerUser is < 1 or > 100_000)
+            throw new InvalidOperationException("App:FileTransferStartsPerMinutePerUser must be between 1 and 100000.");
         if (BlobVerifyBytesPerCycle is < 64L * 1024 * 1024 or > 1024L * 1024 * 1024 * 1024)
             throw new InvalidOperationException("App:BlobVerifyBytesPerCycle must be between 64 MiB and 1 TiB.");
         if (StorageMigrationBytesPerSecond is < 1024L * 1024 or > 10L * 1024 * 1024 * 1024)

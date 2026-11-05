@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Files;
 
 namespace Yf.Api.Modules.Projects;
 
@@ -122,10 +123,13 @@ public static class ProjectsModule
                 id,
                 ParseMessageIds(QueryString(context, "ids")),
                 ct)));
-        api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, MessageService service) =>
+        api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, MessageService service, FileRateLimiter uploadLimiter) =>
         {
             if (!context.Request.HasFormContentType && !context.Request.HasJsonContentType())
                 throw new ApiException(415, 41501, "留言仅支持 JSON 或 multipart/form-data");
+            // Image messages are uploads: count them before the multipart body is read.
+            if (context.Request.HasFormContentType)
+                uploadLimiter.Require(AccessService.GetCurrent(context).Id, FileRateLimiter.MessageImageScope);
             // This short preflight releases its pooled connection before waiting for the request body.
             // CreateAsync rechecks authorization and project state in its own write transaction.
             await WithDb(context, (conn, actor, _, ct) =>

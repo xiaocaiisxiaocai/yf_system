@@ -41,10 +41,10 @@ public sealed class OemWriteEntryLimitTests
         var limiter = host.Service<OemDownloadRateLimiter>();
 
         // One call of the scope was already made over HTTP; the rest of the minute's budget is spent directly.
-        void SpendRestOfBudget(ulong actorId, string scope)
+        void SpendRestOfBudget(ulong actorId, string scope, int budget = OemDownloadRateLimiter.EntryPerMinute)
         {
-            for (var call = 1; call < OemDownloadRateLimiter.EntryPerMinute; call++)
-                Assert.True(limiter.Allow(OemRealms.Internal, actorId, OemDownloadRateLimiter.EntryPerMinute, scope));
+            for (var call = 1; call < budget; call++)
+                Assert.True(limiter.Allow(OemRealms.Internal, actorId, budget, scope));
         }
 
         // Normal use passes, and each entry point has its own budget.
@@ -52,13 +52,14 @@ public sealed class OemWriteEntryLimitTests
         SpendRestOfBudget(viewerId, OemDownloadRateLimiter.PreviewScope);
         await world.Viewer.GetAsync($"/api/v1/oem/files/{fileId}/content", ct).Status(HttpStatusCode.TooManyRequests, 42902);
         await world.Viewer.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Ok();
-        SpendRestOfBudget(viewerId, OemDownloadRateLimiter.DownloadStartScope);
+        SpendRestOfBudget(viewerId, OemDownloadRateLimiter.DownloadStartScope, OemDownloadRateLimiter.TransferStartPerMinute);
         await world.Viewer.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Status(HttpStatusCode.TooManyRequests, 42902);
 
         var draft = await CreateOutboundAsync(world, "限流上传", ct);
         var init = new { fileName = "init.pdf", fileSize = 1000UL };
         await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/uploads/init", init, ct).Ok();
-        SpendRestOfBudget(world.SenderId, OemDownloadRateLimiter.UploadInitScope);
+        // Upload and download starts have the smaller budget shared with collaboration transfers.
+        SpendRestOfBudget(world.SenderId, OemDownloadRateLimiter.UploadInitScope, OemDownloadRateLimiter.TransferStartPerMinute);
         await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/uploads/init", init, ct).Status(HttpStatusCode.TooManyRequests, 42902);
         // The streaming budget itself is separate and not spent.
         Assert.True(limiter.Allow(OemRealms.Internal, viewerId, 600));
