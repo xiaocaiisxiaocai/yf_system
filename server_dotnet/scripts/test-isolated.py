@@ -603,7 +603,8 @@ try:
             put_chunk(client, recovery_id, 0, recovery_bytes)
             submit_md5(client, recovery_id, recovery_bytes)
             with conn.cursor() as cursor:
-                cursor.execute("UPDATE upload_sessions SET status='MERGING' WHERE id=%s", (recovery_id,))
+                # An abandoned merge is one whose lease (updated_at) is older than the two-minute merge lease.
+                cursor.execute("UPDATE upload_sessions SET status='MERGING', updated_at=UTC_TIMESTAMP(6)-INTERVAL 3 MINUTE WHERE id=%s", (recovery_id,))
             recovered = client.call("POST", f"/api/v1/uploads/{recovery_id}/merge")
             recovered_data, _ = client.call("GET", f"/api/v1/files/{recovered['id']}/download", raw=True)
             check("abandoned merge with deferred MD5 completes on retry with exact bytes", recovered_data == recovery_bytes)
