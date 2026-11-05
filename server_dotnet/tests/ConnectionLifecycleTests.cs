@@ -133,10 +133,10 @@ public sealed class ConnectionLifecycleTests
                     WHERE g.name='待清理主项目';
                     INSERT INTO messages(project_id,sender_id,content) SELECT p.id,p.created_by,'待清理留言' FROM projects p;
                     INSERT INTO oem_companies(name,status,created_at,updated_at)
-                    VALUES('待清理 OEM 厂商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+                    VALUES('待清理 ODM/OEMA 厂商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
                     INSERT INTO oem_accounts(employee_no,password_hash,real_name,email,oem_company_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
-                    SELECT 'oem-discard','unused','待清理 OEM 用户','oem-discard@example.invalid',id,'ACTIVE',1,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
-                    FROM oem_companies WHERE name='待清理 OEM 厂商';
+                    SELECT 'oem-discard','unused','待清理 ODM/OEMA 用户','oem-discard@example.invalid',id,'ACTIVE',1,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
+                    FROM oem_companies WHERE name='待清理 ODM/OEMA 厂商';
                     UPDATE system_configs SET cfg_value='false' WHERE cfg_key='notify.enabled';
                     INSERT INTO system_configs(cfg_key,cfg_value) VALUES('smtp.reset-test-secret','retained-test-value');
                     """);

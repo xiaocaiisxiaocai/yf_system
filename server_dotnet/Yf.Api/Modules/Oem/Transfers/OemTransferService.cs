@@ -61,7 +61,7 @@ public sealed class OemTransferService(
             await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
             try { await planning.LoadOrgPathAsync(uow, current.Id, ct); }
             catch (ApprovalPlanningException error) { throw ApiException.BadRequest(error.Message); }
-            companyId = request.OemCompanyId ?? throw ApiException.BadRequest("请选择目标 OEM 厂商");
+            companyId = request.OemCompanyId ?? throw ApiException.BadRequest("请选择目标 ODM/OEMA 厂商");
             if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId && company.Status == OemStatus.Active, ct))
                 throw ApiException.BadRequest("目标厂商不存在或已停用");
             await OemRecipientPolicy.RequireEnabledAccountAsync(uow.Db, companyId, ct);

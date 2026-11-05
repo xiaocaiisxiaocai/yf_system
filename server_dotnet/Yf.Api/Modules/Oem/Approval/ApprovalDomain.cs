@@ -214,13 +214,13 @@ public sealed class ApprovalPlanner
             if (initiatorIsApprover) return ApplySelfPolicy(node, scopeName, initiatorId, eligibility);
             var leader = others.Single();
             if (!eligibility.IsEligible(leader))
-                throw new ApprovalPlanningException($"{scopeName}的主管账号已停用或没有 OEM 审批权限");
+                throw new ApprovalPlanningException($"{scopeName}的主管账号已停用或没有 ODM/OEMA 审批权限");
             return new PlannedNode(node.SortNo, node.Name, node.Source, ApprovalModes.Single, false, null, false, [leader], scopeName);
         }
 
         // Specified users: the initiator never approves their own transfer.
         if (node.Mode == ApprovalModes.All && others.Any(id => !eligibility.IsEligible(id)))
-            throw new ApprovalPlanningException($"节点「{node.Name}」为会签，但其中有审批人已停用或没有 OEM 审批权限");
+            throw new ApprovalPlanningException($"节点「{node.Name}」为会签，但其中有审批人已停用或没有 ODM/OEMA 审批权限");
         var eligible = others.Where(eligibility.IsEligible).ToArray();
         if (eligible.Length > 0)
             return new PlannedNode(node.SortNo, node.Name, node.Source, node.Mode, false, null, false, eligible, scopeName);

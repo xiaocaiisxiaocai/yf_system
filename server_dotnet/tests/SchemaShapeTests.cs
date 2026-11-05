@@ -51,6 +51,7 @@ public sealed class SchemaShapeTests
         "20261102012333_RemoveOemCompanyPrimaryContact",
         "20261105082534_MergeOemLeaderApproverSources",
         "20261105091038_AllowCadExportUploads",
+        "20261105102815_RenameOemLabelsToOdmOema",
     ];
 
     [Fact]

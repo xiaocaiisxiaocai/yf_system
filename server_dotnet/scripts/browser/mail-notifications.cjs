@@ -132,7 +132,7 @@ const captured = async () => {
         'mail logs never expose the SMTP password');
     });
 
-    await record('提醒规则 Tab 分别保存 Robot 与 ODM/OEM 开关并保持两边设置隔离', async () => {
+    await record('提醒规则 Tab 分别保存 Robot 与 ODM/OEMA 开关并保持两边设置隔离', async () => {
       await page.getByRole('tab', { name: '邮件提醒规则', exact: true }).click();
       const switchTo = async (label, value) => {
         const toggle = page.getByRole('switch', { name: label, exact: true });
@@ -178,7 +178,7 @@ const captured = async () => {
       assert.deepEqual(await read('GET', '/oem/notify-policies'), originalOem);
     });
 
-    await record('Robot 与 ODM/OEM 独立查询邮件队列和日志，系统审计能筛到测试邮件', async () => {
+    await record('Robot 与 ODM/OEMA 独立查询邮件队列和日志，系统审计能筛到测试邮件', async () => {
       await page.getByRole('tab', { name: 'SMTP 配置', exact: true }).click();
       await page.getByRole('combobox', { name: '邮件日志业务', exact: true }).waitFor();
       const robot = await readMail('collaboration');

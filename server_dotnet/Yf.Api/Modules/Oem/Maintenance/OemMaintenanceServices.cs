@@ -515,12 +515,12 @@ public sealed class OemReconcileService(
         try
         {
             var root = storage.Root();
-            if (!Directory.Exists(root)) return "OEM 存储根目录不存在";
+            if (!Directory.Exists(root)) return "ODM/OEMA 存储根目录不存在";
             foreach (var area in new[] { OemStorage.QuarantineArea, OemStorage.AvailableArea })
             {
                 if (!storedPaths.Any(path => path.StartsWith(area + "/", StringComparison.Ordinal))) continue;
                 var directory = Path.Combine(root, area);
-                if (!Directory.Exists(directory)) return $"OEM 存储区 {area}/ 不存在";
+                if (!Directory.Exists(directory)) return $"ODM/OEMA 存储区 {area}/ 不存在";
                 using var entries = Directory.EnumerateFileSystemEntries(directory).GetEnumerator();
                 entries.MoveNext();
             }
@@ -528,7 +528,7 @@ public sealed class OemReconcileService(
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            return $"OEM 存储根目录或存储区不可读（{error.GetType().Name}）";
+            return $"ODM/OEMA 存储根目录或存储区不可读（{error.GetType().Name}）";
         }
     }
 

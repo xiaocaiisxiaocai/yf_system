@@ -85,7 +85,7 @@ public sealed class OemDomainTests
         // An unavailable own leader is an error; it never silently escalates.
         var ineligible = Assert.Throws<ApprovalPlanningException>(() =>
             ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(), Initiator, new SetEligibility([DepartmentLeader])));
-        Assert.Contains("装配一课的主管账号已停用或没有 OEM 审批权限", ineligible.Message);
+        Assert.Contains("装配一课的主管账号已停用或没有 ODM/OEMA 审批权限", ineligible.Message);
     }
 
     [Fact]

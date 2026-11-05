@@ -97,7 +97,7 @@ public static class OemSettingCatalog
     [
         new(AllowedExtsInternalToOem, OemSettingKind.Extensions, OemSettingGroup.File, "公司出站允许的扩展名",
             "3dxml,3mf,7z,ai,amf,doc,docx,dwg,dxf,eprt,glb,gltf,hcg,hsf,ifc,iges,igs,jpeg,jpg,obj,pdf,ply,png,ppt,pptx,prt,prtdot,psd,rar,sat,sldftp,sldlfp,sldprt,step,stl,stp,tif,vda,wrl,x_b,x_t,xaml,xls,xlsx,zip"),
-        new(AllowedExtsOemToInternal, OemSettingKind.Extensions, OemSettingGroup.File, "OEM 入站允许的扩展名",
+        new(AllowedExtsOemToInternal, OemSettingKind.Extensions, OemSettingGroup.File, "ODM/OEMA 入站允许的扩展名",
             "3dxml,3mf,7z,ai,amf,doc,docx,dwg,dxf,eprt,glb,gltf,hcg,hsf,ifc,iges,igs,jpeg,jpg,obj,pdf,ply,png,ppt,pptx,prt,prtdot,psd,rar,sat,sldftp,sldlfp,sldprt,step,stl,stp,tif,vda,wrl,x_b,x_t,xaml,xls,xlsx,zip"),
         new(MaxFileSize, OemSettingKind.Integer, OemSettingGroup.File, "单文件大小上限", "2147483648", 1024 * 1024, 64 * GiB),
         new(MaxTransferSize, OemSettingKind.Integer, OemSettingGroup.File, "单传递单总大小上限", "10737418240", 1024 * 1024, 1024 * GiB),
@@ -119,7 +119,7 @@ public static class OemSettingCatalog
         new(IdleTimeoutSeconds, OemSettingKind.Integer, OemSettingGroup.File, "下载无进展取消期限（秒）", "300", 10, 24 * 3600),
         new(MaxDurationMinutes, OemSettingKind.Integer, OemSettingGroup.File, "单个下载请求最长时长（分钟）", "720", 1, 7 * 24 * 60),
         new(PurgeDrainMinutes, OemSettingKind.Integer, OemSettingGroup.File, "到期后活动下载排空期限（分钟）", "30", 0, 24 * 60),
-        new(NotifyEnabled, OemSettingKind.Boolean, OemSettingGroup.Notify, "OEM 邮件提醒总开关", "true"),
+        new(NotifyEnabled, OemSettingKind.Boolean, OemSettingGroup.Notify, "ODM/OEMA 邮件提醒总开关", "true"),
         new(NotifyApprovalPending, OemSettingKind.Boolean, OemSettingGroup.Notify, "待审批邮件", "true"),
         new(NotifyTransferReleased, OemSettingKind.Boolean, OemSettingGroup.Notify, "发布通知接收人邮件", "true"),
         new(NotifySenderResult, OemSettingKind.Boolean, OemSettingGroup.Notify, "发送结果通知发送人邮件", "true"),

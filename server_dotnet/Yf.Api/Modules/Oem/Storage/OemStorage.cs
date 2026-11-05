@@ -27,7 +27,7 @@ public sealed class OemStorage(AppOptions options)
     public string Root()
     {
         var roots = options.OemStorageRoots;
-        if (roots.Root.Length == 0) throw new ApiException(503, 50301, "OEM 文件存储未配置，请联系管理员");
+        if (roots.Root.Length == 0) throw new ApiException(503, 50301, "ODM/OEMA 文件存储未配置，请联系管理员");
         return ResolveRoot(roots.Root);
     }
 
@@ -39,7 +39,7 @@ public sealed class OemStorage(AppOptions options)
 
     private static IReadOnlyList<string> Roots(StorageRootPair roots)
     {
-        if (roots.Root.Length == 0) throw new ApiException(503, 50301, "OEM 文件存储未配置，请联系管理员");
+        if (roots.Root.Length == 0) throw new ApiException(503, 50301, "ODM/OEMA 文件存储未配置，请联系管理员");
         var primary = ResolveRoot(roots.Root);
         return roots.Fallback is { } fallback ? [primary, ResolveRoot(fallback)] : [primary];
     }
@@ -89,7 +89,7 @@ public sealed class OemStorage(AppOptions options)
     {
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         return roots.FirstOrDefault(root => full.StartsWith(root + Path.DirectorySeparatorChar, comparison))
-            ?? throw new InvalidOperationException("非法 OEM 存储路径");
+            ?? throw new InvalidOperationException("非法 ODM/OEMA 存储路径");
     }
 
     public static string QuarantineRelative(string storedName) => Relative(QuarantineArea, storedName);
@@ -126,14 +126,14 @@ public sealed class OemStorage(AppOptions options)
     private static string AbsoluteIn(string root, string relative)
     {
         if (string.IsNullOrWhiteSpace(relative) || Path.IsPathRooted(relative) || relative.Split('/', '\\').Any(part => part == ".."))
-            throw new InvalidOperationException("非法 OEM 存储路径");
+            throw new InvalidOperationException("非法 ODM/OEMA 存储路径");
         return FileStorage.EnsureLexicallyWithin(root, Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)), false);
     }
 
     /// <summary>Creates the parent directory of <paramref name="absolutePath"/> inside the root (no reparse-point escapes).</summary>
     public void EnsureParent(string absolutePath, CancellationToken ct)
     {
-        var parent = Path.GetDirectoryName(absolutePath) ?? throw new InvalidOperationException("非法 OEM 存储路径");
+        var parent = Path.GetDirectoryName(absolutePath) ?? throw new InvalidOperationException("非法 ODM/OEMA 存储路径");
         FileStorage.CreateDirectoryWithin(RootOf(absolutePath), parent, ct);
     }
 
@@ -157,7 +157,7 @@ public sealed class OemStorage(AppOptions options)
     // Two-character fan-out keeps directories small without leaking anything about the file.
     private static string Relative(string area, string storedName)
     {
-        if (!Guid.TryParseExact(storedName, "D", out _)) throw new InvalidOperationException("非法 OEM 文件标识");
+        if (!Guid.TryParseExact(storedName, "D", out _)) throw new InvalidOperationException("非法 ODM/OEMA 文件标识");
         return $"{area}/{storedName[..2]}/{storedName}";
     }
 }

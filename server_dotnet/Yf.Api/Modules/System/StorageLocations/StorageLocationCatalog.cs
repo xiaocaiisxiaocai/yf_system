@@ -24,7 +24,7 @@ internal static class StorageKinds
     internal static string Label(string kind) => kind switch
     {
         Collaboration => "协作文件存储",
-        Oem => "OEM 文件存储",
+        Oem => "ODM/OEMA 文件存储",
         Log => "日志目录",
         _ => kind,
     };

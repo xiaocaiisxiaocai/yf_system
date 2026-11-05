@@ -150,7 +150,7 @@ internal static partial class MailHtml
         var match = SubjectPrefix().Match(subject);
         if (!match.Success) return ("供应商协作平台", subject);
         var tag = match.Groups[1].Value;
-        var brand = tag.Contains("OEM", StringComparison.OrdinalIgnoreCase) ? "ODM/OEM 文件传递" : "供应商协作平台";
+        var brand = tag.Contains("OEM", StringComparison.OrdinalIgnoreCase) ? "ODM/OEMA 文件传递" : "供应商协作平台";
         return (brand, match.Groups[2].Value.Trim());
     }
 

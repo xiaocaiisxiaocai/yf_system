@@ -109,8 +109,8 @@ public sealed class OemIdentitySessionTests
             INSERT INTO email_outbox(
                 event_type,recipient_email,subject,body,status,retry_count,
                 recipient_realm,recipient_account_id)
-            VALUES('OEM_APPROVAL_PENDING','mail-history@example.invalid','OEM历史','历史','SENT',0,'internal',@userId),
-                  ('OEM_APPROVAL_PENDING','mail-history@example.invalid','OEM待发','待发','PENDING',0,'internal',@userId)
+            VALUES('OEM_APPROVAL_PENDING','mail-history@example.invalid','ODM/OEMA历史','历史','SENT',0,'internal',@userId),
+                  ('OEM_APPROVAL_PENDING','mail-history@example.invalid','ODM/OEMA待发','待发','PENDING',0,'internal',@userId)
             """, new { userId });
 
         // Mail records are logs, not business references: delivered mail stays, undelivered mail is cancelled.

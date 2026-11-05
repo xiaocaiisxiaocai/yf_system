@@ -50,7 +50,7 @@ internal static class OemIdentityEndpoints
     }
 
     private static OemAccountActor RequireAccount(HttpContext ctx) =>
-        OemActorAccessor.Get(ctx) as OemAccountActor ?? throw ApiException.Forbidden("该接口仅供 OEM 厂商账号使用");
+        OemActorAccessor.Get(ctx) as OemAccountActor ?? throw ApiException.Forbidden("该接口仅供 ODM/OEMA 厂商账号使用");
 
     private static void SetRefreshCookie(HttpContext ctx, string token, AppOptions options) =>
         ctx.Response.Cookies.Append(RefreshCookie, token, new CookieOptions

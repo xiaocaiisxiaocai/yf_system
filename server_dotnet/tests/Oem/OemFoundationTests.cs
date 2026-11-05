@@ -208,7 +208,7 @@ public sealed class OemFoundationTests
         await supplier.GetAsync("/api/v1/oem/auth/me", ct).Status(HttpStatusCode.Forbidden, 40304);
         await supplier.GetAsync("/api/v1/oem/companies", ct).Status(HttpStatusCode.Forbidden, 40304);
         var portalOnly = await staff.GetAsync("/api/v1/oem/auth/me", ct).Status(HttpStatusCode.Forbidden, 40301);
-        Assert.Equal("该接口仅供 OEM 厂商账号使用", portalOnly.Json!["message"]!.GetValue<string>());
+        Assert.Equal("该接口仅供 ODM/OEMA 厂商账号使用", portalOnly.Json!["message"]!.GetValue<string>());
 
         var oemRefresh = CookieValue(vendor, "/api/v1/oem/auth/refresh", "oem_refresh_token");
         var staffRefresh = CookieValue(staff, "/api/v1/auth/refresh", "refresh_token");

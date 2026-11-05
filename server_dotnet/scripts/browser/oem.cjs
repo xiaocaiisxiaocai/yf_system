@@ -101,7 +101,7 @@ async function openReleasedFile(page, url, fileName) {
     const inbound = OUT + '/' + inboundName;
     fs.copyFileSync(process.env.YF_PROJECT_ROOT + '/web/test/fixtures/pdf-compatibility.pdf', outbound);
     fs.writeFileSync(inbound, '%PDF-1.4\n% OEM inbound process sheet ' + marker + '\n%%EOF\n');
-    const companyName = 'UI OEM厂商-' + marker;
+    const companyName = 'UI ODM/OEMA厂商-' + marker;
     const vendor = { username: 'uioem_' + marker, password: password(), changedPassword: password() };
 
     // Admin session: OEM directory management happens in the UI; roles/org/users are harness fixtures.
@@ -110,7 +110,7 @@ async function openReleasedFile(page, url, fileName) {
     await admin.page.waitForURL(s.base + '/');
     const adminToken = adminAuth.accessToken;
     const users = {};
-    await record('OEM 测试夹具：发送人/课别主管角色、组织课别与主管', async () => {
+    await record('ODM/OEMA 测试夹具：发送人/课别主管角色、组织课别与主管', async () => {
       const permissions = await json(admin.context, adminToken, 'GET', '/permissions');
       const ids = codes => codes.map(code => {
         const item = permissions.find(permission => permission.code === code);
@@ -118,16 +118,16 @@ async function openReleasedFile(page, url, fileName) {
         return item.id;
       });
       const role = async (name, codes) => {
-        const created = await json(admin.context, adminToken, 'POST', '/admin/roles', { name: name + '-' + marker, description: 'OEM 浏览器验收' });
+        const created = await json(admin.context, adminToken, 'POST', '/admin/roles', { name: name + '-' + marker, description: 'ODM/OEMA 浏览器验收' });
         await api(admin.context, 'PUT', '/admin/roles/' + created.id + '/permissions', { permissionIds: ids(codes) }, adminToken);
         return created.id;
       };
-      const senderRole = await role('OEM发送人', ['oem:transfer_create', 'oem:transfer_view', 'oem:file_download']);
-      const leaderRole = await role('OEM课别主管', ['oem:flow_approve', 'oem:transfer_view']);
-      const division = await json(admin.context, adminToken, 'POST', '/admin/departments', { name: 'OEM事业部-' + marker, parentId: null, sortNo: 950 });
-      const department = await json(admin.context, adminToken, 'POST', '/admin/departments', { name: 'OEM部门-' + marker, parentId: division.id, sortNo: 951 });
-      const section = await json(admin.context, adminToken, 'POST', '/admin/departments', { name: 'OEM课别-' + marker, parentId: department.id, sortNo: 952 });
-      for (const [key, realName, roleId] of [['sender', 'OEM发送人', senderRole], ['leader', 'OEM课别主管', leaderRole]]) {
+      const senderRole = await role('ODM/OEMA发送人', ['oem:transfer_create', 'oem:transfer_view', 'oem:file_download']);
+      const leaderRole = await role('ODM/OEMA课别主管', ['oem:flow_approve', 'oem:transfer_view']);
+      const division = await json(admin.context, adminToken, 'POST', '/admin/departments', { name: 'ODM/OEMA事业部-' + marker, parentId: null, sortNo: 950 });
+      const department = await json(admin.context, adminToken, 'POST', '/admin/departments', { name: 'ODM/OEMA部门-' + marker, parentId: division.id, sortNo: 951 });
+      const section = await json(admin.context, adminToken, 'POST', '/admin/departments', { name: 'ODM/OEMA课别-' + marker, parentId: department.id, sortNo: 952 });
+      for (const [key, realName, roleId] of [['sender', 'ODM/OEMA发送人', senderRole], ['leader', 'ODM/OEMA课别主管', leaderRole]]) {
         const initial = password();
         const created = await json(admin.context, adminToken, 'POST', '/admin/users', {
           employeeNo: 'oem_' + key + '_' + marker, password: initial, realName,
@@ -140,7 +140,7 @@ async function openReleasedFile(page, url, fileName) {
       save();
     });
 
-    await record('管理员在 OEM 厂商与账号页面新增厂商和首次登录账号', async () => {
+    await record('管理员在 ODM/OEMA 厂商与账号页面新增厂商和首次登录账号', async () => {
       const page = admin.page;
       await page.goto(s.base + '/oem/admin/companies');
       await page.getByText('ODM/OEMA 厂商与账号', { exact: true }).waitFor();
@@ -164,7 +164,7 @@ async function openReleasedFile(page, url, fileName) {
       for (const index of [1, 2]) {
         await contacts.getByRole('button', { name: '新增联络人', exact: true }).click();
         modal = visibleModal(page);
-        const name = `OEM 联络人 ${index}-${marker}`;
+        const name = `ODM/OEMA 联络人 ${index}-${marker}`;
         const email = `oem-contact-${index}-${marker}@vendor.invalid`;
         await modal.getByLabel('姓名', { exact: true }).fill(name);
         await modal.getByLabel('邮箱', { exact: true }).fill(email);
@@ -204,7 +204,7 @@ async function openReleasedFile(page, url, fileName) {
       await page.getByRole('row').filter({ hasText: companyName }).getByRole('button', { name: '账号管理', exact: true }).waitFor();
     });
 
-    await record('OEM 账号与联络人 Excel 导入重复厂商绑定、密码不导出且多联络人可导出', async () => {
+    await record('ODM/OEMA 账号与联络人 Excel 导入重复厂商绑定、密码不导出且多联络人可导出', async () => {
       const page = admin.page;
       const companyId = f.oem.companyId;
       const workbook = (headers, values) => {
@@ -288,9 +288,9 @@ async function openReleasedFile(page, url, fileName) {
       assert(contactRows.some(row => row.includes(importedContact.email)));
     });
 
-    await record('OEM 厂商 Excel 模板只接收名称备注，重复厂商跳过，新公司默认启用且可导出', async () => {
+    await record('ODM/OEMA 厂商 Excel 模板只接收名称备注，重复厂商跳过，新公司默认启用且可导出', async () => {
       const page = admin.page;
-      const importedCompanyName = 'OEM Excel 厂商-' + marker;
+      const importedCompanyName = 'ODM/OEMA Excel 厂商-' + marker;
       await toolbarMenu(page, '导入厂商');
       let modal = visibleModal(page);
       await modal.getByText('导入 ODM/OEMA 厂商资料', { exact: true }).waitFor();
@@ -351,7 +351,7 @@ async function openReleasedFile(page, url, fileName) {
 
     const sender = await newPage('oem-sender');
     let outboundId;
-    await record('内部发送人首次改密后选择 OEM 厂商、上传 PDF 并提交审批', async () => {
+    await record('内部发送人首次改密后选择 ODM/OEMA 厂商、上传 PDF 并提交审批', async () => {
       await internalFirstLogin(sender.page, users.sender);
       const page = sender.page;
       await page.goto(s.base + '/oem');
@@ -412,7 +412,7 @@ async function openReleasedFile(page, url, fileName) {
     await leader.context.close();
 
     const portal = await newPage('oem-vendor');
-    await record('OEM 厂商门户首次登录强制改密并以新密码重新登录', async () => {
+    await record('ODM/OEMA 厂商门户首次登录强制改密并以新密码重新登录', async () => {
       const page = portal.page;
       await page.goto(s.base + '/oem-portal');
       await page.waitForURL('**/oem-portal/login');
@@ -431,7 +431,7 @@ async function openReleasedFile(page, url, fileName) {
       await page.waitForURL('**/oem-portal/transfers');
     });
 
-    await record('OEM 厂商看到已发布传递单，带水印页内预览 PDF 并下载 SHA 一致', async () => {
+    await record('ODM/OEMA 厂商看到已发布传递单，带水印页内预览 PDF 并下载 SHA 一致', async () => {
       const page = portal.page;
       await poll('released transfer visible to vendor', async () => {
         const listed = page.waitForResponse(r => new URL(r.url()).pathname === '/api/v1/oem/transfers'
@@ -467,7 +467,7 @@ async function openReleasedFile(page, url, fileName) {
     });
 
     let inboundId;
-    await record('OEM 厂商从门户回传 PDF，无需内部审批', async () => {
+    await record('ODM/OEMA 厂商从门户回传 PDF，无需内部审批', async () => {
       const page = portal.page;
       await page.goto(s.base + '/oem-portal/transfers');
       await page.getByRole('button', { name: '发送文件', exact: true }).click();
@@ -486,7 +486,7 @@ async function openReleasedFile(page, url, fileName) {
     });
 
     lastPage = sender.page;
-    await record('内部发送人在“OEM 发来”中看到回传并下载 SHA 一致', async () => {
+    await record('内部发送人在“ODM/OEMA 发来”中看到回传并下载 SHA 一致', async () => {
       const page = sender.page;
       await page.goto(s.base + '/oem/transfers');
       const filtered = page.waitForResponse(r => {

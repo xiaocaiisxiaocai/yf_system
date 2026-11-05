@@ -103,7 +103,7 @@ public sealed class OemApprovalEngine
         if (blocked)
         {
             instance.Status = FlowInstanceStatuses.ApprovalBlocked;
-            instance.BlockedReason = $"节点「{node.Name}」的审批人已停用或失去 OEM 审批权限";
+            instance.BlockedReason = $"节点「{node.Name}」的审批人已停用或失去 ODM/OEMA 审批权限";
             Touch(uow, instance);
             await uow.Db.SaveChangesAsync(ct);
             return new ActivationResult(ActivationOutcome.Blocked, [], instance.BlockedReason);
@@ -210,7 +210,7 @@ public sealed class OemApprovalEngine
         var restoring = newApproverId == task.ApproverUserId && instance.Status == FlowInstanceStatuses.ApprovalBlocked;
         if (newApproverId == task.ApproverUserId && !restoring) throw ApiException.BadRequest("新审批人与原审批人相同");
         var eligible = await ApprovalPlanningService.EligibleIdsAsync(uow.Db, [newApproverId], ct);
-        if (eligible.Length == 0) throw ApiException.BadRequest("新审批人必须是启用的内部账号且具备 OEM 审批权限");
+        if (eligible.Length == 0) throw ApiException.BadRequest("新审批人必须是启用的内部账号且具备 ODM/OEMA 审批权限");
         var conflict = await uow.Db.OemFlowTasks.AnyAsync(item => item.InstanceId == instance.Id && item.ApproverUserId == newApproverId
             && item.Id != task.Id && item.Status != FlowTaskStatuses.Superseded && item.Status != FlowTaskStatuses.Cancelled, ct);
         if (conflict) throw ApiException.BadRequest("新审批人已在本传递单的审批流程中");
@@ -249,7 +249,7 @@ public sealed class OemApprovalEngine
         }
         node.Status = FlowNodeStatuses.Waiting;
         instance.Status = FlowInstanceStatuses.ApprovalBlocked;
-        instance.BlockedReason = $"节点「{node.Name}」的审批人已停用或失去 OEM 审批权限";
+        instance.BlockedReason = $"节点「{node.Name}」的审批人已停用或失去 ODM/OEMA 审批权限";
         Touch(uow, instance);
         await uow.Db.SaveChangesAsync(ct);
         return instance.BlockedReason;

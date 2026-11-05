@@ -15,9 +15,9 @@ public sealed class MailHtmlTests
             + "- 482a103b2cff877bdceb27ef575510cc.mp4\n  https://yf.example.test/projects/5?tab=files&target=32\n  上传人：123（张三）\n"),
         ("status", "[协作平台] 子项目「1」已终止",
             "项目：test1111 / 1\n状态：子项目已终止\n原因：客户取消\n\n请登录平台查看：https://yf.example.test/projects/5?tab=activity\n\n（本邮件由系统自动发送）"),
-        ("oem", "[ODM/OEM 文件传递] 新文件已送达：training-drawing.pdf",
-            "王五，您好：\n\n有新的文件传递给您，请登录平台查看和下载。\n\n传递单：training-drawing.pdf\n方向：公司 → OEM（培训ODM-OEM厂商）\n"
-            + "发送方：OEM培训发送人1029\n附件：1 个，共 2.5 KB\n\n请登录 ODM/OEM 文件传递平台查看：https://yf.example.test/oem-portal/transfers/5\n\n此邮件由系统自动发送，请勿直接回复。"),
+        ("oem", "[ODM/OEMA 文件传递] 新文件已送达：training-drawing.pdf",
+            "王五，您好：\n\n有新的文件传递给您，请登录平台查看和下载。\n\n传递单：training-drawing.pdf\n方向：公司 → ODM/OEMA（培训ODM-OEM厂商）\n"
+            + "发送方：ODM/OEMA培训发送人1029\n附件：1 个，共 2.5 KB\n\n请登录 ODM/OEMA 文件传递平台查看：https://yf.example.test/oem-portal/transfers/5\n\n此邮件由系统自动发送，请勿直接回复。"),
         ("test", "[供应商协作平台] SMTP 测试邮件",
             "这是一封 SMTP 配置测试邮件。收到此邮件说明当前配置已成功完成邮件发送。\n此邮件由管理员手动触发，请勿回复。"),
     ];
@@ -40,9 +40,9 @@ public sealed class MailHtmlTests
         Assert.Contains("此邮件由系统自动发送，请勿直接回复。", file);
 
         var oem = MailHtml.Render(Samples[3].Subject, Samples[3].Body);
-        Assert.Contains("SAA · ODM/OEM 文件传递", oem);
-        Assert.Contains(">登录 ODM/OEM 文件传递平台查看</a>", oem);
-        Assert.Contains("公司 → OEM（培训ODM-OEM厂商）", oem);
+        Assert.Contains("SAA · ODM/OEMA 文件传递", oem);
+        Assert.Contains(">登录 ODM/OEMA 文件传递平台查看</a>", oem);
+        Assert.Contains("公司 → ODM/OEMA（培训ODM-OEM厂商）", oem);
 
         var directory = Environment.GetEnvironmentVariable("YF_MAIL_PREVIEW_DIR");
         if (!string.IsNullOrWhiteSpace(directory))

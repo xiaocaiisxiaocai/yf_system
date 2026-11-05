@@ -295,7 +295,7 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
             var eligible = (await ApprovalPlanningService.EligibleIdsAsync(uow.Db, people, ct)).ToHashSet();
             var invalid = people.Where(id => !eligible.Contains(id)).ToArray();
             if (invalid.Length > 0)
-                throw ApiException.BadRequest("以下审批人不是启用的内部账号或没有 OEM 审批权限：" +
+                throw ApiException.BadRequest("以下审批人不是启用的内部账号或没有 ODM/OEMA 审批权限：" +
                     string.Join("、", (await NamesAsync(uow, invalid, ct)).Values.Select(item => item.RealName)));
         }
         return normalized;

@@ -122,20 +122,20 @@ public sealed class OemDirectoryImportTests
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT must_change_password FROM oem_accounts WHERE employee_no='oem_import_1'"));
 
         await admin.PostAsync($"/api/v1/oem/companies/{companyId}/contacts", new
-        { name = "OEM联系人已存在", phone = "13800000000", email = "oem-contact-existing@example.invalid", sortNo = 0 }, ct).Ok();
+        { name = "ODM/OEMA联系人已存在", phone = "13800000000", email = "oem-contact-existing@example.invalid", sortNo = 0 }, ct).Ok();
         var contactImport = await admin.PostAsync($"/api/v1/oem/companies/{companyId}/contacts/import", new
         {
             rows = new[]
             {
-                new { rowNumber = 2, companyName = "Excel新厂商", name = "OEM联系人已存在", phone = "13800000000", email = "oem-contact-existing@example.invalid", sortNo = 0 },
-                new { rowNumber = 3, companyName = "Excel新厂商", name = "OEM联系人甲", phone = "13800000001", email = "oem-contact-a@example.invalid", sortNo = 1 },
-                new { rowNumber = 4, companyName = "Excel新厂商", name = "OEM联系人乙", phone = "13800000002", email = "oem-contact-b@example.invalid", sortNo = 2 },
+                new { rowNumber = 2, companyName = "Excel新厂商", name = "ODM/OEMA联系人已存在", phone = "13800000000", email = "oem-contact-existing@example.invalid", sortNo = 0 },
+                new { rowNumber = 3, companyName = "Excel新厂商", name = "ODM/OEMA联系人甲", phone = "13800000001", email = "oem-contact-a@example.invalid", sortNo = 1 },
+                new { rowNumber = 4, companyName = "Excel新厂商", name = "ODM/OEMA联系人乙", phone = "13800000002", email = "oem-contact-b@example.invalid", sortNo = 2 },
             }
         }, ct).Ok();
         Assert.Equal((2, 1, 0), Counts(contactImport));
         Assert.Equal(3, (await admin.GetAsync($"/api/v1/oem/companies/{companyId}/contacts", ct).Ok()).AsArray().Count);
-        var contactId = await conn.ExecuteScalarAsync<ulong>("SELECT id FROM oem_company_contacts WHERE name='OEM联系人甲'");
-        await admin.PutAsync($"/api/v1/oem/company-contacts/{contactId}", new { name = "OEM联系人甲更新", email = "updated@example.invalid", sortNo = 4 }, ct).Ok();
+        var contactId = await conn.ExecuteScalarAsync<ulong>("SELECT id FROM oem_company_contacts WHERE name='ODM/OEMA联系人甲'");
+        await admin.PutAsync($"/api/v1/oem/company-contacts/{contactId}", new { name = "ODM/OEMA联系人甲更新", email = "updated@example.invalid", sortNo = 4 }, ct).Ok();
         await admin.PutAsync($"/api/v1/oem/company-contacts/{contactId}/status", new { status = "DISABLED" }, ct).Ok();
         Assert.Equal("DISABLED", await conn.ExecuteScalarAsync<string>("SELECT status FROM oem_company_contacts WHERE id=@contactId", new { contactId }));
         Assert.Equal("updated@example.invalid", await conn.ExecuteScalarAsync<string>("SELECT email FROM oem_company_contacts WHERE id=@contactId", new { contactId }));

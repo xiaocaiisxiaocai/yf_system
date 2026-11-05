@@ -143,7 +143,7 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
                     var activation = task.ActivatedAt?.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture) ?? "0";
                     if (await OemRecipients.InternalUserAsync(uow.Db, task.ApproverUserId, ct) is { } approver)
                         await EnqueueAsync(uow, settings, OemMailEvents.ApprovalPending, $"oem:approval:{taskId}:{activation}", approver, facts,
-                            $"待审批：{transfer.Title}", "有一张公司发往 OEM 厂商的文件传递单等待您审批。", null, ct);
+                            $"待审批：{transfer.Title}", "有一张公司发往 ODM/OEMA 厂商的文件传递单等待您审批。", null, ct);
                 }
                 break;
             case TransferReleasedEvent:
@@ -204,7 +204,7 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
             case FilePurgeFailingEvent failing:
                 foreach (var admin in await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.FilePolicyManage))
                     await EnqueueAsync(uow, settings, OemMailEvents.PurgeFailing, $"oem:purgefail:{failing.FileId}:{failing.Attempts}:{admin.Id}", admin, facts,
-                        "OEM 附件清理持续失败", "有到期附件多次清理失败，请检查 OEM 存储目录权限和占用情况。", $"已重试 {failing.Attempts} 次", ct);
+                        "ODM/OEMA 附件清理持续失败", "有到期附件多次清理失败，请检查 ODM/OEMA 存储目录权限和占用情况。", $"已重试 {failing.Attempts} 次", ct);
                 break;
         }
     }
@@ -233,8 +233,8 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
         }
         var transfer = facts.Transfer;
         var direction = transfer.Direction == TransferDirections.InternalToOem
-            ? $"公司 → OEM（{facts.CompanyName}）"
-            : $"OEM（{facts.CompanyName}）→ 公司";
+            ? $"公司 → ODM/OEMA（{facts.CompanyName}）"
+            : $"ODM/OEMA（{facts.CompanyName}）→ 公司";
         var lines = new List<string>
         {
             $"{recipient.Name}，您好：", string.Empty, lead, string.Empty,
@@ -244,10 +244,10 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
         if (!string.IsNullOrWhiteSpace(reason)) lines.Add($"说明：{reason}");
         // Vendors use their own portal; internal staff use the OEM section of the company site.
         var area = recipient.Realm == OemRealms.Oem ? "oem-portal" : "oem";
-        lines.AddRange([string.Empty, $"请登录 ODM/OEM 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/{area}/transfers/{transfer.Id}", string.Empty,
+        lines.AddRange([string.Empty, $"请登录 ODM/OEMA 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/{area}/transfers/{transfer.Id}", string.Empty,
             "此邮件由系统自动发送，请勿直接回复。"]);
         var body = string.Join("\n", lines);
-        var fullSubject = Truncate("[ODM/OEM 文件传递] " + subject, 255);
+        var fullSubject = Truncate("[ODM/OEMA 文件传递] " + subject, 255);
         var key = Truncate(dedupeKey, 128);
         // Idempotent enqueue (a documented raw-SQL boundary): a repeated event never mails twice.
         // Only a dedupe-key conflict is ignored; unlike INSERT IGNORE, truncation or other data
@@ -286,9 +286,9 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
         await using var db = EfDb.Use(conn, tx);
         var settings = await OemSettings.LoadAsync(db, ct);
         if (!OemMailEvents.Allowed(settings, mail.EventType))
-            return OutboxDecision.Cancel("OEM 邮件提醒规则已关闭，通知已取消", "OEM_NOTIFICATION_POLICY_DISABLED");
+            return OutboxDecision.Cancel("ODM/OEMA 邮件提醒规则已关闭，通知已取消", "OEM_NOTIFICATION_POLICY_DISABLED");
         if (mail.RecipientAccountId is not ulong recipientId || mail.OemTransferId is not ulong transferId)
-            return OutboxDecision.Cancel("OEM 邮件缺少收件人或传递单信息", "OEM_MAIL_INVALID");
+            return OutboxDecision.Cancel("ODM/OEMA 邮件缺少收件人或传递单信息", "OEM_MAIL_INVALID");
         var transfer = await db.OemTransfers.AsNoTracking().SingleOrDefaultAsync(item => item.Id == transferId, ct);
         if (transfer is null) return OutboxDecision.Cancel("传递单不存在", "OEM_TRANSFER_MISSING");
 

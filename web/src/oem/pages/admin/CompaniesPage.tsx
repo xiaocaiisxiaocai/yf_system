@@ -593,7 +593,7 @@ export default function CompaniesPage() {
           company.name, account.employeeNo, account.status, account.lastLoginAt ?? '',
         ]))
       }
-      await downloadExcelWorkbook('ODM-OEM账号.xlsx', [
+      await downloadExcelWorkbook('ODM-OEMA账号.xlsx', [
         { name: '数据', headers: [...OEM_ACCOUNT_EXPORT_HEADERS], rows: data },
       ])
       Message.success(`已导出 ${data.length} 个账号；导出文件不含密码`)
@@ -615,7 +615,7 @@ export default function CompaniesPage() {
           company.name, contact.name, contact.email ?? '', String(contact.sortNo), contact.status,
         ]))
       }
-      await downloadExcelWorkbook('ODM-OEM联络人.xlsx', [
+      await downloadExcelWorkbook('ODM-OEMA联络人.xlsx', [
         { name: '数据', headers: [...OEM_CONTACT_IMPORT_HEADERS, ...OEM_CONTACT_EXPORT_HEADERS], rows: data },
         ...OEM_CONTACT_WORKBOOK.slice(1),
       ])
@@ -675,7 +675,7 @@ export default function CompaniesPage() {
         company.name,
         company.remark ?? '', company.status, String(company.accountCount ?? 0), String(company.activeAccountCount ?? 0), String(company.contactCount ?? 0),
       ])
-      await downloadExcelWorkbook('ODM-OEM厂商.xlsx', [
+      await downloadExcelWorkbook('ODM-OEMA厂商.xlsx', [
         { name: '数据', headers: [...OEM_COMPANY_IMPORT_HEADERS, '状态', '账号数', '启用账号数', '联络人'], rows },
         ...companyTemplateSheets.slice(1),
       ])
@@ -849,7 +849,7 @@ export default function CompaniesPage() {
       <ExcelImportDialog<OemCompanyImportPayload>
         visible={importOpen}
         title="导入 ODM/OEMA 厂商资料"
-        templateName="ODM-OEM厂商导入模板.xlsx"
+        templateName="ODM-OEMA厂商导入模板.xlsx"
         requiredHeaders={OEM_COMPANY_IMPORT_HEADERS}
         optionalHeaders={['状态', '账号数', '启用账号数', '联络人']}
         templateSheets={companyTemplateSheets}
@@ -862,7 +862,7 @@ export default function CompaniesPage() {
       <ExcelImportDialog<OemAccountImportPayload>
         visible={accountImportOpen}
         title="导入 ODM/OEMA 厂商账号"
-        templateName="ODM-OEM账号导入模板.xlsx"
+        templateName="ODM-OEMA账号导入模板.xlsx"
         requiredHeaders={OEM_ACCOUNT_IMPORT_HEADERS}
         optionalHeaders={OEM_ACCOUNT_EXPORT_HEADERS}
         templateSheets={OEM_ACCOUNT_WORKBOOK}
@@ -875,7 +875,7 @@ export default function CompaniesPage() {
       <ExcelImportDialog<OemContactImportPayload>
         visible={contactImportOpen}
         title="导入 ODM/OEMA 厂商联络人"
-        templateName="ODM-OEM联络人导入模板.xlsx"
+        templateName="ODM-OEMA联络人导入模板.xlsx"
         requiredHeaders={OEM_CONTACT_IMPORT_HEADERS}
         optionalHeaders={OEM_CONTACT_EXPORT_HEADERS}
         templateSheets={OEM_CONTACT_WORKBOOK}

@@ -251,7 +251,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         if (await context.Users.AnyAsync(u => u.DepartmentId == id, ct)) throw ApiException.BadRequest("该组织仍有用户，请先调整用户归属或禁用组织");
         // oem_flow_template_scopes.department_id has no FK, so check it explicitly instead of orphaning the binding.
         if (await context.OemFlowTemplateScopes.AnyAsync(scope => scope.DepartmentId == id, ct))
-            throw ApiException.BadRequest("该组织仍绑定 OEM 审批模板，请先在审批模板中解除绑定");
+            throw ApiException.BadRequest("该组织仍绑定 ODM/OEMA 审批模板，请先在审批模板中解除绑定");
         await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), actor.Id, "DEPT_DELETE", "department", id, new { row.Name, row.Kind, targetName = row.Name, changes = Array.Empty<AuditChange>() }, null, ct);
         await context.Departments.Where(d => d.Id == id).ExecuteDeleteAsync(ct);
         await tx.CommitAsync(ct);
