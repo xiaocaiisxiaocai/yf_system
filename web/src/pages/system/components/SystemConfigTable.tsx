@@ -52,6 +52,12 @@ export function renderSystemConfigTable({
         />
       )
     }
+    if (cfg.key === 'upload.allowed_exts') {
+      return (
+        <Input.TextArea aria-label={label} value={value} disabled={saving} autoSize={{ minRows: 2, maxRows: 8 }}
+          onChange={(next) => onSetValue(cfg.key, next)} />
+      )
+    }
     return <Input aria-label={label} value={value} disabled={saving} onChange={(next) => onSetValue(cfg.key, next)} />
   }
 

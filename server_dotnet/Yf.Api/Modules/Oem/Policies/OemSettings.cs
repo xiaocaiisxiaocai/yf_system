@@ -40,8 +40,8 @@ public sealed record OemSettingDefinition(
             case OemSettingKind.Extensions:
                 var parts = value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
                     .Select(part => part.TrimStart('.').ToLowerInvariant()).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-                if (parts.Length == 0 || parts.Any(part => part.Length is < 1 or > 16 || part.Any(c => !char.IsAsciiLetterOrDigit(c))))
-                    throw ApiException.BadRequest($"{Label}需为逗号分隔的扩展名（字母或数字，1~16 位）");
+                if (parts.Length == 0 || parts.Any(part => part.Length is < 1 or > 16 || part.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')))
+                    throw ApiException.BadRequest($"{Label}需为逗号分隔的扩展名（字母、数字或下划线，1~16 位）");
                 return string.Join(',', parts);
             default:
                 return value;
@@ -96,9 +96,9 @@ public static class OemSettingCatalog
     public static readonly IReadOnlyList<OemSettingDefinition> All =
     [
         new(AllowedExtsInternalToOem, OemSettingKind.Extensions, OemSettingGroup.File, "公司出站允许的扩展名",
-            "7z,doc,docx,dwg,dxf,igs,iges,jpeg,jpg,obj,pdf,png,ppt,pptx,rar,step,stl,stp,xls,xlsx,zip"),
+            "3dxml,3mf,7z,ai,amf,doc,docx,dwg,dxf,eprt,glb,gltf,hcg,hsf,ifc,iges,igs,jpeg,jpg,obj,pdf,ply,png,ppt,pptx,prt,prtdot,psd,rar,sat,sldftp,sldlfp,sldprt,step,stl,stp,tif,vda,wrl,x_b,x_t,xaml,xls,xlsx,zip"),
         new(AllowedExtsOemToInternal, OemSettingKind.Extensions, OemSettingGroup.File, "OEM 入站允许的扩展名",
-            "7z,doc,docx,dwg,dxf,igs,iges,jpeg,jpg,obj,pdf,png,ppt,pptx,rar,step,stl,stp,xls,xlsx,zip"),
+            "3dxml,3mf,7z,ai,amf,doc,docx,dwg,dxf,eprt,glb,gltf,hcg,hsf,ifc,iges,igs,jpeg,jpg,obj,pdf,ply,png,ppt,pptx,prt,prtdot,psd,rar,sat,sldftp,sldlfp,sldprt,step,stl,stp,tif,vda,wrl,x_b,x_t,xaml,xls,xlsx,zip"),
         new(MaxFileSize, OemSettingKind.Integer, OemSettingGroup.File, "单文件大小上限", "2147483648", 1024 * 1024, 64 * GiB),
         new(MaxTransferSize, OemSettingKind.Integer, OemSettingGroup.File, "单传递单总大小上限", "10737418240", 1024 * 1024, 1024 * GiB),
         new(ChunkSize, OemSettingKind.Integer, OemSettingGroup.File, "分片大小", "16777216", 256 * 1024, 64 * 1024 * 1024),

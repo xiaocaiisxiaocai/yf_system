@@ -139,7 +139,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
         if (key == "upload.allowed_exts")
         {
             var parts = (value ?? "").Split(',').Select(x => x.Trim().ToLowerInvariant()).ToArray();
-            if (parts.Length == 0 || parts.Any(x => x.Length is < 1 or > 16 || x.Any(c => !char.IsAsciiLetterOrDigit(c))))
+            if (parts.Length == 0 || parts.Any(x => x.Length is < 1 or > 16 || x.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_')))
                 throw ApiException.BadRequest("文件扩展名参数无效");
             // 发给供应商的资料必须含动作流程 Excel 与 STEP/压缩文件（上传资料要求契约），白名单缺少任一类会让内部上传全部失败。
             if (!parts.Any(part => Yf.Api.Modules.Files.UploadMaterialRules.ModelFileExtensions.Contains(part, StringComparer.Ordinal))

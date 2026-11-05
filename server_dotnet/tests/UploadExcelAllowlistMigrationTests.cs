@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
@@ -8,6 +8,9 @@ namespace Yf.Api.Tests;
 [Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class UploadExcelAllowlistMigrationTests
 {
+    // Later allowlist migrations (AllowCadExportUploads) append more extensions; stop at this one.
+    private const string Target = "20261007003510_AllowMacroAndBinaryExcelUploads";
+
     [Fact(Timeout = 120_000)]
     public async Task ExistingAllowlistWithXlsxGainsMacroAndBinaryWorkbooksOnce()
     {
@@ -25,8 +28,8 @@ public sealed class UploadExcelAllowlistMigrationTests
             VALUES('test.unrelated_exts','xlsx','不相关参数');
             """, ct);
 
-        await migrator.MigrateAsync(cancellationToken: ct);
-        await migrator.MigrateAsync(cancellationToken: ct);
+        await migrator.MigrateAsync(Target, ct);
+        await migrator.MigrateAsync(Target, ct);
 
         await using var connection = await database.Database.OpenAsync(ct);
         Assert.Equal("pdf, XLSX,step,xlsb,xlsm", await connection.ExecuteScalarAsync<string>(
@@ -50,7 +53,7 @@ public sealed class UploadExcelAllowlistMigrationTests
             ON DUPLICATE KEY UPDATE cfg_value=VALUES(cfg_value);
             """, ct);
 
-        await migrator.MigrateAsync(cancellationToken: ct);
+        await migrator.MigrateAsync(Target, ct);
 
         await using var connection = await database.Database.OpenAsync(ct);
         Assert.Equal("pdf,step,xls", await connection.ExecuteScalarAsync<string>(

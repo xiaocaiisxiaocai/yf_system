@@ -198,9 +198,13 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
                 ? <InputNumber style={{ width: 220 }} value={Number(values[item.key])}
                     min={item.min ?? undefined} max={item.max ?? undefined} aria-label={item.label} disabled={item.readOnly}
                     onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(value) }))} />
-              : <Input style={{ width: item.kind === 'extensions' ? 520 : 220 }} value={values[item.key]}
-                  aria-label={item.label} disabled={item.readOnly}
-                  onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
+              : item.kind === 'extensions'
+                ? <Input.TextArea style={{ width: 520, maxWidth: '100%' }} autoSize={{ minRows: 2, maxRows: 8 }} value={values[item.key]}
+                    aria-label={item.label} disabled={item.readOnly}
+                    onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />
+                : <Input style={{ width: 220 }} value={values[item.key]}
+                    aria-label={item.label} disabled={item.readOnly}
+                    onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
             {BYTE_SETTING_KEYS.has(item.key) && Number(values[item.key]) > 0 && (
               <Typography.Text type="secondary" className="oem-setting-size">约 {formatBytes(Number(values[item.key]))}</Typography.Text>
             )}

@@ -189,6 +189,10 @@ public sealed class OemDomainTests
         var exts = OemSettingCatalog.Get(OemSettingCatalog.AllowedExtsOemToInternal);
         Assert.Equal("pdf,step,zip", exts.Normalize(".STEP, pdf,zip,pdf"));
         Assert.Throws<ApiException>(() => exts.Normalize("p/f"));
+        Assert.Equal("sldprt,x_b,x_t", exts.Normalize("X_T,.x_b,SLDPRT"));
+        Assert.Throws<ApiException>(() => exts.Normalize("x-t"));
+        // The default lists carry the SOLIDWORKS export formats.
+        Assert.Contains("x_t", exts.Normalize(exts.Default).Split(','));
         Assert.Equal("false", OemSettingCatalog.Get(OemSettingCatalog.NotifyReceipt).Normalize("0"));
         var settings = new OemSettings(new Dictionary<string, string?> { [OemSettingCatalog.MaxFileSize] = "garbage" });
         Assert.Equal(2147483648UL, settings.MaxFileSize);

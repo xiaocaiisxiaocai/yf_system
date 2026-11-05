@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using Microsoft.AspNetCore.Http;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.SystemManagement;
@@ -40,6 +40,14 @@ public class SystemTests
     [Fact]
     public void ExtensionsAreNormalizedAndDeduplicated()
         => Assert.Equal("jpg,pdf,stp,xlsx", SystemService.NormalizeConfig("upload.allowed_exts", " PDF,jpg,pdf,STP,XLSX "));
+
+    [Fact]
+    public void CadExportExtensionsMayContainUnderscores()
+    {
+        Assert.Equal("sldprt,step,x_b,x_t,xlsx", SystemService.NormalizeConfig("upload.allowed_exts", "step,xlsx,X_T,x_b,SLDPRT"));
+        Assert.Throws<ApiException>(() => SystemService.NormalizeConfig("upload.allowed_exts", "step,xlsx,x-t"));
+        Assert.Throws<ApiException>(() => SystemService.NormalizeConfig("upload.allowed_exts", "step,xlsx,x.t"));
+    }
 
     [Fact]
     public void ArchiveSatisfiesTheModelMaterialExtension()
