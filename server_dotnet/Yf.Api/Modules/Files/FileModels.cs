@@ -29,7 +29,13 @@ public sealed record FileListItem(
     bool IsCopiedReference,
     bool CanDelete,
     // Supplier contact who provided the file; null for internal or unsigned uploads.
-    string? SignerName);
+    string? SignerName,
+    // Until when the viewing supplier account may withdraw this file it uploaded; null when it cannot.
+    DateTime? WithdrawableUntil = null,
+    // Withdrawn by its supplier uploader: internal accounts can still read it, suppliers cannot.
+    bool Withdrawn = false,
+    // The viewing supplier account withdrew this file and may restore it now.
+    bool CanRestore = false);
 
 public sealed record UploadInitResponse(
     string SessionId,

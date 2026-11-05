@@ -30,8 +30,12 @@ internal sealed class ProjectActivityService(
             [("project", "PROJECT_MATERIAL_RETURN")] = new("PROJECT", "MATERIAL_RETURN", "退回回传资料"),
             [("file", "FILE_UPLOAD")] = new("FILE", "UPLOAD", "上传文件"),
             [("file", "FILE_DELETE")] = new("FILE", "DELETE", "删除文件"),
+            [("file", "FILE_WITHDRAW")] = new("FILE", "WITHDRAW", "撤回文件"),
+            [("file", "FILE_RESTORE")] = new("FILE", "RESTORE", "恢复文件"),
             [("message", "MESSAGE_CREATE")] = new("MESSAGE", "CREATE", "发表留言"),
             [("message", "MESSAGE_DELETE")] = new("MESSAGE", "DELETE", "删除留言"),
+            [("message", "MESSAGE_WITHDRAW")] = new("MESSAGE", "WITHDRAW", "撤回留言"),
+            [("message", "MESSAGE_RESTORE")] = new("MESSAGE", "RESTORE", "恢复留言"),
         };
     internal static IReadOnlySet<(string TargetType, string AuditAction)> KnownIgnoredAuditActions { get; } =
         new HashSet<(string, string)>

@@ -42,7 +42,14 @@ internal static class RuntimeSettings
             options => options.BatchDownloadMinBytesPerMinute, (options, value) => options.BatchDownloadMinBytesPerMinute = value),
         new("download.batch_max_duration_minutes", "批量下载最长时间", "单次批量下载允许的最长分钟数", 5, 1440,
             options => options.BatchDownloadMaxDurationMinutes, (options, value) => options.BatchDownloadMaxDurationMinutes = (int)value),
+        new(SupplierFileWithdrawKey, "厂商文件撤回时限", "厂商上传文件后可自行撤回的分钟数，0 表示不允许撤回", 0, 1440,
+            options => options.SupplierFileWithdrawMinutes, (options, value) => options.SupplierFileWithdrawMinutes = (int)value),
+        new(SupplierMessageWithdrawKey, "厂商留言撤回时限", "厂商发表留言后可自行撤回的分钟数，0 表示不允许撤回", 0, 1440,
+            options => options.SupplierMessageWithdrawMinutes, (options, value) => options.SupplierMessageWithdrawMinutes = (int)value),
     ];
+
+    internal const string SupplierFileWithdrawKey = "withdraw.supplier_file_minutes";
+    internal const string SupplierMessageWithdrawKey = "withdraw.supplier_message_minutes";
 
     internal static Setting? Find(string key) => All.FirstOrDefault(setting => setting.Key == key);
 

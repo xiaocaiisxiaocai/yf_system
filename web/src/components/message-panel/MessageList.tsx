@@ -1,9 +1,10 @@
 import {
   Avatar, Button, Empty, Popconfirm, Popover, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconCheck, IconDelete } from '@arco-design/web-react/icon'
+import { IconCheck, IconDelete, IconRedo, IconUndo } from '@arco-design/web-react/icon'
 import { memo, type ComponentType, type RefObject } from 'react'
 import type { Message as Msg } from '../../api/types'
+import { canWithdraw } from '../../hooks/useWithdrawClock'
 import './MessageList.css'
 
 interface Props {
@@ -26,6 +27,10 @@ interface Props {
   onReceiveReceipt: (id: number, readCount: number, totalCount: number) => void
   onOpenReceipt: (id: number) => void
   onRemove: (id: number) => void | Promise<void>
+  withdrawNow: number
+  internalViewer: boolean
+  onWithdraw: (id: number) => void | Promise<void>
+  onRestore: (id: number) => void | Promise<void>
   MessageImages: ComponentType<{
     messageId: number
     images: Msg['images']
@@ -51,6 +56,10 @@ interface MessageRowProps {
   onReceiveReceipt: Props['onReceiveReceipt']
   onOpenReceipt: Props['onOpenReceipt']
   onRemove: Props['onRemove']
+  withdrawNow: number
+  internalViewer: boolean
+  onWithdraw: Props['onWithdraw']
+  onRestore: Props['onRestore']
   MessageImages: Props['MessageImages']
   ReceiptBody: Props['ReceiptBody']
 }
@@ -67,14 +76,36 @@ const MessageRow = memo(function MessageRow({
   onReceiveReceipt,
   onOpenReceipt,
   onRemove,
+  withdrawNow,
+  internalViewer,
+  onWithdraw,
+  onRestore,
   MessageImages,
   ReceiptBody,
 }: MessageRowProps) {
+  const mine = m.senderId === userId
+  const withdrawn = m.status === 'WITHDRAWN'
+  // 厂商侧只看到撤回提示（撤回它的账号可恢复）；内部账号仍看到原文与图片，并标注已撤回。
+  if (withdrawn && !internalViewer) {
+    return <div
+      className={`msg-item msg-item--withdrawn${m.id === targetId ? ' msg-item-target' : ''}`}
+      data-message-id={m.id}
+      aria-label={m.id === targetId ? '当前定位留言' : undefined}
+      data-unread="false"
+    >
+      <Typography.Text type="secondary" className="message-row-withdrawn">
+        {mine ? '你' : m.senderName}撤回了一条留言 · {fmtTime(m.createdAt)}
+      </Typography.Text>
+      {m.canRestore && <Popconfirm title="恢复这条留言？恢复后双方都能再次看到。" onOk={() => onRestore(m.id)}>
+        <Button className="msg-secondary-action" size="mini" type="text" icon={<IconRedo />}>恢复</Button>
+      </Popconfirm>}
+    </div>
+  }
   return <div
-    className={`msg-item${m.id === targetId ? ' msg-item-target' : ''}${m.senderId === userId ? ' msg-item--mine' : ''}`}
+    className={`msg-item${m.id === targetId ? ' msg-item-target' : ''}${mine ? ' msg-item--mine' : ''}`}
     data-message-id={m.id}
     aria-label={m.id === targetId ? '当前定位留言' : undefined}
-    data-unread={!m.readByMe && m.senderId !== userId ? 'true' : 'false'}
+    data-unread={!m.readByMe && !mine && !withdrawn ? 'true' : 'false'}
   >
     <Space align="start">
       <Avatar size={32} className={m.senderType === 'SUPPLIER' ? 'msg-avatar msg-avatar--supplier' : 'msg-avatar'}>
@@ -88,6 +119,7 @@ const MessageRow = memo(function MessageRow({
             {m.senderType === 'SUPPLIER' ? '供应商' : '公司'}
           </Tag>
           <Typography.Text type="secondary" className="message-row-time">{fmtTime(m.createdAt)}</Typography.Text>
+          {withdrawn && <Tag size="small" color="orange">厂商已撤回</Tag>}
         </Space>
         <div className="message-row-content">{m.content}</div>
         {m.signerName && <div className="message-row-signature">— {m.signerName}</div>}
@@ -116,6 +148,9 @@ const MessageRow = memo(function MessageRow({
           {canDelete && <Popconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => onRemove(m.id)}>
             <Button className="msg-secondary-action" size="mini" type="text" status="danger" icon={<IconDelete />}>删除</Button>
           </Popconfirm>}
+          {mine && canWithdraw(m.withdrawableUntil, withdrawNow) && <Popconfirm title="撤回这条留言？撤回后双方只能看到撤回提示。" onOk={() => onWithdraw(m.id)}>
+            <Button className="msg-secondary-action" size="mini" type="text" status="warning" icon={<IconUndo />}>撤回</Button>
+          </Popconfirm>}
         </div>
       </div>
     </Space>
@@ -142,6 +177,10 @@ export function MessageList({
   onReceiveReceipt,
   onOpenReceipt,
   onRemove,
+  withdrawNow,
+  internalViewer,
+  onWithdraw,
+  onRestore,
   MessageImages,
   ReceiptBody,
 }: Props) {
@@ -171,6 +210,10 @@ export function MessageList({
                 onReceiveReceipt={onReceiveReceipt}
                 onOpenReceipt={onOpenReceipt}
                 onRemove={onRemove}
+                withdrawNow={withdrawNow}
+                internalViewer={internalViewer}
+                onWithdraw={onWithdraw}
+                onRestore={onRestore}
                 MessageImages={MessageImages}
                 ReceiptBody={ReceiptBody}
               />)}

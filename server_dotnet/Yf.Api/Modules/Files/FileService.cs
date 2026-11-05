@@ -17,7 +17,9 @@ public sealed class FileService(
     BatchDownloadLimiter limiter,
     MediaGrantService mediaGrants,
     DownloadGrantService downloadGrants,
-    IdentityService identity)
+    IdentityService identity,
+    ILogger<FileService>? logger = null,
+    IStoredUploadNotifier? changes = null)
 {
     private const ulong PreviewMaximumBytes = 50UL * 1024 * 1024;
     private const ulong BatchInputMaximumBytes = 256UL * 1024 * 1024;
@@ -38,7 +40,12 @@ public sealed class FileService(
         var direction = context.Request.Query["direction"].ToString();
         var keyword = context.Request.Query["keyword"].ToString().Trim();
         var targetId = QueryValues.OptionalUInt64(context.Request, "targetId");
-        var query = ef.Files.Where(file => file.ProjectId == projectId && file.Status == FileStatuses.Available);
+        // Withdrawn files stay listed for internal accounts (readable) and for the supplier account that withdrew
+        // them (restorable, not readable); other supplier accounts never see them.
+        var actorId = actor.Id;
+        var internalViewer = actor.IsInternal;
+        var query = ef.Files.Where(file => file.ProjectId == projectId && (file.Status == FileStatuses.Available
+            || (file.Status == FileStatuses.Withdrawn && (internalViewer || file.UploaderId == actorId))));
         if (targetId is not null) query = query.Where(file => file.Id == targetId.Value);
         if (!string.IsNullOrEmpty(direction)) query = query.Where(file => file.Direction == direction);
         if (!string.IsNullOrEmpty(keyword))
@@ -51,16 +58,25 @@ public sealed class FileService(
         {
             Id = file.Id, ProjectId = file.ProjectId, UploaderId = file.UploaderId, Direction = file.Direction,
             OriginalName = file.OriginalName, Ext = file.Ext, SizeBytes = file.SizeBytes, MimeType = file.MimeType,
-            Sha256 = file.Sha256, CreatedAt = file.CreatedAt,
+            Sha256 = file.Sha256, CreatedAt = file.CreatedAt, Status = file.Status,
             UploaderName = ef.Users.Where(user => user.Id == file.UploaderId).Select(user => user.RealName).FirstOrDefault(),
             IsCopiedReference = ef.FileCopyRefs.Any(reference => reference.TargetFileId == file.Id),
             SignerName = file.SignerName,
         }).Page(offset, size).ToArrayAsync(ct);
         var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, tx, actor, project.Status, ct);
-        var list = rows.Select(row => new FileListItem(
-            row.Id, row.ProjectId, row.UploaderId, row.Direction, row.OriginalName, row.Ext, row.SizeBytes,
-            row.MimeType, row.Sha256, row.CreatedAt, row.UploaderName, row.IsCopiedReference, canDelete,
-            row.SignerName)).ToArray();
+        var withdrawable = await WithdrawableFilterAsync(ef, actor, project, ct);
+        var canRestore = actor.UserType == UserTypes.Supplier && project.Status == ProjectStatuses.InProgress;
+        var list = rows.Select(row =>
+        {
+            var withdrawn = row.Status == FileStatuses.Withdrawn;
+            return new FileListItem(
+                row.Id, row.ProjectId, row.UploaderId, row.Direction, row.OriginalName, row.Ext, row.SizeBytes,
+                row.MimeType, row.Sha256, row.CreatedAt, row.UploaderName, row.IsCopiedReference, canDelete,
+                row.SignerName,
+                withdrawn ? null : withdrawable?.Invoke(row.Id, row.UploaderId, row.Direction, row.CreatedAt),
+                withdrawn,
+                withdrawn && canRestore && row.UploaderId == actor.Id);
+        }).ToArray();
         await tx.CommitAsync(ct);
         return new(list, total, page, size);
     }
@@ -70,7 +86,7 @@ public sealed class FileService(
         var actor = AccessService.GetCurrent(context);
         await using var conn = await db.OpenAsync(ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, inline ? "file:preview" : "file:download", ct);
-        var row = await LoadAvailableAsync(conn, id, ct);
+        var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         if (inline && !IsPreviewable(row.Ext))
             throw ApiException.BadRequest("该文件类型不支持在线预览，请下载原文件查看");
@@ -115,7 +131,7 @@ public sealed class FileService(
         var claims = RequireMatchingClaims(context, actor);
         await using var conn = await db.OpenAsync(ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:download", ct);
-        var row = await LoadAvailableAsync(conn, id, ct);
+        var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         _ = ResolveExisting(row, ct);
 
@@ -137,7 +153,7 @@ public sealed class FileService(
         await using var conn = await db.OpenAsync(ct);
         var actor = await RequireActiveDownloadActorAsync(conn, session, ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:download", ct);
-        var row = await LoadAvailableAsync(conn, id, ct);
+        var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         var filePath = ResolveExisting(row, ct);
         var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
@@ -211,7 +227,7 @@ public sealed class FileService(
 
         await using var conn = await db.OpenAsync(ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:preview", ct);
-        var row = await LoadAvailableAsync(conn, id, ct);
+        var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         if (!IsVideo(row.Ext)) throw ApiException.BadRequest("该文件类型不支持视频预览");
 
@@ -232,7 +248,7 @@ public sealed class FileService(
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         var actor = await LoadMediaActorAsync(conn, grant.UserId, ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:preview", ct);
-        var row = await LoadAvailableAsync(conn, id, ct);
+        var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         var contentType = MediaMimeType(row.Ext)
             ?? throw ApiException.BadRequest("该文件类型不支持视频预览");
@@ -276,15 +292,120 @@ public sealed class FileService(
             .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
         var row = ToRow(locked);
         if (row.ProjectId != initial.ProjectId) throw ApiException.Conflict("文件所属项目已变化，请刷新后重试");
-        if (row.Status != FileStatuses.Available) throw ApiException.NotFound();
+        if (row.Status is not (FileStatuses.Available or FileStatuses.Withdrawn)) throw ApiException.NotFound();
         var deletedAt = await DbClock.UtcNowAsync(ef, ct);
-        var changed = await ef.Files.Where(file => file.Id == id && file.Status == FileStatuses.Available)
+        var changed = await ef.Files.Where(file => file.Id == id
+                && (file.Status == FileStatuses.Available || file.Status == FileStatuses.Withdrawn))
             .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, FileStatuses.Deleted)
                 .SetProperty(file => file.DeletedAt, deletedAt), ct);
         if (changed != 1) throw ApiException.NotFound();
         await audit.WriteAsync(conn, tx, current.Id, "FILE_DELETE", "file", id,
             new { name = row.OriginalName }, ClientIp.Resolve(context, options), ct);
         await tx.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// A supplier account withdraws a file it uploaded itself, within the configured window, while the
+    /// subproject is in progress and the responsible user has not returned that file. The file becomes
+    /// WITHDRAWN: it no longer counts as material and suppliers cannot read it, while internal accounts still
+    /// can and its uploader can restore it. A still-pending upload summary loses its entry.
+    /// </summary>
+    public async Task WithdrawAsync(HttpContext context, ulong id, CancellationToken ct)
+    {
+        var actor = AccessService.GetCurrent(context);
+        if (actor.UserType != UserTypes.Supplier) throw ApiException.Forbidden();
+        await using var conn = await db.OpenAsync(ct);
+        await using var initialContext = EfDb.Use(conn);
+        var initial = await FileRows(initialContext).SingleOrDefaultAsync(file => file.Id == id, ct) ?? throw ApiException.NotFound();
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        try { await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, initial.ProjectId, ct); }
+        catch (ApiException error) when (error.Status == StatusCodes.Status409Conflict)
+        {
+            throw ApiException.Conflict("项目当前不可撤回文件");
+        }
+        await using var ef = EfDb.Use(conn, tx);
+        var locked = await ef.Files.FromSqlInterpolated($"SELECT * FROM files WHERE id={id} FOR UPDATE")
+            .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        if (locked.ProjectId != initial.ProjectId) throw ApiException.Conflict("文件所属项目已变化，请刷新后重试");
+        if (locked.Status != FileStatuses.Available) throw ApiException.NotFound();
+        if (locked.UploaderId != current.Id || locked.Direction != "S2C")
+            throw ApiException.Forbidden("只能撤回本账号上传的文件");
+        var review = await ef.Projects.AsNoTracking().Where(project => project.Id == locked.ProjectId)
+            .Select(project => new { project.MaterialReviewStatus, project.MaterialReviewFileId }).SingleAsync(ct);
+        if (review.MaterialReviewStatus == MaterialReviewStatuses.Returned && review.MaterialReviewFileId == id)
+            throw ApiException.Conflict("负责人已审核过这份资料，不能撤回");
+        var now = await DbClock.UtcNowAsync(ef, ct);
+        SupplierWithdrawal.RequireOpen(current, locked.UploaderId, locked.CreatedAt, options.SupplierFileWithdrawMinutes, now, "文件");
+        var changed = await ef.Files.Where(file => file.Id == id && file.Status == FileStatuses.Available)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, FileStatuses.Withdrawn), ct);
+        if (changed != 1) throw ApiException.NotFound();
+        await ProjectNotificationService.RemovePendingSummaryEntryAsync(conn, tx, "FILE_UPLOADED", locked.ProjectId, "files", id, ct);
+        await audit.WriteAsync(conn, tx, current.Id, "FILE_WITHDRAW", "file", id,
+            new { name = locked.OriginalName }, ClientIp.Resolve(context, options), ct);
+        await tx.CommitAsync(ct);
+        await PublishFileChangeAsync(locked.ProjectId, id);
+    }
+
+    /// <summary>
+    /// The supplier account that withdrew a file restores it while the subproject is in progress, at any time.
+    /// It becomes available again (and counts as material if it belongs to the current round); no mail is sent.
+    /// </summary>
+    public async Task RestoreAsync(HttpContext context, ulong id, CancellationToken ct)
+    {
+        var actor = AccessService.GetCurrent(context);
+        if (actor.UserType != UserTypes.Supplier) throw ApiException.Forbidden();
+        await using var conn = await db.OpenAsync(ct);
+        await using var initialContext = EfDb.Use(conn);
+        var initial = await FileRows(initialContext).SingleOrDefaultAsync(file => file.Id == id, ct) ?? throw ApiException.NotFound();
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        try { await ProjectAccessService.RequireFileUploadAsync(conn, tx, current, initial.ProjectId, ct); }
+        catch (ApiException error) when (error.Status == StatusCodes.Status409Conflict)
+        {
+            throw ApiException.Conflict("项目当前不可恢复文件");
+        }
+        await using var ef = EfDb.Use(conn, tx);
+        var locked = await ef.Files.FromSqlInterpolated($"SELECT * FROM files WHERE id={id} FOR UPDATE")
+            .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        if (locked.ProjectId != initial.ProjectId) throw ApiException.Conflict("文件所属项目已变化，请刷新后重试");
+        if (locked.UploaderId != current.Id) throw ApiException.NotFound();
+        if (locked.Status != FileStatuses.Withdrawn) throw ApiException.Conflict("文件未被撤回，无需恢复");
+        var changed = await ef.Files.Where(file => file.Id == id && file.Status == FileStatuses.Withdrawn)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(file => file.Status, FileStatuses.Available), ct);
+        if (changed != 1) throw ApiException.Conflict("文件未被撤回，无需恢复");
+        await audit.WriteAsync(conn, tx, current.Id, "FILE_RESTORE", "file", id,
+            new { name = locked.OriginalName }, ClientIp.Resolve(context, options), ct);
+        await tx.CommitAsync(ct);
+        await PublishFileChangeAsync(locked.ProjectId, id);
+    }
+
+    private async Task PublishFileChangeAsync(ulong projectId, ulong fileId)
+    {
+        if (changes is null) return;
+        try { await changes.PublishAsync(projectId, "project", CancellationToken.None); }
+        catch (Exception error)
+        {
+            logger?.LogWarning(error, "Realtime project notification failed after changing file {FileId}", fileId);
+        }
+    }
+
+    /// <summary>
+    /// For a supplier viewer of an in-progress subproject, computes each listed file's withdrawal deadline;
+    /// null when the viewer cannot withdraw anything here.
+    /// </summary>
+    private async Task<Func<ulong, ulong, string, DateTime, DateTime?>?> WithdrawableFilterAsync(
+        YfDbContext ef, CurrentUser actor, ProjectAccess project, CancellationToken ct)
+    {
+        var minutes = options.SupplierFileWithdrawMinutes;
+        if (actor.UserType != UserTypes.Supplier || minutes <= 0 || project.Status != ProjectStatuses.InProgress) return null;
+        var review = await ef.Projects.AsNoTracking().Where(item => item.Id == project.Id)
+            .Select(item => new { item.MaterialReviewStatus, item.MaterialReviewFileId }).SingleAsync(ct);
+        var returnedFileId = review.MaterialReviewStatus == MaterialReviewStatuses.Returned ? review.MaterialReviewFileId : null;
+        var now = await DbClock.UtcNowAsync(ef, ct);
+        return (fileId, uploaderId, direction, createdAt) => direction == "S2C" && fileId != returnedFileId
+            ? SupplierWithdrawal.Deadline(actor, uploaderId, createdAt, minutes, now)
+            : null;
     }
 
     public async Task<IResult> BatchDownloadAsync(HttpContext context, BatchDownloadRequest request, CancellationToken ct)
@@ -455,7 +576,7 @@ public sealed class FileService(
             if (!available.TryGetValue(id, out var row)) throw ApiException.NotFound();
             if (viewableProjects.Add(row.ProjectId))
                 await RequireViewOrNotFoundAsync(conn, tx, actor, row.ProjectId, ct);
-            if (row.Status != FileStatuses.Available) throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
+            if (!Readable(actor, row)) throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
             var path = ResolveExisting(row, ct);
             inputBytes = checked(inputBytes + (ulong)new FileInfo(path).Length);
             if (inputBytes > BatchInputMaximumBytes)
@@ -590,11 +711,15 @@ public sealed class FileService(
     private static string NativeBatchDownloadPath(string handle) =>
         $"/api/v1/files/batch-download/{handle}";
 
-    private static async Task<FileRow> LoadAvailableAsync(MySqlConnection conn, ulong id, CancellationToken ct)
+    /// <summary>Available files are readable by every viewer; withdrawn files only by internal accounts.</summary>
+    private static bool Readable(CurrentUser actor, FileRow row) =>
+        row.Status == FileStatuses.Available || (row.Status == FileStatuses.Withdrawn && actor.IsInternal);
+
+    private static async Task<FileRow> LoadReadableAsync(MySqlConnection conn, CurrentUser actor, ulong id, CancellationToken ct)
     {
         await using var ef = EfDb.Use(conn);
         var row = await FileRows(ef).SingleOrDefaultAsync(file => file.Id == id, ct);
-        return row is { Status: FileStatuses.Available } ? row : throw ApiException.NotFound();
+        return row is not null && Readable(actor, row) ? row : throw ApiException.NotFound();
     }
 
     private static bool IsPreviewable(string extension) =>
@@ -649,6 +774,7 @@ public sealed class FileService(
 
     private sealed class FileListRow
     {
+        public string Status { get; set; } = string.Empty;
         public ulong Id { get; set; }
         public ulong ProjectId { get; set; }
         public ulong UploaderId { get; set; }

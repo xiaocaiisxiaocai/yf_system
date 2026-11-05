@@ -244,6 +244,13 @@ export function useMessageFeed({
     return added
   }, [key])
 
+  /** The supplier that withdrew a message keeps a restorable placeholder without content or images. */
+  const withdrawConfirmedMessage = useCallback((id: number) => {
+    mapFeedMessages(key, message => message.id === id
+      ? { ...message, status: 'WITHDRAWN', content: '', images: [], withdrawableUntil: null, canRestore: true }
+      : message)
+  }, [key])
+
   const removeConfirmedMessage = useCallback((id: number) => {
     updateFeedData(key, data => {
       const exists = flattenMessages(data).some(message => message.id === id)
@@ -299,6 +306,7 @@ export function useMessageFeed({
     markReadLocally,
     addConfirmedMessage,
     removeConfirmedMessage,
+    withdrawConfirmedMessage,
     replaceFromSync,
   }
 }
@@ -591,6 +599,18 @@ export function useMessageCommands() {
       return id
     },
   }, queryClient)
+  const withdraw = useMutation({
+    mutationFn: async (id: number) => {
+      await http.post<ApiResponses['POST /messages/{id}/withdraw']>(`/messages/${id}/withdraw`)
+      return id
+    },
+  }, queryClient)
+  const restore = useMutation({
+    mutationFn: async (id: number) => {
+      await http.post<ApiResponses['POST /messages/{id}/restore']>(`/messages/${id}/restore`)
+      return id
+    },
+  }, queryClient)
   const markRead = useMutation({
     mutationFn: async (ids: number[]) => {
       await http.post<ApiResponses['POST /messages/read']>('/messages/read', { ids })
@@ -599,7 +619,7 @@ export function useMessageCommands() {
     // 服务端会同时把对应的留言通知记为已查看，立即刷新右上角通知数。
     onSuccess: () => { useCollaboration.getState().refresh().catch(() => undefined) },
   }, queryClient)
-  return { send, remove, markRead }
+  return { send, remove, withdraw, restore, markRead }
 }
 
 export interface MessageSendBody { content: string; clientMessageId: string; signerName?: string }

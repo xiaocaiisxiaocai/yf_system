@@ -59,6 +59,10 @@ public sealed class AppOptions
     public long UploadMaxPendingBytesPerUser { get; set; } = 20L * 1024 * 1024 * 1024;
     /// <summary>Upload starts, image messages and download starts (each counted separately) one account may make per minute; 429/42902 above it.</summary>
     public int FileTransferStartsPerMinutePerUser { get; set; } = 60;
+    /// <summary>Minutes after upload during which a supplier account may withdraw its own file; 0 disables withdrawal.</summary>
+    public int SupplierFileWithdrawMinutes { get; set; } = 10;
+    /// <summary>Minutes after posting during which a supplier account may withdraw its own message; 0 disables withdrawal.</summary>
+    public int SupplierMessageWithdrawMinutes { get; set; } = 10;
     /// <summary>Maximum bytes the files maintenance worker re-hashes per cycle while verifying referenced blobs.</summary>
     public long BlobVerifyBytesPerCycle { get; set; } = 2L * 1024 * 1024 * 1024;
     /// <summary>Copy throughput cap of an online storage migration, so it never crowds out live transfers.</summary>
@@ -151,6 +155,10 @@ public sealed class AppOptions
             throw new InvalidOperationException("App:UploadMaxPendingBytesPerUser must be between 1 GiB and 16 TiB.");
         if (FileTransferStartsPerMinutePerUser is < 1 or > 100_000)
             throw new InvalidOperationException("App:FileTransferStartsPerMinutePerUser must be between 1 and 100000.");
+        if (SupplierFileWithdrawMinutes is < 0 or > 1440)
+            throw new InvalidOperationException("App:SupplierFileWithdrawMinutes must be between 0 and 1440.");
+        if (SupplierMessageWithdrawMinutes is < 0 or > 1440)
+            throw new InvalidOperationException("App:SupplierMessageWithdrawMinutes must be between 0 and 1440.");
         if (BlobVerifyBytesPerCycle is < 64L * 1024 * 1024 or > 1024L * 1024 * 1024 * 1024)
             throw new InvalidOperationException("App:BlobVerifyBytesPerCycle must be between 64 MiB and 1 TiB.");
         if (StorageMigrationBytesPerSecond is < 1024L * 1024 or > 10L * 1024 * 1024 * 1024)

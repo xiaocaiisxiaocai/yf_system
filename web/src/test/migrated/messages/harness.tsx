@@ -32,6 +32,9 @@ export interface MessageFixture {
   readByMe: boolean
   createdAt: string
   images?: Array<{ id: number; name: string; sizeBytes: number; mimeType: string }>
+  status?: 'NORMAL' | 'WITHDRAWN'
+  withdrawableUntil?: string | null
+  canRestore?: boolean
 }
 
 export function messageRow(id: number, overrides: Partial<MessageFixture> = {}): MessageFixture {

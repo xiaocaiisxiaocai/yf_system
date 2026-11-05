@@ -502,6 +502,56 @@ internal static class ProjectNotificationService
 
     private static string SideUserType(string side) => side == "SUPPLIER" ? UserTypes.Supplier : UserTypes.Internal;
 
+    internal const string WithdrawnMailReason = "通知内容已被撤回";
+
+    /// <summary>
+    /// Removes a withdrawn file or message from summary mail that is still waiting in its coalescing window
+    /// (the same untouched-PENDING condition under which entries are appended), and cancels a summary left
+    /// with no entry. Each entry carries the item's unique link on its own line; mail that was already
+    /// claimed, retried or sent is left alone.
+    /// </summary>
+    internal static async Task RemovePendingSummaryEntryAsync(
+        MySqlConnection conn, MySqlTransaction tx, string eventType, ulong projectId, string tab, ulong targetId,
+        CancellationToken ct)
+    {
+        var marker = $"/projects/{projectId}?tab={tab}&target={targetId}\n";
+        await using var db = EfDb.Use(conn, tx);
+        var rows = await db.EmailOutbox.FromSqlInterpolated($"""
+            SELECT * FROM email_outbox
+            WHERE event_type={eventType} AND project_id={projectId}
+              AND status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL
+              AND LOCATE({marker}, body) > 0
+            FOR UPDATE
+            """).ToListAsync(ct);
+        foreach (var row in rows)
+        {
+            if (RemoveSummaryEntry(row.Body, marker) is not { } body) continue;
+            row.Body = body;
+            if (body.Contains("\n- ", StringComparison.Ordinal)) continue;
+            row.Status = MailStatuses.Cancelled;
+            row.DedupeKey = null;
+            row.NextAttemptAt = null;
+            row.LastError = WithdrawnMailReason;
+        }
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// The body without the entry whose link line ends with <paramref name="marker"/>, or null when it is absent.
+    /// Entries start with "- " on a new line (mail lines never contain line breaks), so an entry runs from its
+    /// line start to the next entry or the end of the body.
+    /// </summary>
+    internal static string? RemoveSummaryEntry(string body, string marker)
+    {
+        var at = body.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0) return null;
+        var start = body.LastIndexOf("\n- ", at, StringComparison.Ordinal);
+        if (start < 0) return null;
+        var next = body.IndexOf("\n- ", at, StringComparison.Ordinal);
+        var end = next < 0 ? body.Length : next + 1;
+        return body.Remove(start + 1, end - start - 1);
+    }
+
     private static string ProjectUrl(string baseUrl, ulong projectId, string tab, ulong? targetId = null) =>
         $"{baseUrl.TrimEnd('/')}/projects/{projectId}?tab={tab}" + (targetId is null ? string.Empty : $"&target={targetId.Value}");
 

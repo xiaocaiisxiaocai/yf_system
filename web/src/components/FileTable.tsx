@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import {
   Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip,
 } from '@arco-design/web-react'
-import { IconDownload, IconEye, IconUpload, IconDelete, IconClose } from '@arco-design/web-react/icon'
+import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconUndo, IconRedo } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, PROJECT_STATUS, fmtSize, fmtTime } from '../api/types'
@@ -12,6 +12,7 @@ import LoadError from './LoadError'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
 import { useCoalescedRefresh } from '../hooks/useCoalescedRefresh'
+import { canWithdraw, useWithdrawClock } from '../hooks/useWithdrawClock'
 import { useCollaboration } from '../store/collaboration'
 import type { ApiResponses } from '../api/types'
 import { downloadFile, downloadFiles } from '../api/download'
@@ -193,6 +194,31 @@ export default function FileTable({
     }
   }
 
+  const withdrawNow = useWithdrawClock(data.list.map((file) => file.withdrawableUntil))
+  const withdraw = useCallback(async (f: FileItem) => {
+    try {
+      await http.post<ApiResponses['POST /files/{id}/withdraw']>(`/files/${f.id}/withdraw`)
+      Message.success('已撤回')
+      load()
+    } catch {
+      // 请求层已显示错误（如已超过撤回时限）；刷新列表以去掉失效的撤回按钮。
+      load()
+    }
+  }, [load])
+
+  const restore = useCallback(async (f: FileItem) => {
+    try {
+      await http.post<ApiResponses['POST /files/{id}/restore']>(`/files/${f.id}/restore`)
+      Message.success('已恢复')
+    } catch {
+      // 请求层已显示错误。
+    }
+    load()
+  }, [load])
+  // 已撤回的文件内部账号仍可下载、预览；厂商账号只能看到记录（撤回它的账号可以恢复）。
+  const internalViewer = user?.userType === 'INTERNAL'
+  const readable = useCallback((f: FileItem) => !f.withdrawn || internalViewer, [internalViewer])
+
   const remove = useCallback(async (f: FileItem) => {
     try {
       await http.delete<ApiResponses['DELETE /files/{id}']>(`/files/${f.id}`)
@@ -212,6 +238,7 @@ export default function FileTable({
       render: (v: string, r: FileItem) => (
         <Space size={4} className="file-name-cell">
           <span className="table-cell-text" title={v}>{v}</span>
+          {r.withdrawn && <Tag className="file-withdrawn-tag" color="orange">已撤回</Tag>}
           {r.isCopiedReference && (
             <Tooltip content={onOpenCopyHistory ? '由项目复制产生，点击查看复制履历' : '由项目复制产生的独立文件'}>
               {onOpenCopyHistory ? (
@@ -220,7 +247,7 @@ export default function FileTable({
               ) : <Tag className="file-reference-tag" color="arcoblue">复制件</Tag>}
             </Tooltip>
           )}
-          {previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (
+          {readable(r) && previewKind(r.ext, r.sizeBytes) !== 'none' && hasPerm('file:preview') && (
             <Tooltip content="在线预览">
               <Button size="mini" type="text" icon={<IconEye />} aria-label="预览文件" onClick={() => setPreview(r)} />
             </Tooltip>
@@ -246,15 +273,24 @@ export default function FileTable({
     {
       title: '操作', width: compactNarrow ? COMPACT_NARROW_ACTIONS_WIDTH : COLUMN_WIDTHS.actions[w], fixed: compactMedium ? undefined : 'right' as const,
       render: (_: unknown, r: FileItem) => actionSlots([
-        hasPerm('file:download') && (
+        hasPerm('file:download') && readable(r) && (
           <Tooltip key="download" content="下载" disabled={!compactNarrow}>
             <Button size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
               onClick={() => { void downloadFile(r.id).catch(() => undefined) }}>{compactNarrow ? null : '下载'}</Button>
           </Tooltip>
         ),
-        r.canDelete && projectStatus === 'IN_PROGRESS' && (
+        // 删除（内部账号）与撤回/恢复（上传它的厂商账号）互斥，共用同一个操作位以保持对齐。
+        r.canDelete && projectStatus === 'IN_PROGRESS' ? (
           <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
             <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">{compactNarrow ? null : '删除'}</Button>
+          </Popconfirm>
+        ) : r.canRestore ? (
+          <Popconfirm key="restore" title={`恢复文件「${r.originalName}」？`} onOk={() => restore(r)}>
+            <Button size="mini" type="text" icon={<IconRedo />} aria-label="恢复文件">{compactNarrow ? null : '恢复'}</Button>
+          </Popconfirm>
+        ) : canWithdraw(r.withdrawableUntil, withdrawNow) && (
+          <Popconfirm key="withdraw" title={`撤回文件「${r.originalName}」？`} onOk={() => withdraw(r)}>
+            <Button size="mini" type="text" status="warning" icon={<IconUndo />} aria-label="撤回文件">{compactNarrow ? null : '撤回'}</Button>
           </Popconfirm>
         ),
       ], 'file'),
@@ -262,7 +298,7 @@ export default function FileTable({
   ].filter((column) => !(
     (compactMedium && (column.dataIndex === 'uploaderName' || column.dataIndex === 'createdAt'))
     || (compactNarrow && column.dataIndex === 'sizeBytes')
-  )), [compactMedium, compactNarrow, hasPerm, onOpenCopyHistory, projectStatus, remove, w])
+  )), [compactMedium, compactNarrow, hasPerm, onOpenCopyHistory, projectStatus, readable, remove, restore, w, withdraw, withdrawNow])
   const selectionWidth = hasPerm('file:download') ? 40 : 0
   const compactContentWidth = columns.reduce((sum, column) => sum + (column.width ?? COMPACT_NAME_MIN_WIDTH), 0) + selectionWidth
   // 放得下时不设横向滚动宽度，文件名列自然吃满；放不下才按内容宽度滚动。
@@ -337,6 +373,7 @@ export default function FileTable({
           rowSelection={hasPerm('file:download') ? {
             selectedRowKeys: selected,
             onChange: (keys) => setSelected(keys as number[]),
+            checkboxProps: (record: FileItem) => ({ disabled: !readable(record) }),
           } : undefined}
           size={compact ? 'small' : undefined}
           noDataElement={compact ? <Empty description="暂无文件" /> : undefined}

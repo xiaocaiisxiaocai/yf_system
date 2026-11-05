@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Yf.Api.Modules.Files;
 
 namespace Yf.Api.Modules.Projects;
@@ -10,6 +11,8 @@ public static class ProjectsModule
 {
     public static IServiceCollection AddProjectsModule(this IServiceCollection services)
     {
+        // Image messages share the collaboration upload budget with the files module.
+        services.TryAddSingleton<FileRateLimiter>();
         services.AddScoped<ProjectService>();
         services.AddScoped<ProjectGroupService>();
         services.AddScoped<ProjectGroupStatusService>();
@@ -123,7 +126,7 @@ public static class ProjectsModule
                 id,
                 ParseMessageIds(QueryString(context, "ids")),
                 ct)));
-        api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, MessageService service, FileRateLimiter uploadLimiter) =>
+        api.MapPost("/projects/{id:long}/messages", async (HttpContext context, ulong id, MessageService service, [FromServices] FileRateLimiter uploadLimiter) =>
         {
             if (!context.Request.HasFormContentType && !context.Request.HasJsonContentType())
                 throw new ApiException(415, 41501, "留言仅支持 JSON 或 multipart/form-data");
@@ -204,6 +207,10 @@ public static class ProjectsModule
         }).Produces(StatusCodes.Status200OK, null, "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp");
         api.MapDelete("/messages/{id:long}", (HttpContext context, ulong id, MessageService service) =>
             WithDb(context, (conn, actor, ip, ct) => Empty(service.DeleteAsync(conn, actor, id, ip, ct))));
+        api.MapPost("/messages/{id:long}/withdraw", (HttpContext context, ulong id, MessageService service) =>
+            WithDb(context, (conn, actor, ip, ct) => Empty(service.WithdrawAsync(conn, actor, id, ip, ct))));
+        api.MapPost("/messages/{id:long}/restore", (HttpContext context, ulong id, MessageService service) =>
+            WithDb(context, (conn, actor, ip, ct) => Empty(service.RestoreAsync(conn, actor, id, ip, ct))));
 
         api.MapGet("/dashboard/summary", (HttpContext context, DashboardService service) =>
             WithDb(context, (conn, actor, _, ct) => service.SummaryAsync(conn, actor, ct)));

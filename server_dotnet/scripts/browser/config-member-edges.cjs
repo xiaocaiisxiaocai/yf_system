@@ -19,6 +19,8 @@ const configLabels = {
   'storage.migration_bytes_per_second': '存储迁移速度上限',
   'download.batch_min_bytes_per_minute': '批量下载最低速度',
   'download.batch_max_duration_minutes': '批量下载最长时间',
+  'withdraw.supplier_file_minutes': '厂商文件撤回时限',
+  'withdraw.supplier_message_minutes': '厂商留言撤回时限',
 };
 // Whole-number parameters edited in a unit (days, items, GB): the stored value is the shown value times scale.
 const numericConfigs = {
@@ -32,6 +34,8 @@ const numericConfigs = {
   'storage.migration_bytes_per_second': { scale: MB, max: 10 * 1024 },
   'download.batch_min_bytes_per_minute': { scale: 1024, max: 1024 * 1024 },
   'download.batch_max_duration_minutes': { scale: 1, max: 1440 },
+  'withdraw.supplier_file_minutes': { scale: 1, max: 1440 },
+  'withdraw.supplier_message_minutes': { scale: 1, max: 1440 },
 };
 const notificationConfigKeys = new Set([
   'notify.enabled', 'notify.internal.enabled', 'notify.supplier.enabled',

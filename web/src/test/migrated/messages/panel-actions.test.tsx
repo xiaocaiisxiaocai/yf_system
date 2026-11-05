@@ -417,4 +417,45 @@ describe('留言撰写、发送与分页', () => {
       messageMocks.user = previousUser
     }
   })
+
+  it('a supplier withdraws its own message into a placeholder and restores a withdrawn one', async () => {
+    const previousUser = messageMocks.user
+    messageMocks.user = { id: 21, employeeNo: 'shared', realName: '共用账号', userType: 'SUPPLIER' }
+    try {
+      setMessagePermissions('message:create')
+      messageMocks.get.mockResolvedValue(messagePage([
+        messageRow(8, { senderId: 21, senderType: 'SUPPLIER', status: 'WITHDRAWN', content: '', canRestore: true }),
+        messageRow(7, { senderId: 21, senderType: 'SUPPLIER', content: '发错了', withdrawableUntil: new Date(Date.now() + 60_000).toISOString() }),
+      ]))
+      messageMocks.post.mockResolvedValue({ data: {} })
+      renderMessagePanel()
+      expect(await screen.findByText('发错了')).toBeInTheDocument()
+      expect(screen.getAllByText(/你撤回了一条留言/)).toHaveLength(1)
+
+      fireEvent.click(screen.getByRole('button', { name: /撤回/ }))
+      fireEvent.click(screen.getByRole('button', { name: '确定' }))
+      await waitFor(() => expect(messageMocks.post).toHaveBeenCalledWith('/messages/7/withdraw'))
+      await waitFor(() => expect(screen.getAllByText(/你撤回了一条留言/)).toHaveLength(2))
+      expect(screen.queryByText('发错了')).not.toBeInTheDocument()
+
+      const fetches = messageMocks.get.mock.calls.length
+      fireEvent.click(screen.getAllByRole('button', { name: /恢复/ })[0])
+      fireEvent.click(screen.getAllByRole('button', { name: '确定' }).at(-1)!)
+      await waitFor(() => expect(messageMocks.post).toHaveBeenCalledWith(expect.stringMatching(/^\/messages\/[78]\/restore$/)))
+      // The placeholder carries no content, so a restore refetches the feed to bring it back.
+      await waitFor(() => expect(messageMocks.get.mock.calls.length).toBeGreaterThan(fetches))
+    } finally {
+      messageMocks.user = previousUser
+    }
+  })
+
+  it('internal staff still read a message its supplier withdrew, marked as withdrawn', async () => {
+    messageMocks.get.mockResolvedValue(messagePage([
+      messageRow(9, { senderType: 'SUPPLIER', senderName: '厂商账号', status: 'WITHDRAWN', content: '厂商撤回的原文' }),
+    ]))
+    renderMessagePanel()
+    expect(await screen.findByText('厂商撤回的原文')).toBeInTheDocument()
+    expect(screen.getByText('厂商已撤回')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /恢复/ })).not.toBeInTheDocument()
+  })
 })

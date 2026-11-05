@@ -28,8 +28,12 @@ public sealed class ProjectActivityAuditContractTests
             [("project", "PROJECT_MATERIAL_RETURN")] = ("PROJECT", "MATERIAL_RETURN", "退回回传资料"),
             [("file", "FILE_UPLOAD")] = ("FILE", "UPLOAD", "上传文件"),
             [("file", "FILE_DELETE")] = ("FILE", "DELETE", "删除文件"),
+            [("file", "FILE_WITHDRAW")] = ("FILE", "WITHDRAW", "撤回文件"),
+            [("file", "FILE_RESTORE")] = ("FILE", "RESTORE", "恢复文件"),
             [("message", "MESSAGE_CREATE")] = ("MESSAGE", "CREATE", "发表留言"),
             [("message", "MESSAGE_DELETE")] = ("MESSAGE", "DELETE", "删除留言"),
+            [("message", "MESSAGE_WITHDRAW")] = ("MESSAGE", "WITHDRAW", "撤回留言"),
+            [("message", "MESSAGE_RESTORE")] = ("MESSAGE", "RESTORE", "恢复留言"),
         };
 
         Assert.Equal(expected.Count, ProjectActivityService.AuditActionMappings.Count);

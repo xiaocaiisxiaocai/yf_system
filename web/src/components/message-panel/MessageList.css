@@ -14,3 +14,5 @@
 .message-append-error { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; }
 .message-load-more { padding: 12px; text-align: center; }
 .message-locate-notice { display: block; margin-bottom: 12px; }
+.msg-item--withdrawn { text-align: center; padding: 6px 0; }
+.message-row-withdrawn { font-size: 12px; }

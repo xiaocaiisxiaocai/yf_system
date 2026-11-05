@@ -8,6 +8,7 @@ import { MessageImageComposer, MessageImages, pasteMessageImages } from './Messa
 import { ReceiptBody } from './MessageReceipts'
 import { MessageComposer } from './message-panel/MessageComposer'
 import { MessageList } from './message-panel/MessageList'
+import { useWithdrawClock } from '../hooks/useWithdrawClock'
 import { MessageReceiptDrawer } from './message-panel/MessageReceiptDrawer'
 import {
   cancelMessageQueries,
@@ -104,6 +105,7 @@ export default function MessagePanel({
     markReadLocally,
     addConfirmedMessage,
     removeConfirmedMessage,
+    withdrawConfirmedMessage,
     replaceFromSync,
   } = feed
   const feedIdentity = JSON.stringify(feedKey)
@@ -337,6 +339,36 @@ export default function MessagePanel({
     }
   }, [commands.remove, feedKey, removeConfirmedMessage, sync.rootKey])
 
+  const withdrawNow = useWithdrawClock(visibleMessages.map(message => message.withdrawableUntil))
+  const withdraw = useCallback(async (id: number) => {
+    const requestFeedKey = feedKey
+    const markWithdrawn = withdrawConfirmedMessage
+    const requestSyncRoot = sync.rootKey
+    try {
+      await commands.withdraw.mutateAsync(id)
+      const syncWasFetching = queryClient.isFetching({ queryKey: requestSyncRoot }) > 0
+      await cancelMessageQueries([requestFeedKey, requestSyncRoot])
+      markWithdrawn(id)
+      if (syncWasFetching) void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
+    } catch {
+      // 请求层已显示错误（如已超过撤回时限）；重新同步以去掉失效的撤回按钮。
+      void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
+    }
+  }, [commands.withdraw, feedKey, withdrawConfirmedMessage, sync.rootKey])
+
+  const restore = useCallback(async (id: number) => {
+    const requestFeedKey = feedKey
+    const requestSyncRoot = sync.rootKey
+    try {
+      await commands.restore.mutateAsync(id)
+    } catch {
+      // 请求层已显示错误。
+    }
+    // 撤回后本地占位已没有正文和图片，恢复后重新拉取以取回原内容。
+    void queryClient.invalidateQueries({ queryKey: requestFeedKey })
+    void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
+  }, [commands.restore, feedKey, sync.rootKey])
+
   const receipt = !isMessageAccessError(receiptDetail.error) && selectedReceiptId !== null && receiptDetail.data
     ? { id: selectedReceiptId, readers: receiptDetail.data.readers, unread: receiptDetail.data.unread }
     : null
@@ -407,6 +439,10 @@ export default function MessagePanel({
         onReceiveReceipt={receiveReceipt}
         onOpenReceipt={setSelectedReceiptId}
         onRemove={remove}
+        withdrawNow={withdrawNow}
+        internalViewer={user?.userType === 'INTERNAL'}
+        onWithdraw={withdraw}
+        onRestore={restore}
         MessageImages={MessageImages}
         ReceiptBody={ReceiptBody}
       />

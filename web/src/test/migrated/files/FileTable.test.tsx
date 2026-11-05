@@ -52,6 +52,9 @@ type FileRow = {
   createdAt: string
   canDelete: boolean
   isCopiedReference?: boolean
+  withdrawableUntil?: string | null
+  withdrawn?: boolean
+  canRestore?: boolean
 }
 
 function row(id: number, name: string, ext: string, sizeBytes: number, extra: Partial<FileRow> = {}): FileRow {
@@ -193,6 +196,49 @@ describe('FileTable DOM contracts', () => {
     await userEvent.click(current.getByRole('button', { name: '预览文件' }))
     expect(await screen.findByTestId('pdf-preview')).toBeInTheDocument()
     expect(document.querySelector('.file-preview-modal .arco-modal-footer')).not.toBeInTheDocument()
+  })
+
+  it('a supplier withdraws its own file in time, the button expires on its own, and a withdrawn file is restorable but not downloadable', async () => {
+    mocks.permissions.add('file:preview')
+    mocks.permissions.add('file:download')
+    mocks.user = { id: 201, userType: 'SUPPLIER', employeeNo: 'S-201', realName: '厂商' }
+    mocks.post.mockResolvedValue({ data: {} })
+    try {
+      await renderTable([
+        row(1, '刚传的.pdf', 'pdf', 1, { direction: 'S2C', withdrawableUntil: new Date(Date.now() + 60_000).toISOString() }),
+        row(2, '快到期.pdf', 'pdf', 1, { direction: 'S2C', withdrawableUntil: new Date(Date.now() + 800).toISOString() }),
+        row(3, '已撤回.pdf', 'pdf', 1, { direction: 'S2C', withdrawn: true, canRestore: true }),
+      ])
+      expect(tableRow('快到期.pdf').getByRole('button', { name: '撤回文件' })).toBeInTheDocument()
+      await waitFor(() => expect(tableRow('快到期.pdf').queryByRole('button', { name: '撤回文件' })).not.toBeInTheDocument(),
+        { timeout: 3000 })
+
+      const withdrawn = tableRow('已撤回.pdf')
+      expect(withdrawn.getByText('已撤回')).toBeInTheDocument()
+      expect(withdrawn.queryByRole('button', { name: '下载文件' })).not.toBeInTheDocument()
+      expect(withdrawn.queryByRole('button', { name: '预览文件' })).not.toBeInTheDocument()
+      expect(withdrawn.getByRole('checkbox')).toBeDisabled()
+
+      await userEvent.click(tableRow('刚传的.pdf').getByRole('button', { name: '撤回文件' }))
+      fireEvent.click(screen.getByRole('button', { name: '确定' }))
+      await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/files/1/withdraw'))
+      await userEvent.click(tableRow('已撤回.pdf').getByRole('button', { name: '恢复文件' }))
+      fireEvent.click(screen.getAllByRole('button', { name: '确定' }).at(-1)!)
+      await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/files/3/restore'))
+    } finally {
+      mocks.user = { id: 1, userType: 'INTERNAL', employeeNo: 'E-007', realName: '测试用户' }
+    }
+  })
+
+  it('internal staff keep previewing and downloading a file its supplier withdrew', async () => {
+    mocks.permissions.add('file:preview')
+    mocks.permissions.add('file:download')
+    await renderTable([row(1, '厂商撤回.pdf', 'pdf', 1, { direction: 'S2C', withdrawn: true })])
+    const current = tableRow('厂商撤回.pdf')
+    expect(current.getByText('已撤回')).toBeInTheDocument()
+    expect(current.getByRole('button', { name: '下载文件' })).toBeInTheDocument()
+    expect(current.getByRole('button', { name: '预览文件' })).toBeInTheDocument()
+    expect(current.queryByRole('button', { name: '恢复文件' })).not.toBeInTheDocument()
   })
 
   it('handles a failed file deletion without removing the row and permits retry', async () => {

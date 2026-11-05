@@ -118,6 +118,8 @@ export const CONFIG_META: Record<string, { name: string; description: string; hi
   'storage.migration_bytes_per_second': { name: '存储迁移速度上限', description: '在线迁移存储位置时的复制速度上限', numeric: { min: 1, max: 10 * 1024, unit: 'MB/秒', scale: MB } },
   'download.batch_min_bytes_per_minute': { name: '批量下载最低速度', description: '批量下载持续低于该速度时中止', numeric: { min: 1, max: 1024 * 1024, unit: 'KB/分钟', scale: 1024 } },
   'download.batch_max_duration_minutes': { name: '批量下载最长时间', description: '单次批量下载允许的最长时间', numeric: { min: 5, max: 1440, unit: '分钟' } },
+  'withdraw.supplier_file_minutes': { name: '厂商文件撤回时限', description: '厂商上传文件后可自行撤回的时间，0 表示不允许撤回', numeric: { min: 0, max: 1440, unit: '分钟' } },
+  'withdraw.supplier_message_minutes': { name: '厂商留言撤回时限', description: '厂商发表留言后可自行撤回的时间，0 表示不允许撤回', numeric: { min: 0, max: 1440, unit: '分钟' } },
 }
 
 export interface Cfg {

@@ -74,7 +74,11 @@ public sealed record MessageResponse(
     bool ReadByMe,
     IReadOnlyList<MessageImageResponse> Images,
     // Supplier contact the message is signed by; null for internal or unsigned messages.
-    string? SignerName);
+    string? SignerName,
+    // Until when the viewing supplier account may withdraw this message it posted; null when it cannot.
+    DateTime? WithdrawableUntil = null,
+    // The viewing supplier account withdrew this message and may restore it now.
+    bool CanRestore = false);
 
 public sealed record MessageReader(ulong UserId, string RealName, string UserType, DateTime? ReadAt);
 

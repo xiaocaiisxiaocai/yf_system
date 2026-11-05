@@ -3145,6 +3145,86 @@
         }
       }
     },
+    "/api/v1/messages/{id}/withdraw": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/messages/{id}/restore": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dashboard/summary": {
       "get": {
         "tags": [
@@ -4334,6 +4414,86 @@
     },
     "/api/v1/files/{id}": {
       "delete": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{id}/withdraw": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{id}/restore": {
+      "post": {
         "tags": [
           "Yf.Api.Tests"
         ],
@@ -8319,6 +8479,7 @@
       "FileListItem": {
         "required": [
           "canDelete",
+          "canRestore",
           "createdAt",
           "direction",
           "ext",
@@ -8331,7 +8492,9 @@
           "signerName",
           "sizeBytes",
           "uploaderId",
-          "uploaderName"
+          "uploaderName",
+          "withdrawableUntil",
+          "withdrawn"
         ],
         "type": "object",
         "properties": {
@@ -8385,6 +8548,17 @@
           "signerName": {
             "type": "string",
             "nullable": true
+          },
+          "withdrawableUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "withdrawn": {
+            "type": "boolean"
+          },
+          "canRestore": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -9082,6 +9256,7 @@
       },
       "MessageResponse": {
         "required": [
+          "canRestore",
           "content",
           "createdAt",
           "id",
@@ -9094,7 +9269,8 @@
           "senderType",
           "signerName",
           "status",
-          "totalCount"
+          "totalCount",
+          "withdrawableUntil"
         ],
         "type": "object",
         "properties": {
@@ -9146,6 +9322,14 @@
           "signerName": {
             "type": "string",
             "nullable": true
+          },
+          "withdrawableUntil": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "canRestore": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

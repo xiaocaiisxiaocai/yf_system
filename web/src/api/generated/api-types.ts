@@ -207,6 +207,9 @@ export interface FileListItem {
   isCopiedReference: boolean
   canDelete: boolean
   signerName: string | null
+  withdrawableUntil: string | null
+  withdrawn: boolean
+  canRestore: boolean
 }
 
 export interface FileResponse {
@@ -388,6 +391,8 @@ export interface MessageResponse {
   readByMe: boolean
   images: Array<MessageImageResponse>
   signerName: string | null
+  withdrawableUntil: string | null
+  canRestore: boolean
 }
 
 export interface MissingEmailAccount {
@@ -1686,9 +1691,13 @@ export interface ApiResponses {
   "GET /files/{id}/media": Blob
   "POST /files/{id}/media-session": MediaSessionResponse
   "GET /files/{id}/native-download/{handle}": Blob
+  "POST /files/{id}/restore": EmptyResponse
+  "POST /files/{id}/withdraw": EmptyResponse
   "POST /messages/read": EmptyResponse
   "DELETE /messages/{id}": EmptyResponse
   "GET /messages/{id}/reads": MessageReadsResponse
+  "POST /messages/{id}/restore": EmptyResponse
+  "POST /messages/{id}/withdraw": EmptyResponse
   "GET /messages/{messageId}/images/{imageId}": Blob
   "DELETE /oem/accounts/{id}": EmptyResponse
   "GET /oem/accounts/{id}": OemAccountResponse

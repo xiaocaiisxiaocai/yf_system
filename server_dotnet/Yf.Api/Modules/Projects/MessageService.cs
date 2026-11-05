@@ -35,7 +35,8 @@ internal sealed class MessageService(
         var query =
             from message in db.Messages
             join sender in db.Users on message.SenderId equals sender.Id
-            where message.ProjectId == projectId && message.Status == "NORMAL"
+            where message.ProjectId == projectId
+                && (message.Status == "NORMAL" || message.Status == WithdrawnStatus)
             select new MessageRow
             {
                 Id = message.Id,
@@ -76,8 +77,10 @@ internal sealed class MessageService(
         var readsByMessage = reads.ToLookup(read => read.MessageId);
         var images = await LoadImagesAsync(db, messageIds, ct);
         var imagesByMessage = images.ToLookup(image => image.MessageId);
+        var withdrawNow = WithdrawalApplies(actor, project.Status) ? await DatabaseUtcNowAsync(db, ct) : (DateTime?)null;
         var result = rows.Select(message => MessageJson(
-            message, readsByMessage[message.Id], imagesByMessage[message.Id], visibleIds, actor.Id)).ToArray();
+            message, readsByMessage[message.Id], imagesByMessage[message.Id], visibleIds, actor,
+            WithdrawDeadline(actor, message, project.Status, withdrawNow), project.Status)).ToArray();
         return ProjectJson.Page(result, total, actualPage, size);
     }
 
@@ -200,7 +203,8 @@ internal sealed class MessageService(
                     var message = await LoadMessageAsync(db, createdId, false, ct);
                     var persistedImages = await LoadImagesAsync(db, [createdId], ct);
                     var response = MessageJson(message, [], persistedImages,
-                        participants.Select(user => user.Id).ToHashSet(), current.Id);
+                        participants.Select(user => user.Id).ToHashSet(), current,
+                        WithdrawDeadline(current, message, project.Status, message.CreatedAt), project.Status);
                     await tx.CommitAsync(ct);
                     committed = true;
                     await PublishSafelyAsync(projectId, RealtimeChangeKinds.Messages);
@@ -249,7 +253,9 @@ internal sealed class MessageService(
             || !SameSigner(current.IsInternal ? null : SupplierContacts.NormalizeSignerName(signerName), message.SignerName))
             throw ApiException.Conflict("clientMessageId 已用于不同的留言");
         var participants = await ProjectNotificationService.ParticipantsAsync(conn, tx, project, ct);
-        return MessageJson(message, [], images, participants.Select(user => user.Id).ToHashSet(), current.Id);
+        var now = WithdrawalApplies(current, project.Status) ? await DatabaseUtcNowAsync(db, ct) : (DateTime?)null;
+        return MessageJson(message, [], images, participants.Select(user => user.Id).ToHashSet(), current,
+            WithdrawDeadline(current, message, project.Status, now), project.Status);
     }
 
     /// <summary>
@@ -515,7 +521,9 @@ internal sealed class MessageService(
         ulong imageId,
         CancellationToken ct)
     {
-        var message = await LoadMessageAsync(conn, null, messageId, false, true, ct);
+        var message = await LoadMessageAsync(conn, null, messageId, false, false, ct);
+        if (!(message.Status == "NORMAL" || (message.Status == WithdrawnStatus && actor.IsInternal)))
+            throw ApiException.NotFound();
         await ProjectAccessService.RequireViewAsync(conn, null, actor, message.ProjectId, ct);
         await using var db = EfDb.Use(conn);
         var image = await db.MessageImages
@@ -564,7 +572,7 @@ internal sealed class MessageService(
         var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, message.ProjectId, false, ct);
         EnsureWritable(project.Status, posting: false);
-        if (message.Status != "NORMAL")
+        if (message.Status is not ("NORMAL" or WithdrawnStatus))
         {
             throw ApiException.NotFound();
         }
@@ -601,18 +609,116 @@ internal sealed class MessageService(
         return checked((ulong)count);
     }
 
+    /// <summary>Withdrawn by its supplier author: suppliers see a placeholder, internal accounts the content; restorable.</summary>
+    internal const string WithdrawnStatus = "WITHDRAWN";
+
+    private bool WithdrawalApplies(CurrentUser actor, string projectStatus) =>
+        actor.UserType == UserTypes.Supplier && options.SupplierMessageWithdrawMinutes > 0
+        && projectStatus == ProjectStatuses.InProgress;
+
+    private DateTime? WithdrawDeadline(CurrentUser actor, MessageRow message, string projectStatus, DateTime? now) =>
+        now is { } current && message.Status == "NORMAL" && WithdrawalApplies(actor, projectStatus)
+            ? SupplierWithdrawal.Deadline(actor, message.SenderId, message.CreatedAt, options.SupplierMessageWithdrawMinutes, current)
+            : null;
+
+    /// <summary>
+    /// A supplier account withdraws a message it posted itself, within the configured window, while the
+    /// subproject is in progress. Suppliers then see only a placeholder; internal accounts still see the content
+    /// and images, marked withdrawn. A still-pending message summary loses its entry.
+    /// </summary>
+    internal async Task WithdrawAsync(
+        MySqlConnection conn,
+        CurrentUser actor,
+        ulong messageId,
+        string? ip,
+        CancellationToken ct)
+    {
+        if (actor.UserType != UserTypes.Supplier) throw ApiException.Forbidden();
+        var initial = await LoadMessageAsync(conn, null, messageId, false, false, ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, initial.ProjectId, false, ct);
+        var project = await LoadProjectAsync(conn, tx, initial.ProjectId, true, ct);
+        var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);
+        if (message.ProjectId != initial.ProjectId) throw ApiException.Conflict("留言所属项目已变化，请刷新后重试");
+        if (message.Status != "NORMAL") throw ApiException.NotFound();
+        if (message.SenderId != current.Id) throw ApiException.Forbidden("只能撤回本账号发表的留言");
+        if (project.Status != ProjectStatuses.InProgress) throw ApiException.Conflict("项目当前不可撤回留言");
+        await using (var db = EfDb.Use(conn, tx))
+        {
+            var databaseNow = await DatabaseUtcNowAsync(db, ct);
+            SupplierWithdrawal.RequireOpen(current, message.SenderId, message.CreatedAt,
+                options.SupplierMessageWithdrawMinutes, databaseNow, "留言");
+            await db.Messages
+                .Where(candidate => candidate.Id == messageId && candidate.Status == "NORMAL")
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(candidate => candidate.Status, WithdrawnStatus)
+                    .SetProperty(candidate => candidate.DeletedBy, current.Id)
+                    .SetProperty(candidate => candidate.DeletedAt, databaseNow), ct);
+        }
+        await ProjectNotificationService.RemovePendingSummaryEntryAsync(
+            conn, tx, "MESSAGE_CREATED", message.ProjectId, "messages", messageId, ct);
+        await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_WITHDRAW", "message", messageId, null, ip, ct);
+        await tx.CommitAsync(ct);
+        await PublishSafelyAsync(message.ProjectId, RealtimeChangeKinds.Messages);
+    }
+
+    /// <summary>
+    /// The supplier account that withdrew a message restores it while the subproject is in progress, at any
+    /// time. It becomes a normal message again with its read receipts intact; no mail is sent.
+    /// </summary>
+    internal async Task RestoreAsync(
+        MySqlConnection conn,
+        CurrentUser actor,
+        ulong messageId,
+        string? ip,
+        CancellationToken ct)
+    {
+        if (actor.UserType != UserTypes.Supplier) throw ApiException.Forbidden();
+        var initial = await LoadMessageAsync(conn, null, messageId, false, false, ct);
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, initial.ProjectId, false, ct);
+        var project = await LoadProjectAsync(conn, tx, initial.ProjectId, true, ct);
+        var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);
+        if (message.ProjectId != initial.ProjectId) throw ApiException.Conflict("留言所属项目已变化，请刷新后重试");
+        if (message.SenderId != current.Id) throw ApiException.NotFound();
+        if (message.Status != WithdrawnStatus) throw ApiException.Conflict("留言未被撤回，无需恢复");
+        if (project.Status != ProjectStatuses.InProgress) throw ApiException.Conflict("项目当前不可恢复留言");
+        await using (var db = EfDb.Use(conn, tx))
+        {
+            await db.Messages
+                .Where(candidate => candidate.Id == messageId && candidate.Status == WithdrawnStatus)
+                .ExecuteUpdateAsync(update => update
+                    .SetProperty(candidate => candidate.Status, "NORMAL")
+                    .SetProperty(candidate => candidate.DeletedBy, (ulong?)null)
+                    .SetProperty(candidate => candidate.DeletedAt, (DateTime?)null), ct);
+        }
+        await audit.WriteAsync(conn, tx, current.Id, "MESSAGE_RESTORE", "message", messageId, null, ip, ct);
+        await tx.CommitAsync(ct);
+        await PublishSafelyAsync(message.ProjectId, RealtimeChangeKinds.Messages);
+    }
+
     private static MessageResponse MessageJson(
         MessageRow message,
         IEnumerable<MessageReadRow> reads,
         IEnumerable<MessageImageRow> images,
         IReadOnlySet<ulong> visibleUserIds,
-        ulong viewerId)
+        CurrentUser viewer,
+        DateTime? withdrawableUntil,
+        string projectStatus)
     {
-        var counts = ReceiptCounts(message.SenderId, reads, visibleUserIds, viewerId);
+        var counts = ReceiptCounts(message.SenderId, reads, visibleUserIds, viewer.Id);
+        // Internal accounts keep seeing a withdrawn message's content and images; suppliers get a placeholder.
+        var withdrawn = message.Status == WithdrawnStatus && !viewer.IsInternal;
+        var canRestore = message.Status == WithdrawnStatus && viewer.UserType == UserTypes.Supplier
+            && message.SenderId == viewer.Id && projectStatus == ProjectStatuses.InProgress;
         return new MessageResponse(
             message.Id,
             message.ProjectId,
-            message.Content,
+            withdrawn ? string.Empty : message.Content,
             message.Status,
             message.SenderId,
             message.SenderName,
@@ -621,8 +727,10 @@ internal sealed class MessageService(
             counts.ReadCount,
             counts.TotalCount,
             counts.ReadByMe,
-            images.Select(image => new MessageImageResponse(image.Id, image.OriginalName, image.SizeBytes, image.MimeType)).ToArray(),
-            message.SignerName);
+            withdrawn ? [] : images.Select(image => new MessageImageResponse(image.Id, image.OriginalName, image.SizeBytes, image.MimeType)).ToArray(),
+            message.SignerName,
+            withdrawableUntil is { } deadline ? ProjectJson.Utc(deadline) : null,
+            canRestore);
     }
 
     private async Task<MessageImageRow> StoreImageAsync(

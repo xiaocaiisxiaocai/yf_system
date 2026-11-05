@@ -31,6 +31,8 @@ internal static class FileStatuses
 {
     internal const string Available = "AVAILABLE";
     internal const string Deleted = "DELETED";
+    /// <summary>Withdrawn by its supplier uploader: kept (blob referenced), readable only by internal accounts, restorable.</summary>
+    internal const string Withdrawn = "WITHDRAWN";
 }
 
 internal static class BuiltInRoleNames

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Projects;
 
@@ -10,7 +11,7 @@ public static class FilesModule
         services.AddSingleton<BatchDownloadLimiter>();
         services.AddSingleton<MediaGrantService>();
         services.AddSingleton<DownloadGrantService>();
-        services.AddSingleton<FileRateLimiter>();
+        services.TryAddSingleton<FileRateLimiter>();
         services.AddScoped<FileService>();
         services.AddSingleton<IStoredUploadNotifier>(provider =>
             new UploadChangeNotifier(provider.GetRequiredService<IProjectRealtimePublisher>()));
@@ -94,6 +95,18 @@ public static class FilesModule
             HttpContext context, ulong id, FileService service, CancellationToken ct) =>
         {
             await service.DeleteAsync(context, id, ct);
+            return EmptyResponse.Instance;
+        });
+        api.MapPost("/files/{id:long}/withdraw", async (
+            HttpContext context, ulong id, FileService service, CancellationToken ct) =>
+        {
+            await service.WithdrawAsync(context, id, ct);
+            return EmptyResponse.Instance;
+        });
+        api.MapPost("/files/{id:long}/restore", async (
+            HttpContext context, ulong id, FileService service, CancellationToken ct) =>
+        {
+            await service.RestoreAsync(context, id, ct);
             return EmptyResponse.Instance;
         });
         api.MapPost("/files/batch-download", async (
