@@ -19,7 +19,7 @@ function location(overrides: Record<string, unknown>) {
 
 const idle = [
   location({}),
-  location({ kind: 'ODM/OEMA', label: 'ODM/OEMA 文件存储', path: '', freeBytes: null }),
+  location({ kind: 'OEM', label: 'ODM/OEMA 文件存储', path: '', freeBytes: null }),
   location({ kind: 'LOG', label: '日志目录', path: 'D:\\YfData\\logs' }),
 ]
 
@@ -77,5 +77,22 @@ describe('StorageLocationsPanel', () => {
     expect(await screen.findByText('协作文件存储：目标磁盘空间不足')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '重试' }))
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/admin/storage-locations/COLLAB/retry'))
+  })
+
+  it('keeps the OEM storage key stable while showing the ODM/OEMA label', async () => {
+    mocks.get.mockResolvedValue({ data: { items: idle } })
+    mocks.post.mockResolvedValue({ data: idle[1] })
+    const user = userEvent.setup()
+    render(<StorageLocationsPanel />)
+
+    const row = (await screen.findByText('ODM/OEMA 文件存储')).closest('tr')!
+    await user.click(within(row).getByRole('button', { name: '设置路径' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('首次设置 ODM/OEMA 文件存储需重启站点后生效。')).toBeVisible()
+    fireEvent.change(within(dialog).getByLabelText('新目录路径'), { target: { value: 'D:\\YfData\\oem' } })
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(mocks.post).toHaveBeenCalledWith(
+      '/admin/storage-locations/OEM/migrate', { path: 'D:\\YfData\\oem' }))
   })
 })

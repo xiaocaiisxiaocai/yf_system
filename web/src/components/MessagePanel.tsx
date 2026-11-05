@@ -352,6 +352,7 @@ export default function MessagePanel({
       if (syncWasFetching) void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
     } catch {
       // 请求层已显示错误（如已超过撤回时限）；重新同步以去掉失效的撤回按钮。
+      void queryClient.invalidateQueries({ queryKey: requestFeedKey })
       void queryClient.invalidateQueries({ queryKey: requestSyncRoot })
     }
   }, [commands.withdraw, feedKey, withdrawConfirmedMessage, sync.rootKey])

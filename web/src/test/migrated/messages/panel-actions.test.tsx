@@ -449,6 +449,36 @@ describe('留言撰写、发送与分页', () => {
     }
   })
 
+  it('a rejected withdrawal refetches the authoritative feed and removes an expired action', async () => {
+    const previousUser = messageMocks.user
+    messageMocks.user = { id: 21, employeeNo: 'shared', realName: '共用账号', userType: 'SUPPLIER' }
+    try {
+      setMessagePermissions('message:create')
+      const withdrawable = messageRow(7, {
+        senderId: 21,
+        senderType: 'SUPPLIER',
+        content: '服务端时钟即将判定过期',
+        withdrawableUntil: new Date(Date.now() + 60_000).toISOString(),
+      })
+      messageMocks.get
+        .mockResolvedValueOnce(messagePage([withdrawable]))
+        .mockResolvedValue(messagePage([{ ...withdrawable, withdrawableUntil: null }]))
+      messageMocks.post.mockRejectedValueOnce(new Error('withdrawal window expired'))
+      renderMessagePanel()
+      expect(await screen.findByRole('button', { name: /撤回/ })).toBeVisible()
+
+      fireEvent.click(screen.getByRole('button', { name: /撤回/ }))
+      fireEvent.click(screen.getByRole('button', { name: '确定' }))
+
+      await waitFor(() => expect(messageMocks.post).toHaveBeenCalledWith('/messages/7/withdraw'))
+      await waitFor(() => expect(messageMocks.get).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(screen.queryByRole('button', { name: /撤回/ })).not.toBeInTheDocument())
+      expect(screen.getByText('服务端时钟即将判定过期')).toBeVisible()
+    } finally {
+      messageMocks.user = previousUser
+    }
+  })
+
   it('internal staff still read a message its supplier withdrew, marked as withdrawn', async () => {
     messageMocks.get.mockResolvedValue(messagePage([
       messageRow(9, { senderType: 'SUPPLIER', senderName: '厂商账号', status: 'WITHDRAWN', content: '厂商撤回的原文' }),

@@ -73,7 +73,7 @@ public sealed class FileService(
                 row.Id, row.ProjectId, row.UploaderId, row.Direction, row.OriginalName, row.Ext, row.SizeBytes,
                 row.MimeType, row.Sha256, row.CreatedAt, row.UploaderName, row.IsCopiedReference, canDelete,
                 row.SignerName,
-                withdrawn ? null : withdrawable?.Invoke(row.Id, row.UploaderId, row.Direction, row.CreatedAt),
+                withdrawn || row.IsCopiedReference ? null : withdrawable?.Invoke(row.Id, row.UploaderId, row.Direction, row.CreatedAt),
                 withdrawn,
                 withdrawn && canRestore && row.UploaderId == actor.Id);
         }).ToArray();
@@ -331,6 +331,10 @@ public sealed class FileService(
         if (locked.Status != FileStatuses.Available) throw ApiException.NotFound();
         if (locked.UploaderId != current.Id || locked.Direction != "S2C")
             throw ApiException.Forbidden("只能撤回本账号上传的文件");
+        // Copies preserve the original uploader but CreatedAt is their copy time, not a new upload.
+        // Check only the target relation: an original upload may still be withdrawn after being copied.
+        if (await ef.FileCopyRefs.AnyAsync(reference => reference.TargetFileId == id, ct))
+            throw ApiException.Conflict("复制带入的文件不能撤回");
         var review = await ef.Projects.AsNoTracking().Where(project => project.Id == locked.ProjectId)
             .Select(project => new { project.MaterialReviewStatus, project.MaterialReviewFileId }).SingleAsync(ct);
         if (review.MaterialReviewStatus == MaterialReviewStatuses.Returned && review.MaterialReviewFileId == id)

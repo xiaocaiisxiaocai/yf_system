@@ -163,6 +163,59 @@ public sealed class SupplierWithdrawalTests
     }
 
     [Fact(Timeout = 120_000)]
+    public async Task CopiedFilesNeverOpenANewWithdrawalWindowButOriginalUploadsRemainWithdrawable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("supplier_copied_file_withdraw", ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync(Fixture + """
+            UPDATE projects SET status='IN_PROGRESS' WHERE id=1002;
+            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(1003,5001,'再次复制子项目',100,'IN_PROGRESS',1,101);
+            INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status,created_at)
+            VALUES
+                (3101,1002,201,'S2C','old-source.step','old-source','step',4,'unused','AVAILABLE',UTC_TIMESTAMP(6)-INTERVAL 1 DAY),
+                (3102,1001,201,'S2C','copied.step','copied','step',4,'unused','AVAILABLE',UTC_TIMESTAMP(6)),
+                (3103,1003,201,'S2C','nested-copy.step','nested-copy','step',4,'unused','AVAILABLE',UTC_TIMESTAMP(6)),
+                (3104,1002,201,'S2C','fresh-source.step','fresh-source','step',4,'unused','AVAILABLE',UTC_TIMESTAMP(6)),
+                (3105,1001,201,'S2C','fresh-copy.step','fresh-copy','step',4,'unused','AVAILABLE',UTC_TIMESTAMP(6));
+            INSERT INTO project_copies(id,source_project_id,target_project_id,source_project_name,target_project_name,copied_by,copied_by_name,file_count,total_bytes,created_at)
+            VALUES(7001,1002,1001,'source','copy',1,'admin',2,8,UTC_TIMESTAMP(6)),
+                  (7002,1001,1003,'copy','nested',1,'admin',1,4,UTC_TIMESTAMP(6));
+            INSERT INTO file_copy_refs(copy_id,source_file_id,target_file_id,source_file_name,target_file_name,created_at)
+            VALUES(7001,3101,3102,'old-source.step','copied.step',UTC_TIMESTAMP(6)),
+                  (7002,3102,3103,'copied.step','nested-copy.step',UTC_TIMESTAMP(6)),
+                  (7001,3104,3105,'fresh-source.step','fresh-copy.step',UTC_TIMESTAMP(6));
+            """, ct);
+        var files = Files(database.Options);
+
+        foreach (var (projectId, fileId) in new (ulong, ulong)[] { (1001, 3102), (1003, 3103), (1001, 3105) })
+        {
+            var item = (await ListedAsync(files, Supplier, projectId, ct))[fileId];
+            Assert.True(item.GetProperty("isCopiedReference").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, item.GetProperty("withdrawableUntil").ValueKind);
+            await AssertRefused(409, "复制带入的文件不能撤回", () => files.WithdrawAsync(Context(Supplier), fileId, ct));
+        }
+
+        // Being a copy's source must not prevent withdrawal of a genuine recent upload.
+        Assert.Equal(JsonValueKind.String,
+            (await ListedAsync(files, Supplier, 1002, ct))[3104].GetProperty("withdrawableUntil").ValueKind);
+        await files.WithdrawAsync(Context(Supplier), 3104, ct);
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal(3, await conn.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM files WHERE id IN (3102,3103,3105) AND status='AVAILABLE'"));
+        }
+
+        // A copy withdrawn before this rule was introduced can still be recovered by its supplier.
+        await database.SeedAsync("UPDATE files SET status='WITHDRAWN' WHERE id=3102", ct);
+        Assert.True((await ListedAsync(files, Supplier, 1001, ct))[3102].GetProperty("canRestore").GetBoolean());
+        await files.RestoreAsync(Context(Supplier), 3102, ct);
+        Assert.Equal(JsonValueKind.Null,
+            (await ListedAsync(files, Supplier, 1001, ct))[3102].GetProperty("withdrawableUntil").ValueKind);
+    }
+
+    [Fact(Timeout = 120_000)]
     public async Task SupplierWithdrawsAndRestoresOwnMessagesWhileInternalStaffKeepReadingThem()
     {
         var ct = TestContext.Current.CancellationToken;
