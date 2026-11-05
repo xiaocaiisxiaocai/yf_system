@@ -25,7 +25,7 @@ function template(overrides: Partial<FlowTemplate> = {}): FlowTemplate {
     nodes: [{
       sortNo: 1,
       name: '课别主管审批',
-      approverSource: 'SECTION_LEADER',
+      approverSource: 'DIRECT_LEADER',
       approvalMode: 'ANY',
       selfPolicy: 'SKIP',
       enabled: true,
@@ -81,8 +81,8 @@ describe('OEM 审批模板', () => {
       isDefault: false,
       departmentIds: [],
       nodes: [{
-        name: '课别主管审批',
-        approverSource: 'SECTION_LEADER',
+        name: '上级主管审批',
+        approverSource: 'DIRECT_LEADER',
         approvalMode: 'SINGLE',
         selfPolicy: 'SKIP',
         enabled: true,
@@ -112,7 +112,7 @@ describe('OEM 审批模板', () => {
       version: 6,
       departmentIds: [11],
       nodes: [{
-        approverSource: 'SECTION_LEADER',
+        approverSource: 'DIRECT_LEADER',
         approvalMode: 'SINGLE',
         selfPolicy: 'SKIP',
         approverUserIds: [],
@@ -142,7 +142,7 @@ describe('OEM 审批模板', () => {
     renderPage({ flowTemplates, updateFlowTemplateDefinition })
 
     await user.click(await screen.findByText('默认审批'))
-    await chooseOption(user, '课别主管', '指定人员')
+    await chooseOption(user, '上级主管', '指定人员')
     await chooseOption(user, '本节点免审', '改由备用审批人审批')
     expect(within(screen.getByRole('dialog')).getByText('或签（任一人通过）')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '确定' }))

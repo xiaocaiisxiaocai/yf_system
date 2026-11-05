@@ -29,7 +29,7 @@ public sealed class OemApprovalEngine
             TransferId = transfer.Id,
             TemplateId = planning.Template.Id,
             InitiatorUserId = initiatorUserId,
-            InitiatorSectionId = planning.Path.Section.Id,
+            InitiatorSectionId = planning.Path.Own.Id,
             Status = plan.RequiresNoApproval ? FlowInstanceStatuses.Skipped : FlowInstanceStatuses.WaitingFiles,
             TemplateSnapshot = JsonSerializer.Serialize(new
             {

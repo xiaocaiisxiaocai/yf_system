@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Json.Nodes;
 using Dapper;
 using Yf.Api.Modules.Oem.Policies;
@@ -56,9 +56,19 @@ public sealed class OemPolicyTests
         Assert.True(preview["ok"]!.GetValue<bool>());
         Assert.False(preview["requiresApproval"]!.GetValue<bool>());
 
-        // Staff directly under a department cannot send.
+        // Staff directly under a department are routed to that department's leader; a section
+        // leader is no longer their superior, and with no leader up the chain sending fails.
         preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={directStaff}", ct).Ok();
-        Assert.Contains("课别", preview["reason"]!.GetValue<string>());
+        Assert.Contains("及其上级组织都未配置主管", preview["reason"]!.GetValue<string>());
+        var departmentLeader = await host.CreateInternalUserAsync("dz_dept_leader", "Leader#2026x", ["oem:flow_approve"], org.Department, ct);
+        await admin.PutAsync($"/api/v1/admin/departments/{org.Department}/leader", new { leaderUserId = departmentLeader }, ct).Ok();
+        preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={directStaff}", ct).Ok();
+        Assert.Equal("dz_dept_leader", preview["nodes"]![0]!["approvers"]![0]!["employeeNo"]!.GetValue<string>());
+        // The section leader's own superior is now the department leader.
+        preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={leader}", ct).Ok();
+        Assert.True(preview["requiresApproval"]!.GetValue<bool>());
+        Assert.Equal("dz_dept_leader", preview["nodes"]![0]!["approvers"]![0]!["employeeNo"]!.GetValue<string>());
+        await admin.PutAsync($"/api/v1/admin/departments/{org.Department}/leader", new { leaderUserId = (ulong?)null }, ct).Ok();
 
         // Node validation: an approver without oem:flow_approve is rejected.
         await admin.PostAsync("/api/v1/oem/flow-templates", new
@@ -69,7 +79,7 @@ public sealed class OemPolicyTests
         await admin.PostAsync("/api/v1/oem/flow-templates", new
         {
             name = "电装专用", isDefault = false,
-            nodes = new[] { new { name = "主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
+            nodes = new[] { new { name = "主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
         }, ct).Status(HttpStatusCode.BadRequest);
 
         var created = await admin.PostAsync("/api/v1/oem/flow-templates", new
@@ -77,7 +87,7 @@ public sealed class OemPolicyTests
             name = "电装专用", isDefault = false, departmentIds = new[] { org.Department },
             nodes = new object[]
             {
-                new { name = "课别主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = new[] { reviewer } },
+                new { name = "课别主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = new[] { reviewer } },
                 new { name = "质量确认", approverSource = "SPECIFIED_USERS", approvalMode = "ANY", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { reviewer }, fallbackUserIds = Array.Empty<ulong>() },
             },
         }, ct).Ok();
@@ -96,12 +106,12 @@ public sealed class OemPolicyTests
         await admin.PostAsync("/api/v1/oem/flow-templates", new
         {
             name = "冲突模板", isDefault = false, departmentIds = new[] { org.Department },
-            nodes = new[] { new { name = "主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "SKIP", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
+            nodes = new[] { new { name = "主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "SKIP", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
         }, ct).Status(HttpStatusCode.Conflict);
         await admin.PostAsync("/api/v1/oem/flow-templates", new
         {
             name = "机加专用", isDefault = false, departmentIds = new[] { otherOrg.Department },
-            nodes = new[] { new { name = "主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "SKIP", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
+            nodes = new[] { new { name = "主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "SKIP", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
         }, ct).Ok();
 
         // Optimistic concurrency and default-template rules.
@@ -123,7 +133,7 @@ public sealed class OemPolicyTests
             departmentIds = new[] { org.Department },
             nodes = new object[]
             {
-                new { name = "课别主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = new[] { reviewer } },
+                new { name = "课别主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = new[] { reviewer } },
                 new { name = "质量确认", approverSource = "SPECIFIED_USERS", approvalMode = "ANY", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { reviewer }, fallbackUserIds = Array.Empty<ulong>() },
             },
         }, ct).Ok();

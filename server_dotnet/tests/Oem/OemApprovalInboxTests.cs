@@ -81,7 +81,7 @@ public sealed class OemApprovalInboxTests
             name = "两级审批", isDefault = false, departmentIds = new[] { world.Org.Department },
             nodes = new object[]
             {
-                new { name = "课别主管", approverSource = "SECTION_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = new[] { backupId } },
+                new { name = "课别主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = new[] { backupId } },
                 new { name = "质量确认", approverSource = "SPECIFIED_USERS", approvalMode = "ANY", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { reviewerId }, fallbackUserIds = Array.Empty<ulong>() },
             },
         }, ct).Ok();

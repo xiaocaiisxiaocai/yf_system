@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
@@ -49,6 +49,7 @@ public sealed class SchemaShapeTests
         "20261101004904_AddProjectMaterialRound",
         "20261101120851_AddOemCompanyContacts",
         "20261102012333_RemoveOemCompanyPrimaryContact",
+        "20261105082534_MergeOemLeaderApproverSources",
     ];
 
     [Fact]
@@ -341,7 +342,8 @@ public sealed class SchemaShapeTests
                     OR (table_name='departments' AND column_name='leader_account_id'))
                 """));
             Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_templates WHERE id=1 AND is_default=1"));
-            Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1 AND approver_source='DIRECT_LEADER'"));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
             Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_retention_templates WHERE id=1 AND mode='KEEP'"));
             Assert.Equal("NO", await conn.ExecuteScalarAsync<string>("""
                 SELECT is_nullable FROM information_schema.columns

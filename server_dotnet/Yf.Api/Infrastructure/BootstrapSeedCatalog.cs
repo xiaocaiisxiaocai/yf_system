@@ -153,27 +153,16 @@ internal static class BootstrapSeedCatalog
             CreatedAt = now,
             UpdatedAt = now,
         });
-        db.OemFlowTemplateNodes.AddRange(
-            new OemFlowTemplateNode
-            {
-                TemplateId = 1,
-                SortNo = 1,
-                Name = "课别主管审批",
-                ApproverSource = "SECTION_LEADER",
-                ApprovalMode = "SINGLE",
-                SelfPolicy = "SKIP",
-                Enabled = true,
-            },
-            new OemFlowTemplateNode
-            {
-                TemplateId = 1,
-                SortNo = 2,
-                Name = "部门主管审批",
-                ApproverSource = "DEPARTMENT_LEADER",
-                ApprovalMode = "SINGLE",
-                SelfPolicy = "SKIP",
-                Enabled = false,
-            });
+        db.OemFlowTemplateNodes.Add(new OemFlowTemplateNode
+        {
+            TemplateId = 1,
+            SortNo = 1,
+            Name = "上级主管审批",
+            ApproverSource = "DIRECT_LEADER",
+            ApprovalMode = "SINGLE",
+            SelfPolicy = "SKIP",
+            Enabled = true,
+        });
         db.OemRetentionTemplates.Add(new OemRetentionTemplate
         {
             Id = 1,

@@ -4,13 +4,12 @@ namespace Yf.Api.Modules.Oem.Approval;
 
 public static class ApproverSources
 {
-    public const string SectionLeader = "SECTION_LEADER";
-    public const string DepartmentLeader = "DEPARTMENT_LEADER";
-    public const string DivisionLeader = "DIVISION_LEADER";
+    /// <summary>The initiator's own organisation leader, or the nearest ancestor's when that is missing or is the initiator.</summary>
+    public const string DirectLeader = "DIRECT_LEADER";
     public const string SpecifiedUsers = "SPECIFIED_USERS";
 
-    public static readonly IReadOnlyList<string> All = [SectionLeader, DepartmentLeader, DivisionLeader, SpecifiedUsers];
-    public static bool IsLeader(string source) => source is SectionLeader or DepartmentLeader or DivisionLeader;
+    public static readonly IReadOnlyList<string> All = [DirectLeader, SpecifiedUsers];
+    public static bool IsLeader(string source) => source == DirectLeader;
 }
 
 public static class ApprovalModes
@@ -84,16 +83,16 @@ public sealed record FlowTemplateDefinition(ulong Id, string Name, ulong Version
 
 public sealed record OrgLevel(ulong Id, string Name, string Kind, ulong? LeaderUserId);
 
-/// <summary>The initiator's organisation chain at send time: section, and its department and division when present.</summary>
-public sealed record OrgPath(OrgLevel Section, OrgLevel? Department, OrgLevel? Division)
+/// <summary>
+/// The initiator's organisation chain at send time: their own organisation (any level) first,
+/// then each active ancestor. The chain stops at the first disabled organisation.
+/// </summary>
+public sealed record OrgPath(IReadOnlyList<OrgLevel> Levels)
 {
-    /// <summary>Most specific first: the order in which template scopes are matched.</summary>
-    public IEnumerable<OrgLevel> MostSpecificFirst()
-    {
-        yield return Section;
-        if (Department is not null) yield return Department;
-        if (Division is not null) yield return Division;
-    }
+    public OrgLevel Own => Levels[0];
+
+    /// <summary>Most specific first: the order in which template scopes are matched and leaders are looked up.</summary>
+    public IEnumerable<OrgLevel> MostSpecificFirst() => Levels;
 }
 
 /// <summary>Whether a user may be assigned an OEM approval task right now (active internal account holding oem:flow_approve).</summary>
@@ -131,19 +130,29 @@ public interface IApproverSourceStrategy
     string Source { get; }
 
     /// <summary>Candidates before self-policy and eligibility are applied, plus the organisation name for messages.</summary>
-    (IReadOnlyList<ulong> Candidates, string ScopeName) Candidates(FlowNodeDefinition node, OrgPath path);
+    (IReadOnlyList<ulong> Candidates, string ScopeName) Candidates(FlowNodeDefinition node, OrgPath path, ulong initiatorId);
 }
 
-internal sealed class LeaderSourceStrategy(string source, Func<OrgPath, OrgLevel?> level, string levelLabel) : IApproverSourceStrategy
+/// <summary>
+/// The initiator's superior: the leader of their own organisation, walking up to the nearest
+/// ancestor with a leader when it has none or the initiator leads it. When the only leaders
+/// found are the initiator, the initiator is returned so the node's self policy decides.
+/// </summary>
+internal sealed class DirectLeaderStrategy : IApproverSourceStrategy
 {
-    public string Source => source;
+    public string Source => ApproverSources.DirectLeader;
 
-    public (IReadOnlyList<ulong> Candidates, string ScopeName) Candidates(FlowNodeDefinition node, OrgPath path)
+    public (IReadOnlyList<ulong> Candidates, string ScopeName) Candidates(FlowNodeDefinition node, OrgPath path, ulong initiatorId)
     {
-        var org = level(path) ?? throw new ApprovalPlanningException($"节点「{node.Name}」需要{levelLabel}主管，但发送人所在组织没有上级{levelLabel}");
-        if (org.LeaderUserId is not ulong leader)
-            throw new ApprovalPlanningException($"{org.Name}未配置主管，请联系管理员维护组织主管");
-        return ([leader], org.Name);
+        OrgLevel? self = null;
+        foreach (var level in path.MostSpecificFirst())
+        {
+            if (level.LeaderUserId is not ulong leader) continue;
+            if (leader != initiatorId) return ([leader], level.Name);
+            self ??= level;
+        }
+        if (self is not null) return ([initiatorId], self.Name);
+        throw new ApprovalPlanningException($"{path.Own.Name}及其上级组织都未配置主管，请联系管理员维护组织主管");
     }
 }
 
@@ -151,7 +160,7 @@ internal sealed class SpecifiedUsersStrategy : IApproverSourceStrategy
 {
     public string Source => ApproverSources.SpecifiedUsers;
 
-    public (IReadOnlyList<ulong> Candidates, string ScopeName) Candidates(FlowNodeDefinition node, OrgPath path) =>
+    public (IReadOnlyList<ulong> Candidates, string ScopeName) Candidates(FlowNodeDefinition node, OrgPath path, ulong initiatorId) =>
         (node.Approvers, "指定人员");
 }
 
@@ -168,9 +177,7 @@ public sealed class ApprovalPlanner
         this.strategies = strategies.ToDictionary(strategy => strategy.Source, StringComparer.Ordinal);
 
     public static ApprovalPlanner Default { get; } = new([
-        new LeaderSourceStrategy(ApproverSources.SectionLeader, path => path.Section, "课别"),
-        new LeaderSourceStrategy(ApproverSources.DepartmentLeader, path => path.Department, "部门"),
-        new LeaderSourceStrategy(ApproverSources.DivisionLeader, path => path.Division, "事业部"),
+        new DirectLeaderStrategy(),
         new SpecifiedUsersStrategy(),
     ]);
 
@@ -181,7 +188,7 @@ public sealed class ApprovalPlanner
         {
             if (!strategies.TryGetValue(node.Source, out var strategy))
                 throw new ApprovalPlanningException($"节点「{node.Name}」的审批人来源无效");
-            var (candidates, scopeName) = strategy.Candidates(node, path);
+            var (candidates, scopeName) = strategy.Candidates(node, path, initiatorId);
             planned.Add(ApprovalPlanner.PlanNode(node, candidates, scopeName, initiatorId, eligibility));
         }
 
@@ -240,7 +247,7 @@ public sealed class ApprovalPlanner
 
 /// <summary>
 /// Chooses the approval template for an initiator: the most specific organisation
-/// (section, then department, then division) bound to an active template wins,
+/// (their own, then each ancestor) bound to an active template wins,
 /// otherwise the default template applies.
 /// </summary>
 public static class TemplateSelection

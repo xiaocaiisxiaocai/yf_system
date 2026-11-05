@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json.Nodes;
@@ -313,7 +313,7 @@ public sealed class OemTransferFlowTests
     }
 
     [Fact(Timeout = 240_000)]
-    public async Task LeaderSelfSendSkipsApprovalAndDirectStaffCannotSend()
+    public async Task LeaderSelfSendSkipsApprovalAndDirectStaffNeedADepartmentLeader()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
@@ -334,11 +334,16 @@ public sealed class OemTransferFlowTests
                 "SELECT detail FROM audit_logs WHERE action='OEM_TRANSFER_SEND' AND target_id=@id",
                 new { id = id.ToString(System.Globalization.CultureInfo.InvariantCulture) }));
 
+        // Staff directly under a department may draft; with no department or division leader the send is refused.
         await host.CreateInternalUserAsync("direct_staff", "Direct#2026x", ["oem:transfer_create"], world.Org.Department, ct);
         var direct = await host.LoginInternalAsync("direct_staff", "Direct#2026x", ct);
-        var refused = await direct.PostAsync("/api/v1/oem/transfers",
-            new { title = "直属发送", oemCompanyId = world.CompanyId }, ct).Status(HttpStatusCode.BadRequest);
-        Assert.Contains("课别", refused.Body);
+        var directDraft = await direct.PostAsync("/api/v1/oem/transfers",
+            new { title = "直属发送", oemCompanyId = world.CompanyId }, ct).Ok();
+        var directId = TransferId(directDraft);
+        await host.UploadAsync(direct, directId, "direct.pdf", OemTestHost.Pdf("direct"), ct);
+        var refused = await direct.PostAsync($"/api/v1/oem/transfers/{directId}/send", new { version = Version(directDraft) + 1 }, ct)
+            .Status(HttpStatusCode.BadRequest);
+        Assert.Contains("及其上级组织都未配置主管", refused.Body);
     }
 
     [Fact(Timeout = 240_000)]

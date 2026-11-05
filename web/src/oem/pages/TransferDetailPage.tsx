@@ -31,7 +31,9 @@ const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
 ]
 
 const SOURCE_LABEL: Record<string, string> = {
-  SECTION_LEADER: '课别主管', DEPARTMENT_LEADER: '部门主管', DIVISION_LEADER: '事业部主管', SPECIFIED_USERS: '指定人员',
+  DIRECT_LEADER: '上级主管', SPECIFIED_USERS: '指定人员',
+  // Approvals sent before the leader sources were merged keep their original source.
+  SECTION_LEADER: '课别主管', DEPARTMENT_LEADER: '部门主管', DIVISION_LEADER: '事业部主管',
 }
 const TASK_LABEL: Record<string, string> = {
   WAITING: '等待', PENDING: '待审批', APPROVED: '已通过', REJECTED: '已驳回', NOT_NEEDED: '无需处理', SUPERSEDED: '已改派', CANCELLED: '已取消',

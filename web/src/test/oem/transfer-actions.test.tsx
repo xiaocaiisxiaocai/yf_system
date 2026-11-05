@@ -52,7 +52,7 @@ function detail(): TransferDetail {
       nodes: [{
         sortNo: 1,
         name: '课别主管',
-        approverSource: 'SECTION_LEADER',
+        approverSource: 'DIRECT_LEADER',
         approvalMode: 'SINGLE',
         status: 'PENDING',
         skipReason: null,

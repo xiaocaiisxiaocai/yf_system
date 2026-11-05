@@ -270,8 +270,8 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
             string mode;
             if (ApproverSources.IsLeader(node.ApproverSource))
             {
-                if (node.ApprovalMode is not (null or ApprovalModes.Single)) throw ApiException.BadRequest("主管类节点只支持单人审批");
-                if (approvers.Length > 0) throw ApiException.BadRequest("主管类节点不能指定审批人");
+                if (node.ApprovalMode is not (null or ApprovalModes.Single)) throw ApiException.BadRequest("上级主管节点只支持单人审批");
+                if (approvers.Length > 0) throw ApiException.BadRequest("上级主管节点不能指定审批人");
                 mode = ApprovalModes.Single;
             }
             else
@@ -287,6 +287,8 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
             else if (fallbacks.Length > 0) throw ApiException.BadRequest($"「{name}」未选择由备用审批人审批，不能配置备用审批人");
             normalized.Add(new FlowNodeInput(name, node.ApproverSource, mode, node.SelfPolicy, node.Enabled, approvers, fallbacks));
         }
+        if (normalized.Count(node => ApproverSources.IsLeader(node.ApproverSource)) > 1)
+            throw ApiException.BadRequest("审批模板只能有一个上级主管节点");
         var people = normalized.SelfMany();
         if (people.Length > 0)
         {

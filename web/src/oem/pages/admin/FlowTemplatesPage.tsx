@@ -11,9 +11,7 @@ import { useHubSwitcher } from '../hubSwitcherContext'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 
 const SOURCES = [
-  { value: 'SECTION_LEADER', label: '课别主管' },
-  { value: 'DEPARTMENT_LEADER', label: '部门主管' },
-  { value: 'DIVISION_LEADER', label: '事业部主管' },
+  { value: 'DIRECT_LEADER', label: '上级主管' },
   { value: 'SPECIFIED_USERS', label: '指定人员' },
 ]
 const SELF_POLICIES = [
@@ -52,7 +50,11 @@ interface EditableNode extends Omit<FlowNode, 'sortNo' | 'approvers' | 'fallback
 
 let nodeKey = 0
 const blankNode = (): EditableNode => ({
-  key: ++nodeKey, name: '课别主管审批', approverSource: 'SECTION_LEADER', approvalMode: 'SINGLE', selfPolicy: 'SKIP', enabled: true, approvers: [], fallbacks: [],
+  key: ++nodeKey, name: '上级主管审批', approverSource: 'DIRECT_LEADER', approvalMode: 'SINGLE', selfPolicy: 'SKIP', enabled: true, approvers: [], fallbacks: [],
+})
+// A template has at most one superior-leader node; further nodes name their approvers.
+const blankSpecifiedNode = (): EditableNode => ({
+  ...blankNode(), name: '审批节点', approverSource: 'SPECIFIED_USERS', approvalMode: 'ANY',
 })
 
 function toTree(nodes: DepartmentNode[]): { key: string; title: string; children: ReturnType<typeof toTree> }[] {
@@ -125,7 +127,7 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
           <Typography.Text bold>适用组织</Typography.Text>
           <TreeSelect treeData={tree} multiple allowClear value={scopes} onChange={setScopes} placeholder="不选择时仅作为默认模板使用"
             style={{ width: '100%', marginTop: 4 }} />
-          <Typography.Text type="secondary">发送人所在课别、部门、事业部依次匹配，最先匹配到的模板生效；都未匹配时使用默认模板。</Typography.Text>
+          <Typography.Text type="secondary">发送人所在组织及其上级组织依次匹配，最先匹配到的模板生效；都未匹配时使用默认模板。</Typography.Text>
         </div>
         {nodes.map((node, index) => (
           <Card key={node.key} size="small" title={`节点 ${index + 1}`} extra={
@@ -139,7 +141,11 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
               <Space wrap align="start">
                 <Form.Item label="节点名称"><Input style={{ width: 180 }} value={node.name} onChange={(name) => patch(node.key, { name })} /></Form.Item>
                 <Form.Item label="审批人来源">
-                  <Select style={{ width: 150 }} value={node.approverSource} options={SOURCES}
+                  <Select style={{ width: 150 }} value={node.approverSource}
+                    options={SOURCES.map((source) => ({
+                      ...source,
+                      disabled: source.value === 'DIRECT_LEADER' && nodes.some((item) => item.key !== node.key && item.approverSource === 'DIRECT_LEADER'),
+                    }))}
                     onChange={(approverSource) => patch(node.key, { approverSource, approvalMode: approverSource === 'SPECIFIED_USERS' ? 'ANY' : 'SINGLE' })} />
                 </Form.Item>
                 {node.approverSource === 'SPECIFIED_USERS' && (
@@ -161,7 +167,7 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
             </Form>
           </Card>
         ))}
-        <Button icon={<IconPlus />} disabled={nodes.length >= 10} onClick={() => setNodes((list) => [...list, { ...blankNode(), name: '审批节点' }])}>添加节点</Button>
+        <Button icon={<IconPlus />} disabled={nodes.length >= 10} onClick={() => setNodes((list) => [...list, list.some((item) => item.approverSource === 'DIRECT_LEADER') ? blankSpecifiedNode() : { ...blankNode(), name: '审批节点' }])}>添加节点</Button>
       </Space>
     </Modal>
   )

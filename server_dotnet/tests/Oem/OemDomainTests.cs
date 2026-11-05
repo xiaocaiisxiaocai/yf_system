@@ -1,4 +1,4 @@
-using Yf.Api.Infrastructure;
+﻿using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Transfers;
@@ -14,13 +14,13 @@ public sealed class OemDomainTests
     private const ulong DivisionLeader = 40;
     private const ulong Fallback = 50;
 
-    private static OrgPath Path(ulong? sectionLeader = SectionLeader, ulong? departmentLeader = DepartmentLeader, bool withDepartment = true) => new(
+    private static OrgPath Path(ulong? sectionLeader = SectionLeader, ulong? departmentLeader = DepartmentLeader, ulong? divisionLeader = DivisionLeader) => new([
         new OrgLevel(1, "装配一课", "SECTION", sectionLeader),
-        withDepartment ? new OrgLevel(2, "装配部", "DEPARTMENT", departmentLeader) : null,
-        withDepartment ? new OrgLevel(3, "制造事业部", "DIVISION", DivisionLeader) : null);
+        new OrgLevel(2, "装配部", "DEPARTMENT", departmentLeader),
+        new OrgLevel(3, "制造事业部", "DIVISION", divisionLeader)]);
 
-    private static FlowNodeDefinition Leader(int sort, string source, string selfPolicy = SelfPolicies.Skip, bool enabled = true, params ulong[] fallbacks) =>
-        new(sort, "节点" + sort, source, ApprovalModes.Single, selfPolicy, enabled, [], fallbacks);
+    private static FlowNodeDefinition Leader(int sort, string selfPolicy = SelfPolicies.Skip, bool enabled = true, params ulong[] fallbacks) =>
+        new(sort, "节点" + sort, ApproverSources.DirectLeader, ApprovalModes.Single, selfPolicy, enabled, [], fallbacks);
 
     private static FlowNodeDefinition Specified(int sort, string mode, ulong[] approvers, string selfPolicy = SelfPolicies.Block, params ulong[] fallbacks) =>
         new(sort, "指定" + sort, ApproverSources.SpecifiedUsers, mode, selfPolicy, true, approvers, fallbacks);
@@ -30,54 +30,62 @@ public sealed class OemDomainTests
     private static readonly IApproverEligibility Everyone = new SetEligibility([SectionLeader, DepartmentLeader, DivisionLeader, Fallback, 60, 61, Initiator]);
 
     [Fact]
-    public void DefaultTemplateRoutesToTheSectionLeaderAndSkipsDisabledNodes()
+    public void DirectLeaderRoutesToTheOwnOrganisationLeaderOnly()
     {
-        var plan = ApprovalPlanner.Default.Plan(
-            Template(Leader(1, ApproverSources.SectionLeader), Leader(2, ApproverSources.DepartmentLeader, enabled: false)),
-            Path(), Initiator, Everyone);
+        var plan = ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(), Initiator, Everyone);
         var node = Assert.Single(plan.Nodes);
         Assert.Equal([SectionLeader], node.Approvers);
+        Assert.Equal("装配一课", node.ScopeName);
         Assert.False(plan.RequiresNoApproval);
+
+        // An account directly under a department is approved by that department's leader.
+        var departmentMember = ApprovalPlanner.Default.Plan(Template(Leader(1)),
+            new OrgPath([new OrgLevel(2, "装配部", "DEPARTMENT", DepartmentLeader), new OrgLevel(3, "制造事业部", "DIVISION", DivisionLeader)]),
+            Initiator, Everyone);
+        Assert.Equal([DepartmentLeader], departmentMember.Nodes[0].Approvers);
     }
 
     [Fact]
-    public void LeaderInitiatorFollowsTheNodeSelfPolicy()
+    public void DirectLeaderWalksUpWhenTheOwnLeaderIsMissingOrIsTheInitiator()
     {
-        var skip = ApprovalPlanner.Default.Plan(Template(Leader(1, ApproverSources.SectionLeader, SelfPolicies.Skip)), Path(Initiator), Initiator, Everyone);
+        var missing = ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(sectionLeader: null), Initiator, Everyone);
+        Assert.Equal([DepartmentLeader], missing.Nodes[0].Approvers);
+        Assert.Equal("装配部", missing.Nodes[0].ScopeName);
+
+        var selfLed = ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(sectionLeader: Initiator, departmentLeader: null), Initiator, Everyone);
+        Assert.Equal([DivisionLeader], selfLed.Nodes[0].Approvers);
+        Assert.False(selfLed.Nodes[0].Skipped);
+    }
+
+    [Fact]
+    public void TopLeaderInitiatorFollowsTheNodeSelfPolicy()
+    {
+        var top = Path(sectionLeader: Initiator, departmentLeader: Initiator, divisionLeader: Initiator);
+        var skip = ApprovalPlanner.Default.Plan(Template(Leader(1, SelfPolicies.Skip)), top, Initiator, Everyone);
         Assert.True(skip.RequiresNoApproval);
         Assert.Equal(SkipReasons.SelfPolicySkip, skip.Nodes[0].SkipReason);
 
-        var designated = ApprovalPlanner.Default.Plan(
-            Template(Leader(1, ApproverSources.SectionLeader, SelfPolicies.Designated, true, Fallback, Initiator)), Path(Initiator), Initiator, Everyone);
+        var designated = ApprovalPlanner.Default.Plan(Template(Leader(1, SelfPolicies.Designated, true, Fallback, Initiator)), top, Initiator, Everyone);
         Assert.True(designated.Nodes[0].UsedFallback);
         Assert.Equal(ApprovalModes.Any, designated.Nodes[0].Mode);
         Assert.Equal([Fallback], designated.Nodes[0].Approvers);
 
         var blocked = Assert.Throws<ApprovalPlanningException>(() =>
-            ApprovalPlanner.Default.Plan(Template(Leader(1, ApproverSources.SectionLeader, SelfPolicies.Block)), Path(Initiator), Initiator, Everyone));
+            ApprovalPlanner.Default.Plan(Template(Leader(1, SelfPolicies.Block)), top, Initiator, Everyone));
         Assert.Contains("不允许本人发送", blocked.Message);
-
-        // A skipped leader node falls through to the next enabled node.
-        var chained = ApprovalPlanner.Default.Plan(
-            Template(Leader(1, ApproverSources.SectionLeader), Leader(2, ApproverSources.DepartmentLeader)), Path(Initiator), Initiator, Everyone);
-        Assert.True(chained.Nodes[0].Skipped);
-        Assert.Equal([DepartmentLeader], chained.Nodes[1].Approvers);
     }
 
     [Fact]
     public void MissingOrUnavailableLeadersFailWithTheOrganisationName()
     {
         var missing = Assert.Throws<ApprovalPlanningException>(() =>
-            ApprovalPlanner.Default.Plan(Template(Leader(1, ApproverSources.SectionLeader)), Path(sectionLeader: null), Initiator, Everyone));
-        Assert.Contains("装配一课未配置主管", missing.Message);
+            ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(null, null, null), Initiator, Everyone));
+        Assert.Contains("装配一课及其上级组织都未配置主管", missing.Message);
 
+        // An unavailable own leader is an error; it never silently escalates.
         var ineligible = Assert.Throws<ApprovalPlanningException>(() =>
-            ApprovalPlanner.Default.Plan(Template(Leader(1, ApproverSources.SectionLeader)), Path(), Initiator, new SetEligibility([])));
-        Assert.Contains("没有 OEM 审批权限", ineligible.Message);
-
-        var noDepartment = Assert.Throws<ApprovalPlanningException>(() =>
-            ApprovalPlanner.Default.Plan(Template(Leader(1, ApproverSources.DepartmentLeader)), Path(withDepartment: false), Initiator, Everyone));
-        Assert.Contains("部门", noDepartment.Message);
+            ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(), Initiator, new SetEligibility([DepartmentLeader])));
+        Assert.Contains("装配一课的主管账号已停用或没有 OEM 审批权限", ineligible.Message);
     }
 
     [Fact]
@@ -102,13 +110,13 @@ public sealed class OemDomainTests
     public void TheSamePersonInTwoNodesIsAConfigurationError()
     {
         var error = Assert.Throws<ApprovalPlanningException>(() => ApprovalPlanner.Default.Plan(
-            Template(Leader(1, ApproverSources.SectionLeader), Specified(2, ApprovalModes.Any, [SectionLeader])), Path(), Initiator, Everyone));
+            Template(Leader(1), Specified(2, ApprovalModes.Any, [SectionLeader])), Path(), Initiator, Everyone));
         Assert.Contains("同一审批人", error.Message);
     }
 
     [Fact]
     public void NoEnabledNodesMeansNoApproval() =>
-        Assert.True(ApprovalPlanner.Default.Plan(Template(Leader(1, ApproverSources.SectionLeader, enabled: false)), Path(), Initiator, Everyone).RequiresNoApproval);
+        Assert.True(ApprovalPlanner.Default.Plan(Template(Leader(1, enabled: false)), Path(), Initiator, Everyone).RequiresNoApproval);
 
     [Fact]
     public void TemplateSelectionPrefersTheMostSpecificOrganisation()

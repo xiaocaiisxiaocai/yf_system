@@ -25,7 +25,7 @@ export type ApprovalStatus = 'NOT_REQUIRED' | 'WAITING_FILES' | 'PENDING' | 'APP
 export type ContentPurpose = 'NONE' | 'RECIPIENT' | 'SENDER' | 'REVIEW'
 export type ActiveStatus = 'ACTIVE' | 'DISABLED'
 export type RetentionMode = 'KEEP' | 'AFTER_RELEASE' | 'AFTER_FIRST_RECEIPT' | 'FIRST_RECEIPT_OR_DEADLINE'
-export type ApproverSource = 'SECTION_LEADER' | 'DEPARTMENT_LEADER' | 'DIVISION_LEADER' | 'SPECIFIED_USERS'
+export type ApproverSource = 'DIRECT_LEADER' | 'SPECIFIED_USERS'
 export type ApprovalMode = 'SINGLE' | 'ANY' | 'ALL'
 export type SelfPolicy = 'DESIGNATED' | 'SKIP' | 'BLOCK'
 

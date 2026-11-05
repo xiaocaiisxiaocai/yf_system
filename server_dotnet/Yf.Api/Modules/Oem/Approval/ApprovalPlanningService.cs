@@ -14,7 +14,7 @@ public sealed record PlanningResult(OrgPath Path, FlowTemplateDefinition Templat
 /// </summary>
 public sealed class ApprovalPlanningService
 {
-    private const string SectionRequired = "只有归属课别的内部员工才能发送公司出站传递单";
+    private const string OrganizationRequired = "只有归属已启用组织的内部员工才能发送公司出站传递单";
 
     internal async Task<PlanningResult> PlanAsync(OemUnitOfWork uow, ulong initiatorUserId, CancellationToken ct)
     {
@@ -34,20 +34,24 @@ public sealed class ApprovalPlanningService
             .Select(item => new { item.DepartmentId, item.Status, item.UserType }).SingleOrDefaultAsync(ct);
         if (user is null || user.Status != OemStatus.Active || user.UserType != "INTERNAL")
             throw new ApprovalPlanningException("发送人账号不可用");
-        if (user.DepartmentId is not ulong departmentId) throw new ApprovalPlanningException(SectionRequired);
-        var section = await LevelAsync(uow, departmentId, "SECTION", ct) ?? throw new ApprovalPlanningException(SectionRequired);
-        var sectionParent = await uow.Db.Departments.AsNoTracking().Where(item => item.Id == section.Id).Select(item => item.ParentId).SingleAsync(ct);
-        var department = sectionParent is ulong departmentParentId ? await LevelAsync(uow, departmentParentId, "DEPARTMENT", ct) : null;
-        OrgLevel? division = null;
-        if (department is not null)
+        if (user.DepartmentId is not ulong departmentId) throw new ApprovalPlanningException(OrganizationRequired);
+        var levels = new List<OrgLevel>();
+        ulong? nextId = departmentId;
+        // The hierarchy is at most three levels deep; the guard only protects against a corrupt cycle.
+        while (nextId is ulong id && levels.Count < 8 && levels.All(level => level.Id != id))
         {
-            var divisionId = await uow.Db.Departments.AsNoTracking().Where(item => item.Id == department.Id).Select(item => item.ParentId).SingleAsync(ct);
-            if (divisionId is ulong id) division = await LevelAsync(uow, id, "DIVISION", ct);
+            var row = await uow.Db.Departments.AsNoTracking().Where(item => item.Id == id && item.Status == OemStatus.Active)
+                .Select(item => new { item.Id, item.Name, item.Kind, item.LeaderAccountId, item.ParentId })
+                .SingleOrDefaultAsync(ct);
+            if (row is null) break;
+            levels.Add(new OrgLevel(row.Id, row.Name, row.Kind, row.LeaderAccountId));
+            nextId = row.ParentId;
         }
-        return new OrgPath(section, department, division);
+        if (levels.Count == 0) throw new ApprovalPlanningException(OrganizationRequired);
+        return new OrgPath(levels);
     }
 
-    internal async Task<bool> IsSectionMemberAsync(OemUnitOfWork uow, ulong userId, CancellationToken ct)
+    internal async Task<bool> IsOrganizationMemberAsync(OemUnitOfWork uow, ulong userId, CancellationToken ct)
     {
         try
         {
@@ -106,9 +110,4 @@ public sealed class ApprovalPlanningService
                     && db.Permissions.Any(permission => permission.Id == rolePermission.PermissionId && permission.Code == OemPermissions.FlowApprove))))
             .Select(user => user.Id).ToArrayAsync(ct);
     }
-
-    private static async Task<OrgLevel?> LevelAsync(OemUnitOfWork uow, ulong id, string kind, CancellationToken ct) =>
-        await uow.Db.Departments.AsNoTracking()
-            .Where(item => item.Id == id && item.Kind == kind && item.Status == OemStatus.Active)
-            .Select(item => new OrgLevel(item.Id, item.Name, item.Kind, item.LeaderAccountId)).SingleOrDefaultAsync(ct);
 }
