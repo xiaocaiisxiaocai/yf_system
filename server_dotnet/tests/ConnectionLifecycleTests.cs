@@ -188,7 +188,7 @@ public sealed class ConnectionLifecycleTests
                 Assert.Equal("false", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='notify.enabled'"));
                 Assert.Equal("RESTORED", await conn.ExecuteScalarAsync<string>("SELECT cfg_value FROM system_configs WHERE cfg_key='oem.storage.reconcile_required'"));
                 Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_templates WHERE id=1 AND is_default=1"));
-                Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1"));
+                Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_flow_template_nodes WHERE template_id=1 AND approver_source='DIRECT_LEADER'"));
                 Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_retention_templates WHERE id=1"));
                 Assert.Equal(6, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM suppliers"));
                 Assert.Equal(40, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM robot_parts"));

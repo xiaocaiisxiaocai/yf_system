@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using Dapper;
 
 namespace Yf.Api.Tests.Oem;
@@ -97,7 +97,7 @@ public sealed class OemIdentitySessionTests
     }
 
     [Fact(Timeout = 180_000)]
-    public async Task InternalRecipientWithOnlyOemMailHistoryCannotBeDeleted()
+    public async Task InternalRecipientWithOnlyOemMailHistoryCanBeDeletedAndKeepsTheHistory()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
@@ -109,13 +109,17 @@ public sealed class OemIdentitySessionTests
             INSERT INTO email_outbox(
                 event_type,recipient_email,subject,body,status,retry_count,
                 recipient_realm,recipient_account_id)
-            VALUES('OEM_APPROVAL_PENDING','mail-history@example.invalid','OEM历史','历史','SENT',0,'internal',@userId)
+            VALUES('OEM_APPROVAL_PENDING','mail-history@example.invalid','OEM历史','历史','SENT',0,'internal',@userId),
+                  ('OEM_APPROVAL_PENDING','mail-history@example.invalid','OEM待发','待发','PENDING',0,'internal',@userId)
             """, new { userId });
 
-        await admin.DeleteAsync($"/api/v1/admin/users/{userId}", ct).Status(HttpStatusCode.BadRequest);
+        // Mail records are logs, not business references: delivered mail stays, undelivered mail is cancelled.
+        await admin.DeleteAsync($"/api/v1/admin/users/{userId}", ct).Ok();
 
-        Assert.Equal(1, await connection.ExecuteScalarAsync<int>(
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>(
             "SELECT COUNT(*) FROM users WHERE id=@userId", new { userId }));
+        Assert.Equal(["CANCELLED", "SENT"], (await connection.QueryAsync<string>(
+            "SELECT status FROM email_outbox WHERE recipient_account_id=@userId ORDER BY status", new { userId })).ToArray());
     }
 
     private sealed class RefreshState
