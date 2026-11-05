@@ -74,7 +74,7 @@ function renderDetail(startDownload: (id: number) => Promise<unknown>) {
 
 const frames = () => Array.from(document.querySelectorAll<HTMLIFrameElement>('iframe.native-download-frame'))
 
-describe('OEM 传递单下载', () => {
+describe('ODM/OEMA 传递单下载', () => {
   afterEach(() => {
     for (const frame of frames()) frame.remove()
   })

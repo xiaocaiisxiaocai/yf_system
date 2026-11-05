@@ -23,7 +23,7 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
   if (!oemPath) return null
   const lines = [
     { key: 'collaboration' as const, label: 'Robot仿真协作', short: '仿真协作', icon: <IconRobot />, path: '/' },
-    { key: 'oem' as const, label: 'ODM/OEM 文件传递', short: 'ODM/OEM', icon: <IconSwap />, path: oemPath },
+    { key: 'oem' as const, label: 'ODM/OEMA 文件传递', short: 'ODM/OEMA', icon: <IconSwap />, path: oemPath },
   ]
   const go = (line: (typeof lines)[number]) => {
     if (line.key !== active) navigate(line.path)

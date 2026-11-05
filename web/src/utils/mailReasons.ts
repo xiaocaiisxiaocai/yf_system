@@ -8,9 +8,9 @@ export const MAIL_REASON_LABELS: Record<string, string> = {
   PROJECT_RECIPIENT_UNAUTHORIZED: '收件人已无权查看该项目，通知已取消',
   RECIPIENT_ADDRESS_STALE: '收件账号或邮箱已变更，通知已取消',
   RECIPIENT_EMAIL_MISSING: '收件账号未填写邮箱，通知未入队',
-  OEM_NOTIFICATION_POLICY_DISABLED: 'OEM 邮件提醒规则已关闭该通知',
+  OEM_NOTIFICATION_POLICY_DISABLED: 'ODM/OEMA 邮件提醒规则已关闭该通知',
   OEM_RECIPIENT_UNAUTHORIZED: '收件人已无权接收该通知，通知已取消',
-  OEM_MAIL_INVALID: 'OEM 邮件缺少收件人或传递单信息',
+  OEM_MAIL_INVALID: 'ODM/OEMA 邮件缺少收件人或传递单信息',
   OEM_TRANSFER_MISSING: '传递单已不存在，通知已取消',
 }
 

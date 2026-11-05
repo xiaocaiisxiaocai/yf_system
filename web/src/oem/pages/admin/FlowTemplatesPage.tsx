@@ -39,7 +39,7 @@ function PeoplePicker({ value, onChange }: { value: Person[]; onChange: (next: P
   useLoadEffect(loadInitial)
   const known = [...value, ...options.filter((option) => !value.some((item) => item.id === option.id))]
   return (
-    <Select mode="multiple" showSearch filterOption={false} placeholder="搜索具有 OEM 审批权限的员工" value={value.map((item) => item.id)}
+    <Select mode="multiple" showSearch filterOption={false} placeholder="搜索具有 ODM/OEMA 审批权限的员工" value={value.map((item) => item.id)}
       onSearch={(keyword) => void search(keyword)}
       onChange={(ids: number[]) => onChange(ids.map((id) => known.find((item) => item.id === id)!).filter(Boolean))}
       options={known.map((item) => ({ value: item.id, label: `${item.realName ?? ''}（${item.employeeNo ?? ''}）` }))} />
@@ -273,7 +273,7 @@ export default function FlowTemplatesPage() {
               </div>
               <div>适用组织：{template.scopes.length ? template.scopes.map((scope) => scope.name).join('、') : '-'}</div>
               {template.nodes.some((node) => [...node.approvers, ...node.fallbacks].some((person) => !person.eligible)) && (
-                <Alert type="warning" style={{ marginTop: 8 }} content="有审批人已停用或失去 OEM 审批权限，相关发送会失败，请调整。" />
+                <Alert type="warning" style={{ marginTop: 8 }} content="有审批人已停用或失去 ODM/OEMA 审批权限，相关发送会失败，请调整。" />
               )}
             </Card>
           ))}

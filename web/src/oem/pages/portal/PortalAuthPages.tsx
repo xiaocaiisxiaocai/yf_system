@@ -7,7 +7,7 @@ import PasswordInput from '../../../components/PasswordInput'
 import { confirmPasswordRule, passwordRule } from '../../../utils/password'
 import { bootPortalSession, portalChangePassword, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
 
-const OEM_BRAND = 'ODM/OEM 文件传递'
+const OEM_BRAND = 'ODM/OEMA 文件传递'
 
 export function PortalLoginPage() {
   usePortalSessionSync()

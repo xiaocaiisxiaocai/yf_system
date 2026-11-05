@@ -143,7 +143,7 @@ async function openReleasedFile(page, url, fileName) {
     await record('管理员在 OEM 厂商与账号页面新增厂商和首次登录账号', async () => {
       const page = admin.page;
       await page.goto(s.base + '/oem/admin/companies');
-      await page.getByText('OEM 厂商与账号', { exact: true }).waitFor();
+      await page.getByText('ODM/OEMA 厂商与账号', { exact: true }).waitFor();
       await page.getByRole('button', { name: '新增厂商', exact: true }).click();
       let modal = visibleModal(page);
       await modal.getByLabel('厂商名称', { exact: true }).fill(companyName);
@@ -234,7 +234,7 @@ async function openReleasedFile(page, url, fileName) {
       };
 
       const shortAccount = 'oem_short_' + marker;
-      let modal = await upload(page, '导入账号', '导入 ODM/OEM 厂商账号', 'oem-short-password.xlsx',
+      let modal = await upload(page, '导入账号', '导入 ODM/OEMA 厂商账号', 'oem-short-password.xlsx',
         ['厂商名称', '账号', '初始密码'], [companyName, shortAccount, 'Ab1!']);
       await modal.getByRole('row').filter({ hasText: shortAccount }).getByText('有错误', { exact: true }).waitFor();
       assert.equal(await modal.getByRole('button', { name: '确认导入', exact: true }).isDisabled(), true,
@@ -242,7 +242,7 @@ async function openReleasedFile(page, url, fileName) {
       await modal.getByRole('button', { name: '关闭', exact: true }).click();
 
       const importedAccount = { employeeNo: 'oem_import_' + marker, password: 'T3st#A9q' };
-      modal = await upload(page, '导入账号', '导入 ODM/OEM 厂商账号', 'oem-accounts.xlsx',
+      modal = await upload(page, '导入账号', '导入 ODM/OEMA 厂商账号', 'oem-accounts.xlsx',
         ['厂商名称', '账号', '初始密码'], [companyName, importedAccount.employeeNo, importedAccount.password]);
       await modal.getByRole('row').filter({ hasText: importedAccount.employeeNo }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
@@ -256,7 +256,7 @@ async function openReleasedFile(page, url, fileName) {
       await modal.getByRole('button', { name: '关闭', exact: true }).click();
 
       const importedContact = { name: 'Excel 联络人-' + marker, email: 'excel-oem-' + marker + '@vendor.invalid' };
-      modal = await upload(page, '导入联络人', '导入 ODM/OEM 厂商联络人', 'oem-contacts.xlsx',
+      modal = await upload(page, '导入联络人', '导入 ODM/OEMA 厂商联络人', 'oem-contacts.xlsx',
         ['厂商名称', '联络人姓名', '邮箱', '排序'], [companyName, importedContact.name, importedContact.email, '3']);
       await modal.getByRole('row').filter({ hasText: importedContact.email }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
@@ -293,7 +293,7 @@ async function openReleasedFile(page, url, fileName) {
       const importedCompanyName = 'OEM Excel 厂商-' + marker;
       await toolbarMenu(page, '导入厂商');
       let modal = visibleModal(page);
-      await modal.getByText('导入 ODM/OEM 厂商资料', { exact: true }).waitFor();
+      await modal.getByText('导入 ODM/OEMA 厂商资料', { exact: true }).waitFor();
       const templateReady = page.waitForEvent('download');
       await modal.getByRole('button', { name: '下载模板', exact: true }).click();
       const template = await templateReady;
@@ -493,7 +493,7 @@ async function openReleasedFile(page, url, fileName) {
         const url = new URL(r.url());
         return url.pathname === '/api/v1/oem/transfers' && url.searchParams.get('direction') === 'OEM_TO_INTERNAL';
       });
-      await page.getByText('OEM 发来', { exact: true }).click();
+      await page.getByText('ODM/OEMA 发来', { exact: true }).click();
       assert.equal((await filtered).status(), 200);
       const link = page.getByRole('link', { name: inboundName, exact: true });
       await link.waitFor();

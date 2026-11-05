@@ -30,7 +30,7 @@ export default function OemMailRulesPanel({ api }: { api: Pick<OemApi, 'settings
     setLoading(true)
     setError('')
     try { const rows = await api.settings('notify'); if (isLatest()) apply(rows) }
-    catch { if (isLatest()) setError('OEM 邮件提醒规则加载失败，请重试') }
+    catch { if (isLatest()) setError('ODM/OEMA 邮件提醒规则加载失败，请重试') }
     finally { if (isLatest()) setLoading(false) }
   }, [api, beginRequest, apply])
   useLoadEffect(load)
@@ -43,16 +43,16 @@ export default function OemMailRulesPanel({ api }: { api: Pick<OemApi, 'settings
       const rows = await api.updateSettings('notify', changed.map(item => ({ key: item.key, value: values[item.key] })))
       apply(rows)
       setError('')
-      Message.success('OEM 邮件提醒规则已保存')
-    } catch { setError('OEM 邮件提醒规则保存失败，修改已保留，请重试') }
+      Message.success('ODM/OEMA 邮件提醒规则已保存')
+    } catch { setError('ODM/OEMA 邮件提醒规则保存失败，修改已保留，请重试') }
     finally { inFlight.current = false; setSaving(false) }
   }
   const disabled = loading || saving || !items.length
   const readOnly = (key: string) => disabled || Boolean(items.find(item => item.key === key)?.readOnly)
   return <div className="system-notification-settings oem-mail-rules">
     <div className="system-notification-heading">
-      <Typography.Text type="secondary">与 Robot 共用系统 SMTP，以下开关只控制 ODM/OEM 邮件。</Typography.Text>
-      <Space><Typography.Text>OEM 邮件通知总开关</Typography.Text><Switch aria-label="OEM 邮件通知总开关" disabled={readOnly(MASTER)} checked={values[MASTER] === 'true'} onChange={checked => setValues(previous => ({ ...previous, [MASTER]: String(checked) }))} /></Space>
+      <Typography.Text type="secondary">与 Robot 共用系统 SMTP，以下开关只控制 ODM/OEMA 邮件。</Typography.Text>
+      <Space><Typography.Text>ODM/OEMA 邮件通知总开关</Typography.Text><Switch aria-label="ODM/OEMA 邮件通知总开关" disabled={readOnly(MASTER)} checked={values[MASTER] === 'true'} onChange={checked => setValues(previous => ({ ...previous, [MASTER]: String(checked) }))} /></Space>
     </div>
     {error && <Alert type="error" content={error} action={<Button size="small" disabled={saving} onClick={() => void load()}>重新加载</Button>} />}
     <div className="system-notification-grid oem-mail-rules-grid">
@@ -63,6 +63,6 @@ export default function OemMailRulesPanel({ api }: { api: Pick<OemApi, 'settings
         </div>
       </div>)}
     </div>
-    <Space wrap><Button type="primary" size="small" loading={saving} disabled={disabled || !changed.length} onClick={() => void save()}>保存 OEM 邮件提醒</Button><Button size="small" disabled={disabled || !changed.length} onClick={() => setValues(Object.fromEntries(items.map(item => [item.key, item.value])))}>取消修改</Button><Typography.Text type="secondary">独立于 Robot 总开关；已入队邮件发送前会重新核对规则和联络人邮箱。</Typography.Text></Space>
+    <Space wrap><Button type="primary" size="small" loading={saving} disabled={disabled || !changed.length} onClick={() => void save()}>保存 ODM/OEMA 邮件提醒</Button><Button size="small" disabled={disabled || !changed.length} onClick={() => setValues(Object.fromEntries(items.map(item => [item.key, item.value])))}>取消修改</Button><Typography.Text type="secondary">独立于 Robot 总开关；已入队邮件发送前会重新核对规则和联络人邮箱。</Typography.Text></Space>
   </div>
 }

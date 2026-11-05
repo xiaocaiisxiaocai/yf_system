@@ -157,8 +157,8 @@ const captured = async () => {
       const oemToggle = page.getByRole('switch', { name: '文件送达提醒', exact: true });
       const target = oemStart.value !== 'true';
       if ((await oemToggle.getAttribute('aria-checked')) !== String(target)) await oemToggle.click();
-      await page.getByRole('button', { name: '保存 OEM 邮件提醒', exact: true }).click();
-      await page.getByText('OEM 邮件提醒规则已保存', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '保存 ODM/OEMA 邮件提醒', exact: true }).click();
+      await page.getByText('ODM/OEMA 邮件提醒规则已保存', { exact: true }).waitFor();
       const oemSaved = await read('GET', '/oem/notify-policies');
       assert.equal(oemSaved.find(item => item.key === oemStart.key).value, String(target));
       assert.equal((await readConfigs())['notify.event.project_started'], String(robotProjectStart),
@@ -173,8 +173,8 @@ const captured = async () => {
         .evaluate(element => element.click());
       const restoreOem = page.getByRole('switch', { name: '文件送达提醒', exact: true });
       if ((await restoreOem.getAttribute('aria-checked')) !== String(oemStart.value === 'true')) await restoreOem.click();
-      await page.getByRole('button', { name: '保存 OEM 邮件提醒', exact: true }).click();
-      await page.getByText('OEM 邮件提醒规则已保存', { exact: true }).waitFor();
+      await page.getByRole('button', { name: '保存 ODM/OEMA 邮件提醒', exact: true }).click();
+      await page.getByText('ODM/OEMA 邮件提醒规则已保存', { exact: true }).waitFor();
       assert.deepEqual(await read('GET', '/oem/notify-policies'), originalOem);
     });
 
@@ -191,7 +191,7 @@ const captured = async () => {
       const scope = page.getByRole('combobox', { name: '邮件日志业务', exact: true });
       await scope.click();
       await page.getByRole('option', { name: 'ODM/OEM', exact: true }).click();
-      await page.getByRole('button', { name: 'OEM 日志', exact: true }).waitFor();
+      await page.getByRole('button', { name: 'ODM/OEMA 日志', exact: true }).waitFor();
       await scope.click();
       await page.getByRole('option', { name: 'Robot 仿真协作', exact: true }).click();
       await page.getByRole('button', { name: '全部日志', exact: true }).waitFor();

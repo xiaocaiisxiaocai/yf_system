@@ -52,7 +52,7 @@ function renderUploader(api: Partial<OemApi>) {
   )
 }
 
-describe('OEM 上传队列的中止与失效会话', () => {
+describe('ODM/OEMA 上传队列的中止与失效会话', () => {
   beforeEach(() => {
     hashMocks.fileMd5.mockResolvedValue('md5')
   })
@@ -124,7 +124,7 @@ describe('OEM 上传队列的中止与失效会话', () => {
   })
 })
 
-describe('OEM 传递单详情加载失败', () => {
+describe('ODM/OEMA 传递单详情加载失败', () => {
   it('非 404 错误显示可重试的错误页而不是无限加载', async () => {
     const user = userEvent.setup()
     const loaded: TransferDetail = {
@@ -160,7 +160,7 @@ describe('OEM 传递单详情加载失败', () => {
   })
 })
 
-describe('OEM 厂商门户登录页跳转', () => {
+describe('ODM/OEMA 厂商门户登录页跳转', () => {
   const account = { id: 31, employeeNo: 'OEM31', companyId: 9, companyName: '测试代工厂' }
 
   afterEach(() => {
@@ -183,7 +183,7 @@ describe('OEM 厂商门户登录页跳转', () => {
     usePortalAuth.setState({ token: null, account: null, mustChangePassword: false, booted: true, generation: 0 })
     renderPortal('/oem-portal/change-password')
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent('/oem-portal/login'))
-    expect(screen.getByLabelText('SAA ODM/OEM 文件传递')).toBeInTheDocument()
+    expect(screen.getByLabelText('SAA ODM/OEMA 文件传递')).toBeInTheDocument()
   })
 
   it('已登录用户访问登录页时直接进入门户', async () => {
@@ -204,7 +204,7 @@ describe('OEM 厂商门户登录页跳转', () => {
   })
 })
 
-describe('OEM 管理列表的过期响应', () => {
+describe('ODM/OEMA 管理列表的过期响应', () => {
   function company(id: number, name: string): Company {
     return {
       id, name, remark: null, status: 'ACTIVE',

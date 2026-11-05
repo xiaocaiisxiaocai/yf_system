@@ -193,7 +193,7 @@ export function usePortalSessionSync(): void {
 portalHttp.interceptors.request.use((config) => {
   const sessionConfig = config as PortalSessionConfig
   sessionConfig.authGeneration ??= usePortalAuth.getState().generation
-  if (!isCurrentSession(sessionConfig)) throw new Error('OEM 登录状态已变化，请重新操作')
+  if (!isCurrentSession(sessionConfig)) throw new Error('ODM/OEMA 登录状态已变化，请重新操作')
   const token = usePortalAuth.getState().token
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
@@ -201,7 +201,7 @@ portalHttp.interceptors.request.use((config) => {
 
 portalHttp.interceptors.response.use(
   (response) => {
-    if (!isCurrentSession(response.config as PortalSessionConfig)) throw new Error('OEM 登录状态已变化，请重新操作')
+    if (!isCurrentSession(response.config as PortalSessionConfig)) throw new Error('ODM/OEMA 登录状态已变化，请重新操作')
     return response
   },
   async (error: AxiosError<{ code?: number; message?: string }>) => {
@@ -245,7 +245,7 @@ export async function portalLogin(employeeNo: string, password: string): Promise
     const response = await portalHttp.post<ApiResponses['POST /oem/auth/login']>('/oem/auth/login', { employeeNo, password }, { withCredentials: true })
     if (typeof response.data?.accessToken !== 'string'
       || !isPortalAccount(response.data?.account)
-      || typeof response.data?.mustChangePassword !== 'boolean') throw new Error('OEM 登录响应格式无效')
+      || typeof response.data?.mustChangePassword !== 'boolean') throw new Error('ODM/OEMA 登录响应格式无效')
     usePortalAuth.getState().setLogin(response.data.accessToken, response.data.account, response.data.mustChangePassword)
     return response.data.mustChangePassword
   })

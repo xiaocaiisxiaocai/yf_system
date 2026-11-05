@@ -98,7 +98,7 @@ async function openAccounts(user: ReturnType<typeof userEvent.setup>) {
   return document.querySelector<HTMLElement>('.oem-accounts-drawer')!
 }
 
-describe('OEM 厂商与账号目录', () => {
+describe('ODM/OEMA 厂商与账号目录', () => {
   it('厂商列表和编辑资料与 Robot 一致，仅显示名称、状态、创建时间和操作', async () => {
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
@@ -113,7 +113,7 @@ describe('OEM 厂商与账号目录', () => {
     expect(within(dialog).queryByLabelText('联系电话')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('联系邮箱')).not.toBeInTheDocument()
   })
-  it('账号和联络人 Excel 批量入口位于 ODM/OEM 厂商总表页', async () => {
+  it('账号和联络人 Excel 批量入口位于 ODM/OEMA 厂商总表页', async () => {
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
 
     const user = userEvent.setup()
@@ -126,7 +126,7 @@ describe('OEM 厂商与账号目录', () => {
     expect(screen.getByRole('menuitem', { name: '导出联络人' })).toBeVisible()
   })
 
-  it('ODM/OEM账号导出不包含姓名、邮箱或任何密码列', async () => {
+  it('ODM/OEMA账号导出不包含姓名、邮箱或任何密码列', async () => {
     vi.mocked(downloadExcelWorkbook).mockClear()
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
@@ -146,7 +146,7 @@ describe('OEM 厂商与账号目录', () => {
     expect(sheets[0].headers).not.toContain('初始密码')
   })
 
-  it('共用 OEM 登录账号不显示或要求填写联系人姓名和邮箱', async () => {
+  it('共用 ODM/OEMA 登录账号不显示或要求填写联系人姓名和邮箱', async () => {
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:account_manage'])
     const drawer = await openAccounts(user)

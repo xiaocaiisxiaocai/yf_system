@@ -93,7 +93,7 @@ describe('native authenticated downloads', () => {
     expect(frames()).toHaveLength(1)
   })
 
-  describe('OEM 下载授权', () => {
+  describe('ODM/OEMA 下载授权', () => {
     it('只接受该文件自己的下载路径，并经隐藏 iframe 下载而不是整页导航', () => {
       startOemDownload('/api/v1/oem/files/301/download', 301)
 
@@ -102,7 +102,7 @@ describe('native authenticated downloads', () => {
       expect(frame.hidden).toBe(true)
     })
 
-    it('OEM 下载失败的 JSON 错误页只提示原因，不跳转页面', () => {
+    it('ODM/OEMA 下载失败的 JSON 错误页只提示原因，不跳转页面', () => {
       startOemDownload('/api/v1/oem/files/301/download', 301)
       const [frame] = frames()
       const before = window.location.href

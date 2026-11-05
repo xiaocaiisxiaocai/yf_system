@@ -229,11 +229,11 @@ export function normalizeMailStatus(value: unknown): MailStatus {
 }
 
 export const MAIL_ACTION_LABELS: Record<string, string> = {
-  OEM_EMAIL_SENT: 'OEM 发送成功',
-  OEM_EMAIL_FAILED: 'OEM 发送失败',
-  OEM_EMAIL_RETRY: 'OEM 发送重试',
-  OEM_EMAIL_CANCELLED_STALE: 'OEM 通知已取消',
-  OEM_EMAIL_SKIPPED_MISSING_EMAIL: 'OEM 未入队：缺少邮箱',
+  OEM_EMAIL_SENT: 'ODM/OEMA 发送成功',
+  OEM_EMAIL_FAILED: 'ODM/OEMA 发送失败',
+  OEM_EMAIL_RETRY: 'ODM/OEMA 发送重试',
+  OEM_EMAIL_CANCELLED_STALE: 'ODM/OEMA 通知已取消',
+  OEM_EMAIL_SKIPPED_MISSING_EMAIL: 'ODM/OEMA 未入队：缺少邮箱',
   EMAIL_TEST_STARTED: '测试邮件：开始发送',
   EMAIL_TEST_SENT: '测试邮件：服务器已接受',
   EMAIL_TEST_FAILED: '测试邮件：发送失败',

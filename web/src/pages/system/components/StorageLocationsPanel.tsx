@@ -198,7 +198,7 @@ export default function StorageLocationsPanel() {
               新目录须为空，并已授予 IIS 应用池账号读写权限。迁移期间系统照常使用；全部文件复制校验完成后，将自动删除原目录中已迁移的文件。
             </Typography.Text>
           ) : editing?.kind === 'OEM' ? (
-            <Typography.Text type="secondary">首次设置 OEM 文件存储需重启站点后生效。</Typography.Text>
+            <Typography.Text type="secondary">首次设置 ODM/OEMA 文件存储需重启站点后生效。</Typography.Text>
           ) : null}
         </Space>
       </Modal>

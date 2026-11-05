@@ -110,7 +110,7 @@ function renderOem(element: ReactNode, api: Partial<OemApi>, permissions: string
   return { client, ...view }
 }
 
-describe('OEM 列表加载失败', () => {
+describe('ODM/OEMA 列表加载失败', () => {
   it('传递单列表失败可重试，背景失败保留已有行', async () => {
     const user = userEvent.setup()
     const kept = summary('保留的传递单')

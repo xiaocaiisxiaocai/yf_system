@@ -96,7 +96,7 @@ function renderDetail(api: Partial<OemApi>) {
   )
 }
 
-describe('OEM 终止与改派', () => {
+describe('ODM/OEMA 终止与改派', () => {
   it('同步连点终止只提交一次', async () => {
     let resolveCancel!: (value: TransferDetail) => void
     const cancel = vi.fn().mockImplementation(() => new Promise<TransferDetail>((resolve) => { resolveCancel = resolve }))

@@ -31,7 +31,7 @@ afterEach(() => {
   portalQueryClient.clear()
 })
 
-describe('OEM 厂商会话缓存隔离', () => {
+describe('ODM/OEMA 厂商会话缓存隔离', () => {
   it('账号切换和退出会清空门户缓存，刷新同一会话则保留缓存', () => {
     portalQueryClient.setQueryData(['oem', 'transfers'], ['old-account-data'])
     usePortalAuth.getState().setLogin('token-1', account, false)
@@ -51,7 +51,7 @@ describe('OEM 厂商会话缓存隔离', () => {
     expect(portalQueryClient.getQueryData(['oem', 'transfers'])).toBeUndefined()
   })
 
-  it('其他标签退出后同步清除当前 OEM 门户会话', () => {
+  it('其他标签退出后同步清除当前 ODM/OEMA 门户会话', () => {
     usePortalAuth.getState().setLogin('token-1', account, false)
     renderHook(() => usePortalSessionSync())
 
@@ -84,7 +84,7 @@ function httpError(config: InternalAxiosRequestConfig, status: number, data: unk
   })
 }
 
-describe('OEM 门户 HTTP 拦截器', () => {
+describe('ODM/OEMA 门户 HTTP 拦截器', () => {
   beforeEach(() => {
     usePortalAuth.setState({
       token: 'old-token',

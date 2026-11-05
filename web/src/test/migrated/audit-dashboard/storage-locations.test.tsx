@@ -19,7 +19,7 @@ function location(overrides: Record<string, unknown>) {
 
 const idle = [
   location({}),
-  location({ kind: 'OEM', label: 'OEM 文件存储', path: '', freeBytes: null }),
+  location({ kind: 'ODM/OEMA', label: 'ODM/OEMA 文件存储', path: '', freeBytes: null }),
   location({ kind: 'LOG', label: '日志目录', path: 'D:\\YfData\\logs' }),
 ]
 
@@ -44,7 +44,7 @@ describe('StorageLocationsPanel', () => {
 
     const row = (await screen.findByText('协作文件存储')).closest('tr')!
     expect(within(row).getByText('正常')).toBeInTheDocument()
-    expect(within(screen.getByText('OEM 文件存储').closest('tr')!).getByText('未配置')).toBeInTheDocument()
+    expect(within(screen.getByText('ODM/OEMA 文件存储').closest('tr')!).getByText('未配置')).toBeInTheDocument()
     await user.click(within(row).getByRole('button', { name: '更换路径' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByRole('button', { name: '开始迁移' })).toBeDisabled()

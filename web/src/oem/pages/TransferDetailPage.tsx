@@ -208,7 +208,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
         cancelButtonProps={{ disabled: reassignSaving }}
         onCancel={() => { if (!reassignSaving) setReassigning(null) }} onOk={submitReassign} unmountOnExit>
         <Space direction="vertical" style={{ width: '100%' }}>
-          <Select showSearch placeholder="搜索具有 OEM 审批权限的员工" value={target} onChange={setTarget} filterOption={false}
+          <Select showSearch placeholder="搜索具有 ODM/OEMA 审批权限的员工" value={target} onChange={setTarget} filterOption={false}
             onSearch={(value) => void searchCandidates(value)}
             options={candidates.map((item) => ({ value: item.id, label: `${item.realName}（${item.employeeNo}）` }))} />
           <Input.TextArea placeholder="改派原因（必填）" value={reason} onChange={setReason} maxLength={512} />

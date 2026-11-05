@@ -57,7 +57,7 @@ afterEach(() => {
   window.localStorage.clear()
 })
 
-describe('A. OEM 分片 SHA-256 摘要', () => {
+describe('A. ODM/OEMA 分片 SHA-256 摘要', () => {
   beforeEach(() => { hashMocks.fileMd5.mockResolvedValue('md5') })
 
   it('OemApi.putChunk 发送 X-Chunk-SHA256 请求头', async () => {
@@ -224,7 +224,7 @@ describe('C. 自动重试期间不重复提示', () => {
   })
 })
 
-describe('D. OEM 预览带水印', () => {
+describe('D. ODM/OEMA 预览带水印', () => {
   const file = (ext: string): TransferFile => ({ id: 88, originalName: `图纸.${ext}`, ext, sizeBytes: 3 } as TransferFile)
 
   it('门户图片在页内预览并显示当前厂商账号水印', async () => {
@@ -242,7 +242,7 @@ describe('D. OEM 预览带水印', () => {
     view.unmount()
   })
 
-  it('PDF 预览通过 OEM 内容接口取数并叠加水印', async () => {
+  it('PDF 预览通过 ODM/OEMA 内容接口取数并叠加水印', async () => {
     usePortalAuth.setState({ account, token: 't' })
     const previewBlob = vi.fn().mockResolvedValue(new Blob(['%PDF']))
     render(<OemProvider value={context({ previewBlob }, 'oem')}><OemFilePreview file={file('pdf')} onClose={() => undefined} /></OemProvider>)

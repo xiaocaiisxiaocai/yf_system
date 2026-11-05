@@ -66,7 +66,7 @@ async function chooseOption(user: ReturnType<typeof userEvent.setup>, current: s
   fireEvent.click(await screen.findByRole('option', { name: option }))
 }
 
-describe('OEM 审批模板', () => {
+describe('ODM/OEMA 审批模板', () => {
   it('新建时非指定人员强制单人审批，且不带备用审批人', async () => {
     const user = userEvent.setup()
     const createFlowTemplate = vi.fn().mockResolvedValue(template())

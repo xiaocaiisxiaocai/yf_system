@@ -43,8 +43,8 @@ export const PAYLOAD: Record<PayloadStatus, [string, TagColor]> = {
 }
 
 export const DIRECTION_LABEL: Record<Direction, string> = {
-  INTERNAL_TO_OEM: '公司 → OEM',
-  OEM_TO_INTERNAL: 'OEM → 公司',
+  INTERNAL_TO_OEM: '公司 → ODM/OEMA',
+  OEM_TO_INTERNAL: 'ODM/OEMA → 公司',
 }
 
 /** List filter groups; a comma-separated value matches any of its lifecycle states. */

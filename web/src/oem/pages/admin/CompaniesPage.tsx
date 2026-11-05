@@ -137,7 +137,7 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
   return (
     <Drawer width="min(920px, 100vw)" title={`联络人 · ${company?.name ?? ''}`} visible={!!company}
       onCancel={onClose} footer={null} unmountOnExit>
-      {!can.manageCompanies ? <span>当前账号没有 OEM 厂商管理权限。</span> : <>
+      {!can.manageCompanies ? <span>当前账号没有 ODM/OEMA 厂商管理权限。</span> : <>
         {failed && <Alert type="error" style={{ marginBottom: 12 }} content="联络人列表加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
         <div className="drawer-toolbar responsive-toolbar">
           <Typography.Text type="secondary">共 {rows.length} 位联络人</Typography.Text>
@@ -366,7 +366,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
               />
 
         </>
-      ) : <span>当前账号没有 OEM 账号管理权限。</span>}
+      ) : <span>当前账号没有 ODM/OEMA 账号管理权限。</span>}
       <Modal
         className="form-dialog"
         title="新增账号"
@@ -487,7 +487,7 @@ export default function CompaniesPage() {
       const initialPassword = row.values['初始密码'] ?? ''
       const key = employeeNo || `第 ${row.rowNumber} 行`
       const detail = companyName
-      if (!company) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: 'ODM/OEM 厂商不存在，请先建立厂商资料' }
+      if (!company) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: 'ODM/OEMA 厂商不存在，请先建立厂商资料' }
       if (company.status !== 'ACTIVE') return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '厂商已停用，不能新增账号' }
       if (employeeNo && (sourceCounts.get(employeeNo.toUpperCase()) ?? 0) > 1)
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '文件内账号重复，本重复组未导入' }
@@ -545,7 +545,7 @@ export default function CompaniesPage() {
       const sortText = row.values['排序']?.trim() ?? ''
       const key = name || `第 ${row.rowNumber} 行`
       const detail = [companyName, email].filter(Boolean).join(' · ')
-      if (!company) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: 'ODM/OEM 厂商不存在，请先建立厂商资料' }
+      if (!company) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: 'ODM/OEMA 厂商不存在，请先建立厂商资料' }
       if (company.status !== 'ACTIVE') return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '厂商已停用，不能新增联络人' }
       const contactKey = `${company.id}:${name.toLowerCase()}`
       if (name && (counts.get(contactKey) ?? 0) > 1)
@@ -598,7 +598,7 @@ export default function CompaniesPage() {
       ])
       Message.success(`已导出 ${data.length} 个账号；导出文件不含密码`)
     } catch (error) {
-      Message.error(oemRequestError(error, 'ODM/OEM账号导出失败'))
+      Message.error(oemRequestError(error, 'ODM/OEMA账号导出失败'))
     } finally {
       setAccountExporting(false)
     }
@@ -621,7 +621,7 @@ export default function CompaniesPage() {
       ])
       Message.success(`已导出 ${data.length} 位联络人`)
     } catch (error) {
-      Message.error(oemRequestError(error, 'ODM/OEM联络人导出失败'))
+      Message.error(oemRequestError(error, 'ODM/OEMA联络人导出失败'))
     } finally {
       setContactExporting(false)
     }
@@ -630,7 +630,7 @@ export default function CompaniesPage() {
   const companyTemplateSheets: ExcelWorkbookSheet[] = [
     { name: '数据', headers: [...OEM_COMPANY_IMPORT_HEADERS], rows: [] },
     { name: '说明', headers: ['说明'], rows: [
-      ['本模板仅新增 ODM/OEM 厂商资料；已存在的厂商名称会跳过，不覆盖现有资料。'],
+      ['本模板仅新增 ODM/OEMA 厂商资料；已存在的厂商名称会跳过，不覆盖现有资料。'],
         ['“状态”、账号数和联络人数为只读信息，不参与导入。新建厂商默认为启用。'],
     ] },
   ]
@@ -807,7 +807,7 @@ export default function CompaniesPage() {
 
   return (
     <Card className="page-card page-card--table">
-      <h1 className="visually-hidden">OEM 厂商与账号</h1>
+      <h1 className="visually-hidden">ODM/OEMA 厂商与账号</h1>
       <div className="page-toolbar responsive-toolbar">
         <Space>
           <Input.Search allowClear placeholder="厂商名称" style={{ width: 260 }} onSearch={(value) => { setKeyword(value); setPage(1) }} onClear={() => { setKeyword(''); setPage(1) }} />
@@ -848,7 +848,7 @@ export default function CompaniesPage() {
 
       <ExcelImportDialog<OemCompanyImportPayload>
         visible={importOpen}
-        title="导入 ODM/OEM 厂商资料"
+        title="导入 ODM/OEMA 厂商资料"
         templateName="ODM-OEM厂商导入模板.xlsx"
         requiredHeaders={OEM_COMPANY_IMPORT_HEADERS}
         optionalHeaders={['状态', '账号数', '启用账号数', '联络人']}
@@ -861,7 +861,7 @@ export default function CompaniesPage() {
       />
       <ExcelImportDialog<OemAccountImportPayload>
         visible={accountImportOpen}
-        title="导入 ODM/OEM 厂商账号"
+        title="导入 ODM/OEMA 厂商账号"
         templateName="ODM-OEM账号导入模板.xlsx"
         requiredHeaders={OEM_ACCOUNT_IMPORT_HEADERS}
         optionalHeaders={OEM_ACCOUNT_EXPORT_HEADERS}
@@ -874,7 +874,7 @@ export default function CompaniesPage() {
       />
       <ExcelImportDialog<OemContactImportPayload>
         visible={contactImportOpen}
-        title="导入 ODM/OEM 厂商联络人"
+        title="导入 ODM/OEMA 厂商联络人"
         templateName="ODM-OEM联络人导入模板.xlsx"
         requiredHeaders={OEM_CONTACT_IMPORT_HEADERS}
         optionalHeaders={OEM_CONTACT_EXPORT_HEADERS}

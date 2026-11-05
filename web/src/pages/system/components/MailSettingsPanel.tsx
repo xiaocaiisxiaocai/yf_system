@@ -72,7 +72,7 @@ export function renderMailSettingsPanel({
 
   if (view === 'rules') return (
     <Card className="page-card system-mail-card system-reminder-card" title="邮件提醒规则"
-      extra={oemRules && <Radio.Group type="button" aria-label="邮件提醒业务" value={rulesBusiness} onChange={onRulesBusinessChange}><Radio value="robot">Robot 仿真协作</Radio><Radio value="oem">ODM/OEM</Radio></Radio.Group>}>
+      extra={oemRules && <Radio.Group type="button" aria-label="邮件提醒业务" value={rulesBusiness} onChange={onRulesBusinessChange}><Radio value="robot">Robot 仿真协作</Radio><Radio value="oem">ODM/OEMA</Radio></Radio.Group>}>
       <div className="system-rule-business-pane" hidden={Boolean(oemRules) && rulesBusiness === 'oem'}>
         <div className="system-notification-settings">
           <div className="system-notification-heading">

@@ -26,7 +26,7 @@ function renderWithOem(element: React.ReactNode, api: Partial<OemApi>, permissio
   )
 }
 
-describe('OEM 文件校验界面', () => {
+describe('ODM/OEMA 文件校验界面', () => {
   it('设置页显示文件与压缩结构规则，并过滤旧病毒扫描参数', async () => {
     const settings: SettingItem[] = [
       {

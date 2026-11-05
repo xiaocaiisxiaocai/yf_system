@@ -113,7 +113,7 @@ async function choose(dialog: HTMLElement, user: ReturnType<typeof userEvent.set
   await waitFor(() => expect(within(dialog).getByRole('button', { name: '提交审批' })).toBeEnabled())
 }
 
-describe('OEM 一键发送文件', () => {
+describe('ODM/OEMA 一键发送文件', () => {
   beforeEach(() => {
     hashMocks.fileMd5.mockResolvedValue('md5')
   })
@@ -135,7 +135,7 @@ describe('OEM 一键发送文件', () => {
     await user.click(within(dialog).getByRole('combobox'))
     const option = await screen.findByRole('option', { name: /甲厂.*该厂商没有启用的登录账号/ })
     expect(option).toHaveClass('arco-select-option-disabled')
-    expect(await within(dialog).findByText('至少需要一个启用的 OEM 登录账号才能发送。')).toBeInTheDocument()
+    expect(await within(dialog).findByText('至少需要一个启用的 ODM/OEMA 登录账号才能发送。')).toBeInTheDocument()
   })
 
   it('所有厂商都没有启用账号时阻止提交', async () => {
@@ -152,7 +152,7 @@ describe('OEM 一键发送文件', () => {
     const dialog = await screen.findByRole('dialog')
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '阻止.pdf'))
     const submit = within(dialog).getByRole('button', { name: '提交审批' })
-    expect(await within(dialog).findByText('当前没有可接收的 OEM 厂商，请先新增或启用至少一个 OEM 登录账号后再发送。')).toBeInTheDocument()
+    expect(await within(dialog).findByText('当前没有可接收的 ODM/OEMA 厂商，请先新增或启用至少一个 ODM/OEMA 登录账号后再发送。')).toBeInTheDocument()
     expect(submit).toBeDisabled()
     expect(api.createTransfer).not.toHaveBeenCalled()
   })
@@ -224,7 +224,7 @@ describe('OEM 一键发送文件', () => {
     expect(api.send).toHaveBeenCalledTimes(1)
   })
 
-  it('OEM 回传无需选择厂商，发送结果未知时先查状态并避免重复发送', async () => {
+  it('ODM/OEMA 回传无需选择厂商，发送结果未知时先查状态并避免重复发送', async () => {
     const user = userEvent.setup()
     const inboundDraft = detail(52, 'DRAFT', 3)
     inboundDraft.summary.direction = 'OEM_TO_INTERNAL'
@@ -243,7 +243,7 @@ describe('OEM 一键发送文件', () => {
 
     await user.click(await screen.findByRole('button', { name: '发送文件' }))
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).queryByText('目标 OEM 厂商')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('目标 ODM/OEMA 厂商')).not.toBeInTheDocument()
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
 
@@ -373,7 +373,7 @@ describe('OEM 一键发送文件', () => {
 
     await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
 
-    expect(await within(dialog).findByText('目标 OEM 厂商加载失败：厂商服务暂不可用')).toBeInTheDocument()
+    expect(await within(dialog).findByText('目标 ODM/OEMA 厂商加载失败：厂商服务暂不可用')).toBeInTheDocument()
     expect(within(dialog).getAllByText(/厂商服务暂不可用/)).toHaveLength(1)
     // The chosen vendor keeps its name instead of collapsing to a bare id.
     // Scope to the select's rendered value: the option list may still be closing and contain the same text.

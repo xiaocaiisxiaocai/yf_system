@@ -81,7 +81,7 @@ const internalApi = new OemApi(http)
 export function OemLanding() {
   const permissions = useAuth((state) => state.permissions)
   const home = oemHome(permissions)
-  return home ? <Navigate to={home} replace /> : <Result status="403" title="没有可用的 OEM 功能" />
+  return home ? <Navigate to={home} replace /> : <Result status="403" title="没有可用的 ODM/OEMA 功能" />
 }
 
 /**
@@ -95,7 +95,7 @@ export function OemInternalLayout() {
   const navigate = useNavigate()
   const set = useMemo(() => new Set(permissions), [permissions])
   const has = (code: string) => set.has(code)
-  if (user?.userType !== 'INTERNAL') return <Result status="403" title="OEM 内部入口仅供公司员工使用" />
+  if (user?.userType !== 'INTERNAL') return <Result status="403" title="ODM/OEMA 内部入口仅供公司员工使用" />
   const menu: MenuEntry[] = [
     { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: has('oem:transfer_create') || has('oem:transfer_view') },
     { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: has('oem:flow_approve') || has('oem:approval_recover') },
@@ -103,10 +103,10 @@ export function OemInternalLayout() {
     { path: '/oem/admin/settings', label: '设置', icon: <IconSettings />, visible: OEM_SETTINGS_PERMISSIONS.some(has), admin: true },
     { path: '/oem/admin/audit', label: '审计日志', icon: <IconHistory />, visible: has('oem:audit_view'), admin: true },
   ]
-  if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 ODM/OEM 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
+  if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 ODM/OEMA 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
   return (
     <OemProvider value={{ api: internalApi, realm: 'internal', base: '/oem', permissions: set, userId: user?.id ?? null, queryScope: ['internal', ...sessionScope] }}>
-      <Shell title="ODM/OEM 文件传递" menu={menu} line="oem" account={<AccountMenu />} />
+      <Shell title="ODM/OEMA 文件传递" menu={menu} line="oem" account={<AccountMenu />} />
     </OemProvider>
   )
 }
@@ -139,7 +139,7 @@ export function PortalLayout() {
   return (
     <QueryClientProvider client={portalQueryClient}>
       <OemProvider value={oemValue}>
-        <Shell title="ODM/OEM 文件传递" subtitle={account?.companyName} menu={[
+        <Shell title="ODM/OEMA 文件传递" subtitle={account?.companyName} menu={[
           { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
         ]} account={
           <Dropdown trigger="click" droplist={

@@ -8,8 +8,8 @@ import { useLatestRequest, useLoadEffect } from '../../../oem/useLoadEffect'
 import { MAIL_ACTION_LABELS, mailRecentSummary, normalizeMailStatus, type MailStatus, type MailRecent } from './systemConfigModel'
 
 type Scope = 'collaboration' | 'oem' | 'all'
-const LABELS = { collaboration: 'Robot 仿真协作', oem: 'ODM/OEM', all: '全部业务' }
-const QUEUE_LABELS = { collaboration: 'Robot 业务通知队列', oem: 'ODM/OEM 业务通知队列', all: '全部业务通知队列' }
+const LABELS = { collaboration: 'Robot 仿真协作', oem: 'ODM/OEMA', all: '全部业务' }
+const QUEUE_LABELS = { collaboration: 'Robot 业务通知队列', oem: 'ODM/OEMA 业务通知队列', all: '全部业务通知队列' }
 
 export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onViewLogs }: {
   mail: MailStatus; formatTime: (value?: string | null) => string; onRefresh?: () => Promise<void>; onViewLogs: () => void
@@ -43,7 +43,7 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
     </Select>}
     <Button size="small" loading={loading} onClick={() => void (visibleScope === 'collaboration' ? onRefresh?.() : load())?.catch(() => undefined)}>刷新</Button>
     {visibleScope !== 'oem' && <Button size="small" onClick={onViewLogs}>{visibleScope === 'all' ? 'Robot 日志' : '全部日志'}</Button>}
-    {visibleScope !== 'collaboration' && canViewOemLogs && <Button size="small" onClick={() => navigate('/oem/admin/audit')}>OEM 日志</Button>}
+    {visibleScope !== 'collaboration' && canViewOemLogs && <Button size="small" onClick={() => navigate('/oem/admin/audit')}>ODM/OEMA 日志</Button>}
   </Space>}>
     {error ? <Alert type="error" content={error} action={<Button size="small" onClick={() => void load()}>重试</Button>} /> : loading || !data ? <Spin loading style={{ width: '100%', minHeight: 100 }} /> : <div className="system-mail-body">
       <Space wrap size={20}>
@@ -58,7 +58,7 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
       </Space>
       <Space wrap size={20}><Typography.Text type="secondary">最近成功：{formatTime(data.latestSentAt)}</Typography.Text><Typography.Text type="secondary">最近失败：{formatTime(data.latestFailedAt)}</Typography.Text></Space>
       {visibleScope !== 'oem' && data.missingEmailCount > 0 && <Typography.Text type="warning">{data.missingEmailCount} 个启用内部账号未填写邮箱，相关通知不会入队。示例：{data.missingEmailAccounts.map(account => `${account.realName}（${account.employeeNo}）`).join('、')}</Typography.Text>}
-      {visibleScope !== 'collaboration' && (data.missingOemContactCompanyCount ?? 0) > 0 && <Space wrap><Typography.Text type="warning">{data.missingOemContactCompanyCount} 家启用的 OEM 厂商没有启用联络人邮箱，无法接收厂商邮件。</Typography.Text>{auth.hasPerm('oem:company_manage') && <Button size="mini" type="text" onClick={() => navigate('/oem/admin/companies')}>维护联络人</Button>}</Space>}
+      {visibleScope !== 'collaboration' && (data.missingOemContactCompanyCount ?? 0) > 0 && <Space wrap><Typography.Text type="warning">{data.missingOemContactCompanyCount} 家启用的 ODM/OEMA 厂商没有启用联络人邮箱，无法接收厂商邮件。</Typography.Text>{auth.hasPerm('oem:company_manage') && <Button size="mini" type="text" onClick={() => navigate('/oem/admin/companies')}>维护联络人</Button>}</Space>}
       <Table rowKey="id" size="small" pagination={false} noDataElement="暂无邮件记录" data={data.recent} scroll={{ x: 620 }} columns={[
         { title: '时间', dataIndex: 'createdAt', width: 160, render: formatTime },
         { title: '结果', dataIndex: 'action', width: 150, render: (action: string) => <Tag color={action.endsWith('_SENT') ? 'green' : action.endsWith('_FAILED') ? 'red' : action.endsWith('_CANCELLED_STALE') ? 'gray' : 'orange'}>{MAIL_ACTION_LABELS[action] || `未知动作：${action}`}</Tag> },

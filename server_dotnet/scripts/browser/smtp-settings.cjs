@@ -536,7 +536,7 @@ const isMailSettingsWrite = value => pathOf(value) === MAIL_SETTINGS_PATH
         assert(reminder.gridScrollHeight >= reminder.gridClientHeight, '窄屏提醒规则在卡片内部承载溢出');
         await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEM' })
           .evaluate(element => element.click());
-        await page.getByRole('button', { name: '保存 OEM 邮件提醒', exact: true }).waitFor();
+        await page.getByRole('button', { name: '保存 ODM/OEMA 邮件提醒', exact: true }).waitFor();
       } finally {
         await page.setViewportSize(previousViewport);
         await page.reload();

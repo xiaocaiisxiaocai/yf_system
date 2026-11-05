@@ -62,7 +62,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       if (isLatest()) setCompanies(options)
       return options
     } catch (error) {
-      const message = oemRequestError(error, '目标 OEM 厂商加载失败，请稍后重试')
+      const message = oemRequestError(error, '目标 ODM/OEMA 厂商加载失败，请稍后重试')
       // Keep the previous options so the chosen vendor still shows its name, not a bare id.
       if (isLatest()) setCompanyOptionsError(message)
       throw new Error(message)
@@ -260,7 +260,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
     >
       <Form onSubmit={() => void submit()} form={form} layout="vertical">
         {realm === 'internal' && (
-          <Form.Item field="oemCompanyId" label="目标 OEM 厂商" extra="至少需要一个启用的 OEM 登录账号才能发送。" rules={[{ required: true, message: '请选择厂商' }]}>
+          <Form.Item field="oemCompanyId" label="目标 ODM/OEMA 厂商" extra="至少需要一个启用的 ODM/OEMA 登录账号才能发送。" rules={[{ required: true, message: '请选择厂商' }]}>
             <Select
               showSearch
               disabled={busy || draftId !== null || companyOptionsLoading || !!companyOptionsError}
@@ -275,12 +275,12 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
           </Form.Item>
         )}
         {realm === 'internal' && companyOptionsLoading && (
-          <Alert type="info" style={{ marginBottom: 12 }} content="正在加载可发送的 OEM 厂商…" />
+          <Alert type="info" style={{ marginBottom: 12 }} content="正在加载可发送的 ODM/OEMA 厂商…" />
         )}
         {realm === 'internal' && companyOptionsError && (
           <Alert type="error" style={{ marginBottom: 12 }} content={(
             <Space size="small">
-              <span>目标 OEM 厂商加载失败：{companyOptionsError}</span>
+              <span>目标 ODM/OEMA 厂商加载失败：{companyOptionsError}</span>
               <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
                 onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
             </Space>
@@ -289,7 +289,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         {realm === 'internal' && !companyOptionsLoading && !companyOptionsError && companies.length === 0 && (
           <Alert type="warning" style={{ marginBottom: 12 }} content={(
             <Space size="small">
-              <span>暂无可发送的 OEM 厂商，请先启用厂商后再试。</span>
+              <span>暂无可发送的 ODM/OEMA 厂商，请先启用厂商后再试。</span>
               <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
                 onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
             </Space>
@@ -298,7 +298,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         {realm === 'internal' && !companyOptionsLoading && !companyOptionsError && companies.length > 0 && !companies.some((company) => company.canReceive) && (
           <Alert type="warning" style={{ marginBottom: 12 }} content={(
             <Space size="small">
-              <span>当前没有可接收的 OEM 厂商，请先新增或启用至少一个 OEM 登录账号后再发送。</span>
+              <span>当前没有可接收的 ODM/OEMA 厂商，请先新增或启用至少一个 ODM/OEMA 登录账号后再发送。</span>
               <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
                 onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
             </Space>
@@ -425,7 +425,7 @@ export default function TransferListPage() {
             <Radio.Group type="button" value={direction} onChange={(value) => { setDirection(value); setPage(1) }}>
               <Radio value="">全部</Radio>
               <Radio value="INTERNAL_TO_OEM">公司发出</Radio>
-              <Radio value="OEM_TO_INTERNAL">OEM 发来</Radio>
+              <Radio value="OEM_TO_INTERNAL">ODM/OEMA 发来</Radio>
             </Radio.Group>
           )}
           <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
