@@ -306,7 +306,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
       >
         <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
-            <Form.Item label="账号" field="employeeNo" rules={[{ required: true, message: '请输入账号' }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
+            <Form.Item label="账号" field="employeeNo" extra="不区分大小写，不可与内部账号或其他 Robot 厂商账号重名" rules={[{ required: true, message: '请输入账号' }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
               <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
             </Form.Item>
             <Form.Item

@@ -8,6 +8,34 @@ namespace Yf.Api.Tests;
 public sealed class AccountDeletionHistoryTests
 {
     [Fact(Timeout = 90_000)]
+    public async Task SoleUnusedSupplierAccountAndThenItsSupplierCanBeDeleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("sole_supplier_account_delete", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await SchemaMigrations.ApplyAsync(database.Database, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO suppliers(id,name,status,created_at,updated_at)
+            VALUES(9701,'唯一空账号供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(9700,'sole-delete-admin','unused','删除管理员','admin@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+                  (9702,'sole-unused-supplier','unused','唯一空账号','supplier@example.invalid','SUPPLIER',9701,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9700,1),(9702,4);
+            """, ct);
+        var suppliers = new SupplierService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), new AuditService([]));
+        var admin = new CurrentUser(9700, "sole-delete-admin", "INTERNAL", null);
+
+        await suppliers.DeleteAccountAsync(admin, 9702, ct);
+        await suppliers.DeleteAsync(admin, 9701, ct);
+
+        await using var connection = await database.Database.OpenAsync(ct);
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM users WHERE id=9702", cancellationToken: ct)));
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
+            "SELECT COUNT(*) FROM suppliers WHERE id=9701", cancellationToken: ct)));
+    }
+
+    [Fact(Timeout = 90_000)]
     public async Task MailRecordsAndAuditLogsDoNotBlockSupplierAccountDeletion()
     {
         var ct = TestContext.Current.CancellationToken;

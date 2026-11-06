@@ -47,12 +47,12 @@ public sealed record OemImportResponse(int Created, int Skipped, int Failed, IRe
 /// or resetting a password, revokes the affected OEM sessions in the same transaction.
 /// Empty vendors and accounts may be physically deleted; records with business or
 /// historical references must be disabled so their identity remains explainable.
-/// An active vendor always keeps at least one active account, and a vendor cannot be
+/// An active vendor with transfers keeps at least one active account, and a vendor cannot be
 /// disabled while transfers in either direction are still in flight.
 /// </summary>
 public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
-    internal const string LastActiveAccountMessage = "厂商至少需要保留一个启用账号；如需停止合作，请停用厂商";
+    internal const string LastActiveAccountMessage = "该厂商已有传递单，至少需要保留一个启用账号；如需停止合作，请停用厂商";
     internal const int MaximumCompanyImportRows = 500;
     internal const int MaximumAccountImportRows = 100;
     internal const int MaximumContactsPerCompany = 100;
@@ -658,9 +658,13 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
                 || file.FirstRecipientRealm == OemRealms.Oem && file.FirstRecipientId == id, ct)
             || await uow.Db.OemUploadSessions.AnyAsync(session => session.UploaderRealm == OemRealms.Oem && session.UploaderId == id, ct)
             || await uow.Db.OemDownloadSessions.AnyAsync(session => session.ActorRealm == OemRealms.Oem && session.ActorId == id, ct)
-            || await uow.Db.AuditLogs.AnyAsync(log => log.ActorRealm == OemRealms.Oem && log.ActorAccountId == id, ct)
+            // Authentication logs retain the account-name snapshot and have no account FK.
+            // A login/password test is not business usage; keep these logs after deletion.
+            || await uow.Db.AuditLogs.AnyAsync(log => log.ActorRealm == OemRealms.Oem && log.ActorAccountId == id
+                && log.Action != "OEM_LOGIN" && log.Action != "OEM_LOGIN_FAILED"
+                && log.Action != "OEM_LOGOUT" && log.Action != "OEM_PASSWORD_CHANGE", ct)
             || await uow.Db.EmailOutbox.AnyAsync(mail => mail.RecipientRealm == OemRealms.Oem && mail.RecipientAccountId == id, ct);
-        if (hasHistory) throw ApiException.BadRequest("该账号仍有传递、文件、通知、登录或审计历史，请停用账号，不要删除");
+        if (hasHistory) throw ApiException.BadRequest("该账号仍有传递、文件、通知或业务操作历史，请停用账号，不要删除");
     }
 
     /// <summary>
@@ -680,13 +684,17 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     }
 
     /// <summary>
-    /// An active vendor must keep at least one active account (like the last active admin);
-    /// a disabled vendor is exempt. Callers hold the company row lock.
+    /// An active vendor with transfers must keep at least one active account.
+    /// Empty or disabled vendors are exempt. Callers hold the management gate and company row lock.
     /// </summary>
     private static async Task EnsureNotLastActiveAccountAsync(OemUnitOfWork uow, OemAccount account, CancellationToken ct)
     {
         var companyActive = await uow.Db.OemCompanies.AnyAsync(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active, ct);
         if (!companyActive) return;
+        // Provisioning permits an active company without accounts. Permit returning to that
+        // state while it has no business, including deletion of its last unused account.
+        // The exclusive management gate also prevents a concurrent first transfer from racing this check.
+        if (!await uow.Db.OemTransfers.AnyAsync(transfer => transfer.OemCompanyId == account.OemCompanyId, ct)) return;
         var othersActive = await uow.Db.OemAccounts.AnyAsync(item => item.OemCompanyId == account.OemCompanyId
             && item.Id != account.Id && item.Status == OemStatus.Active, ct);
         if (!othersActive) throw ApiException.Conflict(LastActiveAccountMessage);

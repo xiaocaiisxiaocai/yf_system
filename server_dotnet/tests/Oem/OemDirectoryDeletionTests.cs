@@ -6,6 +6,40 @@ namespace Yf.Api.Tests.Oem;
 public sealed class OemDirectoryDeletionTests
 {
     [Fact(Timeout = 180_000)]
+    public async Task LoginAndPasswordChangeAloneDoNotPreventDeletingTheLastAccountAndCompany()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = "仅测试登录厂商" }, ct).Ok()).Id();
+        var accountId = await CreateAccountAsync(admin, companyId, "login_only", ct);
+        await host.Anonymous().PostAsync("/api/v1/oem/auth/login",
+            new { employeeNo = "login_only", password = "Wrong#2026x" }, ct).Status(HttpStatusCode.Unauthorized);
+        var vendor = await host.LoginOemAsync("LOGIN_ONLY", "Vendor#2026", ct);
+        await vendor.PutAsync("/api/v1/oem/auth/password", new { oldPassword = "Vendor#2026", newPassword = "Vendor#2027x" }, ct).Ok();
+        vendor = await host.LoginOemAsync("login_only", "Vendor#2027x", ct);
+        await vendor.PostAsync("/api/v1/oem/auth/logout", null, ct).Ok();
+        vendor = await host.LoginOemAsync("login_only", "Vendor#2027x", ct);
+        await vendor.GetAsync("/api/v1/oem/auth/me", ct).Ok();
+
+        await admin.DeleteAsync($"/api/v1/oem/accounts/{accountId}", ct).Ok();
+        await vendor.GetAsync("/api/v1/oem/auth/me", ct).Status(HttpStatusCode.Unauthorized);
+        await admin.DeleteAsync($"/api/v1/oem/companies/{companyId}", ct).Ok();
+
+        await using var connection = await host.OpenAsync(ct);
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM oem_refresh_tokens WHERE account_id=@accountId", new { accountId }));
+        var logs = (await connection.QueryAsync<string>("""
+            SELECT action FROM audit_logs WHERE actor_realm='oem' AND actor_account_id=@accountId
+                AND employee_no='login_only'
+            """, new { accountId })).ToArray();
+        Assert.Contains("OEM_LOGIN", logs);
+        Assert.Contains("OEM_LOGIN_FAILED", logs);
+        Assert.Contains("OEM_LOGOUT", logs);
+        Assert.Contains("OEM_PASSWORD_CHANGE", logs);
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task EmptyAccountAndCompanyCanBeDeletedWithSessionsAndAuditSnapshotsHandled()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -22,9 +56,7 @@ public sealed class OemDirectoryDeletionTests
                 """, new { accountId });
         }
 
-        // The only active account of an active vendor is protected; retiring the vendor first lifts that.
-        await admin.DeleteAsync($"/api/v1/oem/accounts/{accountId}", ct).Status(HttpStatusCode.Conflict, 40901);
-        await admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "DISABLED" }, ct).Ok();
+        // An empty vendor needs no temporary disabling or placeholder account to be removed.
         await admin.DeleteAsync($"/api/v1/oem/accounts/{accountId}", ct).Ok();
         await using (var connection = await host.OpenAsync(ct))
         {

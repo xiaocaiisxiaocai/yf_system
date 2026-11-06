@@ -229,7 +229,7 @@ describe('ODM/OEMA 厂商与账号目录', () => {
 
   it('账号停用被拒绝时在抽屉内显示服务端原因，不刷新列表', async () => {
     const user = userEvent.setup()
-    const backendReason = '厂商至少需要保留一个启用账号；如需停止合作，请停用厂商'
+    const backendReason = '该厂商已有传递单，至少需要保留一个启用账号；如需停止合作，请停用厂商'
     const accounts = vi.fn().mockResolvedValue([account()])
     const setAccountStatus = vi.fn().mockRejectedValue({ response: { status: 409, data: { code: 40901, message: backendReason } } })
     renderDirectory(baseApi({ accounts, setAccountStatus }), ['oem:company_manage', 'oem:account_manage'])

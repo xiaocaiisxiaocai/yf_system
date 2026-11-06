@@ -5,17 +5,25 @@ using static Yf.Api.Tests.Oem.OemTransferFlowTests;
 
 namespace Yf.Api.Tests.Oem;
 
-/// <summary>Directory invariants: an active vendor keeps an active account; a vendor with in-flight transfers stays enabled.</summary>
+/// <summary>Vendors with transfers keep an active account; vendors with in-flight transfers stay enabled.</summary>
 public sealed class OemDirectoryRulesTests
 {
     [Fact(Timeout = 180_000)]
-    public async Task LastActiveAccountOfAnActiveVendorCannotBeDisabledOrDeleted()
+    public async Task LastActiveAccountOfAnActiveVendorWithTransfersCannotBeDisabledOrDeleted()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var admin = await host.LoginAdminAsync(ct);
         var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = "唯一账号厂商" }, ct).Ok()).Id();
         var first = await CreateAccountAsync(admin, companyId, "last_one", ct);
+        // Even a draft is business history, regardless of whether this account created it.
+        await using (var connection = await host.OpenAsync(ct))
+            await connection.ExecuteAsync("""
+                INSERT INTO oem_transfers(direction,oem_company_id,title,lifecycle_status,retention_template_id,
+                    created_at,updated_at,concurrency_version)
+                SELECT 'INTERNAL_TO_OEM',@companyId,'保留接收账号','DRAFT',id,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),0
+                FROM oem_retention_templates ORDER BY id LIMIT 1
+                """, new { companyId });
 
         var disable = await admin.PutAsync($"/api/v1/oem/accounts/{first}/status", new { status = "DISABLED" }, ct)
             .Status(HttpStatusCode.Conflict, 40901);
@@ -39,7 +47,7 @@ public sealed class OemDirectoryRulesTests
         await admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "DISABLED" }, ct).Ok();
         await admin.PutAsync($"/api/v1/oem/accounts/{third}/status", new { status = "DISABLED" }, ct).Ok();
         await admin.DeleteAsync($"/api/v1/oem/accounts/{third}", ct).Ok();
-        await admin.DeleteAsync($"/api/v1/oem/companies/{companyId}", ct).Ok();
+        await admin.DeleteAsync($"/api/v1/oem/companies/{companyId}", ct).Status(HttpStatusCode.BadRequest);
     }
 
     [Fact(Timeout = 240_000)]

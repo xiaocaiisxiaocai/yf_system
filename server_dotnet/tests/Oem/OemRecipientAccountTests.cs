@@ -23,12 +23,8 @@ public sealed class OemRecipientAccountTests
         Assert.Equal(OemRecipientPolicy.MissingAccountMessage, JsonNode.Parse(noAccount.Body)!["message"]!.GetValue<string>());
 
         var accountId = await CreateAccountAsync(world.Admin, companyId, "recipient_one", ct);
-        // An active vendor cannot lose its last active account; a vendor that was re-enabled
-        // after its accounts were disabled while it was disabled still has none.
-        await world.Admin.PutAsync($"/api/v1/oem/accounts/{accountId}/status", new { status = "DISABLED" }, ct).Status(HttpStatusCode.Conflict, 40901);
-        await world.Admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "DISABLED" }, ct).Ok();
+        // A vendor without transfers may disable its only account, but cannot receive a transfer.
         await world.Admin.PutAsync($"/api/v1/oem/accounts/{accountId}/status", new { status = "DISABLED" }, ct).Ok();
-        await world.Admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "ACTIVE" }, ct).Ok();
         await AssertOptionAsync(world.Sender, companyId, false, ct);
         await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Status(HttpStatusCode.BadRequest);
         await using (var conn = await host.OpenAsync(ct))

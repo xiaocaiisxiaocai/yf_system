@@ -382,7 +382,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
         unmountOnExit
       >
         <Form onSubmit={() => void save()} form={form} layout="vertical">
-          <Form.Item field="employeeNo" label="账号" rules={[{ required: true }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
+          <Form.Item field="employeeNo" label="账号" extra="不区分大小写，所有 ODM/OEMA 厂商之间不可重名" rules={[{ required: true }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
             <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
           </Form.Item>
           <Form.Item field="password" label="初始密码" extra="首次登录需改密" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><Input.Password placeholder="5-20 位" /></Form.Item>
@@ -755,7 +755,7 @@ export default function CompaniesPage() {
   const confirmDeleteCompany = (company: Company) => {
     Modal.confirm({
       title: `删除厂商“${company.name}”`,
-      content: `确认永久删除“${company.name}”？删除后不可恢复；如存在账号或业务历史，系统会拒绝删除并说明原因，此时请停用厂商。`,
+      content: `确认永久删除“${company.name}”？请先在账号管理中删除无业务的账号；如有传递单或业务历史，请停用厂商。删除后不可恢复。`,
       okText: '确认删除',
       cancelText: '取消',
       okButtonProps: { status: 'danger' },
