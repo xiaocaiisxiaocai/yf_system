@@ -18,7 +18,9 @@ public sealed class DepartmentLeaderDeletionTests
         var org = await host.CreateOrgPathAsync("删除主管", ct);
         var leaderId = await host.CreateInternalUserAsync("leader_delete", "Leader#2026x", [], org.Section, ct);
         await admin.PutAsync($"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = leaderId }, ct).Ok();
-        await admin.PutAsync($"/api/v1/admin/departments/{org.Department}/leader", new { leaderUserId = leaderId }, ct).Ok();
+        // One person leads at most one organisation; legacy data may still hold a second leadership.
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE departments SET leader_account_id=@leaderId WHERE id=@id", new { leaderId, id = org.Department });
 
         var refused = await admin.DeleteAsync($"/api/v1/admin/users/{leaderId}", ct).Status(HttpStatusCode.BadRequest);
         Assert.Equal(StillLeaderMessage, refused.Json!["message"]!.GetValue<string>());

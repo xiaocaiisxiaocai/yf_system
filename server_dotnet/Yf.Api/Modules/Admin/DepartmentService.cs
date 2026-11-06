@@ -34,13 +34,22 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
     public Task<DepartmentResponse> UpdateAsync(CurrentUser actor, ulong id, DepartmentUpsert request, CancellationToken ct) => WriteAsync(actor, id, request, ct);
 
     public async Task<DepartmentLeaderOption[]> LeaderOptionsAsync(
-        CurrentUser actor, string? keyword, CancellationToken ct)
+        CurrentUser actor, string? keyword, string? departmentId, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         // A read-only lookup: the non-locking precheck avoids queueing on the exclusive management gate.
         await ManagementAuthorization.PrecheckAsync(context, actor, "dept:leader_manage", ct);
         var query = context.Users.AsNoTracking().Where(user =>
             user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal);
+        if (!string.IsNullOrWhiteSpace(departmentId))
+        {
+            if (!ulong.TryParse(departmentId, out var targetId)) throw ApiException.BadRequest("组织编号格式不正确");
+            // Only members of the organisation or its descendants who do not already lead another organisation.
+            var parents = await context.Departments.AsNoTracking().ToDictionaryAsync(item => item.Id, item => item.ParentId, ct);
+            var subtree = parents.Keys.Where(id => IsWithin(parents, id, targetId)).ToArray();
+            query = query.Where(user => user.DepartmentId.HasValue && Enumerable.Contains(subtree, user.DepartmentId.Value)
+                && !context.Departments.Any(item => item.Id != targetId && item.LeaderAccountId == user.Id));
+        }
         var term = string.IsNullOrWhiteSpace(keyword) ? null : keyword.Trim();
         if (term is not null)
         {
@@ -84,6 +93,15 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
                 .SingleOrDefaultAsync(ct) ?? throw ApiException.BadRequest("主管账号不存在");
             if (!IsEligibleLeader(leader.Status, leader.UserType))
                 throw ApiException.BadRequest("主管必须是启用的内部账号");
+            var otherLed = await context.Departments.AsNoTracking()
+                .Where(item => item.Id != id && item.LeaderAccountId == userId).Select(item => item.Name).FirstOrDefaultAsync(ct);
+            if (otherLed is not null)
+                throw ApiException.BadRequest($"{leader.RealName}已是「{otherLed}」的主管，一人只能担任一个组织的主管");
+            var memberDepartmentId = await context.Users.AsNoTracking().Where(user => user.Id == userId)
+                .Select(user => user.DepartmentId).SingleAsync(ct);
+            var parents = await context.Departments.AsNoTracking().ToDictionaryAsync(item => item.Id, item => item.ParentId, ct);
+            if (!IsWithin(parents, memberDepartmentId, id))
+                throw ApiException.BadRequest($"主管必须属于「{department.Name}」或其下级组织");
         }
 
         var previousId = department.LeaderAccountId;
@@ -178,6 +196,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             {
                 await RecomputeAsync(context, resultId, kind, ct);
                 await EnsureProjectOwnerSectionsRemainActiveAsync(context, protectedProjectGroupIds, ct);
+                await EnsureLeaderRulesAsync(context, ct);
             }
         }
         var row = await FindAsync(context, resultId, ct) ?? throw ApiException.NotFound();
@@ -270,6 +289,45 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             if (row.Status != AccountStatuses.Active) throw ApiException.BadRequest("组织已被禁用");
             current = row.ParentId;
         }
+    }
+
+    /// <summary>
+    /// Organisation leader invariants (2026-11-05): one person leads at most one organisation, and a leader belongs
+    /// to the organisation they lead or one of its descendants. Called after a write inside the management-locked
+    /// transaction, so it sees the pending state and a violation rolls the write back.
+    /// </summary>
+    internal static async Task EnsureLeaderRulesAsync(YfDbContext context, CancellationToken ct)
+    {
+        var departments = await context.Departments.AsNoTracking()
+            .Select(d => new { d.Id, d.Name, d.ParentId, d.LeaderAccountId }).ToArrayAsync(ct);
+        var led = departments.Where(d => d.LeaderAccountId.HasValue).ToArray();
+        if (led.Length == 0) return;
+        var leaderIds = led.Select(d => d.LeaderAccountId!.Value).Distinct().ToArray();
+        var leaders = await context.Users.AsNoTracking().Where(user => Enumerable.Contains(leaderIds, user.Id))
+            .Select(user => new { user.Id, user.RealName, user.DepartmentId }).ToDictionaryAsync(user => user.Id, ct);
+        var parents = departments.ToDictionary(d => d.Id, d => d.ParentId);
+        foreach (var group in led.GroupBy(d => d.LeaderAccountId!.Value).Where(group => group.Count() > 1))
+        {
+            var name = leaders.TryGetValue(group.Key, out var person) ? person.RealName : group.Key.ToString();
+            throw ApiException.BadRequest($"{name}同时是「{string.Join("」「", group.Select(d => d.Name))}」的主管，一人只能担任一个组织的主管");
+        }
+        foreach (var department in led)
+        {
+            if (!leaders.TryGetValue(department.LeaderAccountId!.Value, out var leader)) continue;
+            if (!IsWithin(parents, leader.DepartmentId, department.Id))
+                throw ApiException.BadRequest($"{leader.RealName}不属于「{department.Name}」或其下级组织，不能担任该组织主管；请先更换该组织主管");
+        }
+    }
+
+    internal static bool IsWithin(IReadOnlyDictionary<ulong, ulong?> parents, ulong? memberDepartmentId, ulong ancestorId)
+    {
+        var current = memberDepartmentId;
+        for (var guard = 0; current is ulong id && guard < 32; guard++)
+        {
+            if (id == ancestorId) return true;
+            current = parents.GetValueOrDefault(id);
+        }
+        return false;
     }
 
     private static void Validate(DepartmentUpsert r) { if (string.IsNullOrWhiteSpace(r.Name) || r.Name.Trim().EnumerateRunes().Count() > 64) throw ApiException.BadRequest("组织名称需为 1~64 个字符"); if (r.SortNo < 0) throw ApiException.BadRequest("排序号不能为负数"); }

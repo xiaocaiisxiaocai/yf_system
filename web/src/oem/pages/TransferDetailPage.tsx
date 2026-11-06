@@ -35,6 +35,7 @@ const SOURCE_LABEL: Record<string, string> = {
   // Approvals sent before the leader sources were merged keep their original source.
   SECTION_LEADER: '课别主管', DEPARTMENT_LEADER: '部门主管', DIVISION_LEADER: '事业部主管',
 }
+const SKIP_LABEL: Record<string, string> = { INITIATOR_IS_LEADER: '发送人是主管，免审', ABOVE_SECTION: '发送人属于部门或事业部，免审' }
 const TASK_LABEL: Record<string, string> = {
   WAITING: '等待', PENDING: '待审批', APPROVED: '已通过', REJECTED: '已驳回', NOT_NEEDED: '无需处理', SUPERSEDED: '已改派', CANCELLED: '已取消',
 }
@@ -184,7 +185,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
               {node.approvalMode === 'ALL' && <Tag size="small" color="purple">会签</Tag>}
               {node.approvalMode === 'ANY' && <Tag size="small" color="arcoblue">或签</Tag>}
               {node.usedFallback && <Tag size="small" color="orange">备用审批人</Tag>}</Space>}
-            description={node.status === 'SKIPPED' ? '发送人即本节点审批人，按策略免审' : (
+            description={node.status === 'SKIPPED' ? (SKIP_LABEL[node.skipReason ?? ''] ?? '发送人即本节点审批人，按策略免审') : (
               <Space direction="vertical" size={2}>
                 {node.tasks.map((task) => (
                   <Space key={task.id} size={6}>

@@ -267,12 +267,16 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
             if (!SelfPolicies.AllValues.Contains(node.SelfPolicy, StringComparer.Ordinal)) throw ApiException.BadRequest("发起人即审批人时的处理方式无效");
             var approvers = (node.ApproverUserIds ?? []).Distinct().ToArray();
             var fallbacks = (node.FallbackUserIds ?? []).Distinct().ToArray();
+            var selfPolicy = node.SelfPolicy;
             string mode;
             if (ApproverSources.IsLeader(node.ApproverSource))
             {
                 if (node.ApprovalMode is not (null or ApprovalModes.Single)) throw ApiException.BadRequest("上级主管节点只支持单人审批");
                 if (approvers.Length > 0) throw ApiException.BadRequest("上级主管节点不能指定审批人");
                 mode = ApprovalModes.Single;
+                // A sender who is a supervisor skips this node (SkipReasons.InitiatorIsLeader), so the self policy does not apply.
+                selfPolicy = SelfPolicies.Skip;
+                fallbacks = [];
             }
             else
             {
@@ -280,12 +284,12 @@ public sealed class OemFlowTemplateService(IDbContextFactory<YfDbContext> dbFact
                 if (approvers.Length is < 1 or > MaximumUsersPerNode) throw ApiException.BadRequest($"指定人员节点需配置 1~{MaximumUsersPerNode} 名审批人");
                 mode = node.ApprovalMode;
             }
-            if (node.SelfPolicy == SelfPolicies.Designated)
+            if (selfPolicy == SelfPolicies.Designated)
             {
                 if (fallbacks.Length is < 1 or > MaximumUsersPerNode) throw ApiException.BadRequest($"「{name}」需配置 1~{MaximumUsersPerNode} 名备用审批人");
             }
             else if (fallbacks.Length > 0) throw ApiException.BadRequest($"「{name}」未选择由备用审批人审批，不能配置备用审批人");
-            normalized.Add(new FlowNodeInput(name, node.ApproverSource, mode, node.SelfPolicy, node.Enabled, approvers, fallbacks));
+            normalized.Add(new FlowNodeInput(name, node.ApproverSource, mode, selfPolicy, node.Enabled, approvers, fallbacks));
         }
         if (normalized.Count(node => ApproverSources.IsLeader(node.ApproverSource)) > 1)
             throw ApiException.BadRequest("审批模板只能有一个上级主管节点");

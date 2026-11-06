@@ -106,6 +106,59 @@ public sealed class DepartmentLeaderTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task ALeaderLeadsOneOrganisationAndBelongsToItsSubtree()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        var org = await host.CreateOrgPathAsync("唯一主管", ct);
+        var otherOrg = await host.CreateOrgPathAsync("别处", ct);
+        var sectionMember = await host.CreateInternalUserAsync("unique_section", "Leader#2026x", [], org.Section, ct);
+        var departmentMember = await host.CreateInternalUserAsync("unique_department", "Leader#2026x", [], org.Department, ct);
+        var outsider = await host.CreateInternalUserAsync("unique_outsider", "Leader#2026x", [], otherOrg.Section, ct);
+
+        static string Message(ApiResponse result) => result.Json!["message"]!.GetValue<string>();
+
+        // The leader must belong to the organisation or one of its descendants.
+        Assert.Contains("主管必须属于", Message(await admin.PutAsync(
+            $"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = outsider }, ct).Status(HttpStatusCode.BadRequest)));
+        Assert.Contains("主管必须属于", Message(await admin.PutAsync(
+            $"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = departmentMember }, ct).Status(HttpStatusCode.BadRequest)));
+        // A section member may lead the parent department or division.
+        await admin.PutAsync($"/api/v1/admin/departments/{org.Department}/leader", new { leaderUserId = sectionMember }, ct).Ok();
+
+        // One person leads at most one organisation; re-saving the same appointment is fine.
+        Assert.Contains("一人只能担任一个组织的主管", Message(await admin.PutAsync(
+            $"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = sectionMember }, ct).Status(HttpStatusCode.BadRequest)));
+        Assert.Contains("一人只能担任一个组织的主管", Message(await admin.PutAsync(
+            $"/api/v1/admin/departments/{org.Division}/leader", new { leaderUserId = sectionMember }, ct).Status(HttpStatusCode.BadRequest)));
+        await admin.PutAsync($"/api/v1/admin/departments/{org.Department}/leader", new { leaderUserId = sectionMember }, ct).Ok();
+
+        // Candidate options for an organisation list only its subtree members who lead nothing else.
+        var options = (await admin.GetAsync($"/api/v1/admin/department-leader-options?departmentId={org.Section}", ct).Ok()).AsArray();
+        Assert.DoesNotContain(options, option => option!.Id() == sectionMember);
+        Assert.DoesNotContain(options, option => option!.Id() == departmentMember);
+        Assert.DoesNotContain(options, option => option!.Id() == outsider);
+        options = (await admin.GetAsync($"/api/v1/admin/department-leader-options?departmentId={org.Department}", ct).Ok()).AsArray();
+        Assert.Contains(options, option => option!.Id() == sectionMember);
+        Assert.Contains(options, option => option!.Id() == departmentMember);
+        Assert.DoesNotContain(options, option => option!.Id() == outsider);
+
+        // Moving the leader out of the organisation, or moving their section away, is refused while they lead it.
+        Assert.Contains("不能担任该组织主管", Message(await admin.PutAsync(
+            $"/api/v1/admin/users/{sectionMember}", new { departmentId = otherOrg.Section }, ct).Status(HttpStatusCode.BadRequest)));
+        Assert.Contains("不能担任该组织主管", Message(await admin.PutAsync(
+            $"/api/v1/admin/departments/{org.Section}", new { name = "唯一主管课", parentId = otherOrg.Department, sortNo = 0 }, ct).Status(HttpStatusCode.BadRequest)));
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            Assert.Equal(org.Section, await conn.ExecuteScalarAsync<ulong>("SELECT department_id FROM users WHERE id=@sectionMember", new { sectionMember }));
+            Assert.Equal(org.Department, await conn.ExecuteScalarAsync<ulong>("SELECT parent_id FROM departments WHERE id=@id", new { id = org.Section }));
+        }
+        // Moving inside the led subtree stays allowed.
+        await admin.PutAsync($"/api/v1/admin/users/{sectionMember}", new { departmentId = org.Department }, ct).Ok();
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task DepartmentLeaderOperationsRequireTheDedicatedPermission()
     {
         var ct = TestContext.Current.CancellationToken;

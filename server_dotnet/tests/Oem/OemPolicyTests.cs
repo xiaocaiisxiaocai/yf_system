@@ -56,18 +56,17 @@ public sealed class OemPolicyTests
         Assert.True(preview["ok"]!.GetValue<bool>());
         Assert.False(preview["requiresApproval"]!.GetValue<bool>());
 
-        // Staff directly under a department are routed to that department's leader; a section
-        // leader is no longer their superior, and with no leader up the chain sending fails.
+        // Staff directly under a department are above section level: no approval, even with no leader on the chain.
         preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={directStaff}", ct).Ok();
-        Assert.Contains("及其上级组织都未配置主管", preview["reason"]!.GetValue<string>());
+        Assert.True(preview["ok"]!.GetValue<bool>());
+        Assert.False(preview["requiresApproval"]!.GetValue<bool>());
+        Assert.Equal("ABOVE_SECTION", preview["nodes"]![0]!["skipReason"]!.GetValue<string>());
         var departmentLeader = await host.CreateInternalUserAsync("dz_dept_leader", "Leader#2026x", ["oem:flow_approve"], org.Department, ct);
         await admin.PutAsync($"/api/v1/admin/departments/{org.Department}/leader", new { leaderUserId = departmentLeader }, ct).Ok();
-        preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={directStaff}", ct).Ok();
-        Assert.Equal("dz_dept_leader", preview["nodes"]![0]!["approvers"]![0]!["employeeNo"]!.GetValue<string>());
-        // The section leader's own superior is now the department leader.
+        // A section leader is a supervisor: the superior node is skipped even when the department has a leader.
         preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={leader}", ct).Ok();
-        Assert.True(preview["requiresApproval"]!.GetValue<bool>());
-        Assert.Equal("dz_dept_leader", preview["nodes"]![0]!["approvers"]![0]!["employeeNo"]!.GetValue<string>());
+        Assert.False(preview["requiresApproval"]!.GetValue<bool>());
+        Assert.True(preview["nodes"]![0]!["skipped"]!.GetValue<bool>());
         await admin.PutAsync($"/api/v1/admin/departments/{org.Department}/leader", new { leaderUserId = (ulong?)null }, ct).Ok();
 
         // Node validation: an approver without oem:flow_approve is rejected.
@@ -76,10 +75,11 @@ public sealed class OemPolicyTests
             name = "电装专用", isDefault = false,
             nodes = new[] { new { name = "质量会签", approverSource = "SPECIFIED_USERS", approvalMode = "ALL", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { reviewer, noPermission }, fallbackUserIds = Array.Empty<ulong>() } },
         }, ct).Status(HttpStatusCode.BadRequest);
+        // A specified-user node that falls back to designated approvers still needs some.
         await admin.PostAsync("/api/v1/oem/flow-templates", new
         {
             name = "电装专用", isDefault = false,
-            nodes = new[] { new { name = "主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() } },
+            nodes = new[] { new { name = "质量", approverSource = "SPECIFIED_USERS", approvalMode = "ANY", selfPolicy = "DESIGNATED", enabled = true, approverUserIds = new[] { reviewer }, fallbackUserIds = Array.Empty<ulong>() } },
         }, ct).Status(HttpStatusCode.BadRequest);
 
         var created = await admin.PostAsync("/api/v1/oem/flow-templates", new
@@ -94,13 +94,20 @@ public sealed class OemPolicyTests
         var templateId = created.Id();
         Assert.Equal(2, created["nodes"]!.AsArray().Count);
 
-        // The department-scoped template now applies to the sender, and it is a configuration
-        // error for the same reviewer to appear in two nodes once the leader uses the fallback.
+        // The superior node ignores the submitted self policy and fallbacks: a supervisor sending skips it.
+        Assert.Equal("SKIP", created["nodes"]![0]!["selfPolicy"]!.GetValue<string>());
+        Assert.Empty(created["nodes"]![0]!["fallbacks"]!.AsArray());
+
+        // The department-scoped template now applies to the sender; the leader sending skips every node,
+        // the specified reviewer included.
         preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={sender}", ct).Ok();
         Assert.Equal(templateId, preview["template"]!.Id());
         Assert.Equal(org.Department, preview["matchedScope"]!.Id());
+        Assert.Equal("qa_reviewer", preview["nodes"]![1]!["approvers"]![0]!["employeeNo"]!.GetValue<string>());
         preview = await admin.GetAsync($"/api/v1/oem/flow-templates/preview?userId={leader}", ct).Ok();
-        Assert.Contains("同一审批人", preview["reason"]!.GetValue<string>());
+        Assert.True(preview["ok"]!.GetValue<bool>());
+        Assert.False(preview["requiresApproval"]!.GetValue<bool>());
+        Assert.All(preview["nodes"]!.AsArray(), node => Assert.True(node!["skipped"]!.GetValue<bool>()));
 
         // Another template cannot claim the same organisation.
         await admin.PostAsync("/api/v1/oem/flow-templates", new

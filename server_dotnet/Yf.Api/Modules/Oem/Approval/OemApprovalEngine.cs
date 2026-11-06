@@ -8,7 +8,11 @@ namespace Yf.Api.Modules.Oem.Approval;
 
 public enum ActivationOutcome { Activated, Blocked, Completed }
 
-public sealed record ActivationResult(ActivationOutcome Outcome, IReadOnlyList<ulong> ActivatedTaskIds, string? BlockedReason);
+public sealed record ActivationResult(ActivationOutcome Outcome, IReadOnlyList<ulong> ActivatedTaskIds, string? BlockedReason)
+{
+    /// <summary>Tasks approved automatically because their approver already approved an earlier node of the instance.</summary>
+    public IReadOnlyList<ulong> AutoApprovedTaskIds { get; init; } = [];
+}
 
 /// <summary>
 /// State machine of one approval instance (instance → nodes → tasks). It never touches
@@ -74,28 +78,69 @@ public sealed class OemApprovalEngine
         await OemLocks.ForUpdate<OemFlowInstance>(uow.Db, instanceId)
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
 
+    internal const string AutoApprovedReason = "已在前序节点审批通过，自动通过";
+
     /// <summary>
-    /// Activates the next waiting node after re-validating its approvers. Returns
+    /// Activates the next waiting node after re-validating its approvers. A task whose approver already
+    /// approved an earlier node of this instance is approved automatically; a node completed that way
+    /// (any-sign, or all-sign with nobody left) is passed and the following node is tried. Returns
     /// Completed when no node is left, Blocked (instance APPROVAL_BLOCKED) when the node
     /// cannot be decided by anyone eligible.
     /// </summary>
     internal async Task<ActivationResult> ActivateNextAsync(OemUnitOfWork uow, OemFlowInstance instance, CancellationToken ct)
     {
-        var node = await uow.Db.OemFlowInstanceNodes
-            .Where(item => item.InstanceId == instance.Id && item.Status == FlowNodeStatuses.Waiting)
-            .OrderBy(item => item.SortNo).FirstOrDefaultAsync(ct);
-        if (node is null)
+        var autoApproved = new List<ulong>();
+        while (true)
         {
-            instance.Status = FlowInstanceStatuses.Completed;
-            instance.CurrentSortNo = null;
-            instance.BlockedReason = null;
-            Touch(uow, instance);
-            await uow.Db.SaveChangesAsync(ct);
-            return new ActivationResult(ActivationOutcome.Completed, [], null);
+            var node = await uow.Db.OemFlowInstanceNodes
+                .Where(item => item.InstanceId == instance.Id && item.Status == FlowNodeStatuses.Waiting)
+                .OrderBy(item => item.SortNo).FirstOrDefaultAsync(ct);
+            if (node is null)
+            {
+                instance.Status = FlowInstanceStatuses.Completed;
+                instance.CurrentSortNo = null;
+                instance.BlockedReason = null;
+                Touch(uow, instance);
+                await uow.Db.SaveChangesAsync(ct);
+                return new ActivationResult(ActivationOutcome.Completed, [], null) { AutoApprovedTaskIds = autoApproved };
+            }
+            var tasks = await uow.Db.OemFlowTasks
+                .Where(task => task.InstanceNodeId == node.Id && (task.Status == FlowTaskStatuses.Waiting || task.Status == FlowTaskStatuses.Pending))
+                .ToArrayAsync(ct);
+            var approvedBefore = (await uow.Db.OemFlowTasks.AsNoTracking()
+                .Where(task => task.InstanceId == instance.Id && task.InstanceNodeId != node.Id && task.Status == FlowTaskStatuses.Approved)
+                .Select(task => task.ApproverUserId).ToArrayAsync(ct)).ToHashSet();
+            var repeated = tasks.Where(task => approvedBefore.Contains(task.ApproverUserId)).ToArray();
+            foreach (var task in repeated)
+            {
+                task.Status = FlowTaskStatuses.Approved;
+                task.Reason = AutoApprovedReason;
+                task.DecidedAt = uow.Now;
+                task.ConcurrencyVersion++;
+                autoApproved.Add(task.Id);
+            }
+            tasks = tasks.Except(repeated).ToArray();
+            if (repeated.Length > 0 && (node.ApprovalMode != ApprovalModes.All || tasks.Length == 0))
+            {
+                foreach (var task in tasks)
+                {
+                    task.Status = FlowTaskStatuses.NotNeeded;
+                    task.DecidedAt = uow.Now;
+                    task.ConcurrencyVersion++;
+                }
+                node.Status = FlowNodeStatuses.Approved;
+                node.CompletedAt = uow.Now;
+                await uow.Db.SaveChangesAsync(ct);
+                continue;
+            }
+            var result = await ActivateNodeAsync(uow, instance, node, tasks, ct);
+            return result with { AutoApprovedTaskIds = autoApproved };
         }
-        var tasks = await uow.Db.OemFlowTasks
-            .Where(task => task.InstanceNodeId == node.Id && (task.Status == FlowTaskStatuses.Waiting || task.Status == FlowTaskStatuses.Pending))
-            .ToArrayAsync(ct);
+    }
+
+    private async Task<ActivationResult> ActivateNodeAsync(OemUnitOfWork uow, OemFlowInstance instance, OemFlowInstanceNode node,
+        OemFlowTask[] tasks, CancellationToken ct)
+    {
         var eligible = (await ApprovalPlanningService.EligibleIdsAsync(uow.Db, tasks.Select(task => task.ApproverUserId), ct)).ToHashSet();
         var usable = tasks.Where(task => eligible.Contains(task.ApproverUserId)).ToArray();
         var blocked = node.ApprovalMode == ApprovalModes.Any ? usable.Length == 0 : usable.Length != tasks.Length || tasks.Length == 0;

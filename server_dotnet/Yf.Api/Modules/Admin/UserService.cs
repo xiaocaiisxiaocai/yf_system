@@ -142,6 +142,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (request.Email is not null) user.Email = request.Email.Trim();
         if (departmentSpecified) user.DepartmentId = departmentId;
         await context.SaveChangesAsync(ct);
+        if (departmentChanged) await DepartmentService.EnsureLeaderRulesAsync(context, ct);
         if (roleChanged)
         {
             await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);

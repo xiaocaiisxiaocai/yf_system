@@ -4,7 +4,7 @@ namespace Yf.Api.Modules.Oem.Approval;
 
 public static class ApproverSources
 {
-    /// <summary>The initiator's own organisation leader, or the nearest ancestor's when that is missing or is the initiator.</summary>
+    /// <summary>The initiator's own organisation leader, or the nearest ancestor's when that is missing; skipped when the initiator is a leader on the chain.</summary>
     public const string DirectLeader = "DIRECT_LEADER";
     public const string SpecifiedUsers = "SPECIFIED_USERS";
 
@@ -73,6 +73,16 @@ public static class FlowTaskStatuses
 public static class SkipReasons
 {
     public const string SelfPolicySkip = "SELF_POLICY_SKIP";
+    /// <summary>The initiator leads an organisation on their own chain (section, department or division supervisor): no approval at all.</summary>
+    public const string InitiatorIsLeader = "INITIATOR_IS_LEADER";
+    /// <summary>The initiator belongs directly to a department or division, above section level: no approval at all.</summary>
+    public const string AboveSection = "ABOVE_SECTION";
+
+    /// <summary>Why the initiator needs no approval at all, or null when the template applies (2026-11-05).</summary>
+    public static string? ExemptionFor(OrgPath path, ulong initiatorId) =>
+        path.MostSpecificFirst().Any(level => level.LeaderUserId == initiatorId) ? InitiatorIsLeader
+        : path.Own.Kind != "SECTION" ? AboveSection
+        : null;
 }
 
 public sealed record FlowNodeDefinition(
@@ -135,8 +145,8 @@ public interface IApproverSourceStrategy
 
 /// <summary>
 /// The initiator's superior: the leader of their own organisation, walking up to the nearest
-/// ancestor with a leader when it has none or the initiator leads it. When the only leaders
-/// found are the initiator, the initiator is returned so the node's self policy decides.
+/// ancestor with a leader when it has none. Supervisors never reach this strategy: the planner
+/// exempts them from approval altogether (<see cref="SkipReasons.ExemptionFor"/>).
 /// </summary>
 internal sealed class DirectLeaderStrategy : IApproverSourceStrategy
 {
@@ -144,15 +154,9 @@ internal sealed class DirectLeaderStrategy : IApproverSourceStrategy
 
     public (IReadOnlyList<ulong> Candidates, string ScopeName) Candidates(FlowNodeDefinition node, OrgPath path, ulong initiatorId)
     {
-        OrgLevel? self = null;
-        foreach (var level in path.MostSpecificFirst())
-        {
-            if (level.LeaderUserId is not ulong leader) continue;
-            if (leader != initiatorId) return ([leader], level.Name);
-            self ??= level;
-        }
-        if (self is not null) return ([initiatorId], self.Name);
-        throw new ApprovalPlanningException($"{path.Own.Name}及其上级组织都未配置主管，请联系管理员维护组织主管");
+        var nearest = path.MostSpecificFirst().FirstOrDefault(level => level.LeaderUserId.HasValue)
+            ?? throw new ApprovalPlanningException($"{path.Own.Name}及其上级组织都未配置主管，请联系管理员维护组织主管");
+        return ([nearest.LeaderUserId!.Value], nearest.Name);
     }
 }
 
@@ -184,6 +188,11 @@ public sealed class ApprovalPlanner
     public ApprovalPlan Plan(FlowTemplateDefinition template, OrgPath path, ulong initiatorId, IApproverEligibility eligibility)
     {
         var planned = new List<PlannedNode>();
+        // Supervisors and staff above section level send without any approval: every node is skipped.
+        if (SkipReasons.ExemptionFor(path, initiatorId) is string exemption)
+            return new ApprovalPlan(template.Nodes.Where(node => node.Enabled).OrderBy(node => node.SortNo)
+                .Select(node => new PlannedNode(node.SortNo, node.Name, node.Source, node.Mode, true, exemption, false, [], path.Own.Name))
+                .ToArray());
         foreach (var node in template.Nodes.Where(node => node.Enabled).OrderBy(node => node.SortNo))
         {
             if (!strategies.TryGetValue(node.Source, out var strategy))
@@ -191,15 +200,8 @@ public sealed class ApprovalPlanner
             var (candidates, scopeName) = strategy.Candidates(node, path, initiatorId);
             planned.Add(ApprovalPlanner.PlanNode(node, candidates, scopeName, initiatorId, eligibility));
         }
-
-        var seen = new Dictionary<ulong, string>();
-        foreach (var node in planned.Where(node => !node.Skipped))
-        foreach (var approver in node.Approvers)
-        {
-            if (seen.TryGetValue(approver, out var other))
-                throw new ApprovalPlanningException($"同一审批人同时出现在「{other}」和「{node.Name}」节点，请调整审批模板");
-            seen[approver] = node.Name;
-        }
+        // The same approver may appear in several nodes; the engine auto-approves a later task once that
+        // person has approved an earlier node of the same instance (OemApprovalEngine.ActivateNextAsync).
         return new ApprovalPlan(planned);
     }
 
@@ -211,7 +213,6 @@ public sealed class ApprovalPlanner
 
         if (ApproverSources.IsLeader(node.Source))
         {
-            if (initiatorIsApprover) return ApplySelfPolicy(node, scopeName, initiatorId, eligibility);
             var leader = others.Single();
             if (!eligibility.IsEligible(leader))
                 throw new ApprovalPlanningException($"{scopeName}的主管账号已停用或没有 ODM/OEMA 审批权限");

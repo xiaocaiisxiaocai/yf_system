@@ -37,42 +37,43 @@ public sealed class OemDomainTests
         Assert.Equal([SectionLeader], node.Approvers);
         Assert.Equal("装配一课", node.ScopeName);
         Assert.False(plan.RequiresNoApproval);
-
-        // An account directly under a department is approved by that department's leader.
-        var departmentMember = ApprovalPlanner.Default.Plan(Template(Leader(1)),
-            new OrgPath([new OrgLevel(2, "装配部", "DEPARTMENT", DepartmentLeader), new OrgLevel(3, "制造事业部", "DIVISION", DivisionLeader)]),
-            Initiator, Everyone);
-        Assert.Equal([DepartmentLeader], departmentMember.Nodes[0].Approvers);
     }
 
     [Fact]
-    public void DirectLeaderWalksUpWhenTheOwnLeaderIsMissingOrIsTheInitiator()
+    public void DirectLeaderWalksUpWhenTheOwnLeaderIsMissing()
     {
         var missing = ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(sectionLeader: null), Initiator, Everyone);
         Assert.Equal([DepartmentLeader], missing.Nodes[0].Approvers);
         Assert.Equal("装配部", missing.Nodes[0].ScopeName);
-
-        var selfLed = ApprovalPlanner.Default.Plan(Template(Leader(1)), Path(sectionLeader: Initiator, departmentLeader: null), Initiator, Everyone);
-        Assert.Equal([DivisionLeader], selfLed.Nodes[0].Approvers);
-        Assert.False(selfLed.Nodes[0].Skipped);
     }
 
-    [Fact]
-    public void TopLeaderInitiatorFollowsTheNodeSelfPolicy()
+    [Theory]
+    [InlineData(SelfPolicies.Skip)]
+    [InlineData(SelfPolicies.Designated)]
+    [InlineData(SelfPolicies.Block)]
+    public void SupervisorsAndStaffAboveSectionLevelNeedNoApprovalAtAll(string selfPolicy)
     {
-        var top = Path(sectionLeader: Initiator, departmentLeader: Initiator, divisionLeader: Initiator);
-        var skip = ApprovalPlanner.Default.Plan(Template(Leader(1, SelfPolicies.Skip)), top, Initiator, Everyone);
-        Assert.True(skip.RequiresNoApproval);
-        Assert.Equal(SkipReasons.SelfPolicySkip, skip.Nodes[0].SkipReason);
+        var template = Template(Leader(1, selfPolicy, true, Fallback), Specified(2, ApprovalModes.All, [60, 61]), Specified(3, ApprovalModes.Any, [Initiator]));
+        // A section, department or division leader on the sender's chain is a supervisor.
+        foreach (var path in new[] { Path(sectionLeader: Initiator), Path(departmentLeader: Initiator), Path(null, null, Initiator) })
+        {
+            var plan = ApprovalPlanner.Default.Plan(template, path, Initiator, Everyone);
+            Assert.True(plan.RequiresNoApproval);
+            Assert.All(plan.Nodes, node => Assert.Equal(SkipReasons.InitiatorIsLeader, node.SkipReason));
+            Assert.All(plan.Nodes, node => Assert.Empty(node.Approvers));
+        }
 
-        var designated = ApprovalPlanner.Default.Plan(Template(Leader(1, SelfPolicies.Designated, true, Fallback, Initiator)), top, Initiator, Everyone);
-        Assert.True(designated.Nodes[0].UsedFallback);
-        Assert.Equal(ApprovalModes.Any, designated.Nodes[0].Mode);
-        Assert.Equal([Fallback], designated.Nodes[0].Approvers);
-
-        var blocked = Assert.Throws<ApprovalPlanningException>(() =>
-            ApprovalPlanner.Default.Plan(Template(Leader(1, SelfPolicies.Block)), top, Initiator, Everyone));
-        Assert.Contains("不允许本人发送", blocked.Message);
+        // Staff directly under a department or division, even with no leader configured anywhere.
+        foreach (var path in new[]
+        {
+            new OrgPath([new OrgLevel(2, "装配部", "DEPARTMENT", null), new OrgLevel(3, "制造事业部", "DIVISION", null)]),
+            new OrgPath([new OrgLevel(3, "制造事业部", "DIVISION", DivisionLeader)]),
+        })
+        {
+            var plan = ApprovalPlanner.Default.Plan(template, path, Initiator, new SetEligibility([]));
+            Assert.True(plan.RequiresNoApproval);
+            Assert.All(plan.Nodes, node => Assert.Equal(SkipReasons.AboveSection, node.SkipReason));
+        }
     }
 
     [Fact]
@@ -107,11 +108,13 @@ public sealed class OemDomainTests
     }
 
     [Fact]
-    public void TheSamePersonInTwoNodesIsAConfigurationError()
+    public void TheSamePersonMayAppearInSeveralNodes()
     {
-        var error = Assert.Throws<ApprovalPlanningException>(() => ApprovalPlanner.Default.Plan(
-            Template(Leader(1), Specified(2, ApprovalModes.Any, [SectionLeader])), Path(), Initiator, Everyone));
-        Assert.Contains("同一审批人", error.Message);
+        // The engine auto-approves the later task once that person approved the earlier node.
+        var plan = ApprovalPlanner.Default.Plan(
+            Template(Leader(1), Specified(2, ApprovalModes.Any, [SectionLeader, 60])), Path(), Initiator, Everyone);
+        Assert.Equal([SectionLeader], plan.Nodes[0].Approvers);
+        Assert.Equal([SectionLeader, 60UL], plan.Nodes[1].Approvers);
     }
 
     [Fact]

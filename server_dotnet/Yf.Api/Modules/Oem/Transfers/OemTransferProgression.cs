@@ -84,6 +84,9 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
     {
         var wasBlocked = instance.Status == FlowInstanceStatuses.ApprovalBlocked;
         var result = await engine.ActivateNextAsync(uow, instance, ct);
+        if (result.AutoApprovedTaskIds.Count > 0)
+            await audit.WriteAsync(uow, actor, "OEM_APPROVAL_AUTO_APPROVE", "oem_transfer", transfer.Id,
+                new { targetName = transfer.Title, taskIds = result.AutoApprovedTaskIds, reason = OemApprovalEngine.AutoApprovedReason }, ct);
         switch (result.Outcome)
         {
             case ActivationOutcome.Completed:

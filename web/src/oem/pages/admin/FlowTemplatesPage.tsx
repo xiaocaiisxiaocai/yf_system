@@ -77,13 +77,18 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
   useEffect(() => { void api.departments().then((list) => setTree(toTree(list))) }, [api])
 
   const patch = (key: number, value: Partial<EditableNode>) => setNodes((list) => list.map((node) => (node.key === key ? { ...node, ...value } : node)))
-  const inputs = (): FlowNodeInput[] => nodes.map((node) => ({
-    name: node.name, approverSource: node.approverSource,
-    approvalMode: node.approverSource === 'SPECIFIED_USERS' ? node.approvalMode : 'SINGLE',
-    selfPolicy: node.selfPolicy, enabled: node.enabled,
-    approverUserIds: node.approverSource === 'SPECIFIED_USERS' ? node.approvers.map((item) => item.id) : [],
-    fallbackUserIds: node.selfPolicy === 'DESIGNATED' ? node.fallbacks.map((item) => item.id) : [],
-  }))
+  const inputs = (): FlowNodeInput[] => nodes.map((node) => {
+    const specified = node.approverSource === 'SPECIFIED_USERS'
+    // A supervisor sending skips the superior node, so only specified-user nodes carry a self policy.
+    const selfPolicy = specified ? node.selfPolicy : 'SKIP'
+    return {
+      name: node.name, approverSource: node.approverSource,
+      approvalMode: specified ? node.approvalMode : 'SINGLE',
+      selfPolicy, enabled: node.enabled,
+      approverUserIds: specified ? node.approvers.map((item) => item.id) : [],
+      fallbackUserIds: selfPolicy === 'DESIGNATED' ? node.fallbacks.map((item) => item.id) : [],
+    }
+  })
 
   const save = async () => {
     if (savingRef.current) return
@@ -154,14 +159,16 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
                       options={[{ value: 'ANY', label: '或签（任一人通过）' }, { value: 'ALL', label: '会签（全部通过）' }]} />
                   </Form.Item>
                 )}
-                <Form.Item label="发送人本人是审批人时">
-                  <Select style={{ width: 190 }} value={node.selfPolicy} options={SELF_POLICIES} onChange={(selfPolicy) => patch(node.key, { selfPolicy })} />
-                </Form.Item>
+                {node.approverSource === 'SPECIFIED_USERS' && (
+                  <Form.Item label="发送人本人是审批人时">
+                    <Select style={{ width: 190 }} value={node.selfPolicy} options={SELF_POLICIES} onChange={(selfPolicy) => patch(node.key, { selfPolicy })} />
+                  </Form.Item>
+                )}
               </Space>
               {node.approverSource === 'SPECIFIED_USERS' && (
                 <Form.Item label="指定审批人"><PeoplePicker value={node.approvers} onChange={(approvers) => patch(node.key, { approvers })} /></Form.Item>
               )}
-              {node.selfPolicy === 'DESIGNATED' && (
+              {node.approverSource === 'SPECIFIED_USERS' && node.selfPolicy === 'DESIGNATED' && (
                 <Form.Item label="备用审批人"><PeoplePicker value={node.fallbacks} onChange={(fallbacks) => patch(node.key, { fallbacks })} /></Form.Item>
               )}
             </Form>

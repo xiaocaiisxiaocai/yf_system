@@ -313,7 +313,7 @@ public sealed class OemTransferFlowTests
     }
 
     [Fact(Timeout = 240_000)]
-    public async Task LeaderSelfSendSkipsApprovalAndDirectStaffNeedADepartmentLeader()
+    public async Task LeadersAndStaffAboveSectionLevelSendWithoutApproval()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
@@ -330,20 +330,65 @@ public sealed class OemTransferFlowTests
         await host.RunOemJobsAsync(ct);
         Assert.Equal("RELEASED", Lifecycle(await world.Leader.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok()));
         await using (var conn = await host.OpenAsync(ct))
-            Assert.Contains("SELF_POLICY_SKIP", await conn.ExecuteScalarAsync<string>(
+            Assert.Contains("INITIATOR_IS_LEADER", await conn.ExecuteScalarAsync<string>(
                 "SELECT detail FROM audit_logs WHERE action='OEM_TRANSFER_SEND' AND target_id=@id",
                 new { id = id.ToString(System.Globalization.CultureInfo.InvariantCulture) }));
 
-        // Staff directly under a department may draft; with no department or division leader the send is refused.
+        // Staff directly under a department are above section level: sent without approval, even with no leader there.
         await host.CreateInternalUserAsync("direct_staff", "Direct#2026x", ["oem:transfer_create"], world.Org.Department, ct);
         var direct = await host.LoginInternalAsync("direct_staff", "Direct#2026x", ct);
         var directDraft = await direct.PostAsync("/api/v1/oem/transfers",
             new { title = "直属发送", oemCompanyId = world.CompanyId }, ct).Ok();
         var directId = TransferId(directDraft);
         await host.UploadAsync(direct, directId, "direct.pdf", OemTestHost.Pdf("direct"), ct);
-        var refused = await direct.PostAsync($"/api/v1/oem/transfers/{directId}/send", new { version = Version(directDraft) + 1 }, ct)
-            .Status(HttpStatusCode.BadRequest);
-        Assert.Contains("及其上级组织都未配置主管", refused.Body);
+        var directSent = await direct.PostAsync($"/api/v1/oem/transfers/{directId}/send", new { version = Version(directDraft) + 1 }, ct).Ok();
+        Assert.Equal("SKIPPED", directSent["summary"]!["approvalStatus"]!.GetValue<string>());
+        await host.RunOemJobsAsync(ct);
+        Assert.Equal("RELEASED", Lifecycle(await direct.GetAsync($"/api/v1/oem/transfers/{directId}", ct).Ok()));
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task AnApproverRepeatedInLaterNodesIsApprovedAutomatically()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var reviewerId = await host.CreateInternalUserAsync("zp_reviewer", "Review#2026x", ["oem:flow_approve", "oem:transfer_view"], world.Org.Section, ct);
+        var reviewer = await host.LoginInternalAsync("zp_reviewer", "Review#2026x", ct);
+        await world.Admin.PostAsync("/api/v1/oem/flow-templates", new
+        {
+            name = "重复审批人", isDefault = false, departmentIds = new[] { world.Org.Section },
+            nodes = new object[]
+            {
+                new { name = "主管", approverSource = "DIRECT_LEADER", approvalMode = "SINGLE", selfPolicy = "SKIP", enabled = true, approverUserIds = Array.Empty<ulong>(), fallbackUserIds = Array.Empty<ulong>() },
+                new { name = "会签", approverSource = "SPECIFIED_USERS", approvalMode = "ALL", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { world.LeaderId, reviewerId }, fallbackUserIds = Array.Empty<ulong>() },
+                new { name = "或签", approverSource = "SPECIFIED_USERS", approvalMode = "ANY", selfPolicy = "BLOCK", enabled = true, approverUserIds = new[] { world.LeaderId }, fallbackUserIds = Array.Empty<ulong>() },
+            },
+        }, ct).Ok();
+
+        var draft = await CreateOutboundAsync(world, "重复审批", ct);
+        var id = TransferId(draft);
+        await host.UploadAsync(world.Sender, id, "repeat.pdf", OemTestHost.Pdf("repeat"), ct);
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{id}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
+
+        var task = Assert.Single((await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray())!;
+        await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct).Ok();
+        // All-sign: the leader's share is approved automatically, the reviewer still decides.
+        Assert.Empty((await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray());
+        task = Assert.Single((await reviewer.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray())!;
+        var detail = await reviewer.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct).Ok();
+        // Any-sign with only the leader: passed automatically, so the transfer is released.
+        Assert.Equal("RELEASED", Lifecycle(detail));
+        var nodes = detail["approval"]!["nodes"]!.AsArray();
+        Assert.All(nodes, node => Assert.Equal("APPROVED", node!["status"]!.GetValue<string>()));
+        var auto = nodes.SelectMany(node => node!["tasks"]!.AsArray())
+            .Where(item => item!["reason"]?.GetValue<string>() == OemApprovalEngine.AutoApprovedReason).ToArray();
+        Assert.Equal(2, auto.Length);
+        Assert.All(auto, item => Assert.Equal(world.LeaderId, item!["approverUserId"]!.GetValue<ulong>()));
+        await using var conn = await host.OpenAsync(ct);
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM audit_logs WHERE action='OEM_APPROVAL_AUTO_APPROVE' AND target_id=@id",
+            new { id = id.ToString(System.Globalization.CultureInfo.InvariantCulture) }));
     }
 
     [Fact(Timeout = 240_000)]

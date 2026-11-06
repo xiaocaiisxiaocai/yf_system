@@ -32,6 +32,7 @@ export const OEM_ACTIONS: Record<string, ActionMeta> = {
   OEM_TRANSFER_CANCEL: action('终止传递单', 'TRANSFER', '传递单', 'red'),
   OEM_TRANSFER_ABANDON: action('废弃草稿', 'TRANSFER', '传递单', 'gray'),
   OEM_APPROVAL_APPROVE: action('审批通过', 'APPROVAL', '审批', 'green'),
+  OEM_APPROVAL_AUTO_APPROVE: action('自动通过', 'APPROVAL', '审批', 'green'),
   OEM_APPROVAL_REASSIGN: action('转交审批', 'APPROVAL', '审批', 'purple'),
   OEM_APPROVAL_BLOCKED: action('审批异常', 'APPROVAL', '审批', 'orange'),
   OEM_FILE_UPLOAD: action('上传文件', 'FILE', '文件', 'arcoblue'),

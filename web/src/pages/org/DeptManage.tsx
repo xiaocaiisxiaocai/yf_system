@@ -155,6 +155,7 @@ export default function DeptManage() {
   const leaderModalOpen = useRef(false)
   const leaderSaveInFlight = useRef(false)
   const leaderSearchTimer = useRef<number | undefined>(undefined)
+  const leaderTargetId = useRef<number | null>(null)
   const canManageLeader = useAuth((s) => s.hasPerm('dept:leader_manage'))
   const clearLeaderSearchTimer = useCallback(() => {
     if (leaderSearchTimer.current === undefined) return
@@ -215,7 +216,7 @@ export default function DeptManage() {
     try {
       const term = search.trim()
       const response = await http.get<DepartmentLeaderOption[]>('/admin/department-leader-options', {
-        params: term ? { keyword: term } : undefined,
+        params: { ...(term ? { keyword: term } : {}), ...(leaderTargetId.current ? { departmentId: leaderTargetId.current } : {}) },
       })
       if (leaderModalOpen.current && session === leaderModalSession.current && request === leaderRequestSequence.current) {
         setLeaderOptions(response.data)
@@ -244,6 +245,7 @@ export default function DeptManage() {
     const session = leaderModalSession.current + 1
     leaderModalSession.current = session
     leaderModalOpen.current = true
+    leaderTargetId.current = target.id
     setLeaderTarget(target)
     setLeaderDraft(target.leader ? {
       id: target.leader.id,
