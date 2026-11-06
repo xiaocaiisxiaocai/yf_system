@@ -801,7 +801,6 @@ internal sealed class ProjectGroupService(
             if (name.EnumerateRunes().Count() > 128) throw ApiException.BadRequest("子项目名称不能超过 128 个字符");
             if (seen.Add(name)) result.Add(name);
         }
-        if (result.Count == 0) throw ApiException.BadRequest("请至少创建一个子项目");
         if (result.Count > 50) throw ApiException.BadRequest("单个主项目最多创建 50 个子项目");
         return result.ToArray();
     }

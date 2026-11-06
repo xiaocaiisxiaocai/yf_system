@@ -545,6 +545,24 @@ public sealed class ProjectGroupTests
     }
 
     [Fact(Timeout = 90_000)]
+    public async Task MainProjectCanBeCreatedWithoutSubprojects()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_group_no_children", ct);
+        var (_, _, conn, groupId, _) = await SeedOpenGroupAsync(database, "无子项目", 8800, ct, []);
+        await using (conn)
+        {
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM projects WHERE project_group_id=@GroupId", new { GroupId = groupId }, cancellationToken: ct)));
+            Assert.Equal("DRAFT", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT status FROM project_groups WHERE id=@GroupId", new { GroupId = groupId }, cancellationToken: ct)));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
+                "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_GROUP_CREATE' AND target_id=@Id",
+                new { Id = groupId.ToString() }, cancellationToken: ct)));
+        }
+    }
+
+    [Fact(Timeout = 90_000)]
     public async Task OrganizationLeadersCanDeleteProjectsOnlyInsideTheirOrganizationScope()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -923,7 +941,8 @@ public sealed class ProjectGroupTests
     /// </summary>
     private static async Task<(ProjectGroupService Groups, ProjectService Projects, MySqlConnector.MySqlConnection Conn,
         ulong GroupId, ulong ChildId)> SeedOpenGroupAsync(
-        SchemaShapeTests.SchemaDatabaseScope database, string label, ulong baseId, CancellationToken ct)
+        SchemaShapeTests.SchemaDatabaseScope database, string label, ulong baseId, CancellationToken ct,
+        string[]? subprojectNames = null)
     {
         await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
@@ -962,7 +981,7 @@ public sealed class ProjectGroupTests
             RobotTypeId = 1_000_000 + baseId + 7,
             RobotOwnerContactIds = [10_000_000 + baseId],
             ExpectedCompletionDate = "2099-12-31",
-            SubprojectNames = [label + "子项目"],
+            SubprojectNames = subprojectNames ?? [label + "子项目"],
         }, null, ct));
         var groupId = created.RootElement.GetProperty("id").GetUInt64();
         var childId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(

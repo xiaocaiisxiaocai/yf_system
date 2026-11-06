@@ -45,9 +45,9 @@ function optionFilter(input: string, option?: { props?: { children?: unknown } }
   return String(option?.props?.children ?? '').toLocaleLowerCase().includes(input.toLocaleLowerCase())
 }
 
-function listRule(label: string, limit: number, values: unknown, callback: (error?: string) => void) {
+function listRule(label: string, limit: number, values: unknown, callback: (error?: string) => void, optional = false) {
   const normalized = normalizeList(Array.isArray(values) ? values.map(String) : [])
-  if (!normalized.length) { callback(`请至少填写一个${label}`); return }
+  if (!normalized.length) { callback(optional ? undefined : `请至少填写一个${label}`); return }
   if (normalized.length > limit) { callback(`${label}最多填写 ${limit} 项`); return }
   if (normalized.some((item) => [...item].length > 128)) { callback(`每个${label}最多 128 个字符`); return }
   callback()
@@ -394,7 +394,7 @@ export default function ProjectList() {
         Message.success('主项目资料已保存，并同步到未完成的子项目')
       } else {
         await http.post<ApiResponses['POST /project-groups']>('/project-groups', payload)
-        Message.success('主项目及子项目已创建')
+        Message.success(payload.subprojectNames?.length ? '主项目及子项目已创建' : '主项目已创建')
       }
       setEditConflict(false); setModalOpen(false); load()
     } catch (error) {
@@ -490,7 +490,7 @@ export default function ProjectList() {
         </ColumnResizeProvider>
         </>}
 
-      <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: submitOptionsBlocked }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
+      <Modal className="form-dialog" style={{ width: 760 }} title={editing ? '编辑主项目' : '新建主项目'} visible={modalOpen} onOk={submit} onCancel={closeModal} confirmLoading={saving} closable={!saving} maskClosable={false} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: submitOptionsBlocked }} okText={editing ? '保存并同步' : '创建主项目'} unmountOnExit>
         <Form onSubmit={() => void submit()} className="form-grid" form={form} layout="vertical">
           {!editing && (createOptionsBusy || createOptionsNeedRefresh) && <div className="form-grid-full" style={{ display: 'grid', gap: 8 }}>
             {(supplierOptionsLoading || metadataOptionsLoading) && <Typography.Text type="secondary">正在加载创建所需的基础数据…</Typography.Text>}
@@ -507,7 +507,7 @@ export default function ProjectList() {
             <Alert className="form-grid-full" type="warning" content={`主项目已被他人修改，已刷新为最新数据（当前名称：${editing.name}）。请核对后再次保存，保存将覆盖为本弹窗中的内容。`} />
           )}
           <Form.Item className="form-grid-full" label="主项目名称" field="name" rules={[{ required: true, message: '请输入主项目名称' }, textLengthRule('主项目名称', 128)]}><Input autoFocus placeholder="主项目名称" /></Form.Item>
-          {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ required: true, message: '请至少创建一个子项目' }, { validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}
+          {!editing && <Form.Item className="form-grid-full" label="子项目" field="subprojectNames" rules={[{ validator: (value, callback) => listRule('子项目', SUBPROJECT_LIMIT, value, callback, true) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入子项目名称后按回车，可一次创建多个" /></Form.Item>}
           <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
           <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }, textLengthRule('机型', 128)]}><Input maxLength={128} showWordLimit placeholder="请输入机型" /></Form.Item>
           <Form.Item label="Robot 厂商" field="supplierId" rules={[{ required: true, message: '请选择 Robot 厂商' }]}><Select showSearch placeholder="选择 Robot 厂商" filterOption={optionFilter} loading={supplierOptionsLoading} disabled={!!editing || supplierOptionsLoading || supplierOptionsError} onChange={(value) => changeSupplier(value as number | undefined)}>{supplierFormOptions.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select></Form.Item>

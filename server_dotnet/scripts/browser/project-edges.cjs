@@ -151,7 +151,7 @@ async function createGroup(context, token, supplierId, name, defaults) {
       await page.waitForFunction(() => [...document.querySelectorAll('.arco-modal button')].some(button => button.textContent.trim() === '创建主项目' && !button.disabled));
       assert.equal(await dialog.getByRole('textbox', { name: '主项目名称', exact: true }).inputValue(), '恢复后应保留的草稿');
       await dialog.getByRole('button', { name: '创建主项目', exact: true }).click();
-      await dialog.getByText('请至少创建一个子项目', { exact: true }).waitFor();
+      await dialog.getByText('请至少填写一个工令号', { exact: true }).waitFor();
       await dialog.getByRole('button', { name: '取消', exact: true }).click();
       await dialog.waitFor({ state: 'hidden' });
       page.expectedServerErrors.clear();
