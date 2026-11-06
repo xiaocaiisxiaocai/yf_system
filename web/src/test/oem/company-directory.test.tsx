@@ -315,25 +315,42 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     await act(async () => pending.resolve(company({ id: 99, name: '新厂商' })))
   })
 
-  it('切换厂商时忽略前一厂商迟到的账号响应', async () => {
+  it('切换厂商后忽略骏创迟到响应并只删除元控账号', async () => {
+    const user = userEvent.setup()
     const firstAccounts = deferred<VendorAccount[]>()
-    const first = company({ id: 7, name: '厂商 A' })
-    const second = company({ id: 8, name: '厂商 B' })
-    const companies = vi.fn().mockResolvedValue(page([first, second]))
-    const accounts = vi.fn().mockImplementation((companyId: number) => companyId === first.id
+    const junchuang = company({ id: 7, name: '骏创' })
+    const yuankong = company({ id: 8, name: '元控' })
+    const junchuangAccount = account({ id: 71, companyId: junchuang.id, employeeNo: 'JC001' })
+    const yuankongAccount = account({ id: 82, companyId: yuankong.id, employeeNo: 'YK001' })
+    let yuankongDeleted = false
+    const companies = vi.fn().mockResolvedValue(page([junchuang, yuankong]))
+    const accounts = vi.fn().mockImplementation((companyId: number) => companyId === junchuang.id
       ? firstAccounts.promise
-      : Promise.resolve([account({ id: 82, companyId: second.id, employeeNo: 'OEM_B' })]))
-    renderDirectory(baseApi({ companies, accounts }), ['oem:company_manage', 'oem:account_manage', 'oem:account_delete'])
+      : Promise.resolve(yuankongDeleted ? [] : [yuankongAccount]))
+    const deleteAccount = vi.fn().mockImplementation(async (accountId: number) => {
+      if (accountId === yuankongAccount.id) yuankongDeleted = true
+    })
+    renderDirectory(baseApi({ companies, accounts, deleteAccount }), ['oem:company_manage', 'oem:account_manage', 'oem:account_delete'])
 
-    const firstRow = (await screen.findByText('厂商 A')).closest('tr')!
+    const firstRow = (await screen.findByText('骏创')).closest('tr')!
     fireEvent.click(within(firstRow).getByRole('button', { name: '账号管理' }))
-    await waitFor(() => expect(accounts).toHaveBeenCalledWith(first.id))
-    const secondRow = screen.getByText('厂商 B').closest('tr')!
+    await waitFor(() => expect(accounts).toHaveBeenCalledWith(junchuang.id))
+    const secondRow = screen.getByText('元控').closest('tr')!
     fireEvent.click(within(secondRow).getByRole('button', { name: '账号管理' }))
-    expect(await screen.findByText('OEM_B')).toBeVisible()
+    expect(await screen.findByText('YK001')).toBeVisible()
 
-    await act(async () => firstAccounts.resolve([account({ employeeNo: 'OEM_A' })]))
-    expect(screen.getByText('OEM_B')).toBeVisible()
-    expect(screen.queryByText('OEM_A')).not.toBeInTheDocument()
+    await act(async () => firstAccounts.resolve([junchuangAccount]))
+    expect(screen.getByText('YK001')).toBeVisible()
+    expect(screen.queryByText('JC001')).not.toBeInTheDocument()
+
+    const drawer = document.querySelector<HTMLElement>('.oem-accounts-drawer')!
+    const accountRow = within(drawer).getByText('YK001').closest('tr')!
+    await user.click(within(accountRow).getByRole('button', { name: '删除' }))
+    const confirm = (await screen.findByText('删除账号“YK001”')).closest<HTMLElement>('[role="dialog"]')!
+    await user.click(within(confirm).getByRole('button', { name: '确认删除' }))
+
+    await waitFor(() => expect(deleteAccount).toHaveBeenCalledTimes(1))
+    expect(deleteAccount).toHaveBeenCalledWith(yuankongAccount.id)
+    expect(deleteAccount).not.toHaveBeenCalledWith(junchuangAccount.id)
   })
 })
