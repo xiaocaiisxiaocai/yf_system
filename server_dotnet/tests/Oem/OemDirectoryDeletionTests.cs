@@ -100,7 +100,7 @@ public sealed class OemDirectoryDeletionTests
             await connection.ExecuteAsync("""
                 INSERT INTO oem_transfers(
                     direction,oem_company_id,title,lifecycle_status,retention_template_id,created_at,updated_at,concurrency_version)
-                VALUES('INTERNAL_TO_OEM',@transferOnlyCompanyId,'无账号但有传递历史','DRAFT',@retentionId,
+                VALUES('INTERNAL_TO_OEM',@transferOnlyCompanyId,'无账号但有传递历史','RELEASED',@retentionId,
                     UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),0)
                 """, new { transferOnlyCompanyId, retentionId });
             var transferId = await connection.ExecuteScalarAsync<ulong>("""

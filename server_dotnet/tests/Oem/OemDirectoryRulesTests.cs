@@ -1,6 +1,5 @@
 using System.Net;
 using Dapper;
-using Yf.Api.Modules.Oem.Admin;
 using static Yf.Api.Tests.Oem.OemTransferFlowTests;
 
 namespace Yf.Api.Tests.Oem;
@@ -16,20 +15,20 @@ public sealed class OemDirectoryRulesTests
         var admin = await host.LoginAdminAsync(ct);
         var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = "唯一账号厂商" }, ct).Ok()).Id();
         var first = await CreateAccountAsync(admin, companyId, "last_one", ct);
-        // Even a draft is business history, regardless of whether this account created it.
+        // A completed transfer remains business history even if this account did not create it.
         await using (var connection = await host.OpenAsync(ct))
             await connection.ExecuteAsync("""
                 INSERT INTO oem_transfers(direction,oem_company_id,title,lifecycle_status,retention_template_id,
                     created_at,updated_at,concurrency_version)
-                SELECT 'INTERNAL_TO_OEM',@companyId,'保留接收账号','DRAFT',id,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),0
+                SELECT 'INTERNAL_TO_OEM',@companyId,'保留接收账号','RELEASED',id,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),0
                 FROM oem_retention_templates ORDER BY id LIMIT 1
                 """, new { companyId });
 
         var disable = await admin.PutAsync($"/api/v1/oem/accounts/{first}/status", new { status = "DISABLED" }, ct)
             .Status(HttpStatusCode.Conflict, 40901);
-        Assert.Equal(OemDirectoryService.LastActiveAccountMessage, disable.Json!["message"]!.GetValue<string>());
+        Assert.Contains("传递单业务历史", disable.Json!["message"]!.GetValue<string>());
         var delete = await admin.DeleteAsync($"/api/v1/oem/accounts/{first}", ct).Status(HttpStatusCode.Conflict, 40901);
-        Assert.Equal(OemDirectoryService.LastActiveAccountMessage, delete.Json!["message"]!.GetValue<string>());
+        Assert.Equal(disable.Json!["message"]!.GetValue<string>(), delete.Json!["message"]!.GetValue<string>());
         Assert.Equal("ACTIVE", await StatusOfAsync(host, first, ct));
 
         // With a second active account either one may go, but never the last one standing.

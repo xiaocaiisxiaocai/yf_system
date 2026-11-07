@@ -47,12 +47,11 @@ public sealed record OemImportResponse(int Created, int Skipped, int Failed, IRe
 /// or resetting a password, revokes the affected OEM sessions in the same transaction.
 /// Empty vendors and accounts may be physically deleted; records with business or
 /// historical references must be disabled so their identity remains explainable.
-/// An active vendor with transfers keeps at least one active account, and a vendor cannot be
+/// An active vendor with transfer history keeps at least one active account, and a vendor cannot be
 /// disabled while transfers in either direction are still in flight.
 /// </summary>
 public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
-    internal const string LastActiveAccountMessage = "该厂商已有传递单，至少需要保留一个启用账号；如需停止合作，请停用厂商";
     internal const int MaximumCompanyImportRows = 500;
     internal const int MaximumAccountImportRows = 100;
     internal const int MaximumContactsPerCompany = 100;
@@ -288,11 +287,12 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         var accountCount = await uow.Db.OemAccounts.LongCountAsync(account => account.OemCompanyId == id, ct);
         if (accountCount > 0)
             throw ApiException.BadRequest($"该厂商仍有 {accountCount} 个关联账号，请先逐个删除账号；如需保留账号请停用厂商");
-        if (await uow.Db.OemTransfers.AnyAsync(transfer => transfer.OemCompanyId == id, ct))
-            throw ApiException.BadRequest("该厂商仍有传递单或历史记录，请停用厂商，不要删除");
+        if (await RetainedTransferReasonAsync(uow.Db, id, ct) is { } reason)
+            throw ApiException.BadRequest($"{reason}请停用厂商以保留记录。");
+        var removedEmptyDrafts = await DirectoryTransfers(uow.Db, id, emptyDrafts: true).ExecuteDeleteAsync(ct);
         var removedContacts = await uow.Db.OemCompanyContacts.Where(contact => contact.OemCompanyId == id).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_COMPANY_DELETE", "oem_company", id,
-            new { targetName = company.Name, removedContacts, changes = Array.Empty<AuditChange>() }, ct);
+            new { targetName = company.Name, removedContacts, removedEmptyDrafts, changes = Array.Empty<AuditChange>() }, ct);
         await uow.Db.OemCompanies.Where(item => item.Id == id).ExecuteDeleteAsync(ct);
         await uow.CommitAsync(ct);
     }
@@ -627,13 +627,17 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         // references to an account hold a shared lock on that row (OemAccountLock).
         var account = await LockAccountForCompanyChangeAsync(uow, id, ct);
         if (account.Status == OemStatus.Active) await EnsureNotLastActiveAccountAsync(uow, account, ct);
-        await EnsureNoAccountHistoryAsync(uow, id, ct);
+        var ownEmptyDrafts = DirectoryTransfers(uow.Db, account.OemCompanyId, emptyDrafts: true)
+            .Where(t => t.OemSenderAccountId == id || (t.ClosedByRealm == OemRealms.Oem && t.ClosedById == id));
+        await EnsureNoAccountHistoryAsync(uow, id, ownEmptyDrafts, ct);
+        var removedEmptyDrafts = await ownEmptyDrafts.ExecuteDeleteAsync(ct);
         var revokedSessions = await uow.Db.OemRefreshTokens.Where(token => token.AccountId == id).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_ACCOUNT_DELETE", "oem_account", id, new
         {
             account.EmployeeNo,
             targetName = account.EmployeeNo,
             revokedSessions,
+            removedEmptyDrafts,
             changes = Array.Empty<AuditChange>(),
         }, ct);
         await uow.Db.OemAccounts.Where(item => item.Id == id).ExecuteDeleteAsync(ct);
@@ -650,10 +654,36 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
     }
 
-    private static async Task EnsureNoAccountHistoryAsync(OemUnitOfWork uow, ulong id, CancellationToken ct)
+    // The same rule applies to already stored drafts and to new drafts. A removed/purged
+    // file or an unfinished upload is evidence even if the transfer list shows zero files.
+    private static IQueryable<OemTransfer> DirectoryTransfers(YfDbContext db, ulong companyId, bool emptyDrafts) =>
+        db.OemTransfers.Where(t => t.OemCompanyId == companyId)
+            .Where(t => ((t.LifecycleStatus == TransferLifecycle.Draft || t.LifecycleStatus == TransferLifecycle.Abandoned)
+                && t.SentAt == null && t.ReleasedAt == null && t.ManifestSha256 == null
+                && !db.OemTransferFiles.Any(f => f.TransferId == t.Id)
+                && !db.OemUploadSessions.Any(s => s.TransferId == t.Id)
+                && !db.OemFlowInstances.Any(i => i.TransferId == t.Id)
+                && !db.EmailOutbox.Any(m => m.OemTransferId == t.Id)) == emptyDrafts);
+
+    private static async Task<string?> RetainedTransferReasonAsync(YfDbContext db, ulong companyId, CancellationToken ct)
     {
-        var hasHistory = await uow.Db.OemTransfers.AnyAsync(transfer => transfer.OemSenderAccountId == id
-                || transfer.ClosedByRealm == OemRealms.Oem && transfer.ClosedById == id, ct)
+        var status = await DirectoryTransfers(db, companyId, emptyDrafts: false)
+            .OrderBy(t => t.Id).Select(t => t.LifecycleStatus).FirstOrDefaultAsync(ct);
+        return status switch
+        {
+            null => null,
+            TransferLifecycle.Draft => "该厂商有含业务记录的草稿，草稿仅创建人可见。",
+            TransferLifecycle.Abandoned => "该厂商有已废弃的传递单，仍关联业务记录。",
+            _ => "该厂商仍有传递单业务历史。",
+        };
+    }
+
+    private static async Task EnsureNoAccountHistoryAsync(OemUnitOfWork uow, ulong id,
+        IQueryable<OemTransfer> ownEmptyDrafts, CancellationToken ct)
+    {
+        var hasHistory = await uow.Db.OemTransfers.AnyAsync(transfer => (transfer.OemSenderAccountId == id
+                || transfer.ClosedByRealm == OemRealms.Oem && transfer.ClosedById == id)
+                && !ownEmptyDrafts.Any(draft => draft.Id == transfer.Id), ct)
             || await uow.Db.OemTransferFiles.AnyAsync(file => file.UploadedByOemAccountId == id
                 || file.FirstRecipientRealm == OemRealms.Oem && file.FirstRecipientId == id, ct)
             || await uow.Db.OemUploadSessions.AnyAsync(session => session.UploaderRealm == OemRealms.Oem && session.UploaderId == id, ct)
@@ -662,7 +692,11 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             // A login/password test is not business usage; keep these logs after deletion.
             || await uow.Db.AuditLogs.AnyAsync(log => log.ActorRealm == OemRealms.Oem && log.ActorAccountId == id
                 && log.Action != "OEM_LOGIN" && log.Action != "OEM_LOGIN_FAILED"
-                && log.Action != "OEM_LOGOUT" && log.Action != "OEM_PASSWORD_CHANGE", ct)
+                && log.Action != "OEM_LOGOUT" && log.Action != "OEM_PASSWORD_CHANGE"
+                && !(log.TargetType == "oem_transfer"
+                    && (log.Action == "OEM_TRANSFER_CREATE" || log.Action == "OEM_TRANSFER_UPDATE" || log.Action == "OEM_TRANSFER_ABANDON")
+                    // MySQL 5.7 casts the numeric id using the connection collation.
+                    && ownEmptyDrafts.Any(draft => EF.Functions.Collate(draft.Id.ToString(), "utf8mb4_unicode_ci") == log.TargetId)), ct)
             || await uow.Db.EmailOutbox.AnyAsync(mail => mail.RecipientRealm == OemRealms.Oem && mail.RecipientAccountId == id, ct);
         if (hasHistory) throw ApiException.BadRequest("该账号仍有传递、文件、通知或业务操作历史，请停用账号，不要删除");
     }
@@ -684,7 +718,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     }
 
     /// <summary>
-    /// An active vendor with transfers must keep at least one active account.
+    /// An active vendor with retained transfer history must keep at least one active account.
     /// Empty or disabled vendors are exempt. Callers hold the management gate and company row lock.
     /// </summary>
     private static async Task EnsureNotLastActiveAccountAsync(OemUnitOfWork uow, OemAccount account, CancellationToken ct)
@@ -694,10 +728,10 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         // Provisioning permits an active company without accounts. Permit returning to that
         // state while it has no business, including deletion of its last unused account.
         // The exclusive management gate also prevents a concurrent first transfer from racing this check.
-        if (!await uow.Db.OemTransfers.AnyAsync(transfer => transfer.OemCompanyId == account.OemCompanyId, ct)) return;
         var othersActive = await uow.Db.OemAccounts.AnyAsync(item => item.OemCompanyId == account.OemCompanyId
             && item.Id != account.Id && item.Status == OemStatus.Active, ct);
-        if (!othersActive) throw ApiException.Conflict(LastActiveAccountMessage);
+        if (!othersActive && await RetainedTransferReasonAsync(uow.Db, account.OemCompanyId, ct) is { } reason)
+            throw ApiException.Conflict($"{reason}须保留一个启用账号，请先启用其他账号或停用厂商。");
     }
 
     private static async Task<OemCompany> LockCompanyAsync(OemUnitOfWork uow, ulong id, CancellationToken ct) =>
