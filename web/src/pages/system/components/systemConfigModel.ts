@@ -139,6 +139,8 @@ export interface MailDetail {
   retryCount?: number
   error?: string
   failedStep?: string
+  diagnosis?: string
+  nextAttemptAt?: string
 }
 
 export interface MailRecent {
@@ -161,6 +163,7 @@ export interface MailStatus {
   queue: { pending: number; sending: number; sent: number; failed: number; cancelled: number }
   latestSentAt?: string | null
   latestFailedAt?: string | null
+  latestFailure?: MailRecent | null
   missingEmailCount: number
   missingEmailAccounts: Array<{
     userId: number
@@ -248,8 +251,35 @@ export const MAIL_ACTION_LABELS: Record<string, string> = {
   EMAIL_CANCELLED_STALE: '已取消：事件失效',
 }
 
-export function mailRecentSummary(row: MailRecent): string {
-  if (row.action.startsWith('OEM_EMAIL_')) return mailRecentSummary({ ...row, action: row.action.slice(4) })
+/** Result tag of a mail log row; a connection check is one action whose outcome is the presence of a failed step. */
+export function mailActionTag(row: MailRecent): { label: string; color: string } {
+  const { action } = row
+  if (action === 'EMAIL_TEST_DIAGNOSE') {
+    return row.detail?.failedStep ? { label: '连接检测：失败', color: 'red' } : { label: '连接检测：正常', color: 'green' }
+  }
+  const color = action.endsWith('_SENT') ? 'green' : action.endsWith('_FAILED') ? 'red' : action.endsWith('_CANCELLED_STALE') ? 'gray' : 'orange'
+  return { label: MAIL_ACTION_LABELS[action] || `未知动作：${action}`, color }
+}
+
+/** Why a delivery failed: the step and diagnosis recorded since 2026-11-08, else the older coarse category. */
+export function mailFailureCause(row: MailRecent): string {
+  const detail = row.detail || {}
+  if (detail.diagnosis) return detail.failedStep ? `${detail.failedStep}：${detail.diagnosis}` : detail.diagnosis
+  return detail.error || mailReasonText(detail.reason) || '发送失败'
+}
+
+export const MAIL_LOG_RESULTS = [
+  { value: 'all', label: '全部结果' },
+  { value: 'problem', label: '失败与重试' },
+  { value: 'sent', label: '发送成功' },
+  { value: 'skipped', label: '未入队与取消' },
+  { value: 'test', label: '测试与检测' },
+] as const
+
+export type MailLogResult = typeof MAIL_LOG_RESULTS[number]['value']
+
+export function mailRecentSummary(row: MailRecent, formatTime?: (value?: string | null) => string): string {
+  if (row.action.startsWith('OEM_EMAIL_')) return mailRecentSummary({ ...row, action: row.action.slice(4) }, formatTime)
   const detail = row.detail || {}
   if (row.action === 'EMAIL_TEST_DIAGNOSE') return detail.failedStep ? `${detail.failedStep}失败：${detail.reason ?? ''}` : detail.reason || '连接、加密和登录均正常'
   if (row.action.startsWith('EMAIL_TEST_')) return [detail.recipient ? `收件人 ${detail.recipient}` : '', detail.reason].filter(Boolean).join('；')
@@ -258,10 +288,20 @@ export function mailRecentSummary(row: MailRecent): string {
     return `${detail.realName || '账号'}（${detail.employeeNo || `ID ${row.targetId || '-'}`}）未填写邮箱`
   }
   if (row.action === 'EMAIL_RETRY') {
-    return `${detail.error || '发送失败'}${detail.retryCount ? `，已安排第 ${detail.retryCount} 次重试` : ''}`
+    const paused = detail.reason === 'SMTP_UNAVAILABLE'
+    return [
+      mailFailureCause(row),
+      paused ? '暂停发送，不计入重试次数' : detail.retryCount ? `已安排第 ${detail.retryCount} 次重试` : '',
+      detail.nextAttemptAt && formatTime ? `下次 ${formatTime(detail.nextAttemptAt)}` : '',
+      detail.recipient ? `收件人 ${detail.recipient}` : '',
+    ].filter(Boolean).join('；')
   }
   if (row.action === 'EMAIL_FAILED') {
-    return `${detail.error || '发送失败'}${detail.retryCount ? `，第 ${detail.retryCount} 次` : ''}`
+    return [
+      mailFailureCause(row),
+      detail.reason && detail.reason !== 'SMTP_UNAVAILABLE' ? mailReasonText(detail.reason) : detail.retryCount ? `已尝试 ${detail.retryCount} 次，不再重试` : '',
+      detail.recipient ? `收件人 ${detail.recipient}` : '',
+    ].filter(Boolean).join('；')
   }
   if (row.action === 'EMAIL_CANCELLED_STALE') {
     return mailReasonText(detail.reason) || '通知事件已失效，邮件发送已取消'

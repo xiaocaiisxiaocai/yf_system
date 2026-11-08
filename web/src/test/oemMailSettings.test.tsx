@@ -41,13 +41,15 @@ it('switches Robot and OEM rules while preserving drafts and saves only OEM chan
 it('keeps the all-business queue visible when an earlier slow OEM query finishes later', async () => {
   const user = userEvent.setup()
   let resolveOem!: (value: unknown) => void
-  mocks.get.mockImplementation((_url: string, config: { params: { scope: string } }) => config.params.scope === 'oem'
-    ? new Promise(resolve => { resolveOem = resolve })
-    : Promise.resolve({ data: { ...EMPTY_MAIL_STATUS, queue: { ...EMPTY_MAIL_STATUS.queue, pending: 3 }, recent: [{ id: 7, action: 'OEM_EMAIL_SENT', detail: { recipient: 'v***@example.invalid' } }] } }))
+  mocks.get.mockImplementation((url: string, config: { params: { scope: string } }) => url.endsWith('/mail-logs')
+    ? Promise.resolve({ data: { list: config.params.scope === 'all' ? [{ id: 7, action: 'OEM_EMAIL_SENT', detail: { recipient: 'v***@example.invalid' }, createdAt: '2026-11-08T00:00:00Z' }] : [], total: 1, page: 1, pageSize: 20 } })
+    : config.params.scope === 'oem'
+      ? new Promise(resolve => { resolveOem = resolve })
+      : Promise.resolve({ data: { ...EMPTY_MAIL_STATUS, queue: { ...EMPTY_MAIL_STATUS.queue, pending: 3 } } }))
   render(<MemoryRouter><BusinessMailLogPanel mail={EMPTY_MAIL_STATUS} formatTime={() => '-'} onViewLogs={vi.fn()} /></MemoryRouter>)
   await user.click(screen.getByRole('combobox', { name: '邮件日志业务' }))
   fireEvent.click(await screen.findByRole('option', { name: 'ODM/OEMA' }))
-  await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(1))
+  await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/admin/system/mail-status', { params: { scope: 'oem' } }))
   await user.click(screen.getByRole('combobox', { name: '邮件日志业务' }))
   fireEvent.click(await screen.findByRole('option', { name: '全部业务' }))
   expect(await screen.findByText('ODM/OEMA 发送成功')).toBeVisible()

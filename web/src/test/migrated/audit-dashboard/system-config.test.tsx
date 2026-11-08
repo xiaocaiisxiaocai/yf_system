@@ -83,6 +83,11 @@ describe('系统参数与 SMTP 生产界面', () => {
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/admin/system/configs') return { data: [{ key: 'storage.warn_percent', value: '85' }] }
       if (url === '/admin/system/mail-settings') return { data: { ...baseSmtp, configured: false, hasPassword: false } }
+      if (url === '/admin/system/mail-logs') return { data: { page: 1, pageSize: 20, total: 3, list: [
+        { id: 11, action: 'EMAIL_FAILED', targetType: 'email_outbox', targetId: '11', detail: { error: 'SMTP 连接失败' }, createdAt: '2026-09-09T02:00:00Z' },
+        { id: 12, action: 'EMAIL_CANCELLED_STALE', targetType: 'email_outbox', targetId: '12', detail: { reason: '项目状态已变化' }, createdAt: '2026-09-09T03:00:00Z' },
+        { id: 13, action: 'EMAIL_FUTURE_ACTION', targetType: 'email_outbox', targetId: '13', detail: {}, createdAt: '2026-09-09T04:00:00Z' },
+      ] } }
       return { data: {
         ...baseMail,
         configured: false,
@@ -91,11 +96,6 @@ describe('系统参数与 SMTP 生产界面', () => {
         latestFailedAt: '2026-09-09T02:00:00Z',
         missingEmailCount: 1,
         missingEmailAccounts: [{ userId: 7, employeeNo: 'E7', realName: '未填邮箱', userType: 'INTERNAL', status: 'ACTIVE' }],
-        recent: [
-          { id: 11, action: 'EMAIL_FAILED', targetType: 'email_outbox', targetId: '11', detail: { error: 'SMTP 连接失败' }, createdAt: '2026-09-09T02:00:00Z' },
-          { id: 12, action: 'EMAIL_CANCELLED_STALE', targetType: 'email_outbox', targetId: '12', detail: { reason: '项目状态已变化' }, createdAt: '2026-09-09T03:00:00Z' },
-          { id: 13, action: 'EMAIL_FUTURE_ACTION', targetType: 'email_outbox', targetId: '13', detail: {}, createdAt: '2026-09-09T04:00:00Z' },
-        ],
       } }
     })
     const user = userEvent.setup()
@@ -111,9 +111,54 @@ describe('系统参数与 SMTP 生产界面', () => {
     expect(screen.getByText(/待发送/)).toHaveTextContent('2')
     expect(screen.getAllByText((_text, element) => element?.textContent === '失败 3')).toHaveLength(2)
     expect(screen.getByText(/1 个启用内部账号未填写邮箱/)).toHaveTextContent('未填邮箱（E7）')
-    expect(screen.getByText('发送失败')).toBeVisible()
+    expect(await screen.findByText('发送失败')).toBeVisible()
     expect(screen.getByText('已取消：事件失效')).toBeVisible()
     expect(screen.getByText('未知动作：EMAIL_FUTURE_ACTION')).toBeVisible()
+  })
+
+  it('mail log explains the current SMTP failure, filters by result and pages through older records', async () => {
+    const retry = {
+      id: 31, action: 'EMAIL_RETRY', targetType: 'email_outbox', targetId: '9', createdAt: '2026-11-08T02:37:10Z',
+      detail: { error: 'SMTP 连接失败', failedStep: '连接与加密', diagnosis: '服务器中途断开连接（ConnectionReset）', reason: 'SMTP_UNAVAILABLE', recipient: 'u***@example.invalid', retryCount: 0, nextAttemptAt: '2026-11-08T03:07:10Z' },
+    }
+    const logCalls: Array<Record<string, unknown>> = []
+    mocks.get.mockImplementation(async (url: string, config?: { params?: Record<string, unknown> }) => {
+      if (url === '/admin/system/mail-settings') return { data: baseSmtp }
+      if (url === '/admin/system/mail-status') return { data: {
+        ...baseMail,
+        queue: { pending: 11, sending: 0, sent: 208, failed: 0, cancelled: 22 },
+        latestSentAt: '2026-11-06T00:04:39Z',
+        latestFailedAt: retry.createdAt,
+        latestFailure: retry,
+      } }
+      if (url === '/admin/system/mail-logs') {
+        logCalls.push(config?.params ?? {})
+        const page = Number(config?.params?.page ?? 1)
+        return { data: { page, pageSize: 20, total: 45, list: [
+          { ...retry, id: 30 + page },
+          { id: 90 + page, action: 'EMAIL_TEST_DIAGNOSE', targetType: 'system', targetId: 'smtp', createdAt: '2026-11-08T03:46:44Z', detail: { reason: '连接、加密和登录均正常（未发送邮件）' } },
+          { id: 95 + page, action: 'EMAIL_TEST_DIAGNOSE', targetType: 'system', targetId: 'smtp', createdAt: '2026-11-08T02:55:35Z', detail: { failedStep: '加密', reason: '服务器中途断开连接（ConnectionReset）' } },
+        ] } }
+      }
+      return { data: [] }
+    })
+    const user = userEvent.setup()
+    renderConfig()
+    await openSmtp(user)
+
+    const log = document.querySelector<HTMLElement>('.system-mail-log')!
+    expect(await within(log).findByText(/发送失败：连接与加密：服务器中途断开连接（ConnectionReset）。11 封待发送/)).toBeVisible()
+    expect(await within(log).findByText(/^连接与加密：服务器中途断开连接（ConnectionReset）；暂停发送，不计入重试次数；下次 .+；收件人 u\*\*\*@example\.invalid$/)).toBeVisible()
+    expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'all', page: 1, pageSize: 20 })
+    expect(within(log).getByText('连接检测：正常').closest('.arco-tag')).toHaveClass('arco-tag-green')
+    expect(within(log).getByText('连接检测：失败').closest('.arco-tag')).toHaveClass('arco-tag-red')
+
+    await user.click(within(log).getByRole('combobox', { name: '邮件日志结果' }))
+    fireEvent.click(await screen.findByRole('option', { name: '失败与重试' }))
+    await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 1, pageSize: 20 }))
+
+    fireEvent.click(log.querySelector<HTMLElement>('.arco-pagination-item-next')!)
+    await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 2, pageSize: 20 }))
   })
 
   it('SMTP editor preserves authorization codes, retries failed saves, and keeps unrelated edits', async () => {

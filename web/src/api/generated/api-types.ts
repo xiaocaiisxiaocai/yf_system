@@ -336,6 +336,7 @@ export interface MailStatusResponse {
   missingEmailAccounts: Array<MissingEmailAccount>
   recent: Array<MailAuditEntry>
   missingOemContactCompanyCount: number
+  latestFailure: MailAuditEntry | null
 }
 
 export interface MarkCollaborationReadRequest {
@@ -966,6 +967,13 @@ export interface PageResponseOfFileCopyHistoryItem {
 
 export interface PageResponseOfFileListItem {
   list: Array<FileListItem>
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface PageResponseOfMailAuditEntry {
+  list: Array<MailAuditEntry>
   total: number
   page: number
   pageSize: number
@@ -1654,6 +1662,7 @@ export interface ApiResponses {
   "PUT /admin/suppliers/{id}/status": SupplierResponse
   "GET /admin/system/configs": Array<SystemConfigResponse>
   "PUT /admin/system/configs": EmptyResponse
+  "GET /admin/system/mail-logs": PageResponseOfMailAuditEntry
   "GET /admin/system/mail-settings": SmtpSettingsView
   "PUT /admin/system/mail-settings": SmtpSettingsView
   "POST /admin/system/mail-settings/diagnose": SmtpDiagnosisResponse

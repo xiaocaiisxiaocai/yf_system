@@ -535,8 +535,13 @@ export function detailSummary(row: AuditLogRow): string {
     return `${person ? `${person}：` : ''}未填写邮箱，通知未入队`
   }
   if (row.action.startsWith('EMAIL_TEST_')) return [detail?.recipient ? `收件人 ${formatAuditValue(detail.recipient)}` : '', detail?.reason ? formatAuditValue(detail.reason) : ''].filter(Boolean).join('；')
-  if (row.action === 'EMAIL_FAILED') return `${formatAuditValue(detail?.error)}${detail?.retryCount ? `，第 ${formatAuditValue(detail.retryCount)} 次` : ''}`
-  if (row.action === 'EMAIL_RETRY') return `${formatAuditValue(detail?.error)}，已安排第 ${formatAuditValue(detail?.retryCount)} 次重试`
+  if (row.action === 'EMAIL_FAILED' || row.action === 'EMAIL_RETRY') {
+    const step = cleanText(detail?.failedStep)
+    const diagnosis = cleanText(detail?.diagnosis)
+    const cause = diagnosis ? `${step ? `${step}：` : ''}${diagnosis}` : formatAuditValue(detail?.error)
+    if (row.action === 'EMAIL_FAILED') return `${cause}${detail?.retryCount ? `，第 ${formatAuditValue(detail.retryCount)} 次` : ''}`
+    return detail?.reason === 'SMTP_UNAVAILABLE' ? `${cause}，暂停发送` : `${cause}，已安排第 ${formatAuditValue(detail?.retryCount)} 次重试`
+  }
   if (row.action === 'EMAIL_SENT') return detail?.recipient ? `收件人 ${formatAuditValue(detail.recipient)}` : '邮件已发送'
   if (!detail) return row.targetType === 'project' ? '历史日志未记录详情' : '未记录补充信息'
   const parts = [detail.name, detail.fileName, detail.employeeNo, detail.projectId]
