@@ -103,6 +103,7 @@ async function chooseNotificationTab(drawer, name) {
   let supplierPage;
   let supplierBPage;
   let mobilePage;
+  let supplierSigner = null;
   const originalUiProjects = JSON.stringify(f.uiProjects);
   try {
     assert(f.users?.a?.uiFirstChanged && f.users?.a?.token, 'supplier A must complete users step');
@@ -124,6 +125,9 @@ async function chooseNotificationTab(drawer, name) {
     await Promise.all([adminPage.waitForURL(s.base + '/'), supplierPage.waitForURL(s.base + '/')]);
     const adminToken = adminAuth.accessToken;
     const supplierToken = supplierAuth.accessToken;
+    const supplierContacts = await json(
+      adminContext, adminToken, 'GET', `/admin/suppliers/${f.suppliers.a.id}/contacts`);
+    supplierSigner = supplierContacts.find(item => item.status === 'ACTIVE')?.name ?? null;
     const marker = crypto.randomBytes(5).toString('hex');
     const project = await createProjectGroup(
       adminContext, adminToken, f.suppliers.a.id, '协作联动-' + marker);
@@ -134,6 +138,13 @@ async function chooseNotificationTab(drawer, name) {
 
     const supplierInput = () => supplierPage.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
     const adminInput = () => adminPage.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
+    const fillSupplierSignature = async scope => {
+      if (!supplierSigner) return;
+      const input = scope.getByLabel('签名', { exact: true });
+      if (await input.count()) await input.fill(supplierSigner);
+    };
+    const waitSupplierSendReady = async () => supplierPage.waitForSelector(
+      '.message-composer-send:enabled', { state: 'visible' });
     await adminPage.goto(s.base + '/');
     await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
     await supplierPage.goto(s.base + `/projects/${project.id}?tab=messages`);
@@ -146,6 +157,8 @@ async function chooseNotificationTab(drawer, name) {
       const summaryChanged = waitSummary(adminPage,
         value => value.revision !== before.revision && value.unreadCount > before.unreadCount);
       await supplierInput().fill(liveMessageText);
+      await fillSupplierSignature(supplierPage);
+      await waitSupplierSendReady();
       const started = Date.now();
       liveMessage = await action(supplierPage, `/projects/${project.id}/messages`, 'POST',
         () => supplierInput().press('Control+Enter'));
@@ -177,7 +190,10 @@ async function chooseNotificationTab(drawer, name) {
     await record('二十二条真实未查看通知形成两页积压且翻页无重复', async () => {
       for (let index = 0; index < 22; index += 1) {
         await json(supplierContext, supplierToken, 'POST',
-          `/projects/${project.id}/messages`, { content: `协作积压-${String(index + 1).padStart(2, '0')}-${marker}` });
+          `/projects/${project.id}/messages`, {
+            content: `协作积压-${String(index + 1).padStart(2, '0')}-${marker}`,
+            signerName: supplierSigner ?? undefined,
+          });
       }
       const summary = await waitSummary(adminPage, value => value.unreadCount >= 22);
       assert(summary.unreadCount >= 22);
@@ -260,6 +276,7 @@ async function chooseNotificationTab(drawer, name) {
         mimeType: 'application/pdf',
         buffer: fs.readFileSync(OUT + '/valid-preview.pdf'),
       });
+      await fillSupplierSignature(dialog);
       const adminReload = waitResponse(adminPage, `/projects/${project.id}/files`);
       const merged = supplierPage.waitForResponse(response =>
         /^\/api\/v1\/uploads\/[^/]+\/merge$/.test(pathOf(response))
@@ -298,6 +315,7 @@ async function chooseNotificationTab(drawer, name) {
         mimeType: 'application/pdf',
         buffer: fs.readFileSync(OUT + '/valid-preview.pdf'),
       });
+      await fillSupplierSignature(dialog);
       const merged = supplierPage.waitForResponse(response =>
         /^\/api\/v1\/uploads\/[^/]+\/merge$/.test(pathOf(response))
         && response.request().method() === 'POST' && response.status() === 200);
@@ -315,6 +333,46 @@ async function chooseNotificationTab(drawer, name) {
     });
 
     let markedNotification;
+    await record('留言列表加载期间 Ctrl+Enter 不发请求且保留草稿，加载完成后恢复发送', async () => {
+      const messageApiPath = apiPath(`/projects/${project.id}/messages`);
+      let releaseFeed;
+      const feedGate = new Promise(resolve => { releaseFeed = resolve; });
+      let postCount = 0;
+      const countPosts = request => {
+        if (pathOf(request) === messageApiPath && request.method() === 'POST') postCount += 1;
+      };
+      const holdFeed = async route => {
+        if (route.request().method() === 'GET') await feedGate;
+        await route.continue();
+      };
+      supplierPage.on('request', countPosts);
+      await supplierPage.route('**' + messageApiPath + '*', holdFeed);
+      try {
+        const loaded = waitResponse(supplierPage, `/projects/${project.id}/messages`);
+        await supplierPage.goto(s.base + `/projects/${project.id}?tab=messages`);
+        await supplierInput().waitFor();
+        const probeDraft = '加载中键盘发送探针-' + marker;
+        await supplierInput().fill(probeDraft);
+        await fillSupplierSignature(supplierPage);
+        const sendButton = supplierPage.getByRole('button', { name: '发送', exact: true });
+        assert.equal(await sendButton.isDisabled(), true,
+          'message send button must expose the loading gate');
+        await supplierInput().press('Control+Enter');
+        await supplierPage.waitForTimeout(300);
+        assert.equal(postCount, 0, 'loading Ctrl+Enter must not dispatch a message request');
+        assert.equal(await supplierInput().inputValue(), probeDraft,
+          'loading Ctrl+Enter preserves the draft');
+        releaseFeed();
+        await loaded;
+        await waitSupplierSendReady();
+        await supplierInput().fill('');
+      } finally {
+        releaseFeed?.();
+        supplierPage.off('request', countPosts);
+        await supplierPage.unroute('**' + messageApiPath + '*', holdFeed);
+      }
+    });
+
     await record('通知查看状态独立于留言已读和流程待确认并在刷新后持久', async () => {
       // The admin page viewed the project earlier to validate deep-linking, so
       // those messages are correctly marked read by the visibility observer.
@@ -323,8 +381,11 @@ async function chooseNotificationTab(drawer, name) {
       const independentText = '通知独立消息-' + marker;
       await supplierPage.goto(s.base + `/projects/${project.id}?tab=messages`);
       await supplierInput().waitFor();
+      await supplierInput().fill(independentText);
+      await fillSupplierSignature(supplierPage);
+      await waitSupplierSendReady();
       const independent = await action(supplierPage, `/projects/${project.id}/messages`, 'POST',
-        async () => { await supplierInput().fill(independentText); await supplierInput().press('Control+Enter'); });
+        () => supplierInput().press('Control+Enter'));
       const unread = await listNotifications(adminContext, adminToken, true);
       const unreadMessages = await listDashboardMessages(adminContext, adminToken, true);
       const unreadMessageIds = new Set(unreadMessages.map(item => item.id));

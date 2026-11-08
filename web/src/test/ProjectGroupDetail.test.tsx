@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Message } from '@arco-design/web-react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
@@ -142,13 +142,18 @@ describe('子项目后台复制任务', () => {
       result: { projectId: 88, copyFileCount: 4 },
       completedAt: '2026-09-23T01:01:00Z',
     })
+    let completeJobList: (() => void) | undefined
+    const completedJobList = new Promise<{ data: { jobs: ReturnType<typeof copyJob>[] } }>((resolve) => {
+      completeJobList = () => resolve({ data: { jobs: [complete] } })
+    })
     mocks.post.mockResolvedValueOnce({ data: pending })
     let jobReads = 0
     mocks.get.mockImplementation((url: string) => {
       if (url === '/project-groups/3') return Promise.resolve({ data: detail })
       if (url === '/project-groups/3/copy-jobs') {
         jobReads += 1
-        return Promise.resolve({ data: { jobs: [jobReads > 1 ? complete : pending] } })
+        if (jobReads === 1) return Promise.resolve({ data: { jobs: [] } })
+        return completedJobList
       }
       const pane = subprojectGet(url)
       if (pane) return pane
@@ -172,6 +177,7 @@ describe('子项目后台复制任务', () => {
     expect(screen.getByText('排队中')).toBeInTheDocument()
 
     await waitFor(() => expect(mocks.get.mock.calls.filter(([url]) => url === '/project-groups/3/copy-jobs').length).toBeGreaterThan(1))
+    await act(async () => completeJobList?.())
     await waitFor(() => {
       expect(screen.getByText('已完成')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: '进入副本' })).toBeInTheDocument()
