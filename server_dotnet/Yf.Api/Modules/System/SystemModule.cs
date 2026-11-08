@@ -44,6 +44,17 @@ public static class SystemModule
             }
             return await service.StatusAsync(ct, scope);
         }).Produces<MailStatusResponse>();
+        config.MapGet("/mail-logs", async (HttpContext ctx, AppDb db, MailService service, CancellationToken ct) =>
+        {
+            var scope = ctx.Request.Query["scope"].FirstOrDefault() ?? "collaboration";
+            if (scope is "oem" or "all")
+            {
+                await using var connection = await db.OpenAsync(ct);
+                await AccessService.RequirePermissionAsync(connection, null, AccessService.GetCurrent(ctx), "oem:notify_manage", ct);
+            }
+            return await service.LogsAsync(scope, ctx.Request.Query["result"].FirstOrDefault() ?? "all",
+                QueryValues.OptionalUInt64(ctx.Request, "page") ?? 1, QueryValues.OptionalUInt64(ctx.Request, "pageSize") ?? 20, ct);
+        }).Produces<PageResponse<MailAuditEntry>>();
         config.MapPost("/mail-settings/test", (SmtpTestRequest body, HttpContext ctx, SmtpTestService service, CancellationToken ct) =>
             service.TestAsync(body, AccessService.GetCurrent(ctx), ct)).Produces<SmtpTestResponse>();
         config.MapPost("/mail-settings/diagnose", (HttpContext ctx, SmtpTestService service, CancellationToken ct) =>

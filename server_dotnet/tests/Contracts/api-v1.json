@@ -26,6 +26,7 @@
   "GET /api/v1/admin/suppliers/{}/accounts",
   "GET /api/v1/admin/suppliers/{}/contacts",
   "GET /api/v1/admin/system/configs",
+  "GET /api/v1/admin/system/mail-logs",
   "GET /api/v1/admin/system/mail-settings",
   "GET /api/v1/admin/system/mail-status",
   "GET /api/v1/admin/user-role-options",

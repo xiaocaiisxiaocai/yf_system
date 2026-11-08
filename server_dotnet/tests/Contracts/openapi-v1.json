@@ -4733,6 +4733,35 @@
         }
       }
     },
+    "/api/v1/admin/system/mail-logs": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResponseOfMailAuditEntry"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/system/mail-settings/test": {
       "post": {
         "tags": [
@@ -9031,6 +9060,7 @@
           "from",
           "host",
           "latestFailedAt",
+          "latestFailure",
           "latestSentAt",
           "missingEmailAccounts",
           "missingEmailCount",
@@ -9097,6 +9127,14 @@
           "missingOemContactCompanyCount": {
             "type": "integer",
             "format": "int64"
+          },
+          "latestFailure": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MailAuditEntry"
+              }
+            ],
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -11644,6 +11682,36 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/FileListItem"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageResponseOfMailAuditEntry": {
+        "required": [
+          "list",
+          "page",
+          "pageSize",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailAuditEntry"
             }
           },
           "total": {

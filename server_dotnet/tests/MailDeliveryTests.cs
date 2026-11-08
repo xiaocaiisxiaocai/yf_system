@@ -582,6 +582,24 @@ public sealed class MailDeliveryTests
                 "SELECT detail FROM audit_logs WHERE action='EMAIL_RETRY'", cancellationToken: ct)));
         }
 
+        // The retry is the latest failure and its record explains why and when the next attempt is due.
+        using (var status = JsonDocument.Parse(JsonSerializer.Serialize(await service.StatusAsync(ct), TestJson.Web)))
+        {
+            var failure = status.RootElement.GetProperty("latestFailure");
+            Assert.Equal("EMAIL_RETRY", failure.GetProperty("action").GetString());
+            Assert.Equal(failure.GetProperty("createdAt").GetDateTime(), status.RootElement.GetProperty("latestFailedAt").GetDateTime());
+            var detail = failure.GetProperty("detail");
+            Assert.StartsWith("认证失败（535）", detail.GetProperty("diagnosis").GetString());
+            Assert.DoesNotContain("bad credentials", detail.GetProperty("diagnosis").GetString());
+            Assert.Equal(MailService.SmtpUnavailableAuditReason, detail.GetProperty("reason").GetString());
+            Assert.True(detail.TryGetProperty("nextAttemptAt", out _));
+        }
+        var problems = await service.LogsAsync("collaboration", "problem", 1, 20, ct);
+        Assert.Equal(1UL, problems.Total);
+        Assert.Equal("EMAIL_RETRY", Assert.Single(problems.List).Action);
+        Assert.Equal(0UL, (await service.LogsAsync("collaboration", "sent", 1, 20, ct)).Total);
+        Assert.Equal(0UL, (await service.LogsAsync("oem", "problem", 1, 20, ct)).Total);
+
         // While the breaker is open nothing is attempted, even rows that are already due.
         Assert.Equal(0, await service.FlushAsync(ct));
         Assert.Single(delivery.Attempts);
@@ -601,6 +619,33 @@ public sealed class MailDeliveryTests
         await using (var connection = await scope.Database.OpenAsync(ct))
             Assert.Equal(3, await connection.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM email_outbox WHERE status='SENT' AND retry_count=0", cancellationToken: ct)));
+
+        var firstPage = await service.LogsAsync("collaboration", "sent", 1, 2, ct);
+        var secondPage = await service.LogsAsync("collaboration", "sent", 2, 2, ct);
+        Assert.Equal((3UL, 2, 1), (firstPage.Total, firstPage.List.Count, secondPage.List.Count));
+        Assert.Empty(firstPage.List.Select(entry => entry.Id).Intersect(secondPage.List.Select(entry => entry.Id)));
+        Assert.Equal(5UL, (await service.LogsAsync("all", "all", 1, 100, ct)).Total);
+        await Assert.ThrowsAsync<ApiException>(() => service.LogsAsync("collaboration", "unknown", 1, 20, ct));
+    }
+
+    [Theory]
+    [InlineData("连接与加密", "服务器中途断开连接（ConnectionReset）")]
+    [InlineData(null, "服务器中途断开连接（ConnectionReset）")]
+    public void DeliveryDiagnosisNamesAResetDuringTheTlsUpgrade(string? stage, string expected)
+    {
+        var reset = new IOException("Unable to read data from the transport connection.",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionReset));
+        Assert.Equal(expected, MailService.DeliveryDiagnosis(reset, stage));
+    }
+
+    [Fact]
+    public void DeliveryDiagnosisSeparatesRefusedConnectionsAndTimeouts()
+    {
+        Assert.StartsWith("无法连接（ConnectionRefused）", MailService.DeliveryDiagnosis(
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused), "连接与加密"));
+        Assert.StartsWith("SMTP 服务器无响应", MailService.DeliveryDiagnosis(new OperationCanceledException(), "发送"));
+        Assert.Equal("服务器拒绝（550，5.1.1）", MailService.DeliveryDiagnosis(
+            new SmtpCommandException(SmtpErrorCode.RecipientNotAccepted, SmtpStatusCode.MailboxUnavailable, "5.1.1 secret text"), "发送"));
     }
 
     [Fact(Timeout = 60_000)]

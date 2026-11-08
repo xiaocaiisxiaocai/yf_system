@@ -68,4 +68,6 @@ public sealed record MailStatusResponse(
     ulong MissingEmailCount,
     IReadOnlyList<MissingEmailAccount> MissingEmailAccounts,
     IReadOnlyList<MailAuditEntry> Recent,
-    ulong MissingOemContactCompanyCount = 0);
+    ulong MissingOemContactCompanyCount = 0,
+    // Newest failed or retried delivery in this scope (its time is LatestFailedAt).
+    MailAuditEntry? LatestFailure = null);

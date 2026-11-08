@@ -142,6 +142,27 @@ public sealed class MailService
         return new[] { "connect", "dns", "network", "tls" }.Any(text.Contains) ? "SMTP 连接失败" : "SMTP 发送失败";
     }
 
+    /// <summary>
+    /// Administrator-facing explanation of a failed delivery, built like the connection check: fixed Chinese text,
+    /// socket error names and SMTP status codes only, never the server's reply text or credentials.
+    /// </summary>
+    internal static string DeliveryDiagnosis(Exception error, string? stage)
+    {
+        if (error is OperationCanceledException) return "SMTP 服务器无响应（超时）：请检查网络、防火墙或代理";
+        if (error is SmtpSenderAddressException) return "发件邮箱地址无效：请检查并重新保存 SMTP 配置";
+        // A refused or unresolvable connection is a connect failure; anything else during connect happened after TCP succeeded.
+        var connectFailure = error is System.Net.Sockets.SocketException
+        {
+            SocketErrorCode: System.Net.Sockets.SocketError.ConnectionRefused or System.Net.Sockets.SocketError.HostNotFound
+                or System.Net.Sockets.SocketError.TryAgain or System.Net.Sockets.SocketError.NoData
+                or System.Net.Sockets.SocketError.TimedOut or System.Net.Sockets.SocketError.NetworkUnreachable
+                or System.Net.Sockets.SocketError.HostUnreachable
+        };
+        var step = connectFailure ? MailKitSmtpDiagnoser.Connect : stage ?? "";
+        var text = MailKitSmtpDiagnoser.Explain(step, error, CancellationToken.None);
+        return text.StartsWith("检测失败", StringComparison.Ordinal) ? $"发送失败（{error.GetType().Name}）" : text;
+    }
+
     public static async Task<bool> EnabledAsync(MySqlConnection conn, CancellationToken ct)
         => (await EmailNotificationPolicy.LoadAsync(conn, null, ct)).GlobalEnabled;
 
@@ -171,34 +192,14 @@ public sealed class MailService
             .Take(20)
             .Select(user => new MissingEmailAccount(user.Id, user.EmployeeNo, user.RealName, user.UserType, user.Status))
             .ToListAsync(ct);
-        string[] auditActions =
-        [
-            "EMAIL_SENT", "EMAIL_FAILED", "EMAIL_RETRY", "EMAIL_SKIPPED_MISSING_EMAIL", "EMAIL_CANCELLED_STALE",
-            "EMAIL_TEST_STARTED", "EMAIL_TEST_SENT", "EMAIL_TEST_FAILED", "EMAIL_TEST_UNKNOWN", "EMAIL_TEST_DIAGNOSE",
-        ];
-        var businessActions = auditActions.Where(action => !action.StartsWith("EMAIL_TEST_", StringComparison.Ordinal)).ToArray();
-        if (scope == "oem") auditActions = auditActions.Where(action => action.StartsWith("EMAIL_TEST_", StringComparison.Ordinal)).Concat(businessActions.Select(action => "OEM_" + action)).ToArray();
-        if (scope == "all") auditActions = auditActions.Concat(businessActions.Select(action => "OEM_" + action)).ToArray();
-        var recent = await context.AuditLogs
-            .Where(log => Enumerable.Contains(auditActions, log.Action))
-            .OrderByDescending(log => log.CreatedAt).ThenByDescending(log => log.Id)
-            .Take(10)
-            .Select(log => new MailAuditRow
-            {
-                Id = log.Id,
-                Action = log.Action,
-                TargetType = log.TargetType,
-                TargetId = log.TargetId,
-                Detail = log.Detail,
-                CreatedAt = log.CreatedAt,
-            })
-            .ToListAsync(ct);
+        var auditActions = MailLogActions(scope, "all");
+        var recent = await ReadMailLogsAsync(context.AuditLogs.Where(log => Enumerable.Contains(auditActions, log.Action)), 0, 10, ct);
         var latestSentAt = await queue.Where(mail => mail.Status == MailStatuses.Sent)
             .Select(mail => mail.SentAt).MaxAsync(ct);
-        var failureActions = scope == "all" ? new[] { "EMAIL_FAILED", "OEM_EMAIL_FAILED" }
-            : new[] { scope == "oem" ? "OEM_EMAIL_FAILED" : "EMAIL_FAILED" };
-        var latestFailedAt = await context.AuditLogs.Where(log => failureActions.Contains(log.Action))
-            .Select(log => (DateTime?)log.CreatedAt).MaxAsync(ct);
+        // Retries count as failures here: while SMTP is unavailable mail keeps its retry budget and never reaches FAILED.
+        var failureActions = MailLogActions(scope, "problem");
+        var latestFailure = (await ReadMailLogsAsync(
+            context.AuditLogs.Where(log => Enumerable.Contains(failureActions, log.Action)), 0, 1, ct)).FirstOrDefault();
         var missingOemContacts = scope == "collaboration" ? 0UL : checked((ulong)await context.OemCompanies.LongCountAsync(
             company => company.Status == "ACTIVE" && !context.OemCompanyContacts.Any(contact => contact.OemCompanyId == company.Id
                 && contact.Status == "ACTIVE" && contact.Email != null && contact.Email.Trim() != ""), ct));
@@ -212,11 +213,76 @@ public sealed class MailService
             new MailQueueCounts(counts.GetValueOrDefault(MailStatuses.Pending), counts.GetValueOrDefault(MailStatuses.Sending),
                 counts.GetValueOrDefault(MailStatuses.Sent), counts.GetValueOrDefault(MailStatuses.Failed), counts.GetValueOrDefault(MailStatuses.Cancelled)),
             latestSentAt,
-            latestFailedAt,
+            latestFailure?.CreatedAt,
             missingCount,
             missing,
-            recent.Select(x => new MailAuditEntry(x.Id, x.Action, x.TargetType, x.TargetId, SafeDetail(x.Detail), x.CreatedAt)).ToArray(),
-            missingOemContacts);
+            recent,
+            missingOemContacts,
+            latestFailure);
+    }
+
+    private static readonly string[] BusinessLogActions =
+        ["EMAIL_SENT", "EMAIL_FAILED", "EMAIL_RETRY", "EMAIL_SKIPPED_MISSING_EMAIL", "EMAIL_CANCELLED_STALE"];
+    private static readonly string[] TestLogActions =
+        ["EMAIL_TEST_STARTED", "EMAIL_TEST_SENT", "EMAIL_TEST_FAILED", "EMAIL_TEST_UNKNOWN", "EMAIL_TEST_DIAGNOSE"];
+
+    /// <summary>
+    /// Audit actions shown in a mail log. <paramref name="result"/> is <c>all</c>, <c>problem</c> (failed or retried),
+    /// <c>sent</c>, <c>skipped</c> (missing address or cancelled) or <c>test</c>; SMTP tests and checks are shared by every scope.
+    /// </summary>
+    internal static string[] MailLogActions(string scope, string result)
+    {
+        if (scope is not ("collaboration" or "oem" or "all")) throw ApiException.BadRequest("邮件业务范围无效");
+        var business = result switch
+        {
+            "all" => BusinessLogActions,
+            "problem" => ["EMAIL_FAILED", "EMAIL_RETRY"],
+            "sent" => ["EMAIL_SENT"],
+            "skipped" => ["EMAIL_SKIPPED_MISSING_EMAIL", "EMAIL_CANCELLED_STALE"],
+            "test" => [],
+            _ => throw ApiException.BadRequest("邮件日志结果筛选无效"),
+        };
+        var tests = result is "all" or "test" ? TestLogActions : [];
+        var prefixed = scope switch
+        {
+            "collaboration" => business,
+            "oem" => business.Select(action => "OEM_" + action).ToArray(),
+            _ => business.Concat(business.Select(action => "OEM_" + action)).ToArray(),
+        };
+        return tests.Concat(prefixed).ToArray();
+    }
+
+    public async Task<PageResponse<MailAuditEntry>> LogsAsync(string scope, string result, ulong page, ulong pageSize, CancellationToken ct)
+    {
+        var actions = MailLogActions(scope, result);
+        var size = Math.Clamp(pageSize, 1UL, 100UL);
+        var actualPage = Math.Clamp(page, 1UL, 100_000UL);
+        await using var conn = await db.OpenAsync(ct);
+        await using var context = EfDb.Use(conn);
+        var query = context.AuditLogs.Where(log => Enumerable.Contains(actions, log.Action));
+        var total = checked((ulong)await query.LongCountAsync(ct));
+        var list = await ReadMailLogsAsync(query, checked((int)((actualPage - 1) * size)), (int)size, ct);
+        return new(list, total, actualPage, size);
+    }
+
+    private static async Task<MailAuditEntry[]> ReadMailLogsAsync(
+        IQueryable<Infrastructure.Entities.AuditLog> query, int skip, int take, CancellationToken ct)
+    {
+        var rows = await query
+            .OrderByDescending(log => log.CreatedAt).ThenByDescending(log => log.Id)
+            .Skip(skip)
+            .Take(take)
+            .Select(log => new MailAuditRow
+            {
+                Id = log.Id,
+                Action = log.Action,
+                TargetType = log.TargetType,
+                TargetId = log.TargetId,
+                Detail = log.Detail,
+                CreatedAt = log.CreatedAt,
+            })
+            .ToListAsync(ct);
+        return rows.Select(x => new MailAuditEntry(x.Id, x.Action, x.TargetType, x.TargetId, SafeDetail(x.Detail), x.CreatedAt)).ToArray();
     }
 
     private static IReadOnlyDictionary<string, object?> SafeDetail(string? detail)
@@ -231,7 +297,7 @@ public sealed class MailService
             if (parsed.RootElement.ValueKind != JsonValueKind.Object) return output;
             foreach (var property in parsed.RootElement.EnumerateObject())
             {
-                if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId", "failedStep" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
+                if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId", "failedStep", "diagnosis", "nextAttemptAt" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
                 if (property.Value.ValueKind == JsonValueKind.String && property.Name == "recipient") output[property.Name] = MaskEmail(property.Value.GetString()!);
                 if (property.Value.ValueKind == JsonValueKind.String && property.Name == "error") output[property.Name] = SanitizeError(property.Value.GetString()!);
             }
@@ -513,6 +579,8 @@ public sealed class MailService
         TimeSpan? retryDelay = null;
         var serviceUnavailable = false;
         string? auditReason = null;
+        string? failedStep = null;
+        string? diagnosis = null;
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -530,6 +598,8 @@ public sealed class MailService
         catch (Exception ex)
         {
             error = ex is OperationCanceledException ? "SMTP 连接超时" : SanitizeError(ex.Message);
+            failedStep = SmtpStage.Of(ex);
+            diagnosis = DeliveryDiagnosis(ex, failedStep);
             var kind = ClassifyFailure(ex);
             logger.LogWarning(
                 "SMTP delivery for outbox {OutboxId} failed ({ErrorType}, {FailureKind}, {SafeError}); sanitized stack: {SanitizedStack}",
@@ -597,9 +667,19 @@ public sealed class MailService
         {
             var action = AuditAction(mail.EventType,
                 status == MailStatuses.Sent ? "EMAIL_SENT" : status == MailStatuses.Failed ? "EMAIL_FAILED" : "EMAIL_RETRY");
-            object detail = auditReason is not null
-                ? new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error, reason = auditReason }
-                : new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail), status, retryCount = retries, error };
+            var detail = new Dictionary<string, object?>
+            {
+                ["eventType"] = mail.EventType,
+                ["recipient"] = MaskEmail(mail.RecipientEmail),
+                ["status"] = status,
+                ["retryCount"] = retries,
+                ["error"] = error,
+            };
+            if (auditReason is not null) detail["reason"] = auditReason;
+            if (failedStep is not null) detail["failedStep"] = failedStep;
+            if (diagnosis is not null) detail["diagnosis"] = diagnosis;
+            if (status == MailStatuses.Pending && nextAttemptAt is { } next)
+                detail["nextAttemptAt"] = DateTime.SpecifyKind(next, DateTimeKind.Utc);
             await audit.WriteAsync(conn, tx, null, action, "email_outbox", mail.Id, detail, null, completionToken);
         }
         await tx.CommitAsync(completionToken);
