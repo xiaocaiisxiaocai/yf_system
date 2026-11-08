@@ -7,6 +7,10 @@ export const PASSWORD_MAX_BYTES = policy.maxBytes
 
 export const PASSWORD_VALIDATION_MESSAGE = policy.message
 
+const SIMPLE_SEQUENCE_WINDOWS = policy.simpleSequenceRows.flatMap(row => [
+  row.repeat(3), Array.from(row).reverse().join('').repeat(3),
+])
+
 function utf8ByteLength(value: string): number {
   let length = 0
   for (const scalar of value) {
@@ -23,6 +27,11 @@ function withinLength(value: string): boolean {
   const characterCount = Array.from(value).length
   return characterCount >= PASSWORD_MIN_CHARS && characterCount <= PASSWORD_MAX_CHARS
     && utf8ByteLength(value) <= PASSWORD_MAX_BYTES
+}
+
+function isSimpleSequence(value: string): boolean {
+  return value.length >= PASSWORD_MIN_CHARS
+    && SIMPLE_SEQUENCE_WINDOWS.some(window => window.includes(value))
 }
 
 export const INITIAL_PASSWORD_MESSAGE = `初始密码需为 ${PASSWORD_MIN_CHARS}–${PASSWORD_MAX_CHARS} 个字符`
@@ -43,8 +52,9 @@ export function validatePassword(value: string): string | undefined {
   const substitutions: Record<string, string> = { '@': 'a', '4': 'a', '$': 's', '5': 's', '0': 'o', '1': 'i', '!': 'i', '3': 'e', '7': 't' }
   const stem = value.replace(/[0-9!-/:-@[-`{-~]+$/, '').toLowerCase()
     .replace(/[@4$501!37]/g, character => substitutions[character]).replace(/[^a-z]/g, '')
+  const sequenceCandidate = value.replace(/[!-/:-@[-`{-~]+$/, '').toLowerCase()
   if (policy.blockedStems.some(word => stem.length > 0 && stem.length % word.length === 0 && word.repeat(stem.length / word.length) === stem)
-    || '0123456789'.repeat(8).includes(value) || '9876543210'.repeat(8).includes(value)
+    || isSimpleSequence(stem) || isSimpleSequence(sequenceCandidate)
     || [1, 2, 3, 4].some(period => characters.every((c, i) => c === characters[i % period]))) {
     return PASSWORD_VALIDATION_MESSAGE
   }

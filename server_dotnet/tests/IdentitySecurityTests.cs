@@ -53,6 +53,35 @@ public sealed class IdentitySecurityTests
         Assert.False(PasswordService.StrongEnough("abcdabcdabcd"));
     }
 
+    [Theory]
+    [InlineData("abcde")]
+    [InlineData("edcba")]
+    [InlineData("bcdef")]
+    [InlineData("qwert")]
+    [InlineData("werty")]
+    [InlineData("asdfg")]
+    [InlineData("sdfgh")]
+    [InlineData("zxcvb")]
+    [InlineData("mnbvc")]
+    [InlineData("12345!")]
+    [InlineData("@bcde")]
+    public void PasswordPolicyRejectsCompleteAlphabetKeyboardAndDecoratedNumericSequences(string password)
+    {
+        Assert.False(PasswordService.StrongEnough(password));
+        Assert.Equal(PasswordService.PolicyMessage,
+            Assert.Throws<ApiException>(() => PasswordService.Validate(password)).Message);
+    }
+
+    [Theory]
+    [InlineData("River")]
+    [InlineData("Crane")]
+    [InlineData("海风7#🙂")]
+    public void PasswordPolicyKeepsReasonableFiveScalarPasswordsWithoutCompositionRules(string password)
+    {
+        Assert.Equal(5, password.EnumerateRunes().Count());
+        Assert.True(PasswordService.StrongEnough(password));
+    }
+
     [Fact]
     public void PasswordChangeAttemptsAreLimitedPerAccountRegardlessOfLoginBudget()
     {

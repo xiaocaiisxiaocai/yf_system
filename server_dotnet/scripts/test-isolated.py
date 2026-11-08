@@ -14,6 +14,7 @@ from pathlib import Path
 import secrets
 import socket
 import shutil
+import string
 import subprocess
 import sys
 import tempfile
@@ -347,7 +348,17 @@ try:
             port = listener.getsockname()[1]
         base = f"http://127.0.0.1:{port}"
         initial = "Yf9!" + secrets.token_urlsafe(9)
-        changed = "Yf9!" + secrets.token_urlsafe(9)
+        # Exactly five Unicode scalars while retaining enough entropy for a temporary credential.
+        # The large non-sequential alphabet makes accidental weak-pattern rejection negligible.
+        password_alphabet = (string.ascii_letters + string.digits + "#%&*+?@"
+                             + "".join(chr(codepoint) for codepoint in range(0x4E00, 0xA000))
+                             + "🙂🚀🌙🌊")
+        changed_chars = []
+        while len(changed_chars) < 5:
+            candidate = secrets.choice(password_alphabet)
+            if candidate not in changed_chars:
+                changed_chars.append(candidate)
+        changed = "".join(changed_chars)
         content_root = prepare_content_root(temp)
         env = {
             key: value for key, value in os.environ.items()
@@ -521,10 +532,18 @@ try:
             result = client.login("admin", initial)
             check("bootstrap direct login enforces password change without CAPTCHA", result["mustChangePassword"])
             client.call("GET", "/api/v1/project-groups", expected=403)
+            weak_change = client.call("PUT", "/api/v1/auth/password", {
+                "oldPassword": initial, "newPassword": "abcde"
+            }, expected=400)
+            check("password change rejects a five-letter sequence without ending the forced-change session",
+                  weak_change["code"] == 40001
+                  and weak_change["message"] == "密码需 5-20 个字符，不能使用常见弱密码或简单重复序列"
+                  and client.call("GET", "/api/v1/auth/profile")["mustChangePassword"])
             client.call("PUT", "/api/v1/auth/password", {"oldPassword": initial, "newPassword": changed})
             client.call("GET", "/api/v1/auth/profile", expected=401)
             result = client.login("admin", changed)
-            check("password change revokes old session and re-login works", not result["mustChangePassword"] and result["user"]["isSystemAdmin"])
+            check("five-scalar password change revokes old session and re-login works",
+                  len(changed) == 5 and not result["mustChangePassword"] and result["user"]["isSystemAdmin"])
             missing_captcha = client.call("GET", "/api/v1/auth/captcha", expected=404)
             check("authenticated authentication API has no CAPTCHA endpoint", missing_captcha["code"] == 40401)
             profile = client.call("GET", "/api/v1/auth/profile")

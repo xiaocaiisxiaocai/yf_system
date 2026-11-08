@@ -120,8 +120,12 @@ describe('管理员表单契约', () => {
     expect(validatePassword(sixCharacters)).toBeUndefined()
     expect(validatePassword(twentyCharacters)).toBeUndefined()
     expect(validatePassword(`${twentyCharacters}x`)).toMatch(/5-20/)
-    for (const weak of ['短密码', 'abcdef', '中'.repeat(6), 'Password123456!', 'P@ssw0rd1234!', 'passwordpassword1!', 'qwerty123456', '123456789012', 'abcdabcdabcd']) {
+    for (const weak of ['短密码', 'abcdef', '中'.repeat(6), 'Password123456!', 'P@ssw0rd1234!', 'passwordpassword1!', 'qwerty123456', '123456789012', 'abcdabcdabcd', 'abcde', 'edcba', 'bcdef', 'qwert', 'werty', 'asdfg', 'sdfgh', 'zxcvb', 'mnbvc', '12345!', '@bcde']) {
       expect(validatePassword(weak)).toBe(PASSWORD_VALIDATION_MESSAGE)
+    }
+    for (const validFive of ['River', 'Crane', '海风7#🙂']) {
+      expect(Array.from(validFive)).toHaveLength(5)
+      expect(validatePassword(validFive)).toBeUndefined()
     }
 
     const changePassword = render(<MemoryRouter><ChangePassword /></MemoryRouter>)

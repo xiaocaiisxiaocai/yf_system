@@ -28,6 +28,14 @@ public static class PasswordService
         "asdfghjkl", "letmein", "welcome", "changeme", "iloveyou", "monkey", "dragon",
         "football", "baseball", "abc", "abcd", "abcdef", "login", "test", "secret"
     ];
+    private static readonly string[] SimpleSequenceRows =
+    [
+        "0123456789", "abcdefghijklmnopqrstuvwxyz", "qwertyuiop", "asdfghjkl", "zxcvbnm"
+    ];
+    private static readonly string[] SimpleSequenceWindows = SimpleSequenceRows
+        .SelectMany(row => new[] { row, new string(row.Reverse().ToArray()) })
+        .Select(row => string.Concat(Enumerable.Repeat(row, 3)))
+        .ToArray();
 
     /// <summary>
     /// Initial passwords of batch-imported accounts are only length-checked (123456 is allowed): every new account
@@ -62,8 +70,10 @@ public static class PasswordService
         if (BlockedStems.Any(word => stem.Length > 0 && stem.Length % word.Length == 0 &&
                                      string.Concat(Enumerable.Repeat(word, stem.Length / word.Length)) == stem))
             return false;
-        if (string.Concat(Enumerable.Repeat("0123456789", 8)).Contains(password, StringComparison.Ordinal) ||
-            string.Concat(Enumerable.Repeat("9876543210", 8)).Contains(password, StringComparison.Ordinal))
+        var sequenceEnd = password.Length;
+        while (sequenceEnd > 0 && password[sequenceEnd - 1] <= 127 && IsAsciiPunctuation(password[sequenceEnd - 1])) sequenceEnd--;
+        var sequenceCandidate = password[..sequenceEnd].ToLowerInvariant();
+        if (IsSimpleSequence(stem) || IsSimpleSequence(sequenceCandidate))
             return false;
         var runes = password.EnumerateRunes().ToArray();
         return !Enumerable.Range(1, 4).Any(period => runes.Select((r, i) => (r, i)).All(x => x.r == runes[x.i % period]));
@@ -185,6 +195,11 @@ public static class PasswordService
         '@' or '4' => 'a', '$' or '5' => 's', '0' => 'o', '1' or '!' => 'i', '3' => 'e', '7' => 't', var x => x
     };
     private static bool IsAsciiPunctuation(char c) => c is >= '!' and <= '/' or >= ':' and <= '@' or >= '[' and <= '`' or >= '{' and <= '~';
+    private static bool IsSimpleSequence(string value)
+    {
+        if (value.Length < MinPasswordChars) return false;
+        return SimpleSequenceWindows.Any(window => window.Contains(value, StringComparison.Ordinal));
+    }
     private static string B64(byte[] bytes) => Convert.ToBase64String(bytes).TrimEnd('=');
     private static byte[] FromB64(string text) => Convert.FromBase64String(text.PadRight((text.Length + 3) / 4 * 4, '='));
     private readonly record struct Phc(string Algorithm, int MemoryKb, int Iterations, int Parallelism, byte[] Salt, byte[] Hash);

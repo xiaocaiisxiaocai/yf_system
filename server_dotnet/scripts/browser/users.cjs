@@ -8,10 +8,20 @@ const {assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BROWSE
   await record(key+' 首次登录强制改密并撤销旧访问令牌',async()=>{
    const old=await login(p,u.username,u.password);assert.equal(old.mustChangePassword,true);
    await p.waitForURL('**/change-password');
+   const submit=p.getByRole('button',{name:'确认修改',exact:true});await submit.waitFor();
+   if(key==='member'){
+    const policyMessage='密码需 5-20 个字符，不能使用常见弱密码或简单重复序列';
+    for(const candidate of ['😀Q7!','abcde']){
+     const rejected=await api(c,'PUT','/auth/password',{oldPassword:u.password,newPassword:candidate},old.accessToken,400);
+     const error=await rejected.json();assert.equal(error.code,40001);assert.equal(error.message,policyMessage);
+    }
+    u.changedPassword='River';
+   }
    await p.getByRole('textbox',{name:'原密码',exact:true}).fill(u.password);
    await p.getByRole('textbox',{name:'新密码',exact:true}).fill(u.changedPassword);
    await p.getByRole('textbox',{name:'确认新密码',exact:true}).fill(u.changedPassword);
-   await p.getByRole('button',{name:'确认修改',exact:true}).click();await p.waitForURL('**/login');
+   const changed=p.waitForResponse(r=>r.url().endsWith('/api/v1/auth/password')&&r.request().method()==='PUT');
+   await submit.click();const changedResponse=await changed;assert.equal(changedResponse.status(),200);await p.waitForURL('**/login');
    await api(c,'GET','/auth/profile',undefined,old.accessToken,401);
    const result=await login(p,u.username,u.changedPassword);assert.equal(result.mustChangePassword,false);u.token=result.accessToken;
    await p.waitForURL(s.base+'/');u.uiFirstChanged=true;save();
@@ -40,7 +50,8 @@ const {assert,OUT,s,f,save,record,login,api,track}=require(process.env.YF_BROWSE
  });
  await record('个人资料普通改密成功并重新登录',async()=>{
   const next='Normal!Q7v9-2026';await p.getByLabel('新密码',{exact:true}).fill(next);await p.getByLabel('确认新密码',{exact:true}).fill(next);
-  await p.getByRole('button',{name:'修改密码',exact:true}).click();await p.waitForURL('**/login');
+  const changed=p.waitForResponse(r=>r.url().endsWith('/api/v1/auth/password')&&r.request().method()==='PUT');
+  await p.getByRole('button',{name:'修改密码',exact:true}).click();const changedResponse=await changed;assert.equal(changedResponse.status(),200);await p.waitForURL('**/login');
   const result=await login(p,u.username,next);u.changedPassword=next;u.token=result.accessToken;save();await p.waitForURL(s.base+'/');
   await c.storageState({path:OUT+'/member.storage.private.json'});
  });
