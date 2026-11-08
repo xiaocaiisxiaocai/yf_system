@@ -30,6 +30,7 @@ from test_host_artifacts import verify_test_host_artifacts
 from test_identity_contracts import run_identity_checks
 from test_file_contracts import run_file_checks, run_upload_material_checks
 from test_native_download_contracts import run_native_download_checks
+from test_file_stream_limits import run_file_stream_limit_checks
 from test_background_copy_contracts import run_background_copy_checks
 from test_role_fixtures import assert_admin_only_initialization, install_legacy_test_roles
 from test_system_contracts import run_system_checks
@@ -611,6 +612,7 @@ try:
                 check("batch ZIP member integrity", zipped.testzip() is None and zipped.read(zipped.namelist()[0]) == pdf)
             run_file_checks(client, conn, check, pid, fid)
             run_native_download_checks(client, conn, check, fid, pdf)
+            run_file_stream_limit_checks(client, conn, check, fid)
             if FILES_ONLY:
                 raise FileContractsComplete()
             run_background_copy_checks(client, conn, check, sid)

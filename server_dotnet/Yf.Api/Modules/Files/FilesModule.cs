@@ -9,6 +9,7 @@ public static class FilesModule
     public static IServiceCollection AddFilesModule(this IServiceCollection services)
     {
         services.AddSingleton<BatchDownloadLimiter>();
+        services.AddSingleton<FileStreamLimiter>();
         services.AddSingleton<MediaGrantService>();
         services.AddSingleton<DownloadGrantService>();
         services.TryAddSingleton<FileRateLimiter>();

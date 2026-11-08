@@ -198,7 +198,9 @@ def run_native_download_checks(admin, conn, check, file_id, expected_bytes):
 
     cookie_header = {"Cookie": f"yf_dls_{handle}={session_secret}"}
     offsets = list(range(8, 18))
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    # The stream guard permits four active responses per account.  Exercise all ten
+    # offsets while keeping each real concurrency wave within that supported limit.
+    with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(
             lambda offset: _direct_call(
                 actor.base, "GET", grant["url"], 206,
@@ -206,7 +208,7 @@ def run_native_download_checks(admin, conn, check, file_id, expected_bytes):
             offsets,
         ))
     check(
-        "ten concurrent native ranges share the fixed session and exact bytes",
+        "ten native ranges in waves of at most four share the fixed session and exact bytes",
         all(payload == expected_bytes[offset:offset + 1]
             and headers.get("Content-Range") == f"bytes {offset}-{offset}/{len(expected_bytes)}"
             for offset, (payload, headers) in zip(offsets, results)),

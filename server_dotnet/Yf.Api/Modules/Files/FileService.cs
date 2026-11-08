@@ -19,10 +19,12 @@ public sealed class FileService(
     DownloadGrantService downloadGrants,
     IdentityService identity,
     ILogger<FileService>? logger = null,
-    IStoredUploadNotifier? changes = null)
+    IStoredUploadNotifier? changes = null,
+    FileStreamLimiter? streamLimiter = null)
 {
     private const ulong PreviewMaximumBytes = 50UL * 1024 * 1024;
     private const ulong BatchInputMaximumBytes = 256UL * 1024 * 1024;
+    private readonly FileStreamLimiter guardedStreams = streamLimiter ?? new();
 
     public async Task<PageResponse<FileListItem>> ListAsync(HttpContext context, ulong projectId, CancellationToken ct)
     {
@@ -100,26 +102,31 @@ public sealed class FileService(
         if (inline && Math.Max(row.SizeBytes, physicalSize) > PreviewMaximumBytes)
             throw ApiException.BadRequest($"文件超过 {PreviewMaximumBytes / 1024 / 1024} MiB，不能在线预览，请下载原文件查看");
 
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        var lease = guardedStreams.Acquire(actor.Id);
+        FileStream? stream = null;
         try
         {
+            stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
             SetNoStore(context.Response);
             if (inline)
             {
                 await WriteWindowedAuditAsync(context, conn, actor.Id, "FILE_PREVIEW", id,
                     new { name = row.OriginalName }, ct);
                 context.Response.Headers.ContentDisposition = $"inline; filename*=UTF-8''{Uri.EscapeDataString(row.OriginalName)}";
-                return Results.File(stream, FileStorage.MimeType("preview." + row.Ext), enableRangeProcessing: true);
+                return new GuardedFileResult(
+                    Results.File(stream, FileStorage.MimeType("preview." + row.Ext), enableRangeProcessing: true), lease);
             }
             await WriteWindowedAuditAsync(context, conn, actor.Id, "FILE_DOWNLOAD", id,
                 new { name = row.OriginalName }, ct);
-            return Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
-                enableRangeProcessing: true);
+            return new GuardedFileResult(
+                Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
+                    enableRangeProcessing: true), lease);
         }
         catch
         {
-            await stream.DisposeAsync();
+            lease.Dispose();
+            if (stream is not null) await stream.DisposeAsync();
             throw;
         }
     }
@@ -156,19 +163,23 @@ public sealed class FileService(
         var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
         var filePath = ResolveExisting(row, ct);
-        var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        var lease = guardedStreams.Acquire(actor.Id);
+        FileStream? stream = null;
         try
         {
+            stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.RandomAccess);
             await WriteSessionAuditAsync(context, conn, session, "FILE_DOWNLOAD", id,
                 new { name = row.OriginalName }, ct);
             SetNoStore(context.Response);
-            return Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
-                enableRangeProcessing: true);
+            return new GuardedFileResult(
+                Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
+                    enableRangeProcessing: true), lease);
         }
         catch
         {
-            await stream.DisposeAsync();
+            lease.Dispose();
+            if (stream is not null) await stream.DisposeAsync();
             throw;
         }
     }
@@ -260,19 +271,22 @@ public sealed class FileService(
         }
         catch (FileNotFoundException) { throw ApiException.NotFound(); }
 
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
+        var lease = guardedStreams.Acquire(actor.Id);
+        FileStream? stream = null;
         try
         {
+            stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
+                FileOptions.Asynchronous | FileOptions.RandomAccess);
             await WriteWindowedAuditAsync(context, conn, actor.Id, "FILE_PREVIEW", id,
                 new { name = row.OriginalName }, ct, $"media:{actor.Id}:{grant.SessionId}:{id}");
             SetNoStore(context.Response);
             context.Response.Headers.ContentDisposition = $"inline; filename*=UTF-8''{Uri.EscapeDataString(row.OriginalName)}";
-            return Results.File(stream, contentType, enableRangeProcessing: true);
+            return new GuardedFileResult(Results.File(stream, contentType, enableRangeProcessing: true), lease);
         }
         catch
         {
-            await stream.DisposeAsync();
+            lease.Dispose();
+            if (stream is not null) await stream.DisposeAsync();
             throw;
         }
     }
