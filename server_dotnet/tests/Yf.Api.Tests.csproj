@@ -18,5 +18,7 @@
     <PackageReference Include="Dapper" Version="2.1.79" />
     <Using Include="Xunit" />
     <None Update="Contracts/api-v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Most tests migrate their own MySQL schema; unbounded parallel DDL slows each test toward its timeout. -->
+    <None Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -86,15 +86,16 @@ public sealed class OemDeliveryClockSkewTests
         var ct = TestContext.Current.CancellationToken;
         var skew = TimeSpan.FromHours(skewHours);
         await using var host = await OemTestHost.StartAsync(ct);
-        var content = OemTestHost.Pdf(new string('c', 80 * 64 * 1024));
+        var content = OemTestHost.Pdf(new string('c', 200 * 64 * 1024));
         var fixture = await ReleasedInboundAsync(host, content, ct);
         var factory = OemTestDbFactory.With(host, new SkewedDatabaseClock(skew));
         await AssertSkewedAsync(factory, skew, ct);
         var delivery = Delivery(host, factory);
 
         // The file is due a few seconds from now on the DB clock with no drain period, so the
-        // session's hard deadline is that DB-clock instant.
-        var window = TimeSpan.FromSeconds(6);
+        // session's hard deadline is that DB-clock instant. The window also covers starting the
+        // download and admitting the stream, which can take several seconds on a loaded test database.
+        var window = TimeSpan.FromSeconds(15);
         await using var conn = await host.OpenAsync(ct);
         await conn.ExecuteAsync("UPDATE system_configs SET cfg_value='0' WHERE cfg_key='oem.download.purge_drain_minutes'");
         await conn.ExecuteAsync("UPDATE oem_transfer_files SET purge_due_at=@due WHERE id=@id",
@@ -108,8 +109,8 @@ public sealed class OemDeliveryClockSkewTests
         await delivery.StreamAsync(stream, fixture.FileId, ct);
         clock.Stop();
 
-        // About 80 writes x 200 ms = 16 s for the whole file; the cut-off must come at the
-        // ~6 s DB deadline (never at a deadline shifted by the 13 h clock difference).
+        // About 200 writes x 200 ms = 40 s for the whole file; the cut-off must come at the
+        // ~15 s DB deadline (never at a deadline shifted by the 13 h clock difference).
         Assert.True(lifetime.Aborted, "the stream must be aborted at the hard deadline");
         Assert.True(clock.Elapsed < window + TimeSpan.FromSeconds(4), $"stream ran {clock.Elapsed} past a {window} deadline");
         var written = ((SlowStream)stream.Response.Body).Written;
