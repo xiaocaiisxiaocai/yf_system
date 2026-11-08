@@ -81,7 +81,17 @@ if (app is not null)
             if (!CryptographicOperations.FixedTimeEquals(supplied, Encoding.UTF8.GetBytes(mailControlKey))) return Results.NotFound();
             await using var database = await factory.CreateDbContextAsync(ct);
             var rows = await database.EmailOutbox.OrderBy(item => item.Id)
-                .Select(item => new { item.Id, item.EventType, item.RecipientEmail, item.Status, item.RetryCount, item.NextAttemptAt })
+                .Select(item => new
+                {
+                    item.Id,
+                    item.EventType,
+                    item.RecipientEmail,
+                    item.Status,
+                    item.RetryCount,
+                    item.NextAttemptAt,
+                    item.OemTransferId,
+                    item.RecipientRealm,
+                })
                 .ToListAsync(ct);
             if (rows.Any(item => !item.RecipientEmail.EndsWith(".invalid", StringComparison.OrdinalIgnoreCase)))
                 return Results.BadRequest();

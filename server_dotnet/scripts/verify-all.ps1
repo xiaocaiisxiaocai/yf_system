@@ -702,6 +702,7 @@ try {
         'test_script_safety',
         'test_publish_defaults',
         'test_browser_step_evidence',
+        'test_smtp_capture',
         'test_test_host_artifacts',
         'test_maintenance_optimization_guard',
         'test_verify_all_guards'
