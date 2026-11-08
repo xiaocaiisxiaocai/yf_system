@@ -161,6 +161,54 @@ public sealed class OemFlowHardeningTests
         await world.Sender.PostAsync($"/api/v1/oem/uploads/{sessionId}/merge", null, ct).Ok();
     }
 
+    [Theory(Timeout = 240_000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RevocationDuringChunkTransferPreservesThePreviouslyConfirmedBytes(bool portalLogout)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var uploader = portalLogout ? world.Vendor : world.Sender;
+        var draft = portalLogout
+            ? await uploader.PostAsync("/api/v1/oem/transfers", new { title = "分片重传" }, ct).Ok()
+            : await CreateOutboundAsync(world, "分片重传", ct);
+        var original = OemTestHost.Pdf(new string('a', 64 * 1024));
+        var replacement = OemTestHost.Pdf(new string('b', 64 * 1024));
+        var init = await uploader.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/uploads/init",
+            new { fileName = "retry.pdf", fileSize = (ulong)original.Length }, ct).Ok();
+        var sessionId = init["sessionId"]!.GetValue<string>();
+        var url = $"/api/v1/oem/uploads/{sessionId}/chunks/0";
+        var path = host.Service<OemStorage>().ChunkPath(sessionId, 0);
+        using (var initial = new ByteArrayContent(original))
+        using (var response = await uploader.Http.PutAsync(url, initial, ct))
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var body = new GatedContent(replacement, 1024, gate.Task);
+        var retry = uploader.Http.PutAsync(url, body, ct);
+        var directory = Path.GetDirectoryName(path)!;
+        try
+        {
+            await WaitForChunkWriteAsync(directory, ct);
+            if (portalLogout)
+                await uploader.PostAsync("/api/v1/oem/auth/logout", null, ct).Ok();
+            else
+            {
+                await using var conn = await host.OpenAsync(ct);
+                var roleId = await conn.QuerySingleAsync<ulong>(
+                    "SELECT role_id FROM user_roles WHERE user_id=@id", new { id = world.SenderId });
+                await world.Admin.PutAsync($"/api/v1/admin/roles/{roleId}/permissions", new { permissionIds = Array.Empty<ulong>() }, ct).Ok();
+            }
+        }
+        finally { gate.TrySetResult(); }
+
+        using var denied = await retry;
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(original, await File.ReadAllBytesAsync(path, ct));
+        Assert.Empty(Directory.EnumerateFiles(directory, "*.uploading"));
+    }
+
     [Fact(Timeout = 240_000)]
     public async Task ALateChunkDoesNotResurrectAnAbortedSessionDirectory()
     {
@@ -179,14 +227,12 @@ public sealed class OemFlowHardeningTests
         var body = new GatedContent(content, 1024, gate.Task);
         using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/v1/oem/uploads/{sessionId}/chunks/0") { Content = body };
         var upload = world.Sender.Http.SendAsync(request, ct);
-        var deadline = DateTime.UtcNow.AddSeconds(30);
-        while (!(Directory.Exists(directory) && Directory.EnumerateFiles(directory, "*.uploading").Any()))
+        try
         {
-            Assert.True(DateTime.UtcNow < deadline, "chunk write did not start");
-            await Task.Delay(50, ct);
+            await WaitForChunkWriteAsync(directory, ct);
+            await world.Sender.DeleteAsync($"/api/v1/oem/uploads/{sessionId}", ct).Ok();
         }
-        await world.Sender.DeleteAsync($"/api/v1/oem/uploads/{sessionId}", ct).Ok();
-        gate.SetResult();
+        finally { gate.TrySetResult(); }
 
         using var response = await upload;
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
@@ -229,6 +275,16 @@ public sealed class OemFlowHardeningTests
     }
 
     /// <summary>Request body that sends a prefix, then waits for <paramref name="gate"/> before sending the rest.</summary>
+    private static async Task WaitForChunkWriteAsync(string directory, CancellationToken ct)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!Directory.EnumerateFiles(directory, "*.uploading").Any())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "chunk write did not start");
+            await Task.Delay(50, ct);
+        }
+    }
+
     private sealed class GatedContent(byte[] content, int prefix, Task gate) : HttpContent
     {
         protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context)

@@ -172,6 +172,11 @@ public sealed partial class OemUploadService(
             // change underneath it, and a swap that won the lock first is complete before the merge checks.
             await using var swap = await OemUnitOfWork.BeginAsync(dbFactory, ct);
             var locked = await LoadOwnSessionAsync(swap, actor, sessionId, forUpdate: true, ct);
+            // Receiving the body holds no authorization locks. Recheck at publication, after any
+            // wait for the session row, while the business gate still protects this transaction.
+            await swap.RefreshNowAsync(ct);
+            var uploader = await OemAuthorizer.RecheckAsync(swap, actor, ct);
+            if (uploader is InternalOemActor) await OemAuthorizer.RequireAsync(swap, uploader, OemPermissions.TransferCreate, ct);
             if (locked.Status != UploadStatuses.Uploading) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
             if (locked.ExpiresAt <= swap.Now) throw ApiException.Conflict("上传会话已过期，请重新发起");
             File.Move(temporary, path, overwrite: true);
