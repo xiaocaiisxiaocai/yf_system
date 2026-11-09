@@ -30,10 +30,8 @@ public sealed class DashboardConcurrencyTests
                       (3,'replacement','unused','Replacement','','INTERNAL','ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(2,9001),(3,9001);
             INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'test','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-                VALUES(5001,'group',100,'IN_PROGRESS',1,2);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-                VALUES(1001,5001,'project',100,'IN_PROGRESS',1,2);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+                VALUES(1001,'project',100,'IN_PROGRESS',1,2);
             INSERT INTO messages(id,project_id,sender_id,content,status)
                 VALUES(10001,1001,1,'private message','NORMAL');
             """, null, ct);
@@ -53,7 +51,7 @@ public sealed class DashboardConcurrencyTests
             command.CommandText = mutation switch
             {
                 "delete" => "UPDATE messages SET status='DELETED',deleted_at=UTC_TIMESTAMP() WHERE id=10001",
-                "reassign" => "UPDATE project_groups SET responsible_user_id=3 WHERE id=5001; UPDATE projects SET responsible_user_id=3 WHERE id=1001",
+                "reassign" => "UPDATE projects SET responsible_user_id=3 WHERE id=1001",
                 "read" => "INSERT INTO message_reads(message_id,user_id,read_at) VALUES(10001,2,UTC_TIMESTAMP())",
                 _ => throw new InvalidOperationException("Unknown mutation")
             };

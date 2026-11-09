@@ -461,8 +461,8 @@ public sealed class MailDeliveryTests
                 VALUES(10,'old-owner','old-owner@example.invalid','INTERNAL',NULL,'ACTIVE'),
                       (11,'new-owner','new-owner@example.invalid','INTERNAL',NULL,'ACTIVE');
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
-                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status)
-                VALUES(7,1,100,10,11,'IN_PROGRESS');
+                INSERT INTO projects(id,supplier_id,created_by,responsible_user_id,status)
+                VALUES(7,100,10,11,'IN_PROGRESS');
                 UPDATE email_outbox
                 SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10,
                     recipient_email='old-owner@example.invalid'
@@ -497,8 +497,8 @@ public sealed class MailDeliveryTests
                 INSERT INTO users(id,employee_no,email,user_type,supplier_id,status)
                 VALUES(10,'owner','changed@example.invalid','INTERNAL',NULL,'ACTIVE');
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10);
-                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status)
-                VALUES(7,1,100,10,10,'IN_PROGRESS');
+                INSERT INTO projects(id,supplier_id,created_by,responsible_user_id,status)
+                VALUES(7,100,10,10,'IN_PROGRESS');
                 UPDATE email_outbox
                 SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10
                 WHERE id=1;
@@ -964,8 +964,8 @@ public sealed class MailDeliveryTests
                 VALUES(10,'supplier-user','supplier@example.invalid','SUPPLIER',100,'ACTIVE',0),
                       (11,'owner','owner@example.invalid','INTERNAL',NULL,'ACTIVE',1);
                 INSERT INTO user_roles(user_id,role_id) VALUES(10,10),(11,10);
-                INSERT INTO projects(id,project_group_id,supplier_id,created_by,responsible_user_id,status)
-                VALUES(7,1,100,11,11,'IN_PROGRESS');
+                INSERT INTO projects(id,supplier_id,created_by,responsible_user_id,status)
+                VALUES(7,100,11,11,'IN_PROGRESS');
                 UPDATE email_outbox
                 SET event_type='MESSAGE_CREATED',project_id=7,recipient_user_id=10,recipient_email='supplier@example.invalid'
                 WHERE id=1;

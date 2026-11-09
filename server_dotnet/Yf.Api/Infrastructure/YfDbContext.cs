@@ -25,10 +25,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
 
-    public DbSet<ProjectGroup> ProjectGroups => Set<ProjectGroup>();
-    public DbSet<ProjectGroupWorkOrder> ProjectGroupWorkOrders => Set<ProjectGroupWorkOrder>();
-    public DbSet<ProjectGroupRobotOwner> ProjectGroupRobotOwners => Set<ProjectGroupRobotOwner>();
-    public DbSet<ProjectGroupStatusLog> ProjectGroupStatusLogs => Set<ProjectGroupStatusLog>();
+    public DbSet<ProjectRobotOwner> ProjectRobotOwners => Set<ProjectRobotOwner>();
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ProjectWorkOrder> ProjectWorkOrders => Set<ProjectWorkOrder>();
     public DbSet<ProjectStatusLog> ProjectStatusLogs => Set<ProjectStatusLog>();

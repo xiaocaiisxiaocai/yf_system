@@ -22,8 +22,6 @@ internal sealed class CollaborationService
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         if (!current.IsInternal && current.SupplierId is null) throw ApiException.OutOfScope();
         await using var db = EfDb.Use(conn, tx);
-        var canViewAll = current.IsInternal
-            && await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
         var supplierId = current.SupplierId ?? 0;
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
 
@@ -49,8 +47,7 @@ internal sealed class CollaborationService
             INNER JOIN projects p ON p.id=pa.project_id
             LEFT JOIN collaboration_reads cr ON cr.activity_id=pa.id AND cr.user_id={current.Id}
             WHERE pa.occurred_at>={cutoff}
-              AND (({current.IsInternal} AND ({canViewAll} OR p.responsible_user_id={current.Id}
-                    OR EXISTS (SELECT 1 FROM project_groups pg WHERE pg.id=p.project_group_id AND pg.created_by={current.Id})))
+              AND (({current.IsInternal} AND p.responsible_user_id={current.Id})
                 OR (NOT {current.IsInternal} AND p.supplier_id={supplierId}))
             """).SingleAsync(ct);
         await tx.CommitAsync(ct);
@@ -70,7 +67,7 @@ internal sealed class CollaborationService
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await using var db = EfDb.Use(conn, tx);
-        var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
+        var visibleProjects = await ProjectAccessService.InboxQueryAsync(db, current, ct);
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
         // Notifications, totals and unread state share the same bounded window. Older activity stays in
         // the audit/history tables but is not part of this hot collaboration feed.
@@ -81,7 +78,6 @@ internal sealed class CollaborationService
         var query =
             from activity in activities
             join project in visibleProjects on activity.ProjectId equals project.Id
-            join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id
             let isRead = db.CollaborationReads.Any(read =>
                 read.ActivityId == activity.Id && read.UserId == current.Id)
             let fileAvailable = activity.ActivityType == "FILE" && activity.TargetId != null
@@ -98,7 +94,6 @@ internal sealed class CollaborationService
             {
                 Activity = activity,
                 ProjectName = project.Name,
-                ProjectGroupName = projectGroup.Name,
                 IsRead = isRead || targetGone,
                 FileAvailable = fileAvailable,
                 MessageAvailable = messageAvailable,
@@ -118,7 +113,6 @@ internal sealed class CollaborationService
             row.Activity.Action,
             row.Activity.ProjectId,
             row.ProjectName,
-            row.ProjectGroupName,
             row.Activity.ActorName,
             row.Activity.Title,
             row.Activity.ActivityType == "MESSAGE" && !row.MessageAvailable ? null : row.Activity.Summary,

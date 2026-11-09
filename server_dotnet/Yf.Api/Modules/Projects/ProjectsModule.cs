@@ -14,8 +14,6 @@ public static class ProjectsModule
         // Image messages share the collaboration upload budget with the files module.
         services.TryAddSingleton<FileRateLimiter>();
         services.AddScoped<ProjectService>();
-        services.AddScoped<ProjectGroupService>();
-        services.AddScoped<ProjectGroupStatusService>();
         services.AddScoped<ProjectCopyService>();
         services.AddSingleton<ProjectCopyWakeSignal>();
         services.AddSingleton<ProjectCopyWorker>();
@@ -42,7 +40,7 @@ public static class ProjectsModule
     {
         var api = endpoints.MapGroup("/api/v1");
 
-        api.MapGet("/project-groups", (HttpContext context, ProjectGroupService service) =>
+        api.MapGet("/projects", (HttpContext context, ProjectService service) =>
             WithDb(context, (conn, actor, _, ct) => service.ListAsync(
                 conn,
                 actor,
@@ -53,19 +51,12 @@ public static class ProjectsModule
                 QueryNullableUlong(context, "supplierId"),
                 QueryString(context, "materialState"),
                 QueryBool(context, "overdue", false),
+                QueryBool(context, "mine", false),
                 ct)));
-        api.MapPost("/project-groups", (HttpContext context, ProjectUpsertRequest request, ProjectGroupService service) =>
+        api.MapPost("/projects", (HttpContext context, ProjectUpsertRequest request, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.CreateAsync(conn, actor, request, ip, ct)));
-        api.MapGet("/project-groups/{id:long}", (HttpContext context, ulong id, ProjectGroupService service) =>
-            WithDb(context, (conn, actor, _, ct) => service.DetailAsync(conn, actor, id, ct)));
-        api.MapPut("/project-groups/{id:long}", (HttpContext context, ulong id, ProjectUpsertRequest request, ProjectGroupService service) =>
-            WithDb(context, (conn, actor, ip, ct) => service.UpdateAsync(conn, actor, id, request, ip, ct)));
-        api.MapPut("/project-groups/{id:long}/responsible", (HttpContext context, ulong id, ProjectGroupTransferRequest request, ProjectGroupService service) =>
+        api.MapPut("/projects/{id:long}/responsible", (HttpContext context, ulong id, ProjectTransferRequest request, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.TransferAsync(conn, actor, id, request, ip, ct)));
-        api.MapDelete("/project-groups/{id:long}", (HttpContext context, ulong id, ProjectGroupService service) =>
-            WithDb(context, (conn, actor, ip, ct) => Empty(service.DeleteAsync(conn, actor, id, ip, ct))));
-        api.MapPost("/project-groups/{id:long}/projects", (HttpContext context, ulong id, SubprojectUpsertRequest request, ProjectGroupService service) =>
-            WithDb(context, (conn, actor, ip, ct) => service.CreateSubprojectAsync(conn, actor, id, request, ip, ct)));
 
         api.MapPost("/projects/{id:long}/copy", async (HttpContext context, ulong id, ProjectCopyRequest request,
             ProjectCopyService service) =>
@@ -76,8 +67,8 @@ public static class ProjectsModule
         });
         api.MapGet("/project-copy-jobs/{jobId:long}", (HttpContext context, ulong jobId, ProjectCopyService service) =>
             WithDb(context, (conn, actor, _, ct) => service.GetJobAsync(conn, actor, jobId, ct)));
-        api.MapGet("/project-groups/{groupId:long}/copy-jobs", (HttpContext context, ulong groupId, ProjectCopyService service) =>
-            WithDb(context, (conn, actor, _, ct) => service.ListJobsAsync(conn, actor, groupId, ct)));
+        api.MapGet("/project-copy-jobs", (HttpContext context, ProjectCopyService service) =>
+            WithDb(context, (conn, actor, _, ct) => service.ListJobsAsync(conn, actor, ct)));
         api.MapGet("/projects/{id:long}/copy-history", (HttpContext context, ulong id, ProjectCopyService service) =>
             WithDb(context, (conn, actor, _, ct) => service.HistoryAsync(conn, actor, id, ct)));
         api.MapGet("/project-copies/{copyId:long}/files", (HttpContext context, ulong copyId, ProjectCopyService service) =>
@@ -85,8 +76,8 @@ public static class ProjectsModule
                 QueryUlong(context, "page", 1), QueryUlong(context, "pageSize", 20), ct)));
         api.MapGet("/projects/{id:long}", (HttpContext context, ulong id, ProjectService service) =>
             WithDb(context, (conn, actor, _, ct) => service.DetailAsync(conn, actor, id, ct)));
-        api.MapPut("/projects/{id:long}", (HttpContext context, ulong id, SubprojectUpdateRequest request, ProjectService service) =>
-            WithDb(context, (conn, actor, ip, ct) => service.UpdateSubprojectAsync(conn, actor, id, request, ip, ct)));
+        api.MapPut("/projects/{id:long}", (HttpContext context, ulong id, ProjectUpsertRequest request, ProjectService service) =>
+            WithDb(context, (conn, actor, ip, ct) => service.UpdateAsync(conn, actor, id, request, ip, ct)));
         api.MapDelete("/projects/{id:long}", (HttpContext context, ulong id, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => Empty(service.DeleteAsync(conn, actor, id, ip, ct))));
         api.MapPut("/projects/{id:long}/status", (HttpContext context, ulong id, ProjectStatusRequest request, ProjectService service) =>

@@ -52,6 +52,7 @@ public sealed class SchemaShapeTests
         "20261105082534_MergeOemLeaderApproverSources",
         "20261105091038_AllowCadExportUploads",
         "20261105102815_RenameOemLabelsToOdmOema",
+        "20261109135314_RemoveProjectGroups",
     ];
 
     [Fact]
@@ -324,8 +325,9 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(51, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(51, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(50, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(50, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='project:view_all'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code IN ('project:submit','project:confirm','project:withdraw')"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113"));
@@ -683,7 +685,7 @@ public sealed class SchemaShapeTests
 
             var grants = new Dictionary<ulong, string[]>
             {
-                [2] = ["dashboard", "project:list", "project:create", "project:update", "project:status", "project:view_all", "file:upload", "file:download", "file:preview", "message:create"],
+                [2] = ["dashboard", "project:list", "project:create", "project:update", "project:status", "project:transfer", "file:upload", "file:download", "file:preview", "message:create"],
                 [3] = ["dashboard", "project:list", "file:upload", "file:download", "file:preview", "message:create"],
                 [4] = ["dashboard", "project:list", "file:upload", "file:download", "file:preview", "message:create"],
             };

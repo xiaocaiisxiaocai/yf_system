@@ -1955,7 +1955,7 @@
         }
       }
     },
-    "/api/v1/project-groups": {
+    "/api/v1/projects": {
       "get": {
         "tags": [
           "Yf.Api.Tests"
@@ -1966,7 +1966,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PageResponseOfProjectGroupResponse"
+                  "$ref": "#/components/schemas/PageResponseOfProjectResponse"
                 }
               }
             }
@@ -2003,7 +2003,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProjectGroupResponse"
+                  "$ref": "#/components/schemas/ProjectResponse"
                 }
               }
             }
@@ -2021,45 +2021,7 @@
         }
       }
     },
-    "/api/v1/project-groups/{id}": {
-      "get": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectGroupDetailResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
+    "/api/v1/projects/{id}/responsible": {
       "put": {
         "tags": [
           "Yf.Api.Tests"
@@ -2079,145 +2041,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ProjectUpsertRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectGroupResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "delete": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EmptyResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/project-groups/{id}/responsible": {
-      "put": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProjectGroupTransferRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProjectGroupResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/project-groups/{id}/projects": {
-      "post": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubprojectUpsertRequest"
+                "$ref": "#/components/schemas/ProjectTransferRequest"
               }
             }
           },
@@ -2337,21 +2161,10 @@
         }
       }
     },
-    "/api/v1/project-groups/{groupId}/copy-jobs": {
+    "/api/v1/project-copy-jobs": {
       "get": {
         "tags": [
           "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "groupId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
         ],
         "responses": {
           "200": {
@@ -2515,7 +2328,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SubprojectUpdateRequest"
+                "$ref": "#/components/schemas/ProjectUpsertRequest"
               }
             }
           },
@@ -8010,7 +7823,6 @@
           "actorName",
           "id",
           "occurredAt",
-          "projectGroupName",
           "projectId",
           "projectName",
           "read",
@@ -8037,9 +7849,6 @@
             "format": "int64"
           },
           "projectName": {
-            "type": "string"
-          },
-          "projectGroupName": {
             "type": "string"
           },
           "actorName": {
@@ -8164,7 +7973,6 @@
           "content",
           "createdAt",
           "id",
-          "projectGroupName",
           "projectId",
           "projectName",
           "senderName",
@@ -8181,9 +7989,6 @@
             "format": "int64"
           },
           "projectName": {
-            "type": "string"
-          },
-          "projectGroupName": {
             "type": "string"
           },
           "content": {
@@ -8207,8 +8012,6 @@
           "id",
           "materialReviewStatus",
           "name",
-          "projectGroupId",
-          "projectGroupName",
           "updatedAt"
         ],
         "type": "object",
@@ -8218,13 +8021,6 @@
             "format": "int64"
           },
           "name": {
-            "type": "string"
-          },
-          "projectGroupId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "projectGroupName": {
             "type": "string"
           },
           "materialReviewStatus": {
@@ -11801,7 +11597,7 @@
         },
         "additionalProperties": false
       },
-      "PageResponseOfProjectGroupResponse": {
+      "PageResponseOfProjectResponse": {
         "required": [
           "list",
           "page",
@@ -11813,7 +11609,7 @@
           "list": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ProjectGroupResponse"
+              "$ref": "#/components/schemas/ProjectResponse"
             }
           },
           "total": {
@@ -12208,7 +12004,6 @@
           "filesCopied",
           "filesTotal",
           "jobId",
-          "projectGroupId",
           "result",
           "sourceProjectId",
           "startedAt",
@@ -12222,10 +12017,6 @@
             "format": "int64"
           },
           "sourceProjectId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "projectGroupId": {
             "type": "integer",
             "format": "int64"
           },
@@ -12411,38 +12202,94 @@
         },
         "additionalProperties": false
       },
-      "ProjectGroupDetailResponse": {
+      "ProjectMaterialReviewRequest": {
         "required": [
-          "group",
-          "projects"
+          "expectedSupplierFileId",
+          "reason"
         ],
         "type": "object",
         "properties": {
-          "group": {
-            "$ref": "#/components/schemas/ProjectGroupResponse"
+          "expectedSupplierFileId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
           },
-          "projects": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ProjectResponse"
-            }
+          "reason": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
       },
-      "ProjectGroupResponse": {
+      "ProjectOwnerOption": {
+        "required": [
+          "employeeNo",
+          "id",
+          "realName",
+          "sectionId",
+          "sectionName"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "realName": {
+            "type": "string"
+          },
+          "sectionId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "sectionName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectReopenRequest": {
+        "required": [
+          "expectedUpdatedAt",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectResponse": {
         "required": [
           "canDelete",
+          "canManage",
+          "canTransfer",
           "completedAt",
-          "completedCount",
+          "copySource",
           "createdAt",
           "createdBy",
           "createdByName",
           "description",
           "expectedCompletionDate",
+          "hasCopyHistory",
           "id",
+          "latestSupplierFileId",
           "machineModel",
-          "materialPendingCount",
+          "materialReviewReason",
+          "materialReviewStatus",
           "name",
           "priorityId",
           "priorityName",
@@ -12459,10 +12306,8 @@
           "sectionId",
           "sectionName",
           "status",
-          "subprojectCount",
           "supplierId",
           "supplierName",
-          "terminatedCount",
           "unreadMessages",
           "updatedAt",
           "workOrderNos"
@@ -12577,282 +12422,6 @@
             "type": "string",
             "nullable": true
           },
-          "completedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "subprojectCount": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "completedCount": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "materialPendingCount": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "terminatedCount": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "unreadMessages": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "canDelete": {
-            "type": "boolean"
-          }
-        },
-        "additionalProperties": false
-      },
-      "ProjectGroupTransferRequest": {
-        "required": [
-          "expectedResponsibleUserId",
-          "responsibleUserId"
-        ],
-        "type": "object",
-        "properties": {
-          "responsibleUserId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "expectedResponsibleUserId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "ProjectMaterialReviewRequest": {
-        "required": [
-          "expectedSupplierFileId",
-          "reason"
-        ],
-        "type": "object",
-        "properties": {
-          "expectedSupplierFileId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "reason": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "ProjectOwnerOption": {
-        "required": [
-          "employeeNo",
-          "id",
-          "realName",
-          "sectionId",
-          "sectionName"
-        ],
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "employeeNo": {
-            "type": "string"
-          },
-          "realName": {
-            "type": "string"
-          },
-          "sectionId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "sectionName": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "ProjectReopenRequest": {
-        "required": [
-          "expectedUpdatedAt",
-          "reason"
-        ],
-        "type": "object",
-        "properties": {
-          "expectedUpdatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "reason": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "ProjectResponse": {
-        "required": [
-          "copySource",
-          "createdAt",
-          "createdBy",
-          "createdByName",
-          "description",
-          "expectedCompletionDate",
-          "hasCopyHistory",
-          "id",
-          "latestSupplierFileId",
-          "machineModel",
-          "materialReviewReason",
-          "materialReviewStatus",
-          "name",
-          "priorityId",
-          "priorityName",
-          "projectGroupId",
-          "projectGroupName",
-          "responsibleUserEmployeeNo",
-          "responsibleUserId",
-          "responsibleUserName",
-          "robotModelName",
-          "robotOwnerName",
-          "robotPartId",
-          "robotPartNumber",
-          "robotTypeId",
-          "robotTypeName",
-          "sectionId",
-          "sectionName",
-          "status",
-          "supplierId",
-          "supplierName",
-          "unreadMessages",
-          "updatedAt",
-          "workOrderNos"
-        ],
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "projectGroupId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "projectGroupName": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string",
-            "nullable": true
-          },
-          "supplierId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "supplierName": {
-            "type": "string",
-            "nullable": true
-          },
-          "status": {
-            "type": "string"
-          },
-          "createdBy": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "createdByName": {
-            "type": "string",
-            "nullable": true
-          },
-          "workOrderNos": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "machineModel": {
-            "type": "string",
-            "nullable": true
-          },
-          "robotPartId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "robotPartNumber": {
-            "type": "string",
-            "nullable": true
-          },
-          "robotModelName": {
-            "type": "string",
-            "nullable": true
-          },
-          "responsibleUserId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "responsibleUserEmployeeNo": {
-            "type": "string",
-            "nullable": true
-          },
-          "responsibleUserName": {
-            "type": "string",
-            "nullable": true
-          },
-          "robotOwnerName": {
-            "type": "string",
-            "nullable": true
-          },
-          "sectionId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "sectionName": {
-            "type": "string",
-            "nullable": true
-          },
-          "priorityId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "priorityName": {
-            "type": "string",
-            "nullable": true
-          },
-          "robotTypeId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "robotTypeName": {
-            "type": "string",
-            "nullable": true
-          },
-          "expectedCompletionDate": {
-            "type": "string",
-            "nullable": true
-          },
           "materialReviewStatus": {
             "type": "string",
             "nullable": true
@@ -12880,6 +12449,20 @@
               }
             ],
             "nullable": true
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "canManage": {
+            "type": "boolean"
+          },
+          "canDelete": {
+            "type": "boolean"
+          },
+          "canTransfer": {
+            "type": "boolean"
           },
           "createdAt": {
             "type": "string",
@@ -12923,6 +12506,26 @@
           },
           "activityRevision": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectTransferRequest": {
+        "required": [
+          "expectedResponsibleUserId",
+          "responsibleUserId"
+        ],
+        "type": "object",
+        "properties": {
+          "responsibleUserId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "expectedResponsibleUserId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -13028,7 +12631,6 @@
           "robotOwnerContactIds",
           "robotPartId",
           "robotTypeId",
-          "subprojectNames",
           "supplierId",
           "workOrderNos"
         ],
@@ -13082,13 +12684,6 @@
           },
           "expectedCompletionDate": {
             "type": "string",
-            "nullable": true
-          },
-          "subprojectNames": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
             "nullable": true
           },
           "expectedUpdatedAt": {
@@ -13682,48 +13277,6 @@
         "properties": {
           "fileMd5": {
             "type": "string"
-          }
-        },
-        "additionalProperties": false
-      },
-      "SubprojectUpdateRequest": {
-        "required": [
-          "description",
-          "expectedUpdatedAt",
-          "name"
-        ],
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "nullable": true
-          },
-          "description": {
-            "type": "string",
-            "nullable": true
-          },
-          "expectedUpdatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "SubprojectUpsertRequest": {
-        "required": [
-          "description",
-          "name"
-        ],
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "nullable": true
-          },
-          "description": {
-            "type": "string",
-            "nullable": true
           }
         },
         "additionalProperties": false

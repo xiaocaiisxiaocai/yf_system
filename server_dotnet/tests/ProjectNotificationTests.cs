@@ -7,26 +7,19 @@ using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
-/// <summary>Robot 仿真协作第 2、3 批：草稿禁言、状态邮件开关、列表筛选与到期提醒。</summary>
+/// <summary>Robot 仿真协作第 2、3 批：状态邮件开关、列表筛选与到期提醒（项目创建即开始）。</summary>
 public sealed class ProjectNotificationTests
 {
     [Fact(Timeout = 90_000)]
-    public async Task DraftsRejectMessagesAndStatusChangesMailTheSupplierPerSwitch()
+    public async Task StatusChangesMailTheSupplierPerSwitch()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_status_mail", ct);
-        var (groups, projects, audit, actor, supplier, children) = await SeedAsync(database, ct);
+        var (projects, audit, actor, supplier, children) = await SeedAsync(database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
         var messages = new MessageService(audit, new AppOptions());
 
-        var draftMessage = await Assert.ThrowsAsync<ApiException>(() => messages.CreateAsync(
-            conn, supplier, children[0], new MessageCreateRequest { Content = "草稿留言" }, null, ct));
-        Assert.Equal((409, "项目尚未开始，暂不能留言"), (draftMessage.Status, draftMessage.Message));
-        var internalDraftMessage = await Assert.ThrowsAsync<ApiException>(() => messages.CreateAsync(
-            conn, actor, children[0], new MessageCreateRequest { Content = "草稿留言" }, null, ct));
-        Assert.Equal(409, internalDraftMessage.Status);
-
-        await Start(projects, conn, actor, children[0], ct);
+        // Creating the project started it and mailed the supplier's contacts once.
         Assert.Equal(1, await CountAsync(conn, children[0], "PROJECT_STARTED", ct));
         Assert.Equal("contact8101@example.test", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT recipient_email FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_STARTED'",
@@ -34,11 +27,11 @@ public sealed class ProjectNotificationTests
         await messages.CreateAsync(conn, supplier, children[0], new MessageCreateRequest { Content = "开始后可留言", SignerName = "Robot 负责人" }, null, ct);
 
         await SqlAsync(conn, "UPDATE system_configs SET cfg_value='false' WHERE cfg_key IN ('notify.event.project_started','notify.event.project_terminated')", ct);
-        await Start(projects, conn, actor, children[1], ct);
+        var third = await projects.CreateAsync(conn, actor, Request("通知项目-C"), null, ct);
+        Assert.Equal(0, await CountAsync(conn, third.Id, "PROJECT_STARTED", ct));
         await projects.SetStatusAsync(conn, actor, children[1],
             new ProjectStatusRequest { Status = ProjectStatuses.Terminated }, null, ct);
         await Start(projects, conn, actor, children[1], ct);
-        Assert.Equal(0, await CountAsync(conn, children[1], "PROJECT_STARTED", ct));
         Assert.Equal(0, await CountAsync(conn, children[1], "PROJECT_TERMINATED", ct));
         Assert.Equal(1, await CountAsync(conn, children[1], "PROJECT_RESTARTED", ct));
         // Supplier-side mail never goes to the internal actor.
@@ -64,7 +57,6 @@ public sealed class ProjectNotificationTests
         Assert.Contains("重开原因：动作流程需要返工", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT body FROM email_outbox WHERE project_id=@ProjectId AND event_type='PROJECT_REOPENED'",
             new { ProjectId = children[0] }, cancellationToken: ct)));
-        _ = groups;
     }
 
     [Fact(Timeout = 90_000)]
@@ -72,14 +64,15 @@ public sealed class ProjectNotificationTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_mail_safety", ct);
-        var (_, projects, audit, actor, supplier, children) = await SeedAsync(database, ct);
+        var (projects, audit, actor, supplier, children) = await SeedAsync(database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
         var messages = new MessageService(audit, new AppOptions());
         var project = children[0];
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE projects SET name=@Name WHERE id=@Id",
             new { Name = "危险名称\r\n项目：伪造\n结果：伪造", Id = project }, cancellationToken: ct));
-
+        // Restart after a terminate so a status mail also carries the injected name.
+        await projects.SetStatusAsync(conn, actor, project, new ProjectStatusRequest { Status = ProjectStatuses.Terminated }, null, ct);
         await Start(projects, conn, actor, project, ct);
         await messages.CreateAsync(conn, actor, project, new MessageCreateRequest { Content = "公司发给厂商的留言" }, null, ct);
         await conn.ExecuteAsync(new CommandDefinition(
@@ -102,7 +95,7 @@ public sealed class ProjectNotificationTests
         await projects.ApproveMaterialsAsync(conn, actor, project,
             new ProjectMaterialReviewRequest { ExpectedSupplierFileId = secondFileId }, null, ct);
 
-        foreach (var eventType in new[] { "PROJECT_STARTED", "PROJECT_MATERIAL_RETURNED", "PROJECT_MATERIAL_APPROVED", "MESSAGE_CREATED" })
+        foreach (var eventType in new[] { "PROJECT_STARTED", "PROJECT_RESTARTED", "PROJECT_MATERIAL_RETURNED", "PROJECT_MATERIAL_APPROVED", "MESSAGE_CREATED" })
         {
             var mail = await conn.QueryFirstAsync<MailRow>(new CommandDefinition(
                 "SELECT subject AS Subject,body AS Body FROM email_outbox WHERE project_id=@ProjectId AND event_type=@EventType AND recipient_user_id=@UserId ORDER BY id LIMIT 1",
@@ -148,22 +141,20 @@ public sealed class ProjectNotificationTests
     }
 
     [Fact(Timeout = 90_000)]
-    public async Task MainProjectListFiltersByMaterialStateAndOverdue()
+    public async Task ProjectListFiltersByMaterialStateAndOverdue()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_list_filters", ct);
-        var (groups, projects, _, actor, supplier, children) = await SeedAsync(database, ct);
+        var (projects, _, actor, supplier, children) = await SeedAsync(database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
 
         async Task<int> Total(string? materialState, bool overdue)
         {
-            var page = await groups.ListAsync(conn, actor, 1, 20, null, null, null, materialState, overdue, ct);
+            var page = await projects.ListAsync(conn, actor, 1, 20, null, null, null, materialState, overdue, false, ct);
             return (int)page.Total;
         }
 
-        Assert.Equal(0, await Total("NO_MATERIAL", false));
-        await Start(projects, conn, actor, children[0], ct);
-        Assert.Equal(1, await Total("NO_MATERIAL", false));
+        Assert.Equal(2, await Total("NO_MATERIAL", false));
         Assert.Equal(0, await Total("PENDING", false));
         await conn.ExecuteAsync(new CommandDefinition(
             """
@@ -171,14 +162,14 @@ public sealed class ProjectNotificationTests
             VALUES(@ProjectId,@SupplierId,'S2C','a.txt','filter-a.txt','txt',1,'files/filter-a.txt','AVAILABLE')
             """, new { ProjectId = children[0], SupplierId = supplier.Id }, cancellationToken: ct));
         Assert.Equal(1, await Total("PENDING", false));
-        Assert.Equal(0, await Total("NO_MATERIAL", false));
+        Assert.Equal(1, await Total("NO_MATERIAL", false));
         var invalid = await Assert.ThrowsAsync<ApiException>(() => Total("APPROVED", false));
         Assert.Equal(400, invalid.Status);
 
         Assert.Equal(0, await Total(null, true));
-        await SqlAsync(conn, "UPDATE project_groups SET expected_completion_date=DATE(UTC_TIMESTAMP()+INTERVAL 8 HOUR)-INTERVAL 1 DAY", ct);
+        await SqlAsync(conn, $"UPDATE projects SET expected_completion_date=DATE(UTC_TIMESTAMP()+INTERVAL 8 HOUR)-INTERVAL 1 DAY WHERE id={children[0]}", ct);
         Assert.Equal(1, await Total(null, true));
-        await SqlAsync(conn, "UPDATE project_groups SET status='COMPLETED'", ct);
+        await SqlAsync(conn, "UPDATE projects SET status='COMPLETED'", ct);
         Assert.Equal(0, await Total(null, true));
     }
 
@@ -187,14 +178,15 @@ public sealed class ProjectNotificationTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_due_reminders", ct);
-        var (_, projects, audit, actor, supplier, children) = await SeedAsync(database, ct);
+        var (projects, audit, actor, supplier, children) = await SeedAsync(database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
         var reminders = new ProjectDueReminderService(database.Database, database.Options, audit,
             NullLogger<ProjectDueReminderService>.Instance);
-        await Start(projects, conn, actor, children[0], ct);
+        await projects.SetStatusAsync(conn, actor, children[1],
+            new ProjectStatusRequest { Status = ProjectStatuses.Terminated }, null, ct);
         await SetDueAsync(conn, children[1], 1, ct);
 
-        // Outside the 3-day window nothing is due; drafts are never reminded.
+        // Outside the 3-day window nothing is due; terminated projects are never reminded.
         await SetDueAsync(conn, children[0], 4, ct);
         Assert.Equal(0, await reminders.RunOnceAsync(conn, ct));
 
@@ -227,7 +219,21 @@ public sealed class ProjectNotificationTests
             "SELECT updated_at FROM projects WHERE id=@ProjectId", new { ProjectId = children[0] }, cancellationToken: ct)));
     }
 
-    private static async Task<(ProjectGroupService Groups, ProjectService Projects, AuditService Audit, CurrentUser Actor,
+    private static ProjectUpsertRequest Request(string name) => new()
+    {
+        Name = name,
+        SupplierId = 8101,
+        WorkOrderNos = ["WO-NOTIFY-1"],
+        MachineModel = "机型-N",
+        RobotPartId = 8402,
+        PriorityId = 8403,
+        RobotTypeId = 1008403,
+        RobotOwnerContactIds = [10008101],
+        ExpectedCompletionDate = "2099-12-31",
+    };
+
+    /// <summary>Seeds the catalog and creates two started projects owned by the internal actor.</summary>
+    private static async Task<(ProjectService Projects, AuditService Audit, CurrentUser Actor,
         CurrentUser Supplier, ulong[] Children)> SeedAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct)
     {
         await database.InitializeBusinessFixtureAsync(ct);
@@ -251,27 +257,11 @@ public sealed class ProjectNotificationTests
         var actor = new CurrentUser(8301, "notify-owner", "INTERNAL", null);
         var supplier = new CurrentUser(8302, "notify-supplier", "SUPPLIER", 8101);
         var audit = new AuditService([]);
-        var groupStatus = new ProjectGroupStatusService(audit);
-        var groups = new ProjectGroupService(audit, groupStatus);
-        var projects = new ProjectService(audit, new AppOptions(), groupStatus);
+        var projects = new ProjectService(audit, new AppOptions());
         await using var conn = await database.Database.OpenAsync(ct);
-        var group = await groups.CreateAsync(conn, actor, new ProjectUpsertRequest
-        {
-            Name = "通知主项目",
-            SupplierId = 8101,
-            WorkOrderNos = ["WO-NOTIFY-1"],
-            MachineModel = "机型-N",
-            RobotPartId = 8402,
-            PriorityId = 8403,
-            RobotTypeId = 1008403,
-            RobotOwnerContactIds = [10008101],
-            ExpectedCompletionDate = "2099-12-31",
-            SubprojectNames = ["通知子项目-A", "通知子项目-B"],
-        }, null, ct);
-        var children = (await conn.QueryAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM projects WHERE project_group_id=@GroupId ORDER BY id", new { GroupId = group.Id },
-            cancellationToken: ct))).ToArray();
-        return (groups, projects, audit, actor, supplier, children);
+        var first = await projects.CreateAsync(conn, actor, Request("通知项目-A"), null, ct);
+        var second = await projects.CreateAsync(conn, actor, Request("通知项目-B"), null, ct);
+        return (projects, audit, actor, supplier, [first.Id, second.Id]);
     }
 
     private static Task Start(ProjectService projects, MySqlConnector.MySqlConnection conn, CurrentUser actor, ulong projectId, CancellationToken ct) =>

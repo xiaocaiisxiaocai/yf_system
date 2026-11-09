@@ -67,9 +67,13 @@ public sealed class AuthorizationReadOptimizationTests
         await AccessService.RequirePermissionAsync(connection, tx, current, "project:list", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(connection, tx, current, 9_400, false, ct);
 
+        // Visibility no longer follows the responsible user: the project stays readable after a transfer,
+        // while the live ownership check refuses writes.
         await database.ExecuteAsync("UPDATE projects SET responsible_user_id=9201 WHERE id=9400", null, ct);
-        await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewForValidatedActorAsync(
-            connection, tx, current, 9_400, false, ct));
+        await ProjectAccessService.RequireViewForValidatedActorAsync(connection, tx, current, 9_400, false, ct);
+        var notOwner = await Assert.ThrowsAsync<ApiException>(() => ProjectAccessService.RequireViewForValidatedActorAsync(
+            connection, tx, current, 9_400, false, ct, ownerOnly: true));
+        Assert.Equal(403, notOwner.Status);
 
         await database.ExecuteAsync("""
             UPDATE projects SET responsible_user_id=9200 WHERE id=9400;
@@ -131,22 +135,14 @@ public sealed class AuthorizationReadOptimizationTests
             VALUES(9200,'read-session',REPEAT('a',64),UTC_TIMESTAMP(),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 DAY),
                    DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 DAY),0,'192.0.2.1');
         INSERT INTO suppliers(id,name,status,created_by) VALUES(9300,'read supplier','ACTIVE',1);
-        INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(9350,'read group',9300,'IN_PROGRESS',1,9200);
-        INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(9400,9350,'read project',9300,'IN_PROGRESS',1,9200);
+        INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(9400,'read project',9300,'IN_PROGRESS',1,9200);
         """, null, ct);
 
     private static async Task AssertForbiddenAsync(Func<Task> action)
     {
         var error = await Assert.ThrowsAsync<ApiException>(action);
         Assert.Equal(40301, error.Code);
-    }
-
-    private static async Task AssertOutOfScopeAsync(Func<Task> action)
-    {
-        var error = await Assert.ThrowsAsync<ApiException>(action);
-        Assert.Equal(40302, error.Code);
     }
 
     private sealed class EfCommandCounter : IDisposable

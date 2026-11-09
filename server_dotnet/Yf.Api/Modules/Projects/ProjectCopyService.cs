@@ -13,7 +13,6 @@ internal sealed class ProjectCopyService(
     AppOptions options,
     AuditService audit,
     IProjectRealtimePublisher realtime,
-    ProjectGroupStatusService groupStatus,
     ProjectCopyWakeSignal? wake = null,
     ILogger<ProjectCopyService>? logger = null)
 {
@@ -62,14 +61,13 @@ internal sealed class ProjectCopyService(
 
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, sourceProjectId, true, ct);
         var source = await LoadProjectAsync(db, sourceProjectId, ct);
-        var group = await LoadGroupAsync(db, source.ProjectGroupId, ct);
         if (string.Equals(source.Name, targetName, StringComparison.OrdinalIgnoreCase))
             throw ApiException.BadRequest("复制项目必须使用新的项目名称");
         await EnsureNameUniqueAsync(db, targetName, ct);
         await ValidateSourceAsync(db, source, ct);
-        await ValidateGroupAsync(db, group, ct);
-        if (group.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
-            throw ApiException.Conflict("主项目已结束，不能复制子项目");
+        // The copy starts at once, so the START prerequisites are checked up front and again at commit.
+        await ProjectService.EnsureResponsibleUserCanActAsync(conn, tx, current.Id, ct);
+        await ProjectService.EnsureSupplierCanCollaborateAsync(conn, tx, source.SupplierId, ct);
         if (await ActiveUploadCountAsync(db, sourceProjectId, ct) != 0)
             throw ApiException.Conflict("源项目仍有进行中的文件上传，请上传完成后再复制");
         // Enqueue only records an advisory total. Capture/commit perform the authoritative locked
@@ -81,7 +79,6 @@ internal sealed class ProjectCopyService(
         var job = new ProjectCopyJob
         {
             SourceProjectId = sourceProjectId,
-            ProjectGroupId = group.Id,
             RequestedBy = current.Id,
             IdempotencyKey = idempotencyKey,
             TargetName = targetName,
@@ -116,17 +113,17 @@ internal sealed class ProjectCopyService(
         return JobResponse(job);
     }
 
+    /// <summary>The caller's own copy jobs: every active one and the 20 most recent finished ones.</summary>
     internal async Task<ProjectCopyJobListResponse> ListJobsAsync(MySqlConnection conn, CurrentUser actor,
-        ulong groupId, CancellationToken ct)
+        CancellationToken ct)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
-        await ProjectGroupAccessService.RequireViewAsync(conn, tx, current, groupId, false, ct);
         await using var db = EfDb.Use(conn, tx);
         var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         var activeStatuses = new[] { ProjectCopyJobStatuses.Pending, ProjectCopyJobStatuses.Running };
         var jobs = db.ProjectCopyJobs.AsNoTracking()
-            .Where(job => job.ProjectGroupId == groupId && job.RequestedBy == current.Id
+            .Where(job => job.RequestedBy == current.Id
                 && visibleProjects.Any(project => project.Id == job.SourceProjectId));
         var active = await jobs.Where(job => activeStatuses.Contains(job.Status))
             .OrderByDescending(job => job.CreatedAt).ThenByDescending(job => job.Id).ToArrayAsync(ct);
@@ -269,18 +266,17 @@ internal sealed class ProjectCopyService(
                     throw ApiException.Conflict("项目复制任务状态已变化");
             }
             var currentSource = await LoadProjectAsync(db, sourceProjectId, ct);
-            var currentGroup = await LoadGroupAsync(db, currentSource.ProjectGroupId, ct);
             var currentFiles = await LoadFilesForUpdateAsync(db, sourceProjectId, ct);
             if (!SameProjectSnapshot(snapshot.Project, currentSource)
-                || !SameGroupSnapshot(snapshot.Group, currentGroup)
                 || !SameFileSnapshot(snapshot.Files, currentFiles)
                 || await ActiveUploadCountAsync(db, sourceProjectId, ct) != 0)
                 throw ApiException.Conflict("源项目或文件已发生变化，请刷新后重新复制");
             await ValidateSourceAsync(db, currentSource, ct);
-            await ValidateGroupAsync(db, currentGroup, ct);
-            if (currentGroup.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
-                throw ApiException.Conflict("主项目已结束，不能复制子项目");
             await EnsureNameUniqueAsync(db, targetName, ct);
+            // The copy is a new project of the caller and starts at once.
+            await ProjectService.EnsureResponsibleUserCanActAsync(conn, tx, current.Id, ct);
+            await ProjectService.EnsureSupplierCanCollaborateAsync(conn, tx, currentSource.SupplierId, ct);
+            var targetSectionId = await ProjectService.ResolveActorSectionAsync(db, current.Id, ct);
             var createdAt = await DatabaseUtcNowAsync(db, ct);
 
             var resolvedBlobs = new Dictionary<string, FileBlob>(StringComparer.Ordinal);
@@ -300,28 +296,27 @@ internal sealed class ProjectCopyService(
 
             var targetProject = new Project
             {
-                ProjectGroupId = currentGroup.Id,
                 Name = targetName,
                 Description = currentSource.Description,
-                SupplierId = currentGroup.SupplierId,
-                Status = ProjectStatuses.Draft,
+                SupplierId = currentSource.SupplierId,
+                Status = ProjectStatuses.InProgress,
                 CreatedBy = current.Id,
                 CreatedAt = createdAt,
                 UpdatedAt = createdAt,
-                MachineModel = currentGroup.MachineModel,
-                RobotPartId = currentGroup.RobotPartId,
-                LegacyRobotModelName = currentGroup.LegacyRobotModelName,
-                ResponsibleUserId = currentGroup.ResponsibleUserId,
-                RobotOwnerName = currentGroup.RobotOwnerName,
-                SectionId = currentGroup.SectionId,
-                PriorityId = currentGroup.PriorityId,
-                RobotTypeId = currentGroup.RobotTypeId,
-                ExpectedCompletionDate = ToDateOnly(currentGroup.ExpectedCompletionDate),
+                MachineModel = currentSource.MachineModel,
+                RobotPartId = currentSource.RobotPartId,
+                LegacyRobotModelName = currentSource.LegacyRobotModelName,
+                ResponsibleUserId = current.Id,
+                RobotOwnerName = currentSource.RobotOwnerName,
+                SectionId = targetSectionId,
+                PriorityId = currentSource.PriorityId,
+                RobotTypeId = currentSource.RobotTypeId,
+                ExpectedCompletionDate = ToDateOnly(currentSource.ExpectedCompletionDate),
             };
             db.Projects.Add(targetProject);
             try { await db.SaveChangesAsync(ct); }
             catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
-            { throw ApiException.Conflict("子项目名称已存在"); }
+            { throw ApiException.Conflict(ProjectService.NameExistsMessage); }
             targetProjectId = targetProject.Id;
             // Project.UpdatedAt is database-generated in the shared EF model, so its explicit
             // initializer is omitted from INSERT. Override only this copied row with the same
@@ -346,24 +341,27 @@ internal sealed class ProjectCopyService(
                 CreatedAt = createdAt,
             };
             db.ProjectCopies.Add(copy);
-            db.ProjectWorkOrders.AddRange(currentGroup.WorkOrderNos.Select((value, index) => new ProjectWorkOrder
+            db.ProjectWorkOrders.AddRange(currentSource.WorkOrderNos.Select((value, index) => new ProjectWorkOrder
             {
                 ProjectId = targetProjectId,
                 WorkOrderNo = value,
                 SortNo = index,
                 CreatedAt = createdAt,
             }));
-            db.ProjectStatusLogs.Add(new ProjectStatusLog
+            db.ProjectRobotOwners.AddRange(currentSource.RobotOwnerContactIds.Select((contactId, index) =>
+                new ProjectRobotOwner { ProjectId = targetProjectId, ContactId = contactId, SortNo = index }));
+            var statusLog = new ProjectStatusLog
             {
                 ProjectId = targetProjectId,
                 FromStatus = null,
-                ToStatus = ProjectStatuses.Draft,
-                Action = "COPY",
+                ToStatus = ProjectStatuses.InProgress,
+                Action = "START",
                 OperatorId = current.Id,
                 ConfirmSide = null,
                 Reason = null,
                 CreatedAt = createdAt,
-            });
+            };
+            db.ProjectStatusLogs.Add(statusLog);
             var copiedFiles = prepared.Select(item => new FileRecord
             {
                 ProjectId = targetProjectId,
@@ -399,25 +397,39 @@ internal sealed class ProjectCopyService(
             InsertActivities(db, sourceProjectId, targetProjectId, copyId, current.Id, actorName,
                 prepared.Count, createdAt);
             await db.SaveChangesAsync(ct);
+            // Copied supplier files stay downloadable but are not this round's material: only a new upload counts.
+            var materialFloor = copiedFiles.Where(file => file.Direction == "S2C").Select(file => (ulong?)file.Id).Max();
+            if (materialFloor is not null)
+                await db.Projects.Where(project => project.Id == targetProjectId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(project => project.MaterialFileFloor, materialFloor)
+                        .SetProperty(project => project.UpdatedAt, createdAt), ct);
 
-            await audit.WriteAsync(conn, tx, current.Id, "PROJECT_COPY", "project", targetProjectId, new
-            {
-                copyId, source = Snapshot(currentSource),
-                target = new { id = targetProjectId, name = targetName, status = ProjectStatuses.Draft,
-                    currentGroup.SupplierId, currentGroup.WorkOrderNos, currentGroup.MachineModel,
-                    currentGroup.RobotPartId, currentGroup.ResponsibleUserId, currentGroup.RobotOwnerName,
-                    currentGroup.SectionId, currentGroup.PriorityId, currentGroup.RobotTypeId,
-                    currentGroup.ExpectedCompletionDate },
-                fileCount = prepared.Count, totalBytes,
-            }, ip, ct);
-            await groupStatus.RecalculateAsync(
-                conn, tx, currentGroup.Id, current.Id, targetProjectId, ct, groupAlreadyLocked: true);
+            await audit.WriteBatchAsync(conn, tx, current.Id, [
+                new AuditWrite("PROJECT_COPY", "project", targetProjectId, new
+                {
+                    copyId, source = Snapshot(currentSource),
+                    target = new { id = targetProjectId, name = targetName, status = ProjectStatuses.InProgress,
+                        currentSource.SupplierId, currentSource.WorkOrderNos, currentSource.MachineModel,
+                        currentSource.RobotPartId, ResponsibleUserId = current.Id, currentSource.RobotOwnerName,
+                        SectionId = targetSectionId, currentSource.PriorityId, currentSource.RobotTypeId,
+                        currentSource.ExpectedCompletionDate },
+                    fileCount = prepared.Count, totalBytes,
+                }),
+                new AuditWrite("PROJECT_START", "project", targetProjectId, new
+                {
+                    from = (string?)null, to = ProjectStatuses.InProgress, action = "START",
+                    reason = (string?)null, statusLogId = statusLog.Id,
+                }),
+            ], ip, ct);
 
             var target = await LoadProjectAsync(db, targetProjectId, ct);
+            await ProjectNotificationService.EnqueueStatusChangeAsync(
+                conn, tx, target, "START", null, current, options.WebBaseUrl, audit, ct);
             target.HasCopyHistory = true;
             target.CopySourceProjectId = sourceProjectId;
             target.CopySourceProjectName = currentSource.Name;
-            response = new ProjectCopyResponse(ProjectJson.Project(target), new ProjectCopyRecord(
+            response = new ProjectCopyResponse(ProjectJson.Project(target, true, current.Id), new ProjectCopyRecord(
                 copyId, sourceProjectId, targetProjectId, prepared.Count, totalBytes, ProjectJson.Utc(createdAt)));
             if (job is not null)
             {
@@ -507,14 +519,10 @@ internal sealed class ProjectCopyService(
                 SourceName = copy.SourceProjectName,
                 SourceSupplierId = source.SupplierId,
                 SourceResponsibleUserId = source.ResponsibleUserId,
-                SourceGroupCreatorId = db.ProjectGroups.Where(mainProject => mainProject.Id == source.ProjectGroupId)
-                    .Select(mainProject => mainProject.CreatedBy).FirstOrDefault(),
                 TargetProjectId = copy.TargetProjectId,
                 TargetName = copy.TargetProjectName,
                 TargetSupplierId = target.SupplierId,
                 TargetResponsibleUserId = target.ResponsibleUserId,
-                TargetGroupCreatorId = db.ProjectGroups.Where(mainProject => mainProject.Id == target.ProjectGroupId)
-                    .Select(mainProject => mainProject.CreatedBy).FirstOrDefault(),
                 CopiedByName = copy.CopiedByName,
                 FileCount = copy.FileCount,
                 TotalBytes = copy.TotalBytes,
@@ -523,17 +531,12 @@ internal sealed class ProjectCopyService(
         ProjectCopyHistoryItem? sourceItem = null;
         var copies = new List<ProjectCopyHistoryItem>();
         var restricted = false;
-        var canViewAll = current.IsInternal
-            && await ProjectAccessService.HasPermissionAsync(db, current.Id, "project:view_all", ct);
         foreach (var row in rows)
         {
             var relatedId = row.SourceProjectId == projectId ? row.TargetProjectId : row.SourceProjectId;
             var relatedSupplierId = relatedId == row.SourceProjectId ? row.SourceSupplierId : row.TargetSupplierId;
-            var relatedResponsibleId = relatedId == row.SourceProjectId ? row.SourceResponsibleUserId : row.TargetResponsibleUserId;
-            var relatedGroupCreatorId = relatedId == row.SourceProjectId ? row.SourceGroupCreatorId : row.TargetGroupCreatorId;
             var canViewRelated = current.IsInternal
-                ? canViewAll || relatedResponsibleId == current.Id || relatedGroupCreatorId == current.Id
-                : current.SupplierId is not null && current.SupplierId == relatedSupplierId;
+                || current.SupplierId is not null && current.SupplierId == relatedSupplierId;
             if (!canViewRelated) { restricted = true; continue; }
             var item = HistoryItem(row, relatedId, relatedId == row.SourceProjectId ? row.SourceName : row.TargetName);
             if (row.TargetProjectId == projectId) sourceItem = item; else copies.Add(item);
@@ -587,19 +590,15 @@ internal sealed class ProjectCopyService(
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, sourceProjectId, true, ct);
         await using var db = EfDb.Use(conn, tx);
         var source = await LoadProjectAsync(db, sourceProjectId, ct);
-        var group = await LoadGroupAsync(db, source.ProjectGroupId, ct);
         if (string.Equals(source.Name, targetName, StringComparison.OrdinalIgnoreCase))
             throw ApiException.BadRequest("复制项目必须使用新的项目名称");
         await EnsureNameUniqueAsync(db, targetName, ct);
         await ValidateSourceAsync(db, source, ct);
-        await ValidateGroupAsync(db, group, ct);
-        if (group.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
-            throw ApiException.Conflict("主项目已结束，不能复制子项目");
         if (await ActiveUploadCountAsync(db, sourceProjectId, ct) != 0)
             throw ApiException.Conflict("源项目仍有进行中的文件上传，请上传完成后再复制");
         var files = await LoadFilesForUpdateAsync(db, sourceProjectId, ct);
         await tx.CommitAsync(ct);
-        return new(source, group, files);
+        return new(source, files);
     }
 
     private static PreparedCopy PrepareBlobReference(
@@ -657,41 +656,25 @@ internal sealed class ProjectCopyService(
         catch { return null; }
     }
 
+    /// <summary>
+    /// The copy takes the source's public data; it must be complete and still point at active catalog entries.
+    /// The responsible user and section are the caller's, so the source's owner is not checked.
+    /// </summary>
     private static async Task ValidateSourceAsync(YfDbContext db, ProjectRow source, CancellationToken ct)
     {
-        await ValidateCopyMetadataAsync(db, source.WorkOrderNos, source.MachineModel, source.SupplierId,
-            source.RobotPartId, source.ResponsibleUserId, source.RobotOwnerName, source.SectionId, source.PriorityId,
-            source.RobotTypeId, source.ExpectedCompletionDate, "源项目", ct);
+        if (source.WorkOrderNos.Length == 0 || string.IsNullOrWhiteSpace(source.MachineModel)
+            || source.RobotPartId is null or 0 || string.IsNullOrWhiteSpace(source.RobotOwnerName)
+            || source.PriorityId is null or 0 || source.RobotTypeId is null or 0 || source.ExpectedCompletionDate is null)
+            throw ApiException.Conflict("源项目资料不完整，请先补齐必填信息后再复制");
+        if (!await ValidMetadataAsync(db, source.SupplierId,
+                source.RobotPartId.Value, source.PriorityId.Value, source.RobotTypeId.Value, ct))
+            throw ApiException.Conflict("源项目关联资料已失效，请先更新供应商、Robot 料号或数据字典后再复制");
     }
 
-    private static async Task ValidateGroupAsync(YfDbContext db, CopyGroupRow group, CancellationToken ct)
-    {
-        await ValidateCopyMetadataAsync(db, group.WorkOrderNos, group.MachineModel, group.SupplierId,
-            group.RobotPartId, group.ResponsibleUserId, group.RobotOwnerName, group.SectionId, group.PriorityId,
-            group.RobotTypeId, group.ExpectedCompletionDate, "主项目", ct);
-    }
-
-    private static async Task ValidateCopyMetadataAsync(
-        YfDbContext db, IReadOnlyCollection<string> workOrderNos, string? machineModel, ulong supplierId,
-        ulong? robotPartId, ulong? ownerId, string? robotOwnerName, ulong? sectionId, ulong? priorityId, ulong? robotTypeId,
-        DateTime? expectedCompletionDate, string label, CancellationToken ct)
-    {
-        if (workOrderNos.Count == 0 || string.IsNullOrWhiteSpace(machineModel)
-            || robotPartId is null or 0 || ownerId is null or 0 || string.IsNullOrWhiteSpace(robotOwnerName)
-            || priorityId is null or 0 || robotTypeId is null or 0 || expectedCompletionDate is null)
-            throw ApiException.Conflict($"{label}资料不完整，请先补齐必填信息后再复制");
-        if (!await ValidMetadataAsync(db, supplierId, ownerId.Value, sectionId,
-                robotPartId.Value, priorityId.Value, robotTypeId.Value, ct))
-            throw ApiException.Conflict($"{label}关联资料已失效，请先更新负责人、课别、供应商或数据字典后再复制");
-    }
-
-    private static async Task<bool> ValidMetadataAsync(YfDbContext db, ulong supplierId, ulong ownerId, ulong? sectionId,
+    private static async Task<bool> ValidMetadataAsync(YfDbContext db, ulong supplierId,
         ulong robotPartId, ulong priorityId, ulong robotTypeId, CancellationToken ct)
     {
         if (!await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct))
-            return false;
-        if (!await ProjectService.EligibleOwners(db)
-                .AnyAsync(owner => owner.Id == ownerId && owner.SectionId == sectionId, ct))
             return false;
         if (!await db.RobotParts.AnyAsync(part => part.Id == robotPartId
                 && part.SupplierId == supplierId && part.Status == AccountStatuses.Active, ct))
@@ -710,31 +693,7 @@ internal sealed class ProjectCopyService(
         row.WorkOrderNos = await db.ProjectWorkOrders.Where(order => order.ProjectId == projectId)
             .OrderBy(order => order.SortNo).ThenBy(order => order.Id)
             .Select(order => order.WorkOrderNo).ToArrayAsync(ct);
-        return row;
-    }
-
-    private static async Task<CopyGroupRow> LoadGroupAsync(YfDbContext db, ulong groupId, CancellationToken ct)
-    {
-        var row = await db.ProjectGroups.Where(group => group.Id == groupId).Select(group => new CopyGroupRow
-        {
-            Id = group.Id,
-            SupplierId = group.SupplierId,
-            Status = group.Status,
-            MachineModel = group.MachineModel,
-            RobotPartId = group.RobotPartId,
-            LegacyRobotModelName = group.LegacyRobotModelName,
-            ResponsibleUserId = group.ResponsibleUserId,
-            RobotOwnerName = group.RobotOwnerName,
-            SectionId = group.SectionId,
-            PriorityId = group.PriorityId,
-            RobotTypeId = group.RobotTypeId,
-            ExpectedCompletionDate = group.ExpectedCompletionDate.HasValue
-                ? group.ExpectedCompletionDate.Value.ToDateTime(TimeOnly.MinValue) : null,
-            UpdatedAt = group.UpdatedAt,
-        }).SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound("主项目不存在");
-        row.WorkOrderNos = await db.ProjectGroupWorkOrders.Where(order => order.ProjectGroupId == groupId)
-            .OrderBy(order => order.SortNo).ThenBy(order => order.Id)
-            .Select(order => order.WorkOrderNo).ToArrayAsync(ct);
+        row.RobotOwnerContactIds = (await RobotOwners.LoadAsync(db, [projectId], ct)).GetValueOrDefault(projectId) ?? [];
         return row;
     }
 
@@ -772,22 +731,14 @@ internal sealed class ProjectCopyService(
     }
 
     private static bool SameProjectSnapshot(ProjectRow a, ProjectRow b) => a.Id == b.Id
-        && a.ProjectGroupId == b.ProjectGroupId && a.Name == b.Name
+        && a.Name == b.Name
         && a.Description == b.Description && a.SupplierId == b.SupplierId && a.Status == b.Status
         && a.UpdatedAt == b.UpdatedAt && a.MachineModel == b.MachineModel
         && a.RobotPartId == b.RobotPartId
         && a.ResponsibleUserId == b.ResponsibleUserId && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId
         && a.RobotTypeId == b.RobotTypeId && a.RobotOwnerName == b.RobotOwnerName
-        && a.ExpectedCompletionDate == b.ExpectedCompletionDate && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
-
-    private static bool SameGroupSnapshot(CopyGroupRow a, CopyGroupRow b) => a.Id == b.Id
-        && a.SupplierId == b.SupplierId && a.Status == b.Status && a.UpdatedAt == b.UpdatedAt
-        && a.MachineModel == b.MachineModel && a.RobotPartId == b.RobotPartId
-        && a.LegacyRobotModelName == b.LegacyRobotModelName && a.ResponsibleUserId == b.ResponsibleUserId
-        && a.SectionId == b.SectionId && a.PriorityId == b.PriorityId && a.RobotTypeId == b.RobotTypeId
-        && a.RobotOwnerName == b.RobotOwnerName
-        && a.ExpectedCompletionDate == b.ExpectedCompletionDate
-        && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal);
+        && a.ExpectedCompletionDate == b.ExpectedCompletionDate && a.WorkOrderNos.SequenceEqual(b.WorkOrderNos, StringComparer.Ordinal)
+        && a.RobotOwnerContactIds.SequenceEqual(b.RobotOwnerContactIds);
 
     private static bool SameFileSnapshot(CopyFileRow[] a, CopyFileRow[] b) =>
         a.Length == b.Length && a.Zip(b).All(pair => pair.First == pair.Second);
@@ -795,7 +746,7 @@ internal sealed class ProjectCopyService(
     private static async Task EnsureNameUniqueAsync(YfDbContext db, string name, CancellationToken ct)
     {
         if (await db.Projects.AnyAsync(project => project.Name == name, ct))
-            throw ApiException.Conflict("子项目名称已存在");
+            throw ApiException.Conflict(ProjectService.NameExistsMessage);
     }
 
     private static ulong TotalBytes(IEnumerable<CopyFileRow> files)
@@ -824,7 +775,7 @@ internal sealed class ProjectCopyService(
     }
 
     private static ProjectCopyJobResponse JobResponse(ProjectCopyJob job) => new(
-        job.Id, job.SourceProjectId, job.ProjectGroupId, job.TargetName, job.Status,
+        job.Id, job.SourceProjectId, job.TargetName, job.Status,
         job.FilesTotal, job.FilesCopied, job.BytesTotal, job.BytesCopied, job.Error,
         job.ResultProjectId is ulong projectId
             ? new ProjectCopyJobResult(projectId, job.ResultCopyFileCount ?? job.FilesCopied)
@@ -1081,25 +1032,7 @@ internal sealed class ProjectCopyService(
         }
     }
 
-    private sealed record ProjectCopySnapshot(ProjectRow Project, CopyGroupRow Group, CopyFileRow[] Files);
-    private sealed class CopyGroupRow
-    {
-        public ulong Id { get; init; }
-        public ulong SupplierId { get; init; }
-        public string Status { get; init; } = string.Empty;
-        public string[] WorkOrderNos { get; set; } = [];
-        public string? MachineModel { get; init; }
-        public ulong? RobotPartId { get; init; }
-        public string? LegacyRobotModelName { get; init; }
-        public ulong? ResponsibleUserId { get; init; }
-        public string? RobotOwnerName { get; init; }
-        public ulong? SectionId { get; init; }
-        public ulong? PriorityId { get; init; }
-        public ulong? RobotTypeId { get; init; }
-        public DateTime? ExpectedCompletionDate { get; init; }
-        public DateTime UpdatedAt { get; init; }
-    }
-
+    private sealed record ProjectCopySnapshot(ProjectRow Project, CopyFileRow[] Files);
     private sealed record PreparedCopy(CopyFileRow Source, string StoredName, FileBlobStore.PreparedBlob Blob);
     private sealed record CopyFileRow(ulong Id, ulong UploaderId, string Direction, string OriginalName, string Ext,
         ulong SizeBytes, string? MimeType, string? Sha256, string StoragePath, string Status, ulong? BlobId,
@@ -1111,12 +1044,10 @@ internal sealed class ProjectCopyService(
         public string SourceName { get; init; } = string.Empty;
         public ulong SourceSupplierId { get; init; }
         public ulong? SourceResponsibleUserId { get; init; }
-        public ulong SourceGroupCreatorId { get; init; }
         public ulong TargetProjectId { get; init; }
         public string TargetName { get; init; } = string.Empty;
         public ulong TargetSupplierId { get; init; }
         public ulong? TargetResponsibleUserId { get; init; }
-        public ulong TargetGroupCreatorId { get; init; }
         public string CopiedByName { get; init; } = string.Empty;
         public ulong FileCount { get; init; }
         public ulong TotalBytes { get; init; }

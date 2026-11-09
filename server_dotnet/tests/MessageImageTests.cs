@@ -18,8 +18,7 @@ public sealed class MessageImageTests
         await database.InitializeAsync(ct);
         await database.SeedAsync("""
             INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'GC supplier','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by) VALUES(5001,'GC group',100,'IN_PROGRESS',1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by) VALUES(1001,5001,'GC project',100,'IN_PROGRESS',1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by) VALUES(1001,'GC project',100,'IN_PROGRESS',1);
             """, ct);
         var root = database.Options.StorageRoot;
         var images = Directory.CreateDirectory(Path.Combine(root, "message-images")).FullName;
@@ -81,8 +80,7 @@ public sealed class MessageImageTests
         await database.InitializeAsync(ct);
         await database.SeedAsync("""
             INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'Orphan supplier','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by) VALUES(5001,'Orphan group',100,'IN_PROGRESS',1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by) VALUES(1001,5001,'Orphan project',100,'IN_PROGRESS',1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by) VALUES(1001,'Orphan project',100,'IN_PROGRESS',1);
             INSERT INTO messages(id,project_id,sender_id,content,status) VALUES(1,1001,1,'kept text','NORMAL');
             INSERT INTO message_images(id,message_id,original_name,stored_name,ext,size_bytes,mime_type,storage_path)
             VALUES(1,1,'image.png','orphan-referenced.png','png',4,'image/png','message-images/2026/10/referenced.png');
@@ -155,12 +153,11 @@ public sealed class MessageImageTests
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
             VALUES(101,'image-outsider','unused','范围外用户','','INTERNAL','ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(101,9001);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by)
-            VALUES(5001,'图片主项目',100,'IN_PROGRESS',1),(5002,'已完成图片主项目',100,'COMPLETED',1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by)
+            INSERT INTO projects(id,name,supplier_id,status,created_by)
             VALUES
-                (1001,5001,'图片项目',100,'IN_PROGRESS',1),
-                (1002,5002,'已完成图片项目',100,'COMPLETED',1);
+                (1001,'图片项目',100,'IN_PROGRESS',1),
+                (1002,'已完成图片项目',100,'COMPLETED',1);
+            UPDATE projects SET responsible_user_id=1;
             """, ct);
 
         var admin = new CurrentUser(1, "admin", "INTERNAL", null);
@@ -196,9 +193,9 @@ public sealed class MessageImageTests
         Assert.Equal("[图片]", Assert.Single(dashboard.GetProperty("list").EnumerateArray())
             .GetProperty("content").GetString());
 
-        var denied = await Assert.ThrowsAsync<ApiException>(
-            () => service.GetImageAsync(conn, outsider, messageId, imageId, ct));
-        Assert.Equal(403, denied.Status);
+        // Every internal account sees every project, including its message images.
+        var colleagueDownload = await service.GetImageAsync(conn, outsider, messageId, imageId, ct);
+        Assert.Equal(png, await System.IO.File.ReadAllBytesAsync(colleagueDownload.Path, ct));
 
         var beforeFiles = StoredFiles(database.Options.StorageRoot);
         var beforeMessages = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM messages");
@@ -249,10 +246,8 @@ public sealed class MessageImageTests
         await database.SeedAsync("""
             UPDATE users SET must_change_password=0 WHERE id=1;
             INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'幂等供应商','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by)
-            VALUES(5001,'幂等主项目',100,'IN_PROGRESS',1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by)
-            VALUES(1001,5001,'幂等项目',100,'IN_PROGRESS',1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(1001,'幂等项目',100,'IN_PROGRESS',1,1);
             """, ct);
         var publisher = new RecordingMessagePublisher();
         var service = new MessageService(new AuditService([]), database.Options, publisher);

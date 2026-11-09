@@ -68,18 +68,19 @@ public sealed class RealtimeSecurityTests
         {
             new RealtimeConnection("owner", 10, "s1", expires),
             new RealtimeConnection("view-all", 11, "s2", expires),
-            new RealtimeConnection("unrelated-internal", 12, "s3", expires),
-            new RealtimeConnection("group-creator", 13, "s7", expires),
+            new RealtimeConnection("other-internal", 12, "s3", expires),
+            new RealtimeConnection("internal-without-list", 13, "s7", expires),
             new RealtimeConnection("supplier", 20, "s4", expires, "SUPPLIER", 100),
             new RealtimeConnection("other-supplier", 21, "s5", expires, "SUPPLIER", 200),
             // Opened while the account belonged to supplier 200; it has since been moved to supplier 100.
             new RealtimeConnection("moved-supplier", 22, "s6", expires, "SUPPLIER", 200),
         };
-        var audience = new ProjectRealtimeAudience(999, 100, 10, new HashSet<ulong> { 11 }, new HashSet<ulong> { 20, 22 }, 13);
+        // Every active internal account with project:list sees every project; 13 lacks project:list.
+        var audience = new ProjectRealtimeAudience(999, 100, 10, new HashSet<ulong> { 10, 11, 12 }, new HashSet<ulong> { 20, 22 });
 
         var candidates = ProjectRealtimeAuthorizer.SelectCandidates(connections, audience);
 
-        Assert.Equal(["owner", "view-all", "group-creator", "supplier", "moved-supplier"],
+        Assert.Equal(["owner", "view-all", "other-internal", "supplier", "moved-supplier"],
             candidates.Select(connection => connection.ConnectionId).ToArray());
     }
 
@@ -100,10 +101,8 @@ public sealed class RealtimeSecurityTests
                 (id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
             VALUES(101,'realtime-owner','unused','实时负责人','','INTERNAL',NULL,'ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(101,9001);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(5001,'实时主项目',100,'IN_PROGRESS',1,101);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(1001,5001,'实时项目',100,'IN_PROGRESS',1,101);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(1001,'实时项目',100,'IN_PROGRESS',1,101);
             INSERT INTO refresh_tokens(user_id,session_id,token_hash,expires_at,session_created_at,session_expires_at,revoked,ip)
             VALUES(101,'realtime-session',REPEAT('a',64),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),
                    UTC_TIMESTAMP(),DATE_ADD(UTC_TIMESTAMP(),INTERVAL 30 DAY),0,NULL);
@@ -134,19 +133,15 @@ public sealed class RealtimeSecurityTests
         Assert.Equal(ProjectRealtimeAuthorization.Skip,
             await authorizer.AuthorizeProjectAsync(connection, 999999, ct));
 
+        // A transfer does not change who is told: every internal account keeps seeing the project.
         await database.SeedAsync("""
             UPDATE projects SET responsible_user_id=1 WHERE id=1001;
             """, ct);
-        Assert.Equal(ProjectRealtimeAuthorization.Skip,
+        Assert.Equal(ProjectRealtimeAuthorization.Deliver,
             await authorizer.AuthorizeProjectAsync(connection, 1001, ct));
-        // A transfer snapshot names the former owner, who is still told the project changed (and then loses it on refetch).
         var afterTransfer = await authorizer.ResolveAudienceAsync(1001, ct);
         Assert.NotNull(afterTransfer);
-        Assert.Empty(ProjectRealtimeAuthorizer.SelectCandidates([connection], afterTransfer));
-        var withFormerOwner = afterTransfer with { FormerInternalUserIds = new HashSet<ulong> { 101 } };
-        Assert.Equal([connection], ProjectRealtimeAuthorizer.SelectCandidates([connection], withFormerOwner));
-        Assert.Equal(ProjectRealtimeAuthorization.Deliver,
-            (await authorizer.AuthorizeProjectAsync([connection], withFormerOwner, ct))[(101UL, "realtime-session")]);
+        Assert.Equal([connection], ProjectRealtimeAuthorizer.SelectCandidates([connection], afterTransfer));
 
         await database.SeedAsync("""
             UPDATE projects SET responsible_user_id=101 WHERE id=1001;
@@ -175,6 +170,8 @@ public sealed class RealtimeSecurityTests
         Assert.Equal(ProjectRealtimeAuthorization.Disconnect,
             await authorizer.AuthorizeProjectAsync(connection, 1001, ct));
 
+        // Only the responsible user deletes messages.
+        await database.SeedAsync("UPDATE projects SET responsible_user_id=1 WHERE id=1001;", ct);
         var failingPublisher = new ThrowingPublisher();
         var messages = new MessageService(new AuditService([]), database.Options, failingPublisher);
         await using (var db = await database.Database.OpenAsync(ct))

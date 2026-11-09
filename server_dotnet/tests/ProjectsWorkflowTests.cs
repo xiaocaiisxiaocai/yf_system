@@ -8,35 +8,51 @@ public sealed class ProjectsWorkflowTests
     [Theory]
     [InlineData(null, null)]
     [InlineData("", null)]
-    [InlineData(" DRAFT ", "DRAFT")]
-    [InlineData("IN_PROGRESS", "IN_PROGRESS")]
+    [InlineData(" IN_PROGRESS ", "IN_PROGRESS")]
     [InlineData("COMPLETED", "COMPLETED")]
     [InlineData("TERMINATED", "TERMINATED")]
-    public void MainProjectStatusFilterAcceptsOnlyDerivedStatuses(string? value, string? expected)
+    public void ProjectStatusFilterAcceptsOnlyLiveStatuses(string? value, string? expected)
     {
-        Assert.Equal(expected, ProjectGroupService.NormalizeGroupStatus(value));
+        Assert.Equal(expected, ProjectService.NormalizeStatus(value));
     }
 
     [Theory]
+    [InlineData("DRAFT")]
     [InlineData("PENDING_CONFIRMATION")]
     [InlineData("UNKNOWN")]
-    public void MainProjectStatusFilterRejectsUnknownValues(string value)
+    public void ProjectStatusFilterRejectsRetiredAndUnknownValues(string value)
     {
-        var error = Assert.Throws<ApiException>(() => ProjectGroupService.NormalizeGroupStatus(value));
+        var error = Assert.Throws<ApiException>(() => ProjectService.NormalizeStatus(value));
         Assert.Equal(400, error.Status);
     }
 
     [Theory]
-    [InlineData(0UL, 0UL, 0UL, 0UL, "DRAFT")]
-    [InlineData(2UL, 2UL, 0UL, 0UL, "DRAFT")]
-    [InlineData(3UL, 0UL, 3UL, 0UL, "COMPLETED")]
-    [InlineData(3UL, 0UL, 2UL, 1UL, "TERMINATED")]
-    [InlineData(3UL, 1UL, 1UL, 0UL, "IN_PROGRESS")]
-    [InlineData(3UL, 0UL, 1UL, 0UL, "IN_PROGRESS")]
-    public void MainProjectStatusIsDerivedFromEverySubproject(
-        ulong total, ulong draft, ulong completed, ulong terminated, string expected)
+    [InlineData("IN_PROGRESS", "TERMINATED", "TERMINATED", "TERMINATE")]
+    [InlineData("TERMINATED", "IN_PROGRESS", "IN_PROGRESS", "RESTART")]
+    public void ManagementTransitionsAreTerminateAndRestart(string from, string requested, string to, string action)
     {
-        Assert.Equal(expected, ProjectGroupStatusService.DeriveStatus(total, draft, completed, terminated));
+        Assert.Equal((to, action), ProjectWorkflowRules.ManagementTransition(from, requested));
+    }
+
+    [Theory]
+    [InlineData("DRAFT", "IN_PROGRESS", 409)]
+    [InlineData("COMPLETED", "TERMINATED", 409)]
+    [InlineData("IN_PROGRESS", "IN_PROGRESS", 409)]
+    [InlineData("IN_PROGRESS", "COMPLETED", 400)]
+    public void OtherManagementTransitionsAreRefused(string from, string requested, int status)
+    {
+        Assert.Equal(status, Assert.Throws<ApiException>(() => ProjectWorkflowRules.ManagementTransition(from, requested)).Status);
+    }
+
+    [Theory]
+    [InlineData("TERMINATED", true)]
+    [InlineData("IN_PROGRESS", false)]
+    [InlineData("COMPLETED", false)]
+    [InlineData("DRAFT", false)]
+    public void OnlyTerminatedProjectsAreDeletable(string status, bool deletable)
+    {
+        var error = Record.Exception(() => ProjectWorkflowRules.EnsureDeletable(status));
+        Assert.Equal(deletable, error is null);
     }
 
     [Fact]
@@ -69,56 +85,6 @@ public sealed class ProjectsWorkflowTests
             Assert.Throws<ApiException>(() => ProjectService.NormalizeWorkOrderNos(tooMany)).Message);
         Assert.Equal("单个工令号不能超过 128 个字符",
             Assert.Throws<ApiException>(() => ProjectService.NormalizeWorkOrderNos([new string('号', 129)])).Message);
-    }
-
-    [Theory]
-    [InlineData("DRAFT", "IN_PROGRESS", "IN_PROGRESS", "START")]
-    [InlineData("TERMINATED", "IN_PROGRESS", "IN_PROGRESS", "RESTART")]
-    [InlineData("IN_PROGRESS", "TERMINATED", "TERMINATED", "TERMINATE")]
-    public void ManagementTransitionsRespectProjectStateMachine(
-        string from,
-        string requested,
-        string expectedTo,
-        string expectedAction)
-    {
-        var transition = ProjectWorkflowRules.ManagementTransition(from, requested);
-        Assert.Equal(expectedTo, transition.To);
-        Assert.Equal(expectedAction, transition.Action);
-    }
-
-    [Theory]
-    [InlineData("IN_PROGRESS", "IN_PROGRESS")]
-    [InlineData("COMPLETED", "TERMINATED")]
-    public void IllegalManagementTransitionsPreserveTheBusinessError(string from, string requested)
-    {
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.ManagementTransition(from, requested));
-        Assert.Equal(409, error.Status);
-        Assert.Equal(40901, error.Code);
-    }
-
-    [Fact]
-    public void UnknownManagementTargetIsARequestError()
-    {
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.ManagementTransition("DRAFT", "COMPLETED"));
-        Assert.Equal(400, error.Status);
-        Assert.Equal("仅允许开始、终止或重新开始项目", error.Message);
-    }
-
-    [Theory]
-    [InlineData("DRAFT")]
-    [InlineData("TERMINATED")]
-    public void DraftAndTerminatedProjectsAreDeletable(string status)
-    {
-        ProjectWorkflowRules.EnsureDeletable(status);
-    }
-
-    [Theory]
-    [InlineData("IN_PROGRESS")]
-    [InlineData("COMPLETED")]
-    public void ActiveAndCompletedProjectsCannotBeDeleted(string status)
-    {
-        var error = Assert.Throws<ApiException>(() => ProjectWorkflowRules.EnsureDeletable(status));
-        Assert.Equal(400, error.Status);
     }
 
     [Theory]
@@ -159,27 +125,24 @@ public sealed class ProjectsWorkflowTests
     }
 
     [Fact]
-    public void AbortRightsStayWithTheUploaderAndNamedCrossUserRoles()
+    public void AbortRightsStayWithTheResponsibleUserAndTheSupplierUploaders()
     {
-        var now = DateTime.UtcNow;
         var owner = new CurrentUser(1, "owner", UserTypes.Internal, null);
-        var reader = new CurrentUser(2, "reader", UserTypes.Internal, null);
-        var statusUser = new CurrentUser(3, "status", UserTypes.Internal, null);
+        var colleague = new CurrentUser(2, "colleague", UserTypes.Internal, null);
         var peer = new CurrentUser(4, "peer", UserTypes.Supplier, 9);
         var otherSupplier = new CurrentUser(5, "other", UserTypes.Supplier, 8);
-        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.Draft, true, false, false, 1, UserTypes.Internal, null, false));
-        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, true, true, 1, UserTypes.Internal, null, false));
-        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null, false));
-        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, false, true, 1, UserTypes.Internal, null, false));
-        Assert.True(UploadActivity.CanAbort(statusUser, ProjectStatuses.InProgress, false, true, false, 1, UserTypes.Supplier, 9, false));
-        Assert.False(UploadActivity.CanAbort(statusUser, ProjectStatuses.Completed, false, true, true, 1, UserTypes.Internal, null, false));
-        Assert.True(UploadActivity.CanAbort(peer, ProjectStatuses.Completed, true, false, false, 6, UserTypes.Supplier, 9, false));
-        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, false, false, 1, UserTypes.Internal, null, false));
-        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, false, false, false, 6, UserTypes.Supplier, 9, false));
-        Assert.False(UploadActivity.CanAbort(otherSupplier, ProjectStatuses.InProgress, true, false, false, 6, UserTypes.Supplier, 9, false));
-        // The responsible user may clear a supplier session blocking the review, without extra permissions.
-        Assert.True(UploadActivity.CanAbort(reader, ProjectStatuses.InProgress, false, false, false, 6, UserTypes.Supplier, 9, true));
-        Assert.False(UploadActivity.CanAbort(reader, ProjectStatuses.Completed, false, false, false, 6, UserTypes.Supplier, 9, true));
-        Assert.NotEqual(default, now);
+        // The responsible user aborts its own session (with file:upload) and any session blocking the project.
+        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, true, 1, UserTypes.Internal, null, true));
+        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, 1, UserTypes.Internal, null, true));
+        Assert.True(UploadActivity.CanAbort(owner, ProjectStatuses.InProgress, false, 6, UserTypes.Supplier, 9, true));
+        Assert.False(UploadActivity.CanAbort(owner, ProjectStatuses.Completed, true, 6, UserTypes.Supplier, 9, true));
+        // Other internal accounts cannot, not even on a session they began before the project was handed over.
+        Assert.False(UploadActivity.CanAbort(colleague, ProjectStatuses.InProgress, true, 2, UserTypes.Internal, null, false));
+        Assert.False(UploadActivity.CanAbort(colleague, ProjectStatuses.InProgress, true, 6, UserTypes.Supplier, 9, false));
+        // Supplier accounts of the same company share their sessions.
+        Assert.True(UploadActivity.CanAbort(peer, ProjectStatuses.Completed, true, 6, UserTypes.Supplier, 9, false));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, true, 1, UserTypes.Internal, null, false));
+        Assert.False(UploadActivity.CanAbort(peer, ProjectStatuses.InProgress, false, 6, UserTypes.Supplier, 9, false));
+        Assert.False(UploadActivity.CanAbort(otherSupplier, ProjectStatuses.InProgress, true, 6, UserTypes.Supplier, 9, false));
     }
 }

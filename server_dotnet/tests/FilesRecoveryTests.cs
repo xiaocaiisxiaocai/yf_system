@@ -191,9 +191,6 @@ public sealed class FilesRecoveryTests
             Assert.Equal(1UL, await observer.QuerySingleAsync<ulong>(new CommandDefinition(
                 "SELECT id FROM projects WHERE id=1 FOR UPDATE", transaction: tx,
                 cancellationToken: lockProbe.Token)));
-            Assert.Equal(1UL, await observer.QuerySingleAsync<ulong>(new CommandDefinition(
-                "SELECT id FROM project_groups WHERE id=1 FOR UPDATE", transaction: tx,
-                cancellationToken: lockProbe.Token)));
             await tx.CommitAsync(lockProbe.Token);
 
             body.Release();
@@ -465,12 +462,10 @@ public sealed class FilesRecoveryTests
         await scope.InsertSessionAsync(sessionId, "UPLOADING", expired: false);
         var md5 = Md5Hex([1]);
 
-        // Merge, claim and init lock the main project, the subproject and only then the session; hold the first
-        // two the way a merge does, and let /md5 queue behind them.
+        // Merge, claim and init lock the project and only then the session; hold the project row the way a merge
+        // does, and let /md5 queue behind it.
         await using var holder = await scope.Database.OpenAsync(ct);
         await using var holdTx = await holder.BeginTransactionAsync(ct);
-        await holder.QueryAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM project_groups WHERE id=1 FOR UPDATE", transaction: holdTx, cancellationToken: ct));
         await holder.QueryAsync<ulong>(new CommandDefinition(
             "SELECT id FROM projects WHERE id=1 FOR UPDATE", transaction: holdTx, cancellationToken: ct));
         var submit = scope.Upload.SubmitMd5Async(FilesDatabaseScope.Context(), sessionId,
@@ -545,7 +540,6 @@ public sealed class FilesRecoveryTests
             INSERT INTO user_roles(user_id,role_id) VALUES(2,2),(3,3),(4,3),(5,4);
             INSERT INTO role_permissions(role_id,permission_id) VALUES
               (2,2),(3,1),(3,2),(3,6),(4,2),(4,5),(4,7);
-            UPDATE project_groups SET created_by=2 WHERE id=1;
             """, ct);
         var active = Guid.NewGuid().ToString("D");
         var expired = Guid.NewGuid().ToString("D");
@@ -581,6 +575,12 @@ public sealed class FilesRecoveryTests
         var missing = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.AbortAsync(
             FilesDatabaseScope.Context(), Guid.NewGuid().ToString("D"), ct));
         Assert.Equal(404, missing.Status);
+
+        // Holding project:status no longer lets a colleague abort; the right follows the responsible user.
+        var colleague = await Assert.ThrowsAsync<ApiException>(() => scope.Upload.AbortAsync(
+            Actor(5, "T005", "INTERNAL", null), active, ct));
+        Assert.Equal(403, colleague.Status);
+        await scope.ExecuteAsync("UPDATE projects SET responsible_user_id=5 WHERE id=1", ct);
 
         var notifier = new RecordingUploadNotifier();
         var upload = new UploadService(scope.Database, scope.Options,
@@ -733,7 +733,7 @@ public sealed class FilesRecoveryTests
         {
             await connection.ExecuteAsync(new CommandDefinition("""
                 INSERT INTO users(id,employee_no,user_type,supplier_id,status,must_change_password,email,real_name)
-                VALUES(2,'T002','INTERNAL',NULL,'ACTIVE',FALSE,NULL,'Outsider');
+                VALUES(2,'S999','SUPPLIER',999,'ACTIVE',FALSE,NULL,'OtherSupplier');
                 INSERT INTO user_roles(user_id,role_id) VALUES(2,1);
                 INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,
                                   mime_type,sha256,storage_path,status,deleted_at,created_at)
@@ -743,7 +743,8 @@ public sealed class FilesRecoveryTests
         }
 
         var context = new DefaultHttpContext();
-        context.Items[typeof(CurrentUser)] = new CurrentUser(2, "T002", "INTERNAL", null);
+        // Every internal account sees the project, so the outsider is another supplier's account.
+        context.Items[typeof(CurrentUser)] = new CurrentUser(2, "S999", "SUPPLIER", 999);
         var error = await Assert.ThrowsAsync<ApiException>(() => scope.Files.BatchDownloadAsync(
             context, new BatchDownloadRequest([1]), ct));
 
@@ -1301,9 +1302,8 @@ public sealed class FilesRecoveryTests
                         INSERT INTO permissions(id,code) VALUES(1,'file:upload'),(2,'project:list'),(3,'file:download');
                         INSERT INTO user_roles(user_id,role_id) VALUES(1,1);
                         INSERT INTO role_permissions(role_id,permission_id) VALUES(1,1),(1,2),(1,3);
-                        INSERT INTO project_groups(id) VALUES(1);
-                        INSERT INTO projects(id,project_group_id,supplier_id,created_by,status,name,responsible_user_id)
-                            VALUES(1,1,1,1,'IN_PROGRESS','File Test',1);
+                        INSERT INTO projects(id,supplier_id,created_by,status,name,responsible_user_id)
+                            VALUES(1,1,1,'IN_PROGRESS','File Test',1);
                         -- 内部账号发给供应商的其它文件要求子项目已有 STEP 3D 图与动作流程 Excel；这两条记录只满足
                         -- 资料规则，其 blob 不在磁盘上，回收测试不会触及仍被引用的可用文件。
                         INSERT INTO file_blobs(id,sha256,size_bytes,storage_path,state,created_at)

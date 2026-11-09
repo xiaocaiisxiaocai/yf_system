@@ -4,61 +4,17 @@ using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Infrastructure.Entities;
 
-public sealed class ProjectGroup
+/// <summary>Robot owners selected on a project; <c>robot_owner_name</c> keeps the joined-name snapshot.</summary>
+public sealed class ProjectRobotOwner
 {
-    public ulong Id { get; set; }
-    public string Name { get; set; } = null!;
-    public string? Description { get; set; }
-    public ulong SupplierId { get; set; }
-    public string Status { get; set; } = null!;
-    public ulong CreatedBy { get; set; }
-    public string? MachineModel { get; set; }
-    public ulong? RobotPartId { get; set; }
-    public string? LegacyRobotModelName { get; set; }
-    public ulong? ResponsibleUserId { get; set; }
-    public string? RobotOwnerName { get; set; }
-    public ulong? SectionId { get; set; }
-    public ulong? PriorityId { get; set; }
-    public ulong? RobotTypeId { get; set; }
-    public DateOnly? ExpectedCompletionDate { get; set; }
-    public DateTime? CompletedAt { get; set; }
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
-}
-
-/// <summary>Robot owners selected on a main project; <c>robot_owner_name</c> keeps the joined-name snapshot.</summary>
-public sealed class ProjectGroupRobotOwner
-{
-    public ulong ProjectGroupId { get; set; }
+    public ulong ProjectId { get; set; }
     public ulong ContactId { get; set; }
     public int SortNo { get; set; }
-}
-
-public sealed class ProjectGroupWorkOrder
-{
-    public ulong Id { get; set; }
-    public ulong ProjectGroupId { get; set; }
-    public string WorkOrderNo { get; set; } = null!;
-    public int SortNo { get; set; }
-    public DateTime CreatedAt { get; set; }
-}
-
-public sealed class ProjectGroupStatusLog
-{
-    public ulong Id { get; set; }
-    public ulong ProjectGroupId { get; set; }
-    public string? FromStatus { get; set; }
-    public string ToStatus { get; set; } = null!;
-    public string Action { get; set; } = null!;
-    public ulong? TriggerProjectId { get; set; }
-    public ulong OperatorId { get; set; }
-    public DateTime CreatedAt { get; set; }
 }
 
 public sealed class Project
 {
     public ulong Id { get; set; }
-    public ulong ProjectGroupId { get; set; }
     public string Name { get; set; } = null!;
     public string? Description { get; set; }
     public ulong SupplierId { get; set; }
@@ -84,8 +40,10 @@ public sealed class Project
     public DateOnly? DueSoonNotifiedFor { get; set; }
     /// <summary>Due date the overdue reminder was sent for.</summary>
     public DateOnly? OverdueNotifiedFor { get; set; }
-    /// <summary>Highest S2C file id when the subproject last started or restarted; only newer supplier files are this round's material.</summary>
+    /// <summary>Highest S2C file id when the project last started or restarted; only newer supplier files are this round's material.</summary>
     public ulong? MaterialFileFloor { get; set; }
+    /// <summary>Set when material approval completes the project; cleared when it leaves COMPLETED.</summary>
+    public DateTime? CompletedAt { get; set; }
 }
 
 public sealed class ProjectWorkOrder
@@ -170,103 +128,19 @@ public sealed class CollaborationRead
     public DateTime ReadAt { get; set; }
 }
 
-public sealed class ProjectGroupConfig : IEntityTypeConfiguration<ProjectGroup>
+public sealed class ProjectRobotOwnerConfig : IEntityTypeConfiguration<ProjectRobotOwner>
 {
-    public void Configure(EntityTypeBuilder<ProjectGroup> b)
+    public void Configure(EntityTypeBuilder<ProjectRobotOwner> b)
     {
-        b.ToTable("project_groups");
+        b.ToTable("project_robot_owners");
         b.UseCollation("utf8mb4_unicode_ci");
-        b.HasKey(x => x.Id);
-        b.Property(x => x.Name).HasColumnName("name").HasMaxLength(128).IsRequired();
-        b.Property(x => x.Description).HasColumnName("description").HasMaxLength(1024);
-        b.Property(x => x.SupplierId).HasColumnName("supplier_id");
-        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(24).IsRequired().HasDefaultValue("DRAFT");
-        b.Property(x => x.CreatedBy).HasColumnName("created_by");
-        b.Property(x => x.MachineModel).HasColumnName("machine_model").HasMaxLength(128);
-        b.Property(x => x.RobotPartId).HasColumnName("robot_part_id");
-        b.Property(x => x.LegacyRobotModelName).HasColumnName("legacy_robot_model_name").HasMaxLength(512);
-        b.Property(x => x.ResponsibleUserId).HasColumnName("responsible_user_id");
-        b.Property(x => x.RobotOwnerName).HasColumnName("robot_owner_name").HasMaxLength(512);
-        b.Property(x => x.SectionId).HasColumnName("section_id");
-        b.Property(x => x.PriorityId).HasColumnName("priority_id");
-        b.Property(x => x.RobotTypeId).HasColumnName("robot_type_id");
-        b.Property(x => x.ExpectedCompletionDate).HasColumnName("expected_completion_date").HasColumnType("date");
-        b.Property(x => x.CompletedAt).HasColumnName("completed_at").HasColumnType("datetime(3)");
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
-        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
-        b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_project_groups_name");
-        b.HasIndex(x => x.SupplierId).HasDatabaseName("idx_project_groups_supplier");
-        b.HasIndex(x => x.Status).HasDatabaseName("idx_project_groups_status");
-        b.HasIndex(x => x.ResponsibleUserId).HasDatabaseName("idx_project_groups_responsible_user");
-        b.HasIndex(x => x.ExpectedCompletionDate).HasDatabaseName("idx_project_groups_expected_completion");
-        b.HasIndex(x => x.CreatedBy).HasDatabaseName("fk_project_groups_created_by");
-        b.HasIndex(x => x.RobotPartId).HasDatabaseName("idx_project_groups_robot_part");
-        b.HasIndex(x => x.SectionId).HasDatabaseName("fk_project_groups_section");
-        b.HasIndex(x => x.PriorityId).HasDatabaseName("fk_project_groups_priority");
-        b.HasIndex(x => x.RobotTypeId).HasDatabaseName("fk_project_groups_robot_type");
-        b.HasOne<User>().WithMany().HasForeignKey(x => x.CreatedBy).HasConstraintName("fk_project_groups_created_by").OnDelete(DeleteBehavior.Restrict);
-        b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.PriorityId).HasConstraintName("fk_project_groups_priority").OnDelete(DeleteBehavior.Restrict);
-        b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.RobotTypeId).HasConstraintName("fk_project_groups_robot_type").OnDelete(DeleteBehavior.Restrict);
-        b.HasOne<User>().WithMany().HasForeignKey(x => x.ResponsibleUserId).HasConstraintName("fk_project_groups_responsible_user").OnDelete(DeleteBehavior.Restrict);
-        b.HasOne<RobotPart>().WithMany().HasForeignKey(x => x.RobotPartId).HasConstraintName("fk_project_groups_robot_part").OnDelete(DeleteBehavior.Restrict);
-        b.HasOne<Department>().WithMany().HasForeignKey(x => x.SectionId).HasConstraintName("fk_project_groups_section").OnDelete(DeleteBehavior.Restrict);
-        b.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).HasConstraintName("fk_project_groups_supplier").OnDelete(DeleteBehavior.Restrict);
-    }
-}
-
-public sealed class ProjectGroupRobotOwnerConfig : IEntityTypeConfiguration<ProjectGroupRobotOwner>
-{
-    public void Configure(EntityTypeBuilder<ProjectGroupRobotOwner> b)
-    {
-        b.ToTable("project_group_robot_owners");
-        b.UseCollation("utf8mb4_unicode_ci");
-        b.HasKey(x => new { x.ProjectGroupId, x.ContactId });
-        b.Property(x => x.ProjectGroupId).HasColumnName("project_group_id");
+        b.HasKey(x => new { x.ProjectId, x.ContactId });
+        b.Property(x => x.ProjectId).HasColumnName("project_id");
         b.Property(x => x.ContactId).HasColumnName("contact_id");
         b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
-        b.HasIndex(x => x.ContactId).HasDatabaseName("idx_project_group_robot_owners_contact");
-        b.HasOne<ProjectGroup>().WithMany().HasForeignKey(x => x.ProjectGroupId).HasConstraintName("fk_project_group_robot_owners_group").OnDelete(DeleteBehavior.Cascade);
-        b.HasOne<SupplierContact>().WithMany().HasForeignKey(x => x.ContactId).HasConstraintName("fk_project_group_robot_owners_contact").OnDelete(DeleteBehavior.Restrict);
-    }
-}
-
-public sealed class ProjectGroupWorkOrderConfig : IEntityTypeConfiguration<ProjectGroupWorkOrder>
-{
-    public void Configure(EntityTypeBuilder<ProjectGroupWorkOrder> b)
-    {
-        b.ToTable("project_group_work_orders");
-        b.UseCollation("utf8mb4_unicode_ci");
-        b.HasKey(x => x.Id);
-        b.Property(x => x.ProjectGroupId).HasColumnName("project_group_id");
-        b.Property(x => x.WorkOrderNo).HasColumnName("work_order_no").HasMaxLength(128).IsRequired();
-        b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
-        b.HasIndex(x => new { x.ProjectGroupId, x.WorkOrderNo }).IsUnique().HasDatabaseName("uk_project_group_work_orders_group_no");
-        b.HasIndex(x => new { x.ProjectGroupId, x.SortNo, x.Id }).HasDatabaseName("idx_project_group_work_orders_group_sort");
-        b.HasOne<ProjectGroup>().WithMany().HasForeignKey(x => x.ProjectGroupId).HasConstraintName("fk_project_group_work_orders_group").OnDelete(DeleteBehavior.Cascade);
-    }
-}
-
-public sealed class ProjectGroupStatusLogConfig : IEntityTypeConfiguration<ProjectGroupStatusLog>
-{
-    public void Configure(EntityTypeBuilder<ProjectGroupStatusLog> b)
-    {
-        b.ToTable("project_group_status_logs");
-        b.UseCollation("utf8mb4_unicode_ci");
-        b.HasKey(x => x.Id);
-        b.Property(x => x.ProjectGroupId).HasColumnName("project_group_id");
-        b.Property(x => x.FromStatus).HasColumnName("from_status").HasMaxLength(24);
-        b.Property(x => x.ToStatus).HasColumnName("to_status").HasMaxLength(24).IsRequired();
-        b.Property(x => x.Action).HasColumnName("action").HasMaxLength(32).IsRequired();
-        b.Property(x => x.TriggerProjectId).HasColumnName("trigger_project_id");
-        b.Property(x => x.OperatorId).HasColumnName("operator_id");
-        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)");
-        b.HasIndex(x => new { x.ProjectGroupId, x.CreatedAt, x.Id }).HasDatabaseName("idx_project_group_status_logs_group_time");
-        b.HasIndex(x => x.TriggerProjectId).HasDatabaseName("idx_project_group_status_logs_project");
-        b.HasIndex(x => x.OperatorId).HasDatabaseName("idx_project_group_status_logs_operator");
-        b.HasOne<ProjectGroup>().WithMany().HasForeignKey(x => x.ProjectGroupId).HasConstraintName("fk_project_group_status_logs_group").OnDelete(DeleteBehavior.Cascade);
-        b.HasOne<User>().WithMany().HasForeignKey(x => x.OperatorId).HasConstraintName("fk_project_group_status_logs_operator").OnDelete(DeleteBehavior.Restrict);
-        b.HasOne<Project>().WithMany().HasForeignKey(x => x.TriggerProjectId).HasConstraintName("fk_project_group_status_logs_project").OnDelete(DeleteBehavior.SetNull);
+        b.HasIndex(x => x.ContactId).HasDatabaseName("idx_project_robot_owners_contact");
+        b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_project_robot_owners_project").OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<SupplierContact>().WithMany().HasForeignKey(x => x.ContactId).HasConstraintName("fk_project_robot_owners_contact").OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -277,11 +151,10 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.ToTable("projects");
         b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
-        b.Property(x => x.ProjectGroupId).HasColumnName("project_group_id");
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(128).IsRequired();
         b.Property(x => x.Description).HasColumnName("description").HasMaxLength(1024);
         b.Property(x => x.SupplierId).HasColumnName("supplier_id");
-        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(24).IsRequired().HasDefaultValue("DRAFT");
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(24).IsRequired().HasDefaultValue("IN_PROGRESS");
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
@@ -300,6 +173,7 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.Property(x => x.DueSoonNotifiedFor).HasColumnName("due_soon_notified_for").HasColumnType("date");
         b.Property(x => x.OverdueNotifiedFor).HasColumnName("overdue_notified_for").HasColumnType("date");
         b.Property(x => x.MaterialFileFloor).HasColumnName("material_file_floor");
+        b.Property(x => x.CompletedAt).HasColumnName("completed_at").HasColumnType("datetime(3)");
         b.HasIndex(x => x.Name).IsUnique().HasDatabaseName("uk_projects_name");
         b.HasIndex(x => x.SupplierId).HasDatabaseName("idx_projects_supplier");
         b.HasIndex(x => x.Status).HasDatabaseName("idx_projects_status");
@@ -309,8 +183,6 @@ public sealed class ProjectConfig : IEntityTypeConfiguration<Project>
         b.HasIndex(x => x.PriorityId).HasDatabaseName("idx_projects_priority");
         b.HasIndex(x => x.RobotTypeId).HasDatabaseName("idx_projects_robot_type");
         b.HasIndex(x => x.ExpectedCompletionDate).HasDatabaseName("idx_projects_expected_completion");
-        b.HasIndex(x => new { x.ProjectGroupId, x.Id }).HasDatabaseName("idx_projects_group");
-        b.HasOne<ProjectGroup>().WithMany().HasForeignKey(x => x.ProjectGroupId).HasConstraintName("fk_projects_group").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.PriorityId).HasConstraintName("fk_projects_priority").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<ProjectDictionary>().WithMany().HasForeignKey(x => x.RobotTypeId).HasConstraintName("fk_projects_robot_type").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.ResponsibleUserId).HasConstraintName("fk_projects_responsible_user").OnDelete(DeleteBehavior.Restrict);

@@ -132,8 +132,7 @@ internal sealed class RobotPartService(AuditService audit)
             Model = part.Model,
             SortNo = part.SortNo,
             Status = part.Status,
-            InUse = db.Projects.Any(project => project.RobotPartId == part.Id)
-                || db.ProjectGroups.Any(group => group.RobotPartId == part.Id),
+            InUse = db.Projects.Any(project => project.RobotPartId == part.Id),
         });
 
     private static async Task<RobotPartResponse> FindResponseAsync(YfDbContext db, ulong id, CancellationToken ct) =>
@@ -147,8 +146,7 @@ internal sealed class RobotPartService(AuditService audit)
             .AsNoTracking().SingleOrDefaultAsync(ct);
 
     private static async Task<bool> InUseAsync(YfDbContext db, ulong id, CancellationToken ct) =>
-        await db.Projects.AnyAsync(project => project.RobotPartId == id, ct)
-            || await db.ProjectGroups.AnyAsync(group => group.RobotPartId == id, ct);
+        await db.Projects.AnyAsync(project => project.RobotPartId == id, ct);
 
     private static async Task RequireSupplierAsync(YfDbContext db, ulong supplierId, CancellationToken ct)
     {

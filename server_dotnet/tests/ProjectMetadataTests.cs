@@ -21,16 +21,16 @@ public sealed class ProjectMetadataTests
             INSERT INTO supplier_contacts(id,supplier_id,name,email,status) SELECT id+10000000,id,'Robot 负责人',CONCAT('contact',id,'@example.test'),'ACTIVE' FROM suppliers WHERE id NOT IN (SELECT supplier_id FROM supplier_contacts);
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
             VALUES(9001,'metadata-admin','test','项目管理员','admin@example.test','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO user_roles(user_id,role_id) VALUES(9001,1);
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(9002,'metadata-supplier','test','供应商上传人','supplier@example.test','SUPPLIER',8001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9001,1),(9002,4);
             """, ct);
 
         var actor = new CurrentUser(9001, "metadata-admin", "INTERNAL", null);
         var audit = new AuditService([]);
         var dictionaries = new ProjectDictionaryService(audit);
         var robotParts = new RobotPartService(audit);
-        var groupStatus = new ProjectGroupStatusService(audit);
-        var groups = new ProjectGroupService(audit, groupStatus);
-        var projects = new ProjectService(audit, new AppOptions(), groupStatus);
+        var projects = new ProjectService(audit, new AppOptions());
         await using var conn = await database.Database.OpenAsync(ct);
 
         var priorityId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
@@ -102,31 +102,30 @@ public sealed class ProjectMetadataTests
             RobotTypeId = robotTypeId,
             RobotOwnerContactIds = [10008001],
             ExpectedCompletionDate = "2026-12-31",
-            SubprojectNames = ["必填校验子项目"],
         };
         foreach (var field in new[] { "workOrderNos", "machineModel", "robotPartId", "priorityId", "robotTypeId", "robotOwnerContactIds", "expectedCompletionDate" })
         {
             var node = JsonSerializer.SerializeToNode(complete)!;
             node[field] = null;
             var missing = JsonSerializer.Deserialize<ProjectUpsertRequest>(node)!;
-            var error = await Assert.ThrowsAsync<ApiException>(() => groups.CreateAsync(conn, actor, missing, null, ct));
+            var error = await Assert.ThrowsAsync<ApiException>(() => projects.CreateAsync(conn, actor, missing, null, ct));
             Assert.Equal(400, error.Status);
         }
 
         // A priority id is a dictionary entry of the wrong type for robotTypeId.
         var notRobotType = CopyRequest(complete, name: "类型不匹配项目", robotTypeId: priorityId);
         var notRobotTypeError = await Assert.ThrowsAsync<ApiException>(() =>
-            groups.CreateAsync(conn, actor, notRobotType, null, ct));
+            projects.CreateAsync(conn, actor, notRobotType, null, ct));
         Assert.Equal(400, notRobotTypeError.Status);
         Assert.Equal("Robot 类型不存在或类型不匹配", notRobotTypeError.Message);
 
         var wrongSupplier = CopyRequest(complete, otherSupplierPartId, "供应商不匹配项目");
         var wrongSupplierError = await Assert.ThrowsAsync<ApiException>(() =>
-            groups.CreateAsync(conn, actor, wrongSupplier, null, ct));
+            projects.CreateAsync(conn, actor, wrongSupplier, null, ct));
         Assert.Equal(400, wrongSupplierError.Status);
         Assert.Equal("Robot 料号不属于所选供应商", wrongSupplierError.Message);
 
-        var created = await groups.CreateAsync(conn, actor, new()
+        var created = await projects.CreateAsync(conn, actor, new()
         {
             Name = "元数据集成项目",
             Description = "初始",
@@ -138,11 +137,8 @@ public sealed class ProjectMetadataTests
             RobotTypeId = robotTypeId,
             RobotOwnerContactIds = [10008001],
             ExpectedCompletionDate = "2026-12-31",
-            SubprojectNames = ["元数据子项目"],
         }, null, ct);
-        var groupId = Id(created);
-        var projectId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM projects WHERE project_group_id=@GroupId", new { GroupId = groupId }, cancellationToken: ct));
+        var projectId = created.Id;
         using (var detail = Json(await projects.DetailAsync(conn, actor, projectId, ct)))
         {
             var root = detail.RootElement;
@@ -180,7 +176,7 @@ public sealed class ProjectMetadataTests
         Assert.Empty(await robotParts.ListAsync(conn, actor, 8001, enabledOnly: true, ct));
         Assert.True(Assert.Single(await robotParts.ListAsync(conn, actor, 8001, enabledOnly: false, ct)).InUse);
 
-        var updated = await groups.UpdateAsync(conn, actor, groupId, new()
+        var updated = await projects.UpdateAsync(conn, actor, projectId, new()
         {
             Name = "元数据集成项目",
             Description = "仅修改说明",
@@ -205,7 +201,7 @@ public sealed class ProjectMetadataTests
 
         var disabledForNewProject = CopyRequest(complete, name: "停用料号新项目");
         var disabledError = await Assert.ThrowsAsync<ApiException>(() =>
-            groups.CreateAsync(conn, actor, disabledForNewProject, null, ct));
+            projects.CreateAsync(conn, actor, disabledForNewProject, null, ct));
         Assert.Equal(400, disabledError.Status);
         Assert.Equal("Robot 料号已停用", disabledError.Message);
         var immutable = await Assert.ThrowsAsync<ApiException>(() => robotParts.UpdateAsync(conn, actor, partId, new()
@@ -231,7 +227,7 @@ public sealed class ProjectMetadataTests
             Enabled = false,
         }, null, ct);
         var disabledRobotType = await Assert.ThrowsAsync<ApiException>(() =>
-            groups.CreateAsync(conn, actor, CopyRequest(complete, name: "停用类型新项目"), null, ct));
+            projects.CreateAsync(conn, actor, CopyRequest(complete, name: "停用类型新项目"), null, ct));
         Assert.Equal(400, disabledRobotType.Status);
         Assert.Equal("Robot 类型已停用", disabledRobotType.Message);
 
@@ -265,7 +261,6 @@ public sealed class ProjectMetadataTests
         RobotTypeId = robotTypeId ?? source.RobotTypeId,
         RobotOwnerContactIds = source.RobotOwnerContactIds,
         ExpectedCompletionDate = source.ExpectedCompletionDate,
-        SubprojectNames = source.SubprojectNames,
     };
 
     private static ulong Id(object value)

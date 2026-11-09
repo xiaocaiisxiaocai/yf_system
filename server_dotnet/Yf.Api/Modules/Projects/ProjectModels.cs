@@ -37,39 +37,10 @@ public sealed class ProjectUpsertRequest
     [JsonPropertyName("expectedCompletionDate")]
     public string? ExpectedCompletionDate { get; init; }
 
-    [JsonPropertyName("subprojectNames")]
-    public string?[]? SubprojectNames { get; init; }
-
     /// <summary>
-    /// Required on <c>PUT /project-groups/{id}</c>. Missing or null is 400; a mismatch with the locked
+    /// Required on <c>PUT /projects/{id}</c>. Missing or null is 400; a mismatch with the locked
     /// row is 409/40903. Create ignores this field.
     /// </summary>
-    [JsonPropertyName("expectedUpdatedAt")]
-    public DateTime? ExpectedUpdatedAt { get; init; }
-}
-
-public sealed class SubprojectUpsertRequest
-{
-    [JsonPropertyName("name")]
-    public string? Name { get; init; }
-
-    [JsonPropertyName("description")]
-    public string? Description { get; init; }
-}
-
-/// <summary>
-/// Editing a subproject's name/description. <c>ExpectedUpdatedAt</c> is the <c>updatedAt</c> the editor
-/// loaded; when given and the subproject changed since, the update is rejected with 409/40903.
-/// Omitting it keeps the previous last-write-wins behavior.
-/// </summary>
-public sealed class SubprojectUpdateRequest
-{
-    [JsonPropertyName("name")]
-    public string? Name { get; init; }
-
-    [JsonPropertyName("description")]
-    public string? Description { get; init; }
-
     [JsonPropertyName("expectedUpdatedAt")]
     public DateTime? ExpectedUpdatedAt { get; init; }
 }
@@ -125,20 +96,20 @@ public sealed class ProjectStatusRequest
     public string? Status { get; init; }
 
     /// <summary>
-    /// Optional guard: the status the caller saw. When given and the locked subproject has another status the
+    /// Optional guard: the status the caller saw. When given and the locked project has another status the
     /// change fails with 409 / 40903; null skips the check.
     /// </summary>
     [JsonPropertyName("expectedStatus")]
     public string? ExpectedStatus { get; init; }
 }
 
-public sealed class ProjectGroupTransferRequest
+public sealed class ProjectTransferRequest
 {
     [JsonPropertyName("responsibleUserId")]
     public ulong? ResponsibleUserId { get; init; }
 
     /// <summary>
-    /// Optional guard: the responsible user the caller saw. When given and the locked main project has another
+    /// Optional guard: the responsible user the caller saw. When given and the locked project has another
     /// one the transfer fails with 409 / 40903; null skips the check.
     /// </summary>
     [JsonPropertyName("expectedResponsibleUserId")]
@@ -198,8 +169,6 @@ public sealed class MarkCollaborationReadRequest
 internal sealed class ProjectRow
 {
     public ulong Id { get; init; }
-    public ulong ProjectGroupId { get; init; }
-    public string ProjectGroupName { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public string? Description { get; init; }
     public ulong SupplierId { get; init; }
@@ -208,44 +177,6 @@ internal sealed class ProjectRow
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
     public string? SupplierName { get; init; }
-    public string? CreatedByName { get; init; }
-    public string[] WorkOrderNos { get; set; } = [];
-    public string? MachineModel { get; init; }
-    public ulong? RobotPartId { get; init; }
-    public string? RobotPartNumber { get; init; }
-    public string? RobotModelName { get; init; }
-    public string? LegacyRobotModelName { get; init; }
-    public ulong? ResponsibleUserId { get; init; }
-    public string? ResponsibleUserEmployeeNo { get; init; }
-    public string? ResponsibleUserName { get; init; }
-    public string? RobotOwnerName { get; init; }
-    public ulong? SectionId { get; init; }
-    public string? SectionName { get; init; }
-    public ulong? PriorityId { get; init; }
-    public string? PriorityName { get; init; }
-    public ulong? RobotTypeId { get; init; }
-    public string? RobotTypeName { get; init; }
-    public DateTime? ExpectedCompletionDate { get; init; }
-    public string? MaterialReviewStatus { get; init; }
-    public ulong? MaterialReviewFileId { get; init; }
-    public string? MaterialReviewReason { get; init; }
-    /// <summary>Latest available supplier-to-company file id; only loaded while the subproject is in progress.</summary>
-    public ulong? LatestSupplierFileId { get; init; }
-    public bool HasCopyHistory { get; set; }
-    public ulong UnreadMessages { get; set; }
-    public ulong? CopySourceProjectId { get; set; }
-    public string? CopySourceProjectName { get; set; }
-}
-
-internal sealed class ProjectGroupRow
-{
-    public ulong Id { get; init; }
-    public string Name { get; init; } = string.Empty;
-    public string? Description { get; init; }
-    public ulong SupplierId { get; init; }
-    public string? SupplierName { get; init; }
-    public string Status { get; init; } = string.Empty;
-    public ulong CreatedBy { get; init; }
     public string? CreatedByName { get; init; }
     public string[] WorkOrderNos { get; set; } = [];
     public string? MachineModel { get; init; }
@@ -266,13 +197,15 @@ internal sealed class ProjectGroupRow
     public string? RobotTypeName { get; init; }
     public DateTime? ExpectedCompletionDate { get; init; }
     public DateTime? CompletedAt { get; init; }
-    public DateTime CreatedAt { get; init; }
-    public DateTime UpdatedAt { get; init; }
-    public ulong SubprojectCount { get; init; }
-    public ulong CompletedCount { get; init; }
-    public ulong MaterialPendingCount { get; init; }
-    public ulong TerminatedCount { get; init; }
+    public string? MaterialReviewStatus { get; init; }
+    public ulong? MaterialReviewFileId { get; init; }
+    public string? MaterialReviewReason { get; init; }
+    /// <summary>Latest available supplier-to-company file id; only loaded while the project is in progress.</summary>
+    public ulong? LatestSupplierFileId { get; init; }
+    public bool HasCopyHistory { get; set; }
     public ulong UnreadMessages { get; set; }
+    public ulong? CopySourceProjectId { get; set; }
+    public string? CopySourceProjectName { get; set; }
 }
 
 internal sealed class UserRow
@@ -366,14 +299,16 @@ internal static class ProjectJson
     };
 
     /// <summary>
-    /// Common subproject fields shared by list, workflow and write endpoints. The responsible user's employee
+    /// Common project fields shared by list, detail, workflow and write endpoints. The responsible user's employee
     /// number is internal data: supplier-side readers pass <paramref name="includeEmployeeNo"/> false and keep the name.
+    /// <paramref name="viewerId"/> sets <c>canManage</c> for the internal responsible user;
+    /// <paramref name="canSupervise"/> is the caller's administrator or organization-leader authority over the
+    /// project's section (see <see cref="ProjectDeletionAuthorization"/>), which allows deleting and transferring.
     /// </summary>
-    internal static ProjectResponse Project(ProjectRow row, bool includeEmployeeNo = true) => new()
+    internal static ProjectResponse Project(ProjectRow row, bool includeEmployeeNo = true, ulong? viewerId = null,
+        bool canSupervise = false) => new()
     {
         Id = row.Id,
-        ProjectGroupId = row.ProjectGroupId,
-        ProjectGroupName = row.ProjectGroupName,
         Name = row.Name,
         Description = row.Description,
         SupplierId = row.SupplierId,
@@ -390,6 +325,7 @@ internal static class ProjectJson
         ResponsibleUserEmployeeNo = includeEmployeeNo ? row.ResponsibleUserEmployeeNo : null,
         ResponsibleUserName = row.ResponsibleUserName,
         RobotOwnerName = row.RobotOwnerName,
+        RobotOwnerContactIds = row.RobotOwnerContactIds,
         SectionId = row.SectionId,
         SectionName = row.SectionName,
         PriorityId = row.PriorityId,
@@ -406,45 +342,13 @@ internal static class ProjectJson
         CopySource = row.CopySourceProjectId is { } sourceProjectId && row.CopySourceProjectName is { } sourceProjectName
             ? new ProjectCopySourceRef(sourceProjectId, sourceProjectName)
             : null,
+        CompletedAt = row.CompletedAt is { } completedAt ? Utc(completedAt) : null,
+        CanManage = includeEmployeeNo && viewerId is { } viewer && row.ResponsibleUserId == viewer,
+        CanDelete = includeEmployeeNo && canSupervise && row.Status == ProjectStatuses.Terminated,
+        CanTransfer = includeEmployeeNo && (canSupervise || viewerId is { } transferViewer && row.ResponsibleUserId == transferViewer),
         CreatedAt = Utc(row.CreatedAt),
         UpdatedAt = Utc(row.UpdatedAt),
     };
-
-    internal static ProjectGroupResponse ProjectGroup(ProjectGroupRow row, bool includeEmployeeNo = true, bool canDelete = false) => new(
-        row.Id,
-        row.Name,
-        row.Description,
-        row.SupplierId,
-        row.SupplierName,
-        row.Status,
-        row.CreatedBy,
-        row.CreatedByName,
-        row.WorkOrderNos,
-        row.MachineModel,
-        row.RobotPartId,
-        row.RobotPartNumber,
-        row.RobotModelName,
-        row.ResponsibleUserId,
-        includeEmployeeNo ? row.ResponsibleUserEmployeeNo : null,
-        row.ResponsibleUserName,
-        row.RobotOwnerName,
-        row.RobotOwnerContactIds,
-        row.SectionId,
-        row.SectionName,
-        row.PriorityId,
-        row.PriorityName,
-        row.RobotTypeId,
-        row.RobotTypeName,
-        row.ExpectedCompletionDate?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
-        row.CompletedAt is { } completedAt ? Utc(completedAt) : null,
-        Utc(row.CreatedAt),
-        Utc(row.UpdatedAt),
-        row.SubprojectCount,
-        row.CompletedCount,
-        row.MaterialPendingCount,
-        row.TerminatedCount,
-        row.UnreadMessages,
-        canDelete);
 
     internal static PageResponse<T> Page<T>(IReadOnlyList<T> list, ulong total, ulong page, ulong pageSize) =>
         new(list, total, page, pageSize);

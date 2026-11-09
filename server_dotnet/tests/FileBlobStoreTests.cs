@@ -155,9 +155,8 @@ public sealed class FileBlobStoreTests
             await WriteAsync(root, "message-images/2026/09/keep.png", [4, 5], ct);
             await database.ExecuteAsync($"""
                 INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'S','ACTIVE',1);
-                INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id) VALUES(1,'G',100,'IN_PROGRESS',1,1);
-                INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-                  VALUES(1,1,'P',100,'IN_PROGRESS',1,1);
+                INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+                  VALUES(1,'P',100,'IN_PROGRESS',1,1);
                 INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,created_at)
                   VALUES(501,1,1,'C2S','legacy.txt','legacy.txt','txt',{content.Length},'text/plain','{sha}','{legacyRelative}','AVAILABLE',UTC_TIMESTAMP(3));
                 """, null, ct);

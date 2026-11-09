@@ -33,11 +33,6 @@ public sealed class FileService(
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var project = await ProjectAccessService.RequireViewAsync(conn, tx, actor, projectId, ct);
         var (page, size, offset) = QueryValues.Page(context.Request);
-        if (HidesDraftFiles(actor, project.Status))
-        {
-            await tx.CommitAsync(ct);
-            return new(Array.Empty<FileListItem>(), 0, page, size);
-        }
         await using var ef = EfDb.Use(conn, tx);
         var direction = context.Request.Query["direction"].ToString();
         var keyword = context.Request.Query["keyword"].ToString().Trim();
@@ -65,7 +60,7 @@ public sealed class FileService(
             IsCopiedReference = ef.FileCopyRefs.Any(reference => reference.TargetFileId == file.Id),
             SignerName = file.SignerName,
         }).Page(offset, size).ToArrayAsync(ct);
-        var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, tx, actor, project.Status, ct);
+        var canDelete = await ProjectAccessService.CanDeleteFilesAsync(conn, tx, actor, project, ct);
         var withdrawable = await WithdrawableFilterAsync(ef, actor, project, ct);
         var canRestore = actor.UserType == UserTypes.Supplier && project.Status == ProjectStatuses.InProgress;
         var list = rows.Select(row =>
@@ -701,18 +696,9 @@ public sealed class FileService(
     private static async Task RequireViewOrNotFoundAsync(
         MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ulong projectId, CancellationToken ct)
     {
-        ProjectAccess project;
-        try { project = await ProjectAccessService.RequireViewAsync(conn, tx, actor, projectId, ct); }
+        try { await ProjectAccessService.RequireViewAsync(conn, tx, actor, projectId, ct); }
         catch (ApiException error) when (error.Status == StatusCodes.Status403Forbidden) { throw ApiException.NotFound(); }
-        if (HidesDraftFiles(actor, project.Status)) throw ApiException.NotFound();
     }
-
-    /// <summary>
-    /// A draft subproject passes no material to the supplier ("草稿不传递资料"): files carried in by a copy stay
-    /// internal until START. Every list, download, preview, media, grant and batch path funnels through here.
-    /// </summary>
-    private static bool HidesDraftFiles(CurrentUser actor, string projectStatus) =>
-        !actor.IsInternal && projectStatus == ProjectStatuses.Draft;
 
     private string ResolveExisting(FileRow row, CancellationToken ct)
     {

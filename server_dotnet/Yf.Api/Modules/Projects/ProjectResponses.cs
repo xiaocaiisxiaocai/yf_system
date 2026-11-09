@@ -20,7 +20,6 @@ public sealed record CollaborationNotification(
     string Action,
     ulong ProjectId,
     string ProjectName,
-    string ProjectGroupName,
     string ActorName,
     string Title,
     string? Summary,
@@ -36,7 +35,6 @@ public sealed record DashboardMessage(
     ulong Id,
     ulong ProjectId,
     string ProjectName,
-    string ProjectGroupName,
     string Content,
     string SenderName,
     DateTime CreatedAt,
@@ -52,8 +50,6 @@ public sealed record DashboardSummaryResponse(
 public sealed record DashboardPendingProject(
     ulong Id,
     string Name,
-    ulong ProjectGroupId,
-    string ProjectGroupName,
     // NO_MATERIAL | PENDING | RETURNED
     string MaterialReviewStatus,
     DateTime UpdatedAt);
@@ -103,12 +99,10 @@ public sealed record ProjectActivityPage(IReadOnlyList<ProjectActivityItem> List
 
 public sealed record ProjectCopySourceRef(ulong ProjectId, string Name);
 
-/// <summary>A subproject as returned by list, workflow and write endpoints.</summary>
+/// <summary>A project as returned by list, detail, workflow and write endpoints.</summary>
 public record ProjectResponse
 {
     public ulong Id { get; init; }
-    public ulong ProjectGroupId { get; init; }
-    public string ProjectGroupName { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public string? Description { get; init; }
     public ulong SupplierId { get; init; }
@@ -124,7 +118,10 @@ public record ProjectResponse
     public ulong? ResponsibleUserId { get; init; }
     public string? ResponsibleUserEmployeeNo { get; init; }
     public string? ResponsibleUserName { get; init; }
+    /// <summary>Joined names of the selected supplier contacts (snapshot).</summary>
     public string? RobotOwnerName { get; init; }
+    /// <summary>Supplier contacts selected as Robot owners.</summary>
+    public IReadOnlyList<ulong> RobotOwnerContactIds { get; init; } = [];
     public ulong? SectionId { get; init; }
     public string? SectionName { get; init; }
     public ulong? PriorityId { get; init; }
@@ -142,50 +139,16 @@ public record ProjectResponse
     public bool HasCopyHistory { get; init; }
     public ulong UnreadMessages { get; init; }
     public ProjectCopySourceRef? CopySource { get; init; }
+    public DateTime? CompletedAt { get; init; }
+    /// <summary>The viewer is the responsible user and may change the project and its collaboration content.</summary>
+    public bool CanManage { get; init; }
+    /// <summary>The viewer may delete this terminated project.</summary>
+    public bool CanDelete { get; init; }
+    /// <summary>The viewer may hand the project to another responsible user (still needs project:transfer).</summary>
+    public bool CanTransfer { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
 }
-
-public sealed record ProjectGroupResponse(
-    ulong Id,
-    string Name,
-    string? Description,
-    ulong SupplierId,
-    string? SupplierName,
-    string Status,
-    ulong CreatedBy,
-    string? CreatedByName,
-    IReadOnlyList<string> WorkOrderNos,
-    string? MachineModel,
-    ulong? RobotPartId,
-    string? RobotPartNumber,
-    string? RobotModelName,
-    ulong? ResponsibleUserId,
-    string? ResponsibleUserEmployeeNo,
-    string? ResponsibleUserName,
-    // Joined names of the selected supplier contacts (snapshot).
-    string? RobotOwnerName,
-    // Supplier contacts selected as Robot owners; empty for main projects not yet re-saved since the change.
-    IReadOnlyList<ulong> RobotOwnerContactIds,
-    ulong? SectionId,
-    string? SectionName,
-    ulong? PriorityId,
-    string? PriorityName,
-    ulong? RobotTypeId,
-    string? RobotTypeName,
-    // yyyy-MM-dd
-    string? ExpectedCompletionDate,
-    DateTime? CompletedAt,
-    DateTime CreatedAt,
-    DateTime UpdatedAt,
-    ulong SubprojectCount,
-    ulong CompletedCount,
-    ulong MaterialPendingCount,
-    ulong TerminatedCount,
-    ulong UnreadMessages,
-    bool CanDelete = false);
-
-public sealed record ProjectGroupDetailResponse(ProjectGroupResponse Group, IReadOnlyList<ProjectResponse> Projects);
 
 public sealed record ProjectSummaryResponse(ulong UnreadMessages, string ActivityRevision);
 
@@ -203,7 +166,6 @@ public sealed record ProjectCopyJobResult(ulong ProjectId, ulong CopyFileCount);
 public sealed record ProjectCopyJobResponse(
     ulong JobId,
     ulong SourceProjectId,
-    ulong ProjectGroupId,
     string TargetName,
     string Status,
     ulong FilesTotal,

@@ -95,7 +95,7 @@ internal sealed class MessageService(
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
-        EnsureWritable(project.Status);
+        EnsureWritable(current, project);
         await tx.CommitAsync(ct);
     }
 
@@ -163,7 +163,7 @@ internal sealed class MessageService(
                         }
                     }
 
-                    EnsureWritable(project.Status);
+                    EnsureWritable(current, project);
                     var signature = await SupplierContacts.ResolveSignatureAsync(db, current, request.SignerName, ct);
                     var databaseNow = await DatabaseUtcNowAsync(db, ct);
                     var entity = new Message
@@ -304,9 +304,9 @@ internal sealed class MessageService(
         MySqlConnection conn, MySqlTransaction tx, CurrentUser current, ulong projectId, CancellationToken ct)
     {
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:create", ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct, ownerOnly: true);
         var project = await LoadProjectAsync(conn, tx, projectId, true, ct);
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct);
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, false, ct, ownerOnly: true);
         return project;
     }
 
@@ -566,12 +566,12 @@ internal sealed class MessageService(
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         AccessService.RequireInternal(current);
         await AccessService.RequirePermissionAsync(conn, tx, current, "message:delete_any", ct);
-        // Scope is authorized before the project and message rows are locked, then again on the locked values.
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, initial.ProjectId, false, ct);
+        // Ownership is authorized before the project and message rows are locked, then again on the locked values.
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, initial.ProjectId, false, ct, ownerOnly: true);
         var project = await LoadProjectAsync(conn, tx, initial.ProjectId, true, ct);
         var message = await LoadMessageAsync(conn, tx, messageId, true, false, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, message.ProjectId, false, ct);
-        EnsureWritable(project.Status, posting: false);
+        EnsureWritable(current, project);
         if (message.Status is not ("NORMAL" or WithdrawnStatus))
         {
             throw ApiException.NotFound();
@@ -623,7 +623,7 @@ internal sealed class MessageService(
 
     /// <summary>
     /// A supplier account withdraws a message it posted itself, within the configured window, while the
-    /// subproject is in progress. Suppliers then see only a placeholder; internal accounts still see the content
+    /// project is in progress. Suppliers then see only a placeholder; internal accounts still see the content
     /// and images, marked withdrawn. A still-pending message summary loses its entry.
     /// </summary>
     internal async Task WithdrawAsync(
@@ -665,7 +665,7 @@ internal sealed class MessageService(
     }
 
     /// <summary>
-    /// The supplier account that withdrew a message restores it while the subproject is in progress, at any
+    /// The supplier account that withdrew a message restores it while the project is in progress, at any
     /// time. It becomes a normal message again with its read receipts intact; no mail is sent.
     /// </summary>
     internal async Task RestoreAsync(
@@ -949,16 +949,11 @@ internal sealed class MessageService(
             readRows.Any(read => read.UserId == viewerId));
     }
 
-    internal const string DraftMessageMessage = "项目尚未开始，暂不能留言";
-
-    private static void EnsureWritable(string status, bool posting = true)
+    /// <summary>Internal accounts post or delete messages only on projects they are responsible for.</summary>
+    private static void EnsureWritable(CurrentUser current, ProjectRow project)
     {
-        // Drafts carry no material yet, so neither side talks about them before START.
-        if (posting && status == ProjectStatuses.Draft)
-        {
-            throw ApiException.Conflict(DraftMessageMessage);
-        }
-        if (status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
+        ProjectAccessService.RequireOwner(current, project.ResponsibleUserId);
+        if (project.Status is ProjectStatuses.Completed or ProjectStatuses.Terminated)
         {
             throw ApiException.Conflict("项目当前不可留言");
         }

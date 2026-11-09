@@ -72,10 +72,10 @@ public sealed class AdminLifecycleTests
                   (7203,'legacy-invalid-owner','unused','既有失效负责人','legacy@example.invalid','INTERNAL',7202,'ACTIVE',0,0,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
                   (7501,'root-section-owner','unused','根课别负责人','root@example.invalid','INTERNAL',7500,'ACTIVE',0,0,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
             INSERT INTO user_roles(user_id,role_id) VALUES(7103,1),(7203,1),(7501,1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id,section_id,created_at,updated_at)
-            VALUES(7400,'组织边界主项目',8001,'IN_PROGRESS',1,7103,7102,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
-                  (7401,'既有失效组织主项目',8001,'IN_PROGRESS',1,7203,7202,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
-                  (7402,'既有根课别主项目',8001,'DRAFT',1,7501,7500,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id,section_id,created_at,updated_at)
+            VALUES(7400,'组织边界项目',8001,'IN_PROGRESS',1,7103,7102,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+                  (7401,'既有失效组织项目',8001,'IN_PROGRESS',1,7203,7202,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)),
+                  (7402,'既有根课别项目',8001,'IN_PROGRESS',1,7501,7500,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
             """, ct);
 
         var actor = new CurrentUser(1, "department-admin", "INTERNAL", null);

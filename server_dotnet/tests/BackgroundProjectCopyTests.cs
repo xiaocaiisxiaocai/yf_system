@@ -45,7 +45,7 @@ public sealed class BackgroundProjectCopyTests
             Assert.Equal(finished.BytesTotal, finished.BytesCopied);
             Assert.NotNull(finished.Result);
             Assert.Null(finished.Error);
-            var listed = await service.ListJobsAsync(conn, actor, source.GroupId, ct);
+            var listed = await service.ListJobsAsync(conn, actor, ct);
             Assert.Contains(listed.Jobs, item => item.JobId == accepted.JobId && item.Status == "succeeded");
             const ulong otherAdminId = 99201;
             await conn.ExecuteAsync(new CommandDefinition("""
@@ -57,7 +57,7 @@ public sealed class BackgroundProjectCopyTests
             var otherAdmin = new CurrentUser(otherAdminId, "other-copy-admin", "INTERNAL", null);
             Assert.Equal(404, (await Assert.ThrowsAsync<ApiException>(() =>
                 service.GetJobAsync(conn, otherAdmin, accepted.JobId, ct))).Status);
-            Assert.Empty((await service.ListJobsAsync(conn, otherAdmin, source.GroupId, ct)).Jobs);
+            Assert.Empty((await service.ListJobsAsync(conn, otherAdmin, ct)).Jobs);
 
             var copied = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
                 "SELECT id AS Id,blob_id AS BlobId,storage_path AS StoragePath,sha256 AS Sha256 FROM files WHERE project_id=@ProjectId",
@@ -105,16 +105,19 @@ public sealed class BackgroundProjectCopyTests
                 "SELECT COUNT(*) FROM file_blobs WHERE id=@Id", new { Id = copied.BlobId }, cancellationToken: ct)));
             Assert.False(File.Exists(canonicalPath));
 
-            // The job's result points at the copy; deleting the copy drops the job with its history.
-            var projects = new ProjectService(new AuditService([]), database.Options,
-                new ProjectGroupStatusService(new AuditService([])));
+            // The job's result points at the copy; deleting the (terminated) copy drops the job with its history.
+            var projects = new ProjectService(new AuditService([]), database.Options);
+            Assert.Equal("IN_PROGRESS", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
+                "SELECT status FROM projects WHERE id=@Id", new { Id = finished.Result!.ProjectId }, cancellationToken: ct)));
+            await projects.SetStatusAsync(conn, actor, finished.Result!.ProjectId,
+                new ProjectStatusRequest { Status = "TERMINATED" }, null, ct);
             await projects.DeleteAsync(conn, actor, finished.Result!.ProjectId, null, ct);
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM project_copy_jobs WHERE id=@Id", new { Id = accepted.JobId }, cancellationToken: ct)));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM project_copies WHERE source_project_id=@ProjectId",
                 new { ProjectId = source.ProjectId }, cancellationToken: ct)));
-            Assert.Empty((await service.ListJobsAsync(conn, actor, source.GroupId, ct)).Jobs);
+            Assert.Empty((await service.ListJobsAsync(conn, actor, ct)).Jobs);
 
             // Simulate a process stop after the durable GC_PENDING claim but before disk deletion.
             var pendingBytes = "pending-blob-restart"u8.ToArray();
@@ -224,8 +227,7 @@ public sealed class BackgroundProjectCopyTests
             await using var conn = await database.Database.OpenAsync(ct);
             var accepted = await service.EnqueueAsync(conn, actor, source.ProjectId,
                 new ProjectCopyRequest { Name = "会失败的复制件", IdempotencyKey = "copy-fail-001" }, null, ct);
-            var projects = new ProjectService(new AuditService([]), database.Options,
-                new ProjectGroupStatusService(new AuditService([])));
+            var projects = new ProjectService(new AuditService([]), database.Options);
             Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
                 projects.DeleteAsync(conn, actor, source.ProjectId, null, ct))).Status);
 
@@ -301,7 +303,7 @@ public sealed class BackgroundProjectCopyTests
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task JobReadIsDeniedAfterRequesterLosesSourceVisibility()
+    public async Task JobReadIsDeniedAfterRequesterLosesProjectListPermission()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
@@ -321,20 +323,19 @@ public sealed class BackgroundProjectCopyTests
                 INSERT INTO role_permissions(role_id,permission_id)
                 SELECT @RoleId,id FROM permissions WHERE code IN ('project:list','project:create');
                 INSERT INTO user_roles(user_id,role_id) VALUES(@UserId,@RoleId);
-                UPDATE project_groups SET responsible_user_id=@UserId,updated_at=UTC_TIMESTAMP(3) WHERE id=@GroupId;
-                UPDATE projects SET responsible_user_id=@UserId,updated_at=UTC_TIMESTAMP(3) WHERE id=@ProjectId;
-                """, new { UserId = limitedId, RoleId = limitedRoleId, source.GroupId, source.ProjectId }, cancellationToken: ct));
+                """, new { UserId = limitedId, RoleId = limitedRoleId }, cancellationToken: ct));
             var limited = new CurrentUser(limitedId, "limited-copy-owner", "INTERNAL", null);
             var accepted = await service.EnqueueAsync(conn, limited, source.ProjectId,
                 new ProjectCopyRequest { Name = "失去可见性任务", IdempotencyKey = "visibility-loss-001" }, null, ct);
+            // Every internal account sees every project; without project:list it sees none.
             await conn.ExecuteAsync(new CommandDefinition("""
-                UPDATE project_groups SET responsible_user_id=@AdminId,updated_at=UTC_TIMESTAMP(3) WHERE id=@GroupId;
-                UPDATE projects SET responsible_user_id=@AdminId,updated_at=UTC_TIMESTAMP(3) WHERE id=@ProjectId;
-                """, new { AdminId = source.ActorId, source.GroupId, source.ProjectId }, cancellationToken: ct));
+                DELETE rp FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
+                WHERE rp.role_id=@RoleId AND p.code='project:list';
+                """, new { RoleId = limitedRoleId }, cancellationToken: ct));
             Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
                 service.GetJobAsync(conn, limited, accepted.JobId, ct))).Status);
             Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
-                service.ListJobsAsync(conn, limited, source.GroupId, ct))).Status);
+                service.ListJobsAsync(conn, limited, ct))).Status);
         }
         finally { TryDeleteStorage(storage); }
     }
@@ -388,7 +389,6 @@ public sealed class BackgroundProjectCopyTests
             .AddSingleton(database.Options)
             .AddSingleton(audit)
             .AddSingleton<IProjectRealtimePublisher, NoOpPublisher>()
-            .AddScoped(_ => new ProjectGroupStatusService(audit))
             .AddScoped<ProjectCopyService>();
     }
 
@@ -433,7 +433,6 @@ public sealed class BackgroundProjectCopyTests
         const ulong partId = 99102;
         const ulong priorityId = 99103;
         const ulong robotTypeId = 99104;
-        const ulong groupId = 99111;
         const ulong projectId = 99112;
         await conn.ExecuteAsync(new CommandDefinition($"""
             INSERT INTO suppliers(id,name,status,created_at,updated_at)
@@ -443,11 +442,13 @@ public sealed class BackgroundProjectCopyTests
             INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
             VALUES({priorityId},'PRIORITY','后台复制优先级',NULL,1,'ACTIVE'),
                   ({robotTypeId},'ROBOT_TYPE','后台复制 Robot 类型',NULL,1,'ACTIVE');
-            INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
-            VALUES({groupId},'后台复制主项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO projects(id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
-            VALUES({projectId},{groupId},'后台复制源项目','测试',{supplierId},'DRAFT',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no) VALUES({groupId},'WO-ASYNC',0);
+            INSERT INTO projects(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
+            VALUES({projectId},'后台复制源项目','测试',{supplierId},'TERMINATED',@ActorId,'M1',{partId},@ActorId,NULL,{priorityId},{robotTypeId},'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO roles(id,name,is_built_in,status) VALUES(99105,'后台复制厂商角色',0,'ACTIVE');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 99105,id FROM permissions WHERE code IN ('project:list','file:upload');
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+            VALUES(99106,'async-supplier','unused','后台复制厂商','','SUPPLIER',{supplierId},'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(99106,99105);
             INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES({projectId},'WO-ASYNC',0);
             """, new { ActorId = actorId }, cancellationToken: ct));
 
@@ -465,12 +466,12 @@ public sealed class BackgroundProjectCopyTests
                 """, new { ActorId = actorId, Size = bytes.Length, Sha = sha, Path = relative }, cancellationToken: ct));
             await FileBlobBackfill.RunAsync(database.Database, storage, ct);
         }
-        return new(actorId, groupId, projectId, priorityId, bytes, sha, relative);
+        return new(actorId, projectId, priorityId, bytes, sha, relative);
     }
 
     private static void TryDeleteStorage(string path) { try { Directory.Delete(path, recursive: true); } catch { } }
 
-    private sealed record Seed(ulong ActorId, ulong GroupId, ulong ProjectId, ulong PriorityId,
+    private sealed record Seed(ulong ActorId, ulong ProjectId, ulong PriorityId,
         byte[] Bytes, string Sha256, string StoragePath);
     private sealed class CopiedFile
     {

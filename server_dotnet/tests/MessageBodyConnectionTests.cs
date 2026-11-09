@@ -26,10 +26,8 @@ public sealed class MessageBodyConnectionTests
             UPDATE users SET must_change_password=0 WHERE id=1;
             INSERT INTO suppliers(id,name,status,created_by)
                 VALUES(9700,'slow body supplier','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-                VALUES(9710,'slow body group',9700,'IN_PROGRESS',1,1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-                VALUES(9720,9710,'slow body project',9700,'IN_PROGRESS',1,1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+                VALUES(9720,'slow body project',9700,'IN_PROGRESS',1,1);
             """, null, ct);
 
         var options = SingleConnectionOptions(database.Options);

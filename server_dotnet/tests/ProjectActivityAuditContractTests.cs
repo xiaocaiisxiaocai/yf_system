@@ -23,7 +23,7 @@ public sealed class ProjectActivityAuditContractTests
             [("project", "PROJECT_REJECT")] = ("PROJECT", "REJECT", "驳回项目验收"),
             [("project", "PROJECT_WITHDRAW")] = ("PROJECT", "WITHDRAW", "撤回项目验收"),
             [("project", "PROJECT_TERMINATE")] = ("PROJECT", "TERMINATE", "终止项目"),
-            [("project", "PROJECT_REOPEN")] = ("PROJECT", "REOPEN", "重开子项目"),
+            [("project", "PROJECT_REOPEN")] = ("PROJECT", "REOPEN", "重开项目"),
             [("project", "PROJECT_MATERIAL_APPROVE")] = ("PROJECT", "MATERIAL_APPROVE", "确认资料 OK 并完成"),
             [("project", "PROJECT_MATERIAL_RETURN")] = ("PROJECT", "MATERIAL_RETURN", "退回回传资料"),
             [("file", "FILE_UPLOAD")] = ("FILE", "UPLOAD", "上传文件"),
@@ -76,10 +76,8 @@ public sealed class ProjectActivityAuditContractTests
         await database.ExecuteAsync("""
             UPDATE users SET must_change_password=0 WHERE id=1;
             INSERT INTO suppliers(id,name,status,created_by) VALUES(9101,'动态合同供应商','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(9102,'动态合同主项目',9101,'IN_PROGRESS',1,1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(9103,9102,'动态合同项目',9101,'IN_PROGRESS',1,1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(9103,'动态合同项目',9101,'IN_PROGRESS',1,1);
             INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,
                               storage_path,status,created_at,deleted_at)
             VALUES(9104,9103,1,'C2S','合同.txt','contract-activity.txt','txt',1,

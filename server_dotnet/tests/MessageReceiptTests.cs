@@ -45,12 +45,10 @@ public sealed class MessageReceiptTests
                 (301,'receipt-other-supplier','unused','其他供应商用户','','SUPPLIER',200,'ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id)
             VALUES(101,9001),(102,9001),(103,9001),(104,9003),(201,9002),(202,9002),(301,9002);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(5001,'回执主项目',100,'IN_PROGRESS',1,101),(5002,'其他主项目',200,'IN_PROGRESS',102,102);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
             VALUES
-                (1001,5001,'回执项目',100,'IN_PROGRESS',1,101),
-                (2001,5002,'其他项目',200,'IN_PROGRESS',102,102);
+                (1001,'回执项目',100,'IN_PROGRESS',1,101),
+                (2001,'其他项目',200,'IN_PROGRESS',102,102);
             INSERT INTO messages(id,project_id,sender_id,content,status)
             VALUES
                 (10001,1001,1,'不可由回执接口返回的正文','NORMAL'),
@@ -68,12 +66,14 @@ public sealed class MessageReceiptTests
         var fileDelete = await Assert.ThrowsAsync<ApiException>(() =>
             ProjectAccessService.RequireFileDeleteAsync(conn, null, supplier, 1001, ct));
         Assert.Equal(403, fileDelete.Status);
+        var ownedByOther = new ProjectAccess(1001, 100, 1, ProjectStatuses.InProgress, ResponsibleUserId: 101);
+        var ownedByAdmin = ownedByOther with { ResponsibleUserId = 1 };
+        Assert.False(await ProjectAccessService.CanDeleteFilesAsync(conn, null, supplier, ownedByOther, ct));
+        // Only the responsible user deletes files, even an administrator holding file:delete.
+        Assert.False(await ProjectAccessService.CanDeleteFilesAsync(conn, null, admin, ownedByOther, ct));
+        Assert.True(await ProjectAccessService.CanDeleteFilesAsync(conn, null, admin, ownedByAdmin, ct));
         Assert.False(await ProjectAccessService.CanDeleteFilesAsync(
-            conn, null, supplier, ProjectStatuses.InProgress, ct));
-        Assert.True(await ProjectAccessService.CanDeleteFilesAsync(
-            conn, null, admin, ProjectStatuses.InProgress, ct));
-        Assert.False(await ProjectAccessService.CanDeleteFilesAsync(
-            conn, null, admin, ProjectStatuses.Draft, ct));
+            conn, null, admin, ownedByAdmin with { Status = ProjectStatuses.Completed }, ct));
         var messageDelete = await Assert.ThrowsAsync<ApiException>(() =>
             service.DeleteAsync(conn, supplier, 10001, null, ct));
         Assert.Equal(403, messageDelete.Status);
@@ -86,7 +86,8 @@ public sealed class MessageReceiptTests
         await using (var authorizationTx = await AppDb.BeginTransactionAsync(conn, ct))
         {
             Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 101, ct));
-            Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 104, ct));
+            // Other internal accounts can open the project but are not mailed about it.
+            Assert.False(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 104, ct));
             Assert.False(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 103, ct));
             Assert.True(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 201, ct));
             Assert.False(await ProjectNotificationService.IsCurrentProjectRecipientAsync(conn, authorizationTx, 1001, 301, ct));
@@ -143,8 +144,10 @@ public sealed class MessageReceiptTests
             detailedReads.GetProperty("readers").GetArrayLength()
             + detailedReads.GetProperty("unread").GetArrayLength());
 
-        var denied = await Assert.ThrowsAsync<ApiException>(
-            () => service.ReceiptsAsync(conn, outsider, 1001, [10001], ct));
+        // Every internal account sees every project's receipts; another supplier's account does not.
+        Assert.Single(await service.ReceiptsAsync(conn, outsider, 1001, [10001], ct));
+        var denied = await Assert.ThrowsAsync<ApiException>(() => service.ReceiptsAsync(
+            conn, new CurrentUser(301, "receipt-other-supplier", "SUPPLIER", 200), 1001, [10001], ct));
         Assert.Equal(403, denied.Status);
         Assert.Empty(await service.ReceiptsAsync(conn, admin, 1001, [], ct));
     }
@@ -172,10 +175,8 @@ public sealed class MessageReceiptTests
                 (101,'summary-owner','unused','负责人','owner@example.invalid','INTERNAL',NULL,'ACTIVE',0),
                 (201,'summary-supplier','unused','供应商','supplier@example.invalid','SUPPLIER',100,'ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(101,9001),(201,9002);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(5001,'汇总主项目',100,'IN_PROGRESS',101,101);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(1001,5001,'汇总项目',100,'IN_PROGRESS',101,101);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(1001,'汇总项目',100,'IN_PROGRESS',101,101);
             """, ct);
         var service = new MessageService(new AuditService([new ProjectActivityService()]), database.Options);
         var supplier = new CurrentUser(201, "summary-supplier", "SUPPLIER", 100);

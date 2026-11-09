@@ -72,10 +72,8 @@ public sealed class AccountDeletionHistoryTests
 
             // Real business content still blocks deletion.
             await conn.ExecuteAsync(new CommandDefinition("""
-                INSERT INTO project_groups(id,name,supplier_id,status,created_by,machine_model,created_at,updated_at)
-                VALUES(9611,'日志主项目',9601,'DRAFT',9600,'机型',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-                INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,machine_model,created_at,updated_at)
-                VALUES(9612,9611,'日志子项目',9601,'TERMINATED',9600,'机型',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+                INSERT INTO projects(id,name,supplier_id,status,created_by,machine_model,created_at,updated_at)
+                VALUES(9612,'日志子项目',9601,'TERMINATED',9600,'机型',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
                 INSERT INTO messages(id,project_id,sender_id,content,status,created_at)
                 VALUES(9613,9612,9603,'供应商留言','NORMAL',UTC_TIMESTAMP(3));
                 """, cancellationToken: ct));

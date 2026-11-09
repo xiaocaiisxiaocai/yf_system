@@ -49,31 +49,27 @@ public sealed class SupplierContactTests
             contacts.CreateAsync(supplier, 9101, new SupplierContactUpsert("赵六", "zhao@example.test"), ct));
         Assert.Equal(["张三", "李四"], (await contacts.ListAsync(admin, 9101, ct)).Select(item => item.Name));
 
-        var groupStatus = new ProjectGroupStatusService(audit);
-        var groups = new ProjectGroupService(audit, groupStatus);
-        var projects = new ProjectService(audit, new AppOptions(), groupStatus);
+        var projects = new ProjectService(audit, new AppOptions());
         await using var conn = await database.Database.OpenAsync(ct);
         ProjectUpsertRequest Request(string name, ulong[] owners, string? description = null, DateTime? expectedUpdatedAt = null) => new()
         {
             Name = name, Description = description, SupplierId = 9101, WorkOrderNos = ["WO-CONTACT"], MachineModel = "机型",
             RobotPartId = 9402, PriorityId = 9403, RobotTypeId = 1009403, ExpectedCompletionDate = "2026-12-31",
-            SubprojectNames = [name + "子项目"], RobotOwnerContactIds = owners, ExpectedUpdatedAt = expectedUpdatedAt,
+            RobotOwnerContactIds = owners, ExpectedUpdatedAt = expectedUpdatedAt,
         };
         var request = Request("联络人主项目", [li.Id, zhang.Id]);
         var foreign = await Assert.ThrowsAsync<ApiException>(() =>
-            groups.CreateAsync(conn, admin, Request("跨供应商", [other.Id]), null, ct));
+            projects.CreateAsync(conn, admin, Request("跨供应商", [other.Id]), null, ct));
         Assert.Equal("Robot 负责人必须是该供应商的联络人", foreign.Message);
         var missing = await Assert.ThrowsAsync<ApiException>(() =>
-            groups.CreateAsync(conn, admin, Request("无负责人", []), null, ct));
+            projects.CreateAsync(conn, admin, Request("无负责人", []), null, ct));
         Assert.Equal("请选择 Robot 负责人", missing.Message);
 
-        using var created = Json(await groups.CreateAsync(conn, admin, request, null, ct));
-        var groupId = created.RootElement.GetProperty("id").GetUInt64();
+        using var created = Json(await projects.CreateAsync(conn, admin, request, null, ct));
+        var projectId = created.RootElement.GetProperty("id").GetUInt64();
         Assert.Equal("李四、张三", created.RootElement.GetProperty("robotOwnerName").GetString());
         Assert.Equal([li.Id, zhang.Id], created.RootElement.GetProperty("robotOwnerContactIds")
             .EnumerateArray().Select(item => item.GetUInt64()));
-        var projectId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM projects WHERE project_group_id=@GroupId", new { GroupId = groupId }, cancellationToken: ct));
         Assert.Equal("李四、张三", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT robot_owner_name FROM projects WHERE id=@ProjectId", new { ProjectId = projectId }, cancellationToken: ct)));
 
@@ -86,16 +82,14 @@ public sealed class SupplierContactTests
         await contacts.SetStatusAsync(admin, li.Id, AccountStatuses.Disabled, ct);
         await conn.OpenAsync(ct);
         Assert.Equal("李四四、张三", await conn.ExecuteScalarAsync<string>(new CommandDefinition(
-            "SELECT robot_owner_name FROM project_groups WHERE id=@GroupId", new { GroupId = groupId }, cancellationToken: ct)));
-        using (var kept = Json(await groups.UpdateAsync(conn, admin, groupId,
+            "SELECT robot_owner_name FROM projects WHERE id=@ProjectId", new { ProjectId = projectId }, cancellationToken: ct)));
+        using (var kept = Json(await projects.UpdateAsync(conn, admin, projectId,
                    Request("联络人主项目", [li.Id, zhang.Id], "保留已停用的负责人", updatedAt), null, ct)))
             Assert.Equal("李四四、张三", kept.RootElement.GetProperty("robotOwnerName").GetString());
         var disabledNew = await Assert.ThrowsAsync<ApiException>(() =>
-            groups.CreateAsync(conn, admin, Request("停用联络人", [li.Id]), null, ct));
+            projects.CreateAsync(conn, admin, Request("停用联络人", [li.Id]), null, ct));
         Assert.Equal("联络人「李四四」已停用，不能选为 Robot 负责人", disabledNew.Message);
 
-        await projects.SetStatusAsync(conn, admin, projectId,
-            new ProjectStatusRequest { Status = ProjectStatuses.InProgress }, null, ct);
         var messages = new MessageService(audit, database.Options);
         var unsigned = await Assert.ThrowsAsync<ApiException>(() => messages.CreateAsync(
             conn, supplier, projectId, new MessageCreateRequest { Content = "没有签名" }, null, ct));

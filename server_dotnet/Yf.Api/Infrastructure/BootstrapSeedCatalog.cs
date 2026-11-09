@@ -28,7 +28,6 @@ internal static class BootstrapSeedCatalog
         (10, "project:update", "编辑项目", "ACTION", 2, 1),
         (11, "project:delete", "删除项目", "ACTION", 2, 2),
         (12, "project:status", "项目状态变更", "ACTION", 2, 3),
-        (14, "project:view_all", "查看全部项目", "ACTION", 2, 5),
         (18, "file:upload", "上传文件", "ACTION", 2, 9),
         (19, "file:download", "下载文件", "ACTION", 2, 10),
         (20, "file:preview", "预览文件", "ACTION", 2, 11),

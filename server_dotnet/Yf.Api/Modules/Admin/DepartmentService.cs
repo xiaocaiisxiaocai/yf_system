@@ -149,8 +149,8 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         var newParent = request.ParentId is ulong parentId ? await FindAsync(context, parentId, ct) ?? throw ApiException.BadRequest("上级组织不存在") : null;
         var oldParent = existing?.ParentId is ulong oldParentId ? await FindAsync(context, oldParentId, ct) : null;
         var parentChanged = existing is not null && existing.ParentId != request.ParentId;
-        var protectedProjectGroupIds = parentChanged
-            ? await ActiveProjectGroupsWithValidOwnerInSubtreeAsync(context, id!.Value, ct)
+        var protectedProjectIds = parentChanged
+            ? await ActiveProjectsWithValidOwnerInSubtreeAsync(context, id!.Value, ct)
             : [];
         var kind = existing is not null && !parentChanged
             ? existing.Kind
@@ -195,7 +195,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             if (parentChanged)
             {
                 await RecomputeAsync(context, resultId, kind, ct);
-                await EnsureProjectOwnerSectionsRemainActiveAsync(context, protectedProjectGroupIds, ct);
+                await EnsureProjectOwnerSectionsRemainActiveAsync(context, protectedProjectIds, ct);
                 await EnsureLeaderRulesAsync(context, ct);
             }
         }
@@ -235,9 +235,9 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         var row = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (status == AccountStatuses.Disabled && row.Status != AccountStatuses.Disabled)
         {
-            var affected = await ActiveProjectGroupsWithValidOwnerInSubtreeAsync(context, id, ct);
+            var affected = await ActiveProjectsWithValidOwnerInSubtreeAsync(context, id, ct);
             if (affected.Length > 0)
-                throw ApiException.BadRequest($"该组织范围内仍有 {affected.Length} 个未结束主项目负责人，请先结束相关项目");
+                throw ApiException.BadRequest($"该组织范围内仍有 {affected.Length} 个未结束项目负责人，请先结束相关项目");
         }
         var oldStatus = row.Status;
         context.Attach(row);
@@ -390,29 +390,29 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
                     && root.Kind == "DIVISION" && root.Status == AccountStatuses.Active && root.ParentId == null)))))
             .Select(section => section.Id);
 
-    private static async Task<ulong[]> ActiveProjectGroupsWithValidOwnerInSubtreeAsync(YfDbContext context, ulong id, CancellationToken ct)
+    private static async Task<ulong[]> ActiveProjectsWithValidOwnerInSubtreeAsync(YfDbContext context, ulong id, CancellationToken ct)
     {
         var departmentIds = await SubtreeIdsAsync(context, id, ct);
         var validSections = ValidSectionIds(context);
-        return await (from g in context.ProjectGroups
+        return await (from g in context.Projects
                       join u in context.Users on g.ResponsibleUserId equals (ulong?)u.Id
-                      where (g.Status == "DRAFT" || g.Status == "IN_PROGRESS")
+                      where g.Status == "IN_PROGRESS"
                           && u.DepartmentId != null
                           && Enumerable.Contains(departmentIds, u.DepartmentId.Value)
                           && validSections.Contains(u.DepartmentId.Value)
                       select g.Id).Distinct().OrderBy(id => id).ToArrayAsync(ct);
     }
 
-    private static async Task EnsureProjectOwnerSectionsRemainActiveAsync(YfDbContext context, ulong[] projectGroupIds, CancellationToken ct)
+    private static async Task EnsureProjectOwnerSectionsRemainActiveAsync(YfDbContext context, ulong[] projectIds, CancellationToken ct)
     {
-        if (projectGroupIds.Length == 0) return;
+        if (projectIds.Length == 0) return;
         var validSections = ValidSectionIds(context);
-        var count = await (from g in context.ProjectGroups
+        var count = await (from g in context.Projects
                            join u in context.Users on g.ResponsibleUserId equals (ulong?)u.Id
                            join section in context.Departments on u.DepartmentId equals (ulong?)section.Id
-                           where Enumerable.Contains(projectGroupIds, g.Id) && !validSections.Contains(section.Id)
+                           where Enumerable.Contains(projectIds, g.Id) && !validSections.Contains(section.Id)
                            select g.Id).Distinct().CountAsync(ct);
         if (count > 0)
-            throw ApiException.BadRequest($"组织调整会使 {count} 个未结束主项目的负责人失去有效课别，请先结束相关项目");
+            throw ApiException.BadRequest($"组织调整会使 {count} 个未结束项目的负责人失去有效课别，请先结束相关项目");
     }
 }

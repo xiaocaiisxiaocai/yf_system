@@ -61,15 +61,12 @@ public sealed class EfTransactionTests
         var user = new User { EmployeeNo = "ef_projection", PasswordHash = "unused", RealName = "投影测试", Email = "ef@example.invalid", UserType = "INTERNAL", Status = "ACTIVE" };
         context.AddRange(supplier, user);
         await context.SaveChangesAsync(ct);
-        var group = new ProjectGroup { Name = "EF投影主项目", SupplierId = supplier.Id, CreatedBy = user.Id, Status = "IN_PROGRESS" };
-        context.Add(group);
-        await context.SaveChangesAsync(ct);
-        var project = new Project { Name = "EF投影子项目", ProjectGroupId = group.Id, SupplierId = supplier.Id, CreatedBy = user.Id,
+        var project = new Project { Name = "EF投影项目", SupplierId = supplier.Id, CreatedBy = user.Id,
             Status = "IN_PROGRESS", ExpectedCompletionDate = new DateOnly(2030, 1, 2) };
         context.Add(project);
         await context.SaveChangesAsync(ct);
         var row = await ProjectQueries.Rows(context).SingleAsync(p => p.Id == project.Id, ct);
-        Assert.Equal(group.Name, row.ProjectGroupName);
+        Assert.Equal("EF投影项目", row.Name);
         Assert.Equal(supplier.Name, row.SupplierName);
         Assert.Equal(user.RealName, row.CreatedByName);
         Assert.Equal(new DateTime(2030, 1, 2), row.ExpectedCompletionDate);
@@ -77,7 +74,7 @@ public sealed class EfTransactionTests
         Assert.Null(row.ResponsibleUserName);
         Assert.False(row.HasCopyHistory);
         var material = await ProjectQueries.InProgressMaterial(context).SingleAsync(m => m.ProjectId == project.Id, ct);
-        Assert.Equal(group.Id, material.ProjectGroupId);
+        Assert.Equal(supplier.Id, material.SupplierId);
         Assert.Equal(MaterialReviewStatuses.NoMaterial, material.State);
         await context.Projects.Where(p => p.Id == project.Id)
             .ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "COMPLETED").SetProperty(p => p.ExpectedCompletionDate, (DateOnly?)null), ct);

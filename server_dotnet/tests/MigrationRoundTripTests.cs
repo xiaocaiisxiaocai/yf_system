@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261105102815_RenameOemLabelsToOdmOema";
+    private const string Latest = "20261109135314_RemoveProjectGroups";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -78,7 +78,8 @@ public sealed class MigrationRoundTripTests
         // + AddProjectNotificationsAndDueReminders (Down drops only the reminder columns, keeping the config rows)
         // + AddStorageLocations (Down drops storage_locations, keeping the storage:manage permission and grants)
         // + AddProjectMaterialRound (Down drops projects.material_file_floor)
-        // + AddOemCompanyContacts (Down drops the OEM additional-contact directory).
+        // + AddOemCompanyContacts (Down drops the OEM additional-contact directory)
+        // + RemoveProjectGroups (Down rebuilds one main project per project, not the retired project:view_all grant).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -96,6 +97,11 @@ public sealed class MigrationRoundTripTests
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|overdue_notified_for|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|material_file_floor|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|oem_company_contacts", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|project_robot_owners", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|completed_at|", StringComparison.Ordinal));
+        Assert.DoesNotContain(latestSchema, line => line.StartsWith("table|project_group", StringComparison.Ordinal));
+        Assert.Contains(rolledBack, line => line.StartsWith("table|project_groups", StringComparison.Ordinal));
+        Assert.DoesNotContain(latestSchema, line => line.StartsWith("column|projects|project_group_id|", StringComparison.Ordinal));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
         await migrator.MigrateAsync(cancellationToken: ct);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));

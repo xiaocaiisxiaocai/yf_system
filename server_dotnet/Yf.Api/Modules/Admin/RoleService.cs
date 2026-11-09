@@ -221,11 +221,11 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     internal static async Task EnsureProjectListRemovalSafeAsync(YfDbContext context, ulong roleId, CancellationToken ct)
     {
-        var count = await (from g in context.ProjectGroups
+        var count = await (from g in context.Projects
                            join ur in context.UserRoles on g.ResponsibleUserId equals (ulong?)ur.UserId
-                           where ur.RoleId == roleId && (g.Status == "DRAFT" || g.Status == "IN_PROGRESS")
+                           where ur.RoleId == roleId && g.Status == "IN_PROGRESS"
                            select g.Id).Distinct().CountAsync(ct);
-        if (count > 0) throw ApiException.BadRequest($"该角色仍有用户负责 {count} 个未结束主项目，请先结束相关项目再移除项目列表权限");
+        if (count > 0) throw ApiException.BadRequest($"该角色仍有用户负责 {count} 个未结束项目，请先结束相关项目再移除项目列表权限");
     }
 
     private static async Task GateAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)

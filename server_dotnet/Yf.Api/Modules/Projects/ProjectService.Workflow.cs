@@ -5,8 +5,8 @@ using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Projects;
 
-// Subproject workflow transitions (start, terminate, restart, reopen); material approval completes a subproject
-// in ProjectService.MaterialReview.cs. See Robot仿真协作流程调整方案.
+// Project workflow transitions (terminate, restart, reopen); creation starts a project (ProjectService.CreateAsync)
+// and material approval completes it (ProjectService.MaterialReview.cs). See 项目协作契约.
 internal sealed partial class ProjectService
 {
     internal const string StatusChangedMessage = "项目状态已被他人变更，请刷新后重试";
@@ -27,15 +27,15 @@ internal sealed partial class ProjectService
         await AccessService.LockBusinessAsync(conn, tx, ct);
         var current = await AccessService.RecheckActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:status", ct);
-        // Scope is authorized before any row lock; the locked values are authorized again inside.
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        // Ownership is checked before the row lock and again on the locked values.
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct, ownerOnly: true);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         // Optional guard: a caller that decided from a stale status must refresh instead of acting on a newer one.
         if (request.ExpectedStatus is { } expectedStatus && expectedStatus != project.Status)
             throw ApiException.VersionConflict(StatusChangedMessage);
         var requested = request.Status ?? string.Empty;
         var (to, action) = ProjectWorkflowRules.ManagementTransition(project.Status, requested);
-        if (action is "START" or "RESTART")
+        if (action == "RESTART")
         {
             await EnsureResponsibleUserCanActAsync(conn, tx, project.ResponsibleUserId, ct);
             await EnsureSupplierCanCollaborateAsync(conn, tx, project.SupplierId, ct);
@@ -45,19 +45,19 @@ internal sealed partial class ProjectService
             throw ApiException.Conflict("项目仍有活动上传会话，不能终止");
         }
         await ApplyTransitionAsync(conn, tx, current, project, to, action, null, ip, ct);
-        if (action is "START" or "RESTART")
+        if (action == "RESTART")
         {
             await StartMaterialRoundAsync(conn, tx, projectId, ct);
         }
         await ProjectNotificationService.EnqueueStatusChangeAsync(
             conn, tx, project, action, null, current, options.WebBaseUrl, audit, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
+        var result = await ResultAsync(conn, tx, current, projectId, ct);
         await tx.CommitAsync(ct);
         return result;
     }
 
     /// <summary>
-    /// Starts a new material round: supplier files already on the subproject (copied from the source, or returned
+    /// Starts a new material round: supplier files already on the project (copied from the source, or returned
     /// before it was terminated) stay downloadable but are not this round's material, so only a new upload can be
     /// approved. Reopen keeps the round, since it re-reviews the material the round already produced.
     /// </summary>
@@ -73,13 +73,13 @@ internal sealed partial class ProjectService
                 .SetProperty(item => item.UpdatedAt, item => item.UpdatedAt), ct);
     }
 
-    internal const string ResponsibleUserUnavailableStartMessage = "主项目负责人已停用或没有项目列表权限，请先转交主项目后再开始项目";
+    internal const string ResponsibleUserUnavailableStartMessage = "项目负责人已停用或没有项目列表权限，请先转交项目后再开始项目";
 
     /// <summary>
-    /// Only the responsible user reviews, returns and reopens material. The disable guard covers draft and in-progress
-    /// main projects only, so a terminated one may be owned by a disabled account; restarting it would strand the subproject.
+    /// Only the responsible user reviews, returns and reopens material. The disable guard covers in-progress projects
+    /// only, so a terminated one may be owned by a disabled account; restarting it would strand the project.
     /// </summary>
-    private static async Task EnsureResponsibleUserCanActAsync(MySqlConnection conn, MySqlTransaction tx, ulong? responsibleUserId, CancellationToken ct)
+    internal static async Task EnsureResponsibleUserCanActAsync(MySqlConnection conn, MySqlTransaction tx, ulong? responsibleUserId, CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
         if (responsibleUserId is not ulong ownerId || !await EligibleOwners(db).AnyAsync(owner => owner.Id == ownerId, ct))
@@ -94,11 +94,11 @@ internal sealed partial class ProjectService
         "项目所属厂商的启用用户都没有上传文件权限，请先为厂商用户分配包含“上传文件”权限的角色后再开始项目";
 
     /// <summary>
-    /// START/RESTART/REOPEN hand the subproject to the supplier, so the supplier company must be active and at least one
+    /// Create (START), RESTART and REOPEN hand the project to the supplier, so the supplier company must be active and at least one
     /// of its active supplier accounts must effectively hold <c>file:upload</c> (through an active role) to return material.
-    /// The supplier row is share-locked so a concurrent disable (which refuses while subprojects are in progress) waits for this one.
+    /// The supplier row is share-locked so a concurrent disable (which refuses while projects are in progress) waits for this one.
     /// </summary>
-    private static async Task EnsureSupplierCanCollaborateAsync(MySqlConnection conn, MySqlTransaction tx, ulong supplierId, CancellationToken ct)
+    internal static async Task EnsureSupplierCanCollaborateAsync(MySqlConnection conn, MySqlTransaction tx, ulong supplierId, CancellationToken ct)
     {
         await using var db = EfDb.Use(conn, tx);
         var supplierStatus = await db.Database
@@ -122,8 +122,8 @@ internal sealed partial class ProjectService
     }
 
     /// <summary>
-    /// Reopens a completed subproject as an after-the-fact return: it goes back to IN_PROGRESS with the latest
-    /// supplier material marked RETURNED, and follows the main project's current public data again.
+    /// Reopens a completed project as an after-the-fact return: it goes back to IN_PROGRESS with the latest
+    /// supplier material marked RETURNED.
     /// </summary>
     internal async Task<ProjectResponse> ReopenAsync(
         MySqlConnection conn,
@@ -135,35 +135,34 @@ internal sealed partial class ProjectService
     {
         if (!actor.IsInternal)
         {
-            throw ApiException.Forbidden("重开子项目仅限项目负责人");
+            throw ApiException.Forbidden("重开项目仅限项目负责人");
         }
         if (request.ExpectedUpdatedAt is not { } expectedUpdatedAt)
         {
-            throw ApiException.BadRequest("expectedUpdatedAt 必须为当前子项目的 updatedAt");
+            throw ApiException.BadRequest("expectedUpdatedAt 必须为当前项目的 updatedAt");
         }
         var reason = ValidateReviewReason(request.Reason, "重开原因");
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var (project, current) = await LockWorkflowProjectAsync(conn, tx, actor, projectId, "project:list", ct);
         if (project.ResponsibleUserId != current.Id)
         {
-            throw ApiException.Forbidden("重开子项目仅限项目负责人");
+            throw ApiException.Forbidden("重开项目仅限项目负责人");
         }
         if (ProjectJson.Utc(project.UpdatedAt) != ProjectJson.Utc(expectedUpdatedAt))
         {
-            throw ApiException.VersionConflict(SubprojectChangedMessage);
+            throw ApiException.VersionConflict(ProjectChangedMessage);
         }
         if (project.Status != ProjectStatuses.Completed)
         {
-            throw ApiException.Conflict("只有已完成的子项目可以重开");
+            throw ApiException.Conflict("只有已完成的项目可以重开");
         }
         await EnsureSupplierCanCollaborateAsync(conn, tx, project.SupplierId, ct);
 
         await ApplyTransitionAsync(conn, tx, current, project, ProjectStatuses.InProgress, "REOPEN", reason, ip, ct);
         await using var db = EfDb.Use(conn, tx);
-        // A completed main project was frozen while contacts were renamed; it is open again now, so rebuild its
-        // Robot owner snapshot before the subproject copies the group's data.
-        await RobotOwners.RebuildSnapshotAsync(db, project.ProjectGroupId, ct);
-        await ProjectGroupService.SyncSubprojectFromGroupAsync(db, project.ProjectGroupId, projectId, ct);
+        // A completed project was frozen while contacts were renamed; it is open again now, so rebuild its
+        // Robot owner snapshot.
+        await RobotOwners.RebuildSnapshotAsync(db, projectId, ct);
         var floor = await db.Projects.Where(item => item.Id == projectId).Select(item => item.MaterialFileFloor).SingleAsync(ct);
         var latestSupplierFileId = await db.Files
             .Where(file => file.ProjectId == projectId && file.Status == FileStatuses.Available && file.Direction == "S2C"
@@ -179,7 +178,7 @@ internal sealed partial class ProjectService
         }
         await ProjectNotificationService.EnqueueStatusChangeAsync(
             conn, tx, project, "REOPEN", reason, current, options.WebBaseUrl, audit, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
+        var result = await ResultAsync(conn, tx, current, projectId, ct);
         await tx.CommitAsync(ct);
         return result;
     }
@@ -194,8 +193,8 @@ internal sealed partial class ProjectService
     {
         var current = await AccessService.LockActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, permission, ct);
-        // Scope is authorized before any row lock; the locked values are authorized again inside.
-        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct);
+        // Only the responsible user reviews or reopens: checked before the row lock and again on the locked values.
+        await ProjectAccessService.RequireViewForValidatedActorAsync(conn, tx, current, projectId, true, ct, ownerOnly: true);
         var project = await LoadProjectAsync(conn, tx, projectId, false, ct);
         return (project, current);
     }
@@ -218,7 +217,8 @@ internal sealed partial class ProjectService
             .Where(item => item.Id == project.Id && item.Status == project.Status)
             .ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, to)
-                // Every transition ends the current material review; restarted or reopened subprojects
+                .SetProperty(item => item.CompletedAt, to == ProjectStatuses.Completed ? now : null)
+                // Every transition ends the current material review; restarted or reopened projects
                 // need the responsible user to review the material again.
                 .SetProperty(item => item.MaterialReviewStatus, (string?)null)
                 .SetProperty(item => item.MaterialReviewFileId, (ulong?)null)
@@ -242,7 +242,6 @@ internal sealed partial class ProjectService
         var statusLogId = statusLog.Id;
         var auditAction = action switch
         {
-            "START" => "PROJECT_START",
             "MATERIAL_APPROVE" => "PROJECT_MATERIAL_APPROVE",
             "REOPEN" => "PROJECT_REOPEN",
             "TERMINATE" => "PROJECT_TERMINATE",
@@ -253,9 +252,6 @@ internal sealed partial class ProjectService
             ? new { from = project.Status, to, action, reason, statusLogId }
             : new { from = project.Status, to, action, reason, statusLogId, supplierFileId };
         await audit.WriteAsync(conn, tx, actor.Id, auditAction, "project", project.Id, details, ip, ct);
-        await groupStatus.RecalculateAsync(
-            conn, tx, project.ProjectGroupId, actor.Id, project.Id, ct, groupAlreadyLocked: true,
-            allowCompletion: action == "MATERIAL_APPROVE");
         return statusLogId;
     }
 

@@ -29,9 +29,9 @@ public sealed class PerformanceBenchmarks
         var admin = new CurrentUser(1, "admin", "INTERNAL", null);
         var collaboration = new CollaborationService();
         var dashboard = new DashboardService();
-        var groups = new ProjectGroupService(new AuditService([]), null!);
+        var projects = new ProjectService(new AuditService([]), new Yf.Api.Infrastructure.AppOptions());
         var report = new StringBuilder();
-        report.AppendLine(CultureInfo.InvariantCulture, $"History: 100000 messages, 100000 activities over ~2 years, 50% read; 20 groups x 5 projects; {Rounds} rounds, first is warm-up");
+        report.AppendLine(CultureInfo.InvariantCulture, $"History: 100000 messages, 100000 activities over ~2 years, 50% read; 100 projects; {Rounds} rounds, first is warm-up");
 
         var benchmarks = new (string Name, Func<MySqlConnector.MySqlConnection, Task> Run)[]
         {
@@ -39,7 +39,7 @@ public sealed class PerformanceBenchmarks
             ("dashboard summary", conn => dashboard.SummaryAsync(conn, admin, ct)),
             ("dashboard unread messages", conn => dashboard.MessagesAsync(conn, admin, 1, 10, true, ct)),
             ("dashboard messages", conn => dashboard.MessagesAsync(conn, admin, 1, 10, false, ct)),
-            ("project group list", conn => groups.ListAsync(conn, admin, 1, 20, null, null, null, null, false, ct)),
+            ("project list", conn => projects.ListAsync(conn, admin, 1, 20, null, null, null, null, false, false, ct)),
             ("notifications (all)", conn => collaboration.NotificationsAsync(conn, admin, 1, 20, false, ct)),
             ("notifications (unread)", conn => collaboration.NotificationsAsync(conn, admin, 1, 20, true, ct)),
         };
@@ -78,10 +78,8 @@ public sealed class PerformanceBenchmarks
             INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'S','ACTIVE',1);
             CREATE TABLE digits(i INT);
             INSERT INTO digits VALUES(0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-              SELECT 1+a.i*10+b.i,CONCAT('G',a.i*10+b.i),100,'IN_PROGRESS',1,1 FROM digits a,digits b WHERE a.i*10+b.i<20;
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-              SELECT 1+a.i*10+b.i,1+(a.i*10+b.i)%20,CONCAT('P',a.i*10+b.i),100,'IN_PROGRESS',1,1 FROM digits a,digits b;
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+              SELECT 1+a.i*10+b.i,CONCAT('P',a.i*10+b.i),100,'IN_PROGRESS',1,1 FROM digits a,digits b;
             INSERT INTO project_activities(project_id,activity_type,action,actor_id,actor_name,occurred_at,title,source_key)
               SELECT 1+(x.i*10000+a.i*1000+b.i*100+c.i*10+d.i)%100,'MESSAGE','CREATE',2,'author',
                      DATE_SUB(UTC_TIMESTAMP(3),INTERVAL (x.i*10000+a.i*1000+b.i*100+c.i*10+d.i)*10 MINUTE),'t',
@@ -94,7 +92,7 @@ public sealed class PerformanceBenchmarks
               FROM digits x,digits a,digits b,digits c,digits d;
             INSERT INTO message_reads(message_id,user_id) SELECT id,1 FROM messages WHERE id%2=0;
             DROP TABLE digits;
-            ANALYZE TABLE messages, message_reads, project_activities, collaboration_reads, projects, project_groups;
+            ANALYZE TABLE messages, message_reads, project_activities, collaboration_reads, projects;
             """, null, ct);
     }
 

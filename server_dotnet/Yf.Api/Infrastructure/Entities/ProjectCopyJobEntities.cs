@@ -15,7 +15,6 @@ public sealed class ProjectCopyJob
 {
     public ulong Id { get; set; }
     public ulong SourceProjectId { get; set; }
-    public ulong ProjectGroupId { get; set; }
     public ulong RequestedBy { get; set; }
     public string IdempotencyKey { get; set; } = null!;
     public string TargetName { get; set; } = null!;
@@ -55,7 +54,6 @@ public sealed class ProjectCopyJobConfig : IEntityTypeConfiguration<ProjectCopyJ
         b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
         b.Property(x => x.SourceProjectId).HasColumnName("source_project_id");
-        b.Property(x => x.ProjectGroupId).HasColumnName("project_group_id");
         b.Property(x => x.RequestedBy).HasColumnName("requested_by");
         b.Property(x => x.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(64).IsRequired();
         b.Property(x => x.TargetName).HasColumnName("target_name").HasMaxLength(128).IsRequired();
@@ -81,14 +79,12 @@ public sealed class ProjectCopyJobConfig : IEntityTypeConfiguration<ProjectCopyJ
             .HasDatabaseName("uk_project_copy_jobs_actor_key");
         b.HasIndex(x => new { x.Status, x.CreatedAt, x.Id })
             .HasDatabaseName("idx_project_copy_jobs_queue");
-        b.HasIndex(x => new { x.ProjectGroupId, x.RequestedBy, x.Status, x.CreatedAt, x.Id })
-            .HasDatabaseName("idx_project_copy_jobs_group_actor_status_time");
+        b.HasIndex(x => new { x.RequestedBy, x.Status, x.CreatedAt, x.Id })
+            .HasDatabaseName("idx_project_copy_jobs_requester");
         b.HasOne<User>().WithMany().HasForeignKey(x => x.RequestedBy)
             .HasConstraintName("fk_project_copy_jobs_requested_by").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.SourceProjectId)
             .HasConstraintName("fk_project_copy_jobs_source").OnDelete(DeleteBehavior.Cascade);
-        b.HasOne<ProjectGroup>().WithMany().HasForeignKey(x => x.ProjectGroupId)
-            .HasConstraintName("fk_project_copy_jobs_group").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ResultProjectId)
             .HasConstraintName("fk_project_copy_jobs_result_project").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<ProjectCopy>().WithMany().HasForeignKey(x => x.ResultCopyId)

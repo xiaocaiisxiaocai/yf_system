@@ -83,10 +83,10 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         if (row.Status == status) return Json(row);
         if (status == AccountStatuses.Disabled)
         {
-            // In-progress subprojects wait for this supplier's material; start/restart/reopen share-lock the row.
+            // In-progress projects wait for this supplier's material; start/restart/reopen share-lock the row.
             var inProgress = await context.Projects.LongCountAsync(x => x.SupplierId == id && x.Status == "IN_PROGRESS", ct);
             if (inProgress > 0)
-                throw ApiException.Conflict($"该供应商仍有 {inProgress} 个进行中的子项目，请先终止或完成相关子项目后再停用");
+                throw ApiException.Conflict($"该供应商仍有 {inProgress} 个进行中的项目，请先终止或完成相关项目后再停用");
         }
         await context.Suppliers.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
         var revokedSessionCount = 0;
@@ -119,7 +119,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
         await AccessService.RequirePermissionAsync(connection, dbTransaction, actor, "supplier:delete", ct);
         var row = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
-        if (await context.Projects.AnyAsync(x => x.SupplierId == id, ct) || await context.ProjectGroups.AnyAsync(x => x.SupplierId == id, ct))
+        if (await context.Projects.AnyAsync(x => x.SupplierId == id, ct))
             throw ApiException.BadRequest("该供应商仍有关联项目，请先删除项目");
         if (await context.RobotParts.AnyAsync(x => x.SupplierId == id, ct))
             throw ApiException.BadRequest("该供应商仍有关联 Robot 料号，请先处理料号");

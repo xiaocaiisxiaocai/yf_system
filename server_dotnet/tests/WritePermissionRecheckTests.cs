@@ -21,7 +21,7 @@ public sealed class WritePermissionRecheckTests
         await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
         await SeedAsync(database, ct);
         var audit = new AuditService([]);
-        var projects = new ProjectService(audit, new AppOptions(), new ProjectGroupStatusService(audit));
+        var projects = new ProjectService(audit, new AppOptions());
         var owner = new CurrentUser(101, "recheck-owner", "INTERNAL", null);
 
         await using var conn = await database.Database.OpenAsync(ct);
@@ -113,10 +113,8 @@ public sealed class WritePermissionRecheckTests
         VALUES(101,'recheck-owner','unused','项目负责人','','INTERNAL',NULL,'ACTIVE',0),
               (201,'recheck-supplier','unused','厂商人员','','SUPPLIER',100,'ACTIVE',0);
         INSERT INTO user_roles(user_id,role_id) VALUES(101,9001),(201,9002);
-        INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-        VALUES(5001,'复核主项目',100,'IN_PROGRESS',1,101);
-        INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-        VALUES(1001,5001,'复核项目',100,'IN_PROGRESS',1,101);
+        INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+        VALUES(1001,'复核项目',100,'IN_PROGRESS',1,101);
         INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status)
         VALUES(1,1001,201,'S2C','a.txt','recheck-a.txt','txt',1,'files/recheck-a.txt','AVAILABLE');
         """, null, ct);

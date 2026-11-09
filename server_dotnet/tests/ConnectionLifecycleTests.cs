@@ -124,13 +124,10 @@ public sealed class ConnectionLifecycleTests
                     INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status) SELECT 'discard',password_hash,'待清理用户','','INTERNAL','ACTIVE' FROM users WHERE employee_no='admin';
                     INSERT INTO user_roles(user_id,role_id) SELECT u.id,r.id FROM users u JOIN roles r ON r.name='待清理角色' WHERE u.employee_no='discard';
                     INSERT INTO suppliers(name) VALUES('待清理供应商');
-                    INSERT INTO project_groups(name,supplier_id,created_by)
-                    SELECT '待清理主项目',s.id,u.id FROM suppliers s JOIN users u ON u.employee_no='discard'
+                    INSERT INTO projects(name,supplier_id,created_by)
+                    SELECT '待清理项目',s.id,u.id
+                    FROM suppliers s JOIN users u ON u.employee_no='discard'
                     WHERE s.name='待清理供应商';
-                    INSERT INTO projects(project_group_id,name,supplier_id,created_by)
-                    SELECT g.id,'待清理子项目',s.id,u.id
-                    FROM project_groups g JOIN suppliers s ON s.name='待清理供应商' JOIN users u ON u.employee_no='discard'
-                    WHERE g.name='待清理主项目';
                     INSERT INTO messages(project_id,sender_id,content) SELECT p.id,p.created_by,'待清理留言' FROM projects p;
                     INSERT INTO oem_companies(name,status,created_at,updated_at)
                     VALUES('待清理 ODM/OEMA 厂商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));

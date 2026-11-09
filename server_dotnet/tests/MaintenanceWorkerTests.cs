@@ -155,10 +155,8 @@ public sealed class MaintenanceWorkerTests
         {
             await database.ExecuteAsync("""
                 INSERT INTO suppliers(id,name,status,created_by) VALUES(9800,'retention supplier','ACTIVE',1);
-                INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-                VALUES(9800,'retention group',9800,'IN_PROGRESS',1,1);
-                INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-                VALUES(9800,9800,'retention project',9800,'IN_PROGRESS',1,1);
+                INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+                VALUES(9800,'retention project',9800,'IN_PROGRESS',1,1);
                 INSERT INTO upload_sessions(
                     id,project_id,uploader_id,file_name,file_size,file_fingerprint,chunk_size,total_chunks,temp_dir,
                     status,expires_at,created_at,updated_at) VALUES

@@ -40,9 +40,8 @@ internal static class HandwrittenTestSchemas
         );
         CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
         CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
-        CREATE TABLE project_groups(id BIGINT UNSIGNED PRIMARY KEY, created_by BIGINT UNSIGNED NOT NULL DEFAULT 0);
         CREATE TABLE projects(
-            id BIGINT UNSIGNED PRIMARY KEY, project_group_id BIGINT UNSIGNED NOT NULL,
+            id BIGINT UNSIGNED PRIMARY KEY,
             supplier_id BIGINT UNSIGNED NOT NULL,
             created_by BIGINT UNSIGNED NOT NULL, status VARCHAR(30) NOT NULL,
             name VARCHAR(100) NOT NULL,
@@ -203,13 +202,8 @@ internal static class HandwrittenTestSchemas
             email VARCHAR(128) NOT NULL,
             status VARCHAR(16) NOT NULL
         );
-        CREATE TABLE project_groups(
-            id BIGINT UNSIGNED PRIMARY KEY,
-            created_by BIGINT UNSIGNED NOT NULL DEFAULT 0
-        );
         CREATE TABLE projects(
             id BIGINT UNSIGNED PRIMARY KEY,
-            project_group_id BIGINT UNSIGNED NULL,
             supplier_id BIGINT UNSIGNED NOT NULL,
             created_by BIGINT UNSIGNED NOT NULL,
             responsible_user_id BIGINT UNSIGNED NULL,

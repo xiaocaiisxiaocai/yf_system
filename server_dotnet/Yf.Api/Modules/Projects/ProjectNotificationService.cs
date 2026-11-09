@@ -10,13 +10,13 @@ internal static class ProjectNotificationService
 {
     internal const string StaleProjectMailReason = "收件人已无项目访问权限，通知已取消";
 
-    /// <summary>Message e-mails for one recipient and subproject are merged within this window.</summary>
+    /// <summary>Message e-mails for one recipient and project are merged within this window.</summary>
     internal const int MessageSummaryDelayMinutes = 2;
     private const int MessageSummaryMaximumBodyBytes = 60_000;
 
     /// <summary>
     /// Queues a MESSAGE_CREATED summary for every eligible recipient on the other side. Like the
-    /// FILE_UPLOADED summary, one PENDING row per (subproject, recipient) collects the messages posted
+    /// FILE_UPLOADED summary, one PENDING row per (project, recipient) collects the messages posted
     /// within <see cref="MessageSummaryDelayMinutes"/> minutes; every entry keeps its own precise link.
     /// </summary>
     internal static async Task EnqueueMessageAsync(
@@ -81,7 +81,7 @@ internal static class ProjectNotificationService
     private static string SafeMailLine(string value, int maximumRunes) =>
         Yf.Api.Modules.Files.UploadService.SafeMailLine(value, maximumRunes);
 
-    /// <summary>Tells the supplier side that the responsible user approved (completing the subproject) or returned its material.</summary>
+    /// <summary>Tells the supplier side that the responsible user approved (completing the project) or returned its material.</summary>
     internal static Task EnqueueMaterialReviewAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
@@ -93,7 +93,7 @@ internal static class ProjectNotificationService
         AuditService audit,
         CancellationToken ct)
     {
-        var verb = approved ? "回传资料已确认 OK，子项目已完成" : "回传资料已被退回";
+        var verb = approved ? "回传资料已确认 OK，项目已完成" : "回传资料已被退回";
         // The name and the free-text reason are user input: one line each, so neither can add header-like lines.
         var safeProjectName = SafeMailLine(project.Name, 100);
         var reasonLine = reason is null ? string.Empty : $"\n退回原因：{SafeMailLine(reason, 500)}";
@@ -113,7 +113,7 @@ internal static class ProjectNotificationService
             audit);
     }
 
-    /// <summary>Tells the supplier side that the subproject was started, terminated, restarted or reopened.</summary>
+    /// <summary>Tells the supplier side that the project was started, terminated, restarted or reopened.</summary>
     internal static Task EnqueueStatusChangeAsync(
         MySqlConnection conn,
         MySqlTransaction tx,
@@ -128,7 +128,7 @@ internal static class ProjectNotificationService
         var (eventType, verb, hint) = action switch
         {
             "START" => ("PROJECT_STARTED", "已开始", "请查看项目资料并按要求回传。"),
-            "TERMINATE" => ("PROJECT_TERMINATED", "已终止", "子项目已停止协作，无需继续回传资料。"),
+            "TERMINATE" => ("PROJECT_TERMINATED", "已终止", "项目已停止协作，无需继续回传资料。"),
             "RESTART" => ("PROJECT_RESTARTED", "已重新开始", "请查看项目资料并按要求回传。"),
             "REOPEN" => ("PROJECT_REOPENED", "已重开", "负责人要求返工，请按重开原因补充回传资料。"),
             _ => throw new InvalidOperationException($"未知项目状态通知动作: {action}"),
@@ -146,13 +146,13 @@ internal static class ProjectNotificationService
             false,
             actor.Id,
             $"[协作平台] 项目「{safeProjectName}」{verb}",
-            $"项目：{safeProjectName}\n状态：子项目{verb}{reasonLine}\n{hint}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
+            $"项目：{safeProjectName}\n状态：项目{verb}{reasonLine}\n{hint}\n\n请登录平台查看：{ProjectUrl(baseUrl, project.Id, "activity")}\n\n（本邮件由系统自动发送）",
             ct,
             audit);
     }
 
     /// <summary>
-    /// Due-soon / overdue reminder for an in-progress subproject: the responsible user and the supplier side, each
+    /// Due-soon / overdue reminder for an in-progress project: the responsible user and the supplier side, each
     /// further gated by its own due switch in <see cref="EmailNotificationPolicy"/>.
     /// </summary>
     internal static Task EnqueueDueReminderAsync(
@@ -436,14 +436,15 @@ internal static class ProjectNotificationService
 
         try
         {
-            await ProjectAccessService.RequireViewForValidatedActorAsync(
+            var access = await ProjectAccessService.RequireViewForValidatedActorAsync(
                 conn,
                 tx,
                 new CurrentUser(recipient.Id, recipient.EmployeeNo, recipient.UserType, recipient.SupplierId),
                 projectId,
                 false,
                 ct);
-            return true;
+            // Internal accounts can open every project but are mailed only about the ones they are responsible for.
+            return recipient.UserType != UserTypes.Internal || access.ResponsibleUserId == recipient.Id;
         }
         catch (ApiException)
         {

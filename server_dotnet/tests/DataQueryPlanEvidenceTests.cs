@@ -28,10 +28,8 @@ public sealed class DataQueryPlanEvidenceTests
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts)
             VALUES(2,'plan-user','unused','Plan User','','INTERNAL','ACTIVE',0,0);
             INSERT INTO suppliers(id,name,status,created_by) VALUES(9900,'plan supplier','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(9900,'plan group',9900,'IN_PROGRESS',1,1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id,created_at,updated_at)
-            SELECT 100000+n,9900,CONCAT('plan-project-',n),9900,
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id,created_at,updated_at)
+            SELECT 100000+n,CONCAT('plan-project-',n),9900,
                    IF(MOD(n,10)=0,'COMPLETED','IN_PROGRESS'),1,IF(MOD(n,3)=0,1,2),
                    DATE_SUB(UTC_TIMESTAMP(3),INTERVAL MOD(n,60) DAY),
                    DATE_SUB(UTC_TIMESTAMP(3),INTERVAL MOD(n,60) DAY)
@@ -59,7 +57,7 @@ public sealed class DataQueryPlanEvidenceTests
             FROM perf_numbers;
             """, cancellationToken: ct));
         await connection.ExecuteAsync(new CommandDefinition(
-            "ANALYZE TABLE projects,project_groups,files,messages,message_reads,email_outbox",
+            "ANALYZE TABLE projects,files,messages,message_reads,email_outbox",
             cancellationToken: ct));
 
         var plans = new Dictionary<string, JsonElement>();
@@ -113,10 +111,10 @@ public sealed class DataQueryPlanEvidenceTests
             ORDER BY eo.id LIMIT 10
             """, ct);
 
-        // Dashboard material tasks for a responsible user: in-progress subprojects whose latest S2C file is unreviewed.
+        // Dashboard material tasks for a responsible user: in-progress projects whose latest S2C file is unreviewed.
         const string materialPendingSql = """
-            SELECT p.id,p.name,p.project_group_id,g.name,p.updated_at
-            FROM projects p JOIN project_groups g ON p.project_group_id=g.id
+            SELECT p.id,p.name,p.updated_at
+            FROM projects p
             WHERE p.status='IN_PROGRESS' AND p.responsible_user_id=1
               AND (SELECT MAX(f.id) FROM files f WHERE f.project_id=p.id AND f.status='AVAILABLE' AND f.direction='S2C' AND (p.material_file_floor IS NULL OR f.id>p.material_file_floor)) IS NOT NULL
               AND NOT (p.material_review_status='RETURNED' AND p.material_review_file_id <=>

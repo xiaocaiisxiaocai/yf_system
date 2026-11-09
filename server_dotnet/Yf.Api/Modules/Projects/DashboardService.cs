@@ -20,7 +20,7 @@ internal sealed class DashboardService
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         await using var db = EfDb.Use(conn, tx);
-        var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
+        var visibleProjects = await ProjectAccessService.InboxQueryAsync(db, current, ct);
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
 
         var query = VisibleMessages(db, visibleProjects, cutoff);
@@ -43,17 +43,14 @@ internal sealed class DashboardService
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
         await using var db = EfDb.Use(conn, tx);
-        var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
+        var visibleProjects = await ProjectAccessService.InboxQueryAsync(db, current, ct);
         var query =
             from task in PendingTasks(db, current, visibleProjects)
             join project in db.Projects on task.ProjectId equals project.Id
-            join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id
             select new
             {
                 project.Id,
                 project.Name,
-                project.ProjectGroupId,
-                ProjectGroupName = projectGroup.Name,
                 task.State,
                 project.UpdatedAt,
             };
@@ -63,7 +60,7 @@ internal sealed class DashboardService
             .Page((actualPage - 1) * size, size)
             .ToArrayAsync(ct);
         var list = rows.Select(row => new DashboardPendingProject(
-            row.Id, row.Name, row.ProjectGroupId, row.ProjectGroupName, row.State, ProjectJson.Utc(row.UpdatedAt))).ToArray();
+            row.Id, row.Name, row.State, ProjectJson.Utc(row.UpdatedAt))).ToArray();
         await tx.CommitAsync(ct);
         return ProjectJson.Page(list, total, actualPage, size);
     }
@@ -75,11 +72,11 @@ internal sealed class DashboardService
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
 
         await using var db = EfDb.Use(conn, tx);
-        var visibleGroups = await ProjectGroupAccessService.VisibleQueryAsync(db, current, ct);
-        var visibleProjects = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
-        var projectCount = (ulong)await visibleGroups.LongCountAsync(ct);
-        var activeProjectCount = (ulong)await visibleGroups.LongCountAsync(
-            group => group.Status == ProjectStatuses.InProgress, ct);
+        // Internal accounts can open every project, but the workbench counts and feeds only the ones they follow.
+        var visibleProjects = await ProjectAccessService.InboxQueryAsync(db, current, ct);
+        var projectCount = (ulong)await visibleProjects.LongCountAsync(ct);
+        var activeProjectCount = (ulong)await visibleProjects.LongCountAsync(
+            project => project.Status == ProjectStatuses.InProgress, ct);
         var pendingTasks = (ulong)await PendingTasks(db, current, visibleProjects).LongCountAsync(ct);
 
         var cutoff = await UnreadWindow.CutoffAsync(db, ct);
@@ -92,7 +89,7 @@ internal sealed class DashboardService
     }
 
     /// <summary>
-    /// In-progress subprojects waiting on the current user: for the responsible user, supplier material to
+    /// In-progress projects waiting on the current user: for the responsible user, supplier material to
     /// review (only they may approve it); for a supplier account, material that was returned or not yet sent.
     /// </summary>
     private static IQueryable<MaterialStateRow> PendingTasks(
@@ -140,7 +137,6 @@ internal sealed class DashboardService
         var details =
             from message in detailMessages
             join project in db.Projects on message.ProjectId equals project.Id
-            join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id
             join sender in db.Users on message.SenderId equals sender.Id
             select new MessageDetailRow
             {
@@ -148,7 +144,6 @@ internal sealed class DashboardService
                 Id = message.Id,
                 ProjectId = message.ProjectId,
                 ProjectName = project.Name,
-                ProjectGroupName = projectGroup.Name,
                 Content = message.Content,
                 SenderId = message.SenderId,
                 CreatedAt = message.CreatedAt,
@@ -178,7 +173,6 @@ internal sealed class DashboardService
                 Id = detail.Id,
                 ProjectId = detail.ProjectId,
                 ProjectName = detail == null ? null : detail.ProjectName,
-                ProjectGroupName = detail == null ? null : detail.ProjectGroupName,
                 Content = detail == null ? null : detail.Content,
                 SenderId = detail.SenderId,
                 CreatedAt = detail.CreatedAt,
@@ -188,7 +182,7 @@ internal sealed class DashboardService
             }).ToArrayAsync(ct);
         var aggregateCount = (ulong)rows[0].Count;
         var list = rows.Where(row => row.Id.HasValue).Select(row => new DashboardMessage(
-            row.Id!.Value, row.ProjectId!.Value, row.ProjectName!, row.ProjectGroupName!, MessagePreview(row.Content!, row.HasImages ?? false),
+            row.Id!.Value, row.ProjectId!.Value, row.ProjectName!, MessagePreview(row.Content!, row.HasImages ?? false),
             row.SenderName!, ProjectJson.Utc(row.CreatedAt!.Value),
             row.SenderId != userId && row.ReadByMe != true && row.CreatedAt >= cutoff)).ToArray();
         return new(aggregateCount, list);
@@ -211,7 +205,6 @@ internal sealed class DashboardService
         public ulong? Id { get; init; }
         public ulong? ProjectId { get; init; }
         public string ProjectName { get; init; } = string.Empty;
-        public string ProjectGroupName { get; init; } = string.Empty;
         public string Content { get; init; } = string.Empty;
         public ulong? SenderId { get; init; }
         public DateTime? CreatedAt { get; init; }
@@ -227,7 +220,6 @@ internal sealed class DashboardService
         public ulong? Id { get; init; }
         public ulong? ProjectId { get; init; }
         public string? ProjectName { get; init; }
-        public string? ProjectGroupName { get; init; }
         public string? Content { get; init; }
         public ulong? SenderId { get; init; }
         public DateTime? CreatedAt { get; init; }

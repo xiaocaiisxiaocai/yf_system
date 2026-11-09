@@ -802,6 +802,10 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
 
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("completed_at");
+
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime(3)")
@@ -867,10 +871,6 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("priority_id");
 
-                    b.Property<ulong>("ProjectGroupId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("project_group_id");
-
                     b.Property<ulong?>("ResponsibleUserId")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("responsible_user_id");
@@ -897,7 +897,7 @@ namespace Yf.Api.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(24)
                         .HasColumnType("varchar(24)")
-                        .HasDefaultValue("DRAFT")
+                        .HasDefaultValue("IN_PROGRESS")
                         .HasColumnName("status");
 
                     b.Property<ulong>("SupplierId")
@@ -941,9 +941,6 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("SupplierId")
                         .HasDatabaseName("idx_projects_supplier");
-
-                    b.HasIndex("ProjectGroupId", "Id")
-                        .HasDatabaseName("idx_projects_group");
 
                     b.ToTable("projects", (string)null);
 
@@ -1151,10 +1148,6 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("datetime(6)")
                         .HasColumnName("next_attempt_at");
 
-                    b.Property<ulong>("ProjectGroupId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("project_group_id");
-
                     b.Property<string>("RequestIp")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -1224,8 +1217,8 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.HasIndex("Status", "CreatedAt", "Id")
                         .HasDatabaseName("idx_project_copy_jobs_queue");
 
-                    b.HasIndex("ProjectGroupId", "RequestedBy", "Status", "CreatedAt", "Id")
-                        .HasDatabaseName("idx_project_copy_jobs_group_actor_status_time");
+                    b.HasIndex("RequestedBy", "Status", "CreatedAt", "Id")
+                        .HasDatabaseName("idx_project_copy_jobs_requester");
 
                     b.ToTable("project_copy_jobs", (string)null);
 
@@ -1326,142 +1319,11 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroup", b =>
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectRobotOwner", b =>
                 {
-                    b.Property<ulong>("Id")
-                        .ValueGeneratedOnAdd()
+                    b.Property<ulong>("ProjectId")
                         .HasColumnType("bigint unsigned")
-                        .HasColumnName("id");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("datetime(3)")
-                        .HasColumnName("completed_at");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime(3)")
-                        .HasColumnName("created_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
-
-                    b.Property<ulong>("CreatedBy")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("created_by");
-
-                    b.Property<string>("Description")
-                        .HasMaxLength(1024)
-                        .HasColumnType("varchar(1024)")
-                        .HasColumnName("description");
-
-                    b.Property<DateOnly?>("ExpectedCompletionDate")
-                        .HasColumnType("date")
-                        .HasColumnName("expected_completion_date");
-
-                    b.Property<string>("LegacyRobotModelName")
-                        .HasMaxLength(512)
-                        .HasColumnType("varchar(512)")
-                        .HasColumnName("legacy_robot_model_name");
-
-                    b.Property<string>("MachineModel")
-                        .HasMaxLength(128)
-                        .HasColumnType("varchar(128)")
-                        .HasColumnName("machine_model");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("varchar(128)")
-                        .HasColumnName("name");
-
-                    b.Property<ulong?>("PriorityId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("priority_id");
-
-                    b.Property<ulong?>("ResponsibleUserId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("responsible_user_id");
-
-                    b.Property<string>("RobotOwnerName")
-                        .HasMaxLength(512)
-                        .HasColumnType("varchar(512)")
-                        .HasColumnName("robot_owner_name");
-
-                    b.Property<ulong?>("RobotPartId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("robot_part_id");
-
-                    b.Property<ulong?>("RobotTypeId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("robot_type_id");
-
-                    b.Property<ulong?>("SectionId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("section_id");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(24)
-                        .HasColumnType("varchar(24)")
-                        .HasDefaultValue("DRAFT")
-                        .HasColumnName("status");
-
-                    b.Property<ulong>("SupplierId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("supplier_id");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("datetime(3)")
-                        .HasColumnName("updated_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CreatedBy")
-                        .HasDatabaseName("fk_project_groups_created_by");
-
-                    b.HasIndex("ExpectedCompletionDate")
-                        .HasDatabaseName("idx_project_groups_expected_completion");
-
-                    b.HasIndex("Name")
-                        .IsUnique()
-                        .HasDatabaseName("uk_project_groups_name");
-
-                    b.HasIndex("PriorityId")
-                        .HasDatabaseName("fk_project_groups_priority");
-
-                    b.HasIndex("ResponsibleUserId")
-                        .HasDatabaseName("idx_project_groups_responsible_user");
-
-                    b.HasIndex("RobotPartId")
-                        .HasDatabaseName("idx_project_groups_robot_part");
-
-                    b.HasIndex("RobotTypeId")
-                        .HasDatabaseName("fk_project_groups_robot_type");
-
-                    b.HasIndex("SectionId")
-                        .HasDatabaseName("fk_project_groups_section");
-
-                    b.HasIndex("Status")
-                        .HasDatabaseName("idx_project_groups_status");
-
-                    b.HasIndex("SupplierId")
-                        .HasDatabaseName("idx_project_groups_supplier");
-
-                    b.ToTable("project_groups", (string)null);
-
-                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
-                });
-
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupRobotOwner", b =>
-                {
-                    b.Property<ulong>("ProjectGroupId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("project_group_id");
+                        .HasColumnName("project_id");
 
                     b.Property<ulong>("ContactId")
                         .HasColumnType("bigint unsigned")
@@ -1473,115 +1335,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDefaultValue(0)
                         .HasColumnName("sort_no");
 
-                    b.HasKey("ProjectGroupId", "ContactId");
+                    b.HasKey("ProjectId", "ContactId");
 
                     b.HasIndex("ContactId")
-                        .HasDatabaseName("idx_project_group_robot_owners_contact");
+                        .HasDatabaseName("idx_project_robot_owners_contact");
 
-                    b.ToTable("project_group_robot_owners", (string)null);
-
-                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
-                });
-
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupStatusLog", b =>
-                {
-                    b.Property<ulong>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("id");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
-
-                    b.Property<string>("Action")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("varchar(32)")
-                        .HasColumnName("action");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(3)")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("FromStatus")
-                        .HasMaxLength(24)
-                        .HasColumnType("varchar(24)")
-                        .HasColumnName("from_status");
-
-                    b.Property<ulong>("OperatorId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("operator_id");
-
-                    b.Property<ulong>("ProjectGroupId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("project_group_id");
-
-                    b.Property<string>("ToStatus")
-                        .IsRequired()
-                        .HasMaxLength(24)
-                        .HasColumnType("varchar(24)")
-                        .HasColumnName("to_status");
-
-                    b.Property<ulong?>("TriggerProjectId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("trigger_project_id");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OperatorId")
-                        .HasDatabaseName("idx_project_group_status_logs_operator");
-
-                    b.HasIndex("TriggerProjectId")
-                        .HasDatabaseName("idx_project_group_status_logs_project");
-
-                    b.HasIndex("ProjectGroupId", "CreatedAt", "Id")
-                        .HasDatabaseName("idx_project_group_status_logs_group_time");
-
-                    b.ToTable("project_group_status_logs", (string)null);
-
-                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
-                });
-
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupWorkOrder", b =>
-                {
-                    b.Property<ulong>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("id");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime(3)")
-                        .HasColumnName("created_at")
-                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
-
-                    b.Property<ulong>("ProjectGroupId")
-                        .HasColumnType("bigint unsigned")
-                        .HasColumnName("project_group_id");
-
-                    b.Property<int>("SortNo")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(0)
-                        .HasColumnName("sort_no");
-
-                    b.Property<string>("WorkOrderNo")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("varchar(128)")
-                        .HasColumnName("work_order_no");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ProjectGroupId", "WorkOrderNo")
-                        .IsUnique()
-                        .HasDatabaseName("uk_project_group_work_orders_group_no");
-
-                    b.HasIndex("ProjectGroupId", "SortNo", "Id")
-                        .HasDatabaseName("idx_project_group_work_orders_group_sort");
-
-                    b.ToTable("project_group_work_orders", (string)null);
+                    b.ToTable("project_robot_owners", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
@@ -4106,13 +3865,6 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_projects_priority");
 
-                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectGroup", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectGroupId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_projects_group");
-
                     b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("ResponsibleUserId")
@@ -4181,13 +3933,6 @@ namespace Yf.Api.Infrastructure.Migrations
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectCopyJob", b =>
                 {
-                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectGroup", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectGroupId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_project_copy_jobs_group");
-
                     b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
                         .WithMany()
                         .HasForeignKey("RequestedBy")
@@ -4224,101 +3969,21 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasConstraintName("fk_project_dictionaries_parent");
                 });
 
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroup", b =>
-                {
-                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
-                        .WithMany()
-                        .HasForeignKey("CreatedBy")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_project_groups_created_by");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectDictionary", null)
-                        .WithMany()
-                        .HasForeignKey("PriorityId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_project_groups_priority");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
-                        .WithMany()
-                        .HasForeignKey("ResponsibleUserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_project_groups_responsible_user");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.RobotPart", null)
-                        .WithMany()
-                        .HasForeignKey("RobotPartId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_project_groups_robot_part");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectDictionary", null)
-                        .WithMany()
-                        .HasForeignKey("RobotTypeId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_project_groups_robot_type");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.Department", null)
-                        .WithMany()
-                        .HasForeignKey("SectionId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .HasConstraintName("fk_project_groups_section");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.Supplier", null)
-                        .WithMany()
-                        .HasForeignKey("SupplierId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_project_groups_supplier");
-                });
-
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupRobotOwner", b =>
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectRobotOwner", b =>
                 {
                     b.HasOne("Yf.Api.Infrastructure.Entities.SupplierContact", null)
                         .WithMany()
                         .HasForeignKey("ContactId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
-                        .HasConstraintName("fk_project_group_robot_owners_contact");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectGroup", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_project_group_robot_owners_group");
-                });
-
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupStatusLog", b =>
-                {
-                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
-                        .WithMany()
-                        .HasForeignKey("OperatorId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired()
-                        .HasConstraintName("fk_project_group_status_logs_operator");
-
-                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectGroup", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectGroupId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_project_group_status_logs_group");
+                        .HasConstraintName("fk_project_robot_owners_contact");
 
                     b.HasOne("Yf.Api.Infrastructure.Entities.Project", null)
                         .WithMany()
-                        .HasForeignKey("TriggerProjectId")
-                        .OnDelete(DeleteBehavior.SetNull)
-                        .HasConstraintName("fk_project_group_status_logs_project");
-                });
-
-            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectGroupWorkOrder", b =>
-                {
-                    b.HasOne("Yf.Api.Infrastructure.Entities.ProjectGroup", null)
-                        .WithMany()
-                        .HasForeignKey("ProjectGroupId")
+                        .HasForeignKey("ProjectId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
-                        .HasConstraintName("fk_project_group_work_orders_group");
+                        .HasConstraintName("fk_project_robot_owners_project");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.ProjectStatusLog", b =>

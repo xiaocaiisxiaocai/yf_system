@@ -170,8 +170,8 @@ public sealed class SupplierWithdrawalTests
         await database.InitializeAsync(ct);
         await database.SeedAsync(Fixture + """
             UPDATE projects SET status='IN_PROGRESS' WHERE id=1002;
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-            VALUES(1003,5001,'再次复制子项目',100,'IN_PROGRESS',1,101);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+            VALUES(1003,'再次复制项目',100,'IN_PROGRESS',1,1);
             INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status,created_at)
             VALUES
                 (3101,1002,201,'S2C','old-source.step','old-source','step',4,'unused','AVAILABLE',UTC_TIMESTAMP(6)-INTERVAL 1 DAY),
@@ -324,10 +324,8 @@ public sealed class SupplierWithdrawalTests
             (201,'wd-supplier','unused','供应商账号','','SUPPLIER',100,'ACTIVE',0),
             (202,'wd-supplier-peer','unused','供应商另一账号','','SUPPLIER',100,'ACTIVE',0);
         INSERT INTO user_roles(user_id,role_id) VALUES(101,9001),(201,9002),(202,9002);
-        INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id)
-        VALUES(5001,'撤回主项目',100,'IN_PROGRESS',1,101);
-        INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-        VALUES(1001,5001,'撤回子项目',100,'IN_PROGRESS',1,101),(1002,5001,'已完成子项目',100,'COMPLETED',1,101);
+        INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+        VALUES(1001,'撤回项目',100,'IN_PROGRESS',1,1),(1002,'已完成项目',100,'COMPLETED',1,1);
 
         """;
 

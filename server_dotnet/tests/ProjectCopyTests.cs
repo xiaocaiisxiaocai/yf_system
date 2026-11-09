@@ -27,7 +27,7 @@ public sealed class ProjectCopyTests
 
         var publisher = new RecordingPublisher();
         var audit = new AuditService([]);
-        var projects = new ProjectService(audit, database.Options, new ProjectGroupStatusService(audit), publisher);
+        var projects = new ProjectService(audit, database.Options, publisher);
         await using var conn = await database.Database.OpenAsync(ct);
         await projects.DeleteAsync(conn, new CurrentUser(1, "admin", "INTERNAL", null), 7102, null, ct);
 
@@ -43,16 +43,13 @@ public sealed class ProjectCopyTests
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task CompletedSourceCopyUsesCurrentMainDataAndIgnoresRealtimeFailureAfterCommit()
+    public async Task CompletedSourceCopyStartsWithTheSourceDataAndIgnoresRealtimeFailureAfterCommit()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_copy_snapshot", ct);
         await database.InitializeBusinessFixtureAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await database.ExecuteAsync(SeedSql + """
-            UPDATE project_groups
-            SET status='IN_PROGRESS',machine_model='主项目当前机型',expected_completion_date='2027-02-01',updated_at=UTC_TIMESTAMP(3)
-            WHERE id=7111;
             UPDATE projects
             SET status='COMPLETED',machine_model='已完成快照机型',expected_completion_date='2026-01-01',updated_at=UTC_TIMESTAMP(3)
             WHERE id=7101;
@@ -66,7 +63,7 @@ public sealed class ProjectCopyTests
             var publisher = new ThrowingPublisher();
             var audit = new AuditService([]);
             var service = new ProjectCopyService(database.Database, new AppOptions { StorageRoot = storage }, audit,
-                publisher, new ProjectGroupStatusService(audit));
+                publisher);
             await using var conn = await database.Database.OpenAsync(ct);
 
             using var result = Json(await service.CopyAsync(conn,
@@ -76,12 +73,16 @@ public sealed class ProjectCopyTests
             var target = await conn.QuerySingleAsync<CopiedProject>(new CommandDefinition("""
                 SELECT machine_model AS MachineModel,expected_completion_date AS ExpectedCompletionDate,
                        (SELECT GROUP_CONCAT(work_order_no ORDER BY sort_no,id)
-                        FROM project_work_orders WHERE project_id=p.id) AS WorkOrders
+                        FROM project_work_orders WHERE project_id=p.id) AS WorkOrders,
+                       status AS Status,responsible_user_id AS ResponsibleUserId
                 FROM projects p WHERE id=@TargetId
                 """, new { TargetId = targetId }, cancellationToken: ct));
-            Assert.Equal("主项目当前机型", target.MachineModel);
-            Assert.Equal(new DateTime(2027, 2, 1), target.ExpectedCompletionDate);
-            Assert.Equal("WO-COPY", target.WorkOrders);
+            // The copy is a new project of the caller that starts at once with the source's current data.
+            Assert.Equal("已完成快照机型", target.MachineModel);
+            Assert.Equal(new DateTime(2026, 1, 1), target.ExpectedCompletionDate);
+            Assert.Equal("WO-FROZEN", target.WorkOrders);
+            Assert.Equal("IN_PROGRESS", target.Status);
+            Assert.Equal(1UL, target.ResponsibleUserId);
             Assert.Equal(2, publisher.ProjectIds.Count);
             Assert.Contains(7101UL, publisher.ProjectIds);
             Assert.Contains(targetId, publisher.ProjectIds);
@@ -123,8 +124,7 @@ public sealed class ProjectCopyTests
             var options = new AppOptions { StorageRoot = storage };
             var publisher = new RecordingPublisher();
             var audit = new AuditService([]);
-            var groupStatus = new ProjectGroupStatusService(audit);
-            var service = new ProjectCopyService(database.Database, options, audit, publisher, groupStatus);
+            var service = new ProjectCopyService(database.Database, options, audit, publisher);
             var actor = new CurrentUser(1, "admin", "INTERNAL", null);
             await using var conn = await database.Database.OpenAsync(ct);
             // Make the database default deliberately non-UTC. The copy path must explicitly use
@@ -138,7 +138,10 @@ public sealed class ProjectCopyTests
             var copyId = result.RootElement.GetProperty("copy").GetProperty("copyId").GetUInt64();
             Assert.Equal(1, result.RootElement.GetProperty("copy").GetProperty("fileCount").GetInt32());
             Assert.Equal((ulong)bytes.Length, result.RootElement.GetProperty("copy").GetProperty("totalBytes").GetUInt64());
-            Assert.Equal("DRAFT", result.RootElement.GetProperty("project").GetProperty("status").GetString());
+            Assert.Equal("IN_PROGRESS", result.RootElement.GetProperty("project").GetProperty("status").GetString());
+            Assert.True(result.RootElement.GetProperty("project").GetProperty("canManage").GetBoolean());
+            // The copied supplier file is not this round's material.
+            Assert.Equal("NO_MATERIAL", result.RootElement.GetProperty("project").GetProperty("materialReviewStatus").GetString());
             Assert.True(result.RootElement.GetProperty("project").GetProperty("hasCopyHistory").GetBoolean());
 
             var copied = await conn.QuerySingleAsync<CopiedFile>(new CommandDefinition(
@@ -166,7 +169,7 @@ public sealed class ProjectCopyTests
                 copied.StoragePath.Replace('/', Path.DirectorySeparatorChar)), ct));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM messages WHERE project_id=@TargetId", new { TargetId = targetId }, cancellationToken: ct)));
-            Assert.Equal(["COPY"], (await conn.QueryAsync<string>(new CommandDefinition(
+            Assert.Equal(["START"], (await conn.QueryAsync<string>(new CommandDefinition(
                 "SELECT action FROM project_status_logs WHERE project_id=@TargetId", new { TargetId = targetId }, cancellationToken: ct))).ToArray());
             Assert.Equal(2, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
                 "SELECT COUNT(*) FROM project_activities WHERE source_key LIKE @Key", new { Key = $"project-copy:{copyId}:%" }, cancellationToken: ct)));
@@ -185,7 +188,7 @@ public sealed class ProjectCopyTests
                 Assert.Equal(copied.Id, mappings.RootElement.GetProperty("list")[0].GetProperty("targetFileId").GetUInt64());
             }
 
-            var projects = new ProjectService(audit, options, groupStatus);
+            var projects = new ProjectService(audit, options);
             // The source is protected while its copy exists; deleting the copy itself is covered separately.
             Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
                 projects.DeleteAsync(conn, actor, 7101, null, ct))).Status);
@@ -201,16 +204,15 @@ public sealed class ProjectCopyTests
             await conn.ExecuteAsync(new CommandDefinition(
                 "UPDATE projects SET responsible_user_id=2,updated_at=UTC_TIMESTAMP(3) WHERE id=@TargetId",
                 new { TargetId = targetId }, cancellationToken: ct));
-            var owner = new CurrentUser(1, "admin", "INTERNAL", null);
-            // Admin has view-all, so a limited actor is introduced below to prove filtering.
-            var limited = new CurrentUser(3, "copy-owner", "INTERNAL", null);
-            using (var filtered = Json(await service.HistoryAsync(conn, limited, 7101, ct)))
+            // Every internal account sees every project, so a colleague who owns neither side still sees the relation.
+            var colleague = new CurrentUser(3, "copy-owner", "INTERNAL", null);
+            using (var visible = Json(await service.HistoryAsync(conn, colleague, 7101, ct)))
             {
-                Assert.Empty(filtered.RootElement.GetProperty("copies").EnumerateArray());
-                Assert.True(filtered.RootElement.GetProperty("hasRestrictedRelations").GetBoolean());
+                Assert.Equal(1, visible.RootElement.GetProperty("copies").GetArrayLength());
+                Assert.False(visible.RootElement.GetProperty("hasRestrictedRelations").GetBoolean());
             }
-            Assert.Equal(404, (await Assert.ThrowsAsync<ApiException>(() =>
-                service.FileHistoryAsync(conn, limited, copyId, 1, 20, ct))).Status);
+            using (var colleagueMappings = Json(await service.FileHistoryAsync(conn, colleague, copyId, 1, 20, ct)))
+                Assert.Equal(1, colleagueMappings.RootElement.GetProperty("total").GetInt32());
 
             var beforeFiles = Directory.EnumerateFiles(storage, "*", SearchOption.AllDirectories).Count();
             await conn.ExecuteAsync(new CommandDefinition(
@@ -301,9 +303,8 @@ public sealed class ProjectCopyTests
 
             var options = new AppOptions { StorageRoot = storage };
             var audit = new AuditService([]);
-            var groupStatus = new ProjectGroupStatusService(audit);
-            var copies = new ProjectCopyService(database.Database, options, audit, new RecordingPublisher(), groupStatus);
-            var projects = new ProjectService(audit, options, groupStatus);
+            var copies = new ProjectCopyService(database.Database, options, audit, new RecordingPublisher());
+            var projects = new ProjectService(audit, options);
             var actor = new CurrentUser(1, "admin", "INTERNAL", null);
             await using var conn = await database.Database.OpenAsync(ct);
             async Task<ulong> CopyAsync(ulong sourceId, string name)
@@ -316,13 +317,17 @@ public sealed class ProjectCopyTests
 
             var copyId = await CopyAsync(7101, "副本");
             var nestedId = await CopyAsync(copyId, "副本的副本");
+            // Copies start at once; only a terminated project can be deleted.
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE projects SET status='TERMINATED' WHERE id IN (@CopyId,@NestedId)",
+                new { CopyId = copyId, NestedId = nestedId }, cancellationToken: ct));
             var blobId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
                 "SELECT blob_id FROM files WHERE id=8101", cancellationToken: ct));
 
             // A copy that has itself been copied is a source: it stays until its own copy is gone.
             var nestedSource = await Assert.ThrowsAsync<ApiException>(() => projects.DeleteAsync(conn, actor, copyId, null, ct));
             Assert.Equal(409, nestedSource.Status);
-            Assert.Equal("该子项目已被复制出副本，请先删除副本", nestedSource.Message);
+            Assert.Equal("该项目已被复制出副本，请先删除副本", nestedSource.Message);
             await projects.DeleteAsync(conn, actor, nestedId, null, ct);
 
             // Content added after the copy (a soft-deleted upload, a message, an abandoned upload) is deleted with
@@ -374,6 +379,8 @@ public sealed class ProjectCopyTests
             await conn.OpenAsync(ct);
             Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM files WHERE id=8101 AND status='PURGED' AND blob_id IS NULL"));
             Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM file_blobs WHERE id=@BlobId AND state='READY'", new { BlobId = blobId }));
+            await conn.ExecuteAsync(new CommandDefinition(
+                "UPDATE projects SET status='TERMINATED' WHERE id=@Id", new { Id = lastCopyId }, cancellationToken: ct));
             await projects.DeleteAsync(conn, actor, lastCopyId, null, ct);
             Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM file_blobs WHERE id=@BlobId AND state='GC_PENDING'", new { BlobId = blobId }));
             Assert.Equal(1, await CountAsync("SELECT COUNT(*) FROM files WHERE id=8101 AND status='PURGED'"));
@@ -414,13 +421,9 @@ public sealed class ProjectCopyTests
         INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
         VALUES(6203,'PRIORITY','复制优先级',NULL,1,'ACTIVE'),
               (1006203,'ROBOT_TYPE','复制优先级-Robot类型',NULL,1,'ACTIVE');
-        INSERT INTO project_groups(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
-        VALUES(7111,'复制主项目一','复制来源',6101,'DRAFT',1,'M1',6202,3,7001,6203,1006203,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (7112,'复制主项目二','无文件复制来源',6101,'DRAFT',1,'M1',6202,3,7001,6203,1006203,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-        INSERT INTO projects(id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
-        VALUES(7101,7111,'源项目','复制来源',6101,'DRAFT',1,'M1',6202,3,7001,6203,1006203,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (7102,7112,'空源项目','无文件复制来源',6101,'DRAFT',1,'M1',6202,3,7001,6203,1006203,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-        INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no) VALUES(7111,'WO-COPY',0),(7112,'WO-EMPTY',0);
+        INSERT INTO projects(id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
+        VALUES(7101,'源项目','复制来源',6101,'TERMINATED',1,'M1',6202,3,7001,6203,1006203,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (7102,'空源项目','无文件复制来源',6101,'TERMINATED',1,'M1',6202,3,7001,6203,1006203,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no) VALUES(7101,'WO-COPY',0),(7102,'WO-EMPTY',0);
         """;
 
@@ -437,6 +440,8 @@ public sealed class ProjectCopyTests
         public string MachineModel { get; init; } = "";
         public DateTime ExpectedCompletionDate { get; init; }
         public string WorkOrders { get; init; } = "";
+        public string Status { get; init; } = "";
+        public ulong ResponsibleUserId { get; init; }
     }
     private sealed class RecordingPublisher : IProjectRealtimePublisher
     {

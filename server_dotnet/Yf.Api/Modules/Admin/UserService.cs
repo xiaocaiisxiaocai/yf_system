@@ -270,10 +270,10 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     {
         if (await context.Departments.AnyAsync(x => x.LeaderAccountId == id, ct))
             throw ApiException.BadRequest("该账号仍是组织主管，请先清除或转交主管后再删除");
-        if (await context.ProjectGroups.AnyAsync(x => x.ResponsibleUserId == id, ct) || await context.Projects.AnyAsync(x => x.ResponsibleUserId == id, ct))
-            throw ApiException.BadRequest("该账号仍是主项目或子项目负责人，请先结束相关项目");
-        if (await context.ProjectGroups.AnyAsync(x => x.CreatedBy == id, ct) || await context.ProjectGroupStatusLogs.AnyAsync(x => x.OperatorId == id, ct))
-            throw ApiException.BadRequest("该账号仍被主项目创建记录或状态历史引用，请禁用账号并保留历史记录");
+        if (await context.Projects.AnyAsync(x => x.ResponsibleUserId == id, ct))
+            throw ApiException.BadRequest("该账号仍是项目负责人，请先结束相关项目");
+        if (await context.Projects.AnyAsync(x => x.CreatedBy == id, ct) || await context.ProjectStatusLogs.AnyAsync(x => x.OperatorId == id, ct))
+            throw ApiException.BadRequest("该账号仍被项目创建记录或状态历史引用，请禁用账号并保留历史记录");
         var hasHistory = await context.Files.AnyAsync(x => x.UploaderId == id, ct)
             || await context.Messages.AnyAsync(x => x.SenderId == id || x.DeletedBy == id, ct)
             || await context.UploadSessions.AnyAsync(x => x.UploaderId == id, ct)
@@ -322,19 +322,17 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
 
     internal static async Task EnsureNoActiveProjectResponsibilityAsync(YfDbContext context, ulong id, CancellationToken ct)
     {
-        var active = new[] { "DRAFT", "IN_PROGRESS" };
-        var count = await context.ProjectGroups.LongCountAsync(x => x.ResponsibleUserId == id && Enumerable.Contains(active, x.Status), ct);
-        if (count > 0) throw ApiException.BadRequest($"该用户仍负责 {count} 个未结束主项目，请先结束相关项目");
+        var count = await context.Projects.LongCountAsync(x => x.ResponsibleUserId == id && x.Status == "IN_PROGRESS", ct);
+        if (count > 0) throw ApiException.BadRequest($"该用户仍负责 {count} 个未结束项目，请先结束相关项目");
     }
 
     private static async Task EnsureNoActiveProjectResponsibilityWithSectionAsync(
         YfDbContext context, ulong id, CancellationToken ct)
     {
-        var active = new[] { "DRAFT", "IN_PROGRESS" };
-        var count = await context.ProjectGroups.LongCountAsync(x => x.ResponsibleUserId == id
-            && x.SectionId != null && Enumerable.Contains(active, x.Status), ct);
+        var count = await context.Projects.LongCountAsync(x => x.ResponsibleUserId == id
+            && x.SectionId != null && x.Status == "IN_PROGRESS", ct);
         if (count > 0)
-            throw ApiException.BadRequest($"该用户仍负责 {count} 个带课别的未结束主项目，请先结束相关项目");
+            throw ApiException.BadRequest($"该用户仍负责 {count} 个带课别的未结束项目，请先结束相关项目");
     }
 
     private static Task<bool> RoleHasPermissionAsync(YfDbContext context, ulong roleId, string permission, CancellationToken ct) =>

@@ -269,8 +269,6 @@ public sealed partial class UploadService(
         var project = await ProjectAccessService.RequireViewAsync(conn, tx, current, projectId, ct);
         await using var ef = EfDb.Use(conn, tx);
         var canUpload = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:upload", ct);
-        var canDelete = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:delete", ct);
-        var canStatus = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:status", ct);
         var dbNow = await DbNowAsync(ef, ct);
         var rows = await (
             from session in ef.UploadSessions
@@ -315,10 +313,11 @@ public sealed partial class UploadService(
                 ProjectJson.Utc(row.ExpiresAt),
                 current.Id == row.UploaderId
                     && canUpload
+                    && (!current.IsInternal || project.ResponsibleUserId == current.Id)
                     && project.Status == ProjectStatuses.InProgress
                     && row.Status == ProjectUploadSessionStatuses.Uploading,
                 UploadActivity.CanAbort(
-                    current, project.Status, canUpload, canDelete, canStatus,
+                    current, project.Status, canUpload,
                     row.UploaderId, row.UploaderUserType, row.UploaderSupplierId, project.ResponsibleUserId == current.Id)));
         }
         return new ProjectUploadSessionListResponse(blocking.Length, items);
@@ -365,14 +364,12 @@ public sealed partial class UploadService(
             await using (var ef = EfDb.Use(conn, tx))
             {
                 var canUpload = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:upload", ct);
-                var canDelete = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "file:delete", ct);
-                var canStatus = await ProjectAccessService.HasPermissionAsync(ef, current.Id, "project:status", ct);
                 var uploader = await ef.Users.AsNoTracking()
                     .Where(user => user.Id == session.UploaderId)
                     .Select(user => new { user.UserType, user.SupplierId })
                     .SingleAsync(ct);
                 if (!UploadActivity.CanAbort(
-                        current, project.Status, canUpload, canDelete, canStatus,
+                        current, project.Status, canUpload,
                         session.UploaderId, uploader.UserType, uploader.SupplierId, project.ResponsibleUserId == current.Id))
                     throw ApiException.Forbidden();
                 if (session.Status == "COMPLETED") throw ApiException.Conflict("会话已完成，不可放弃");
@@ -480,7 +477,7 @@ public sealed partial class UploadService(
         ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024L * 1024 * 1024)} GiB")
         : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024 * 1024):0.##} GiB");
 
-    // 公司发给供应商的其它文件（非 Excel/STEP/压缩文件），需要本子项目已有可用的 C2S 动作流程 Excel 与 3D 资料
+    // 公司发给供应商的其它文件（非 Excel/STEP/压缩文件），需要本项目已有可用的 C2S 动作流程 Excel 与 3D 资料
     // （STEP 或压缩文件）。新建会话时（includeActiveSessions）内部账号正在上传/合并的这两类会话也计入，支持同一
     // 批次并发上传（必需资料的会话先创建即可）；合并写入时只认已合并、未删除的文件，因为进行中的会话随后可能被
     // 取消或过期。恢复已有会话不重复校验。

@@ -157,8 +157,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
                 .Select(parent => parent.Name).FirstOrDefault(),
             SortNo = item.SortNo,
             Status = item.Status,
-            ProjectInUse = db.Projects.Any(project => project.PriorityId == item.Id || project.RobotTypeId == item.Id)
-                || db.ProjectGroups.Any(group => group.PriorityId == item.Id || group.RobotTypeId == item.Id),
+            ProjectInUse = db.Projects.Any(project => project.PriorityId == item.Id || project.RobotTypeId == item.Id),
         });
 
     private static async Task<DictionaryRow?> FindAsync(

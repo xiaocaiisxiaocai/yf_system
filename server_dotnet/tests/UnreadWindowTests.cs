@@ -18,9 +18,8 @@ public sealed class UnreadWindowTests
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
               VALUES(2,'author','x','作者','','INTERNAL','ACTIVE',0);
             INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'S','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id) VALUES(1,'窗口主项目',100,'IN_PROGRESS',1,1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-              VALUES(1,1,'窗口子项目',100,'IN_PROGRESS',1,1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+              VALUES(1,'窗口子项目',100,'IN_PROGRESS',1,1);
             INSERT INTO messages(id,project_id,sender_id,content,status,created_at) VALUES
               (1,1,2,'四十天前未读','NORMAL',DATE_SUB(UTC_TIMESTAMP(),INTERVAL 40 DAY)),
               (2,1,2,'一天前未读','NORMAL',DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 DAY));
@@ -45,11 +44,9 @@ public sealed class UnreadWindowTests
         Assert.Equal([2UL], all.List.Select(message => message.Id));
 
         Assert.Equal(1UL, await MessageService.UnreadCountAsync(conn, null, 1, 1, ct));
-        var groups = new ProjectGroupService(new AuditService([]), null!);
-        Assert.Equal(1UL, Assert.Single((await groups.ListAsync(conn, admin, 1, 20, null, null, null, null, false, ct)).List).UnreadMessages);
-        var detail = await groups.DetailAsync(conn, admin, 1, ct);
-        Assert.Equal(1UL, detail.Group.UnreadMessages);
-        Assert.Equal(1UL, Assert.Single(detail.Projects).UnreadMessages);
+        var projects = new ProjectService(new AuditService([]), new AppOptions());
+        Assert.Equal(1UL, Assert.Single((await projects.ListAsync(conn, admin, 1, 20, null, null, null, null, false, false, ct)).List).UnreadMessages);
+        Assert.Equal(1UL, (await projects.DetailAsync(conn, admin, 1, ct)).UnreadMessages);
 
         var collaboration = new CollaborationService();
         Assert.Equal(1UL, (await collaboration.SummaryAsync(conn, admin, ct)).UnreadCount);
@@ -99,10 +96,8 @@ public sealed class UnreadWindowTests
                 (21,'owner-list','x','只读负责人','','INTERNAL',NULL,'ACTIVE',0),
                 (30,'supplier-user','x','供应商','','SUPPLIER',100,'ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(20,9101),(21,9102),(30,9102);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id) VALUES
-                (1,'G1',100,'IN_PROGRESS',1,20),(2,'G2',100,'IN_PROGRESS',1,21),(3,'G3',200,'IN_PROGRESS',1,1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id) VALUES
-                (1,1,'P1',100,'IN_PROGRESS',1,20),(2,2,'P2',100,'IN_PROGRESS',1,21),(3,3,'P3',200,'IN_PROGRESS',1,1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id) VALUES
+                (1,'P1',100,'IN_PROGRESS',1,20),(2,'P2',100,'IN_PROGRESS',1,21),(3,'P3',200,'IN_PROGRESS',1,1);
             INSERT INTO project_activities(id,project_id,activity_type,action,actor_id,actor_name,occurred_at,title,source_key) VALUES
                 {string.Join(",", activities)};
             INSERT INTO collaboration_reads(activity_id,user_id,read_at) VALUES(11,20,UTC_TIMESTAMP(3)),(12,30,UTC_TIMESTAMP(3));
@@ -112,7 +107,8 @@ public sealed class UnreadWindowTests
         var collaboration = new CollaborationService();
         foreach (var (actor, expected) in new[]
         {
-            (new CurrentUser(1, "admin", "INTERNAL", null), 10UL),
+            // Internal accounts follow only the projects they are responsible for (the admin owns P3).
+            (new CurrentUser(1, "admin", "INTERNAL", null), 3UL),
             (new CurrentUser(20, "owner-confirm", "INTERNAL", null), 2UL),
             (new CurrentUser(21, "owner-list", "INTERNAL", null), 3UL),
             (new CurrentUser(30, "supplier-user", "SUPPLIER", 100), 5UL),
@@ -143,9 +139,8 @@ public sealed class UnreadWindowTests
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
               VALUES(2,'author','x','作者','','INTERNAL','ACTIVE',0);
             INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'S','ACTIVE',1);
-            INSERT INTO project_groups(id,name,supplier_id,status,created_by,responsible_user_id) VALUES(1,'通知主项目',100,'IN_PROGRESS',1,1);
-            INSERT INTO projects(id,project_group_id,name,supplier_id,status,created_by,responsible_user_id)
-              VALUES(1,1,'通知子项目',100,'IN_PROGRESS',1,1);
+            INSERT INTO projects(id,name,supplier_id,status,created_by,responsible_user_id)
+              VALUES(1,'通知子项目',100,'IN_PROGRESS',1,1);
             INSERT INTO messages(id,project_id,sender_id,content,status,created_at) VALUES
               (1,1,2,'将被阅读','NORMAL',UTC_TIMESTAMP()),
               (2,1,2,'保持未读','NORMAL',UTC_TIMESTAMP()),

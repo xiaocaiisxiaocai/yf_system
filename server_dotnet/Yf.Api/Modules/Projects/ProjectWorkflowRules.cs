@@ -7,26 +7,25 @@ internal static class ProjectWorkflowRules
     internal static (string To, string Action) ManagementTransition(string from, string requested) =>
         (from, requested) switch
         {
-            (ProjectStatuses.Draft, ProjectStatuses.InProgress) => (ProjectStatuses.InProgress, "START"),
             (ProjectStatuses.Terminated, ProjectStatuses.InProgress) => (ProjectStatuses.InProgress, "RESTART"),
             (ProjectStatuses.InProgress, ProjectStatuses.Terminated) => (ProjectStatuses.Terminated, "TERMINATE"),
             (_, ProjectStatuses.InProgress or ProjectStatuses.Terminated) =>
                 throw ApiException.Conflict($"项目当前状态 {from} 不允许执行该管理动作"),
-            _ => throw ApiException.BadRequest("仅允许开始、终止或重新开始项目"),
+            _ => throw ApiException.BadRequest("仅允许终止或重新开始项目"),
         };
 
     internal static void EnsureDeletable(string status)
     {
-        if (status is not (ProjectStatuses.Draft or ProjectStatuses.Terminated))
+        if (status != ProjectStatuses.Terminated)
         {
-            throw ApiException.BadRequest("仅草稿或已终止项目可以删除");
+            throw ApiException.BadRequest("仅已终止项目可以删除");
         }
     }
 
     /// <summary>
     /// A stored return only counts while it covers the latest available supplier file, so a new supplier
     /// upload (or removal of the returned file) sends the material back to PENDING without extra writes.
-    /// Approval completes the subproject, so it never appears as an in-progress review state.
+    /// Approval completes the project, so it never appears as an in-progress review state.
     /// </summary>
     internal static string? EffectiveMaterialReview(ProjectRow row) =>
         EffectiveMaterialReview(row.Status, row.MaterialReviewStatus, row.MaterialReviewFileId, row.LatestSupplierFileId);

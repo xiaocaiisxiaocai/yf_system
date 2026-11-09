@@ -15,7 +15,6 @@ namespace Yf.Api.Tests;
 public sealed class OwnerAccessTests
 {
     private const ulong ProjectId = 10_001;
-    private const ulong ProjectGroupId = 11_001;
     private const ulong OwnerlessProjectId = 10_002;
     private const ulong CreatorId = 9_101;
     private const ulong OldMemberId = 9_102;
@@ -27,7 +26,7 @@ public sealed class OwnerAccessTests
     private const ulong OtherSupplierUserId = 9_202;
 
     [Fact(Timeout = 120_000)]
-    public async Task ResponsibleUserAndMainProjectCreatorScopeAccessAndCreationAssignsCreator()
+    public async Task EveryInternalAccountSeesEveryProjectWhileOnlyTheResponsibleUserChangesIt()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
@@ -35,54 +34,45 @@ public sealed class OwnerAccessTests
         await database.SeedAsync(SeedSql, ct);
 
         var creator = Internal(CreatorId, "owner-creator");
-        var oldMember = Internal(OldMemberId, "owner-old-member");
+        var colleague = Internal(OldMemberId, "owner-old-member");
         var oldOwner = Internal(OldOwnerId, "owner-old");
         var newOwner = Internal(NewOwnerId, "owner-new");
-        var viewAll = Internal(ViewAllId, "owner-view-all");
         var ownerWithoutList = Internal(NoPermissionOwnerId, "owner-no-permission");
         var matchingSupplier = new CurrentUser(SupplierUserId, "owner-supplier", "SUPPLIER", 8_001);
         var otherSupplier = new CurrentUser(OtherSupplierUserId, "owner-other-supplier", "SUPPLIER", 8_002);
         var audit = new AuditService([]);
-        var groupStatus = new ProjectGroupStatusService(audit);
-        var groups = new ProjectGroupService(audit, groupStatus);
-        var projects = new ProjectService(audit, database.Options, groupStatus);
+        var projects = new ProjectService(audit, database.Options);
         var users = new UserService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), audit);
         var roles = new RoleService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), audit);
         var admin = Internal(1, "admin");
 
         await using var conn = await database.Database.OpenAsync(ct);
         Assert.Equal(OldOwnerId, (await ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct)).ResponsibleUserId);
-        // The main project's creator keeps access even though someone else is now responsible.
+        // Every internal account with project:list sees every project, owned or not.
         await ProjectAccessService.RequireViewAsync(conn, null, creator, ProjectId, ct);
-        await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, oldMember, ProjectId, ct));
-        await ProjectAccessService.RequireViewAsync(conn, null, viewAll, ProjectId, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, viewAll, OwnerlessProjectId, ct);
+        await ProjectAccessService.RequireViewAsync(conn, null, colleague, ProjectId, ct);
+        await ProjectAccessService.RequireViewAsync(conn, null, colleague, OwnerlessProjectId, ct);
         await ProjectAccessService.RequireViewAsync(conn, null, matchingSupplier, ProjectId, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, matchingSupplier, OwnerlessProjectId, ct);
         await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, otherSupplier, ProjectId, ct));
         await AssertForbiddenAsync(() => ProjectAccessService.RequireViewAsync(conn, null, ownerWithoutList, 10_003, ct));
 
-        Assert.Equal(new ulong[] { ProjectGroupId }, await ListedProjectGroupIdsAsync(groups, conn, oldOwner, ct));
-        Assert.Equal(new ulong[] { 11_003UL, 11_002UL, ProjectGroupId },
-            await ListedProjectGroupIdsAsync(groups, conn, creator, ct));
-        Assert.Empty(await ListedProjectGroupIdsAsync(groups, conn, oldMember, ct));
-        Assert.Equal(new ulong[] { 11_003UL, 11_002UL, ProjectGroupId },
-            await ListedProjectGroupIdsAsync(groups, conn, viewAll, ct));
-        Assert.Equal(new ulong[] { 11_003UL, 11_002UL, ProjectGroupId },
-            await ListedProjectGroupIdsAsync(groups, conn, matchingSupplier, ct));
+        Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId }, await ListedProjectIdsAsync(projects, conn, colleague, ct));
+        Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId }, await ListedProjectIdsAsync(projects, conn, matchingSupplier, ct));
+        Assert.Empty(await ListedProjectIdsAsync(projects, conn, otherSupplier, ct));
+        Assert.Equal(new ulong[] { ProjectId }, await ListedProjectIdsAsync(projects, conn, oldOwner, ct, mine: true));
+        Assert.Empty(await ListedProjectIdsAsync(projects, conn, colleague, ct, mine: true));
 
-        using (var detail = Json(await projects.DetailAsync(conn, oldOwner, ProjectId, ct)))
+        using (var detail = Json(await projects.DetailAsync(conn, colleague, ProjectId, ct)))
         {
             Assert.Equal(OldOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
+            Assert.False(detail.RootElement.GetProperty("canManage").GetBoolean());
             Assert.False(detail.RootElement.TryGetProperty("members", out _));
         }
-        await projects.DetailAsync(conn, creator, ProjectId, ct);
-        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, oldMember, ProjectId, ct));
+        Assert.True((await projects.DetailAsync(conn, oldOwner, ProjectId, ct)).CanManage);
 
         var files = FileService(database, audit);
         Assert.Equal(0UL, Total(await files.ListAsync(Context(oldOwner), ProjectId, ct)));
-        Assert.Equal(0UL, Total(await files.ListAsync(Context(creator), ProjectId, ct)));
-        await AssertOutOfScopeAsync(() => files.ListAsync(Context(oldMember), ProjectId, ct));
+        Assert.Equal(0UL, Total(await files.ListAsync(Context(colleague), ProjectId, ct)));
 
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.SetStatusAsync(admin, OldOwnerId, "DISABLED", ct));
         using (var department = JsonDocument.Parse("7002"))
@@ -92,43 +82,30 @@ public sealed class OwnerAccessTests
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.DeleteAsync(admin, OldOwnerId, ct));
         await AssertActiveResponsibilityBlocksChangeAsync(() => roles.AssignPermissionsAsync(admin, 9_001, [], ct));
 
-        var groupUpdatedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
-            "SELECT updated_at FROM project_groups WHERE id=@Id",
-            new { Id = ProjectGroupId }, cancellationToken: ct));
-        await groups.UpdateAsync(conn, oldOwner, ProjectGroupId, UpdateRequest(groupUpdatedAt), null, ct);
+        var updatedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
+            "SELECT updated_at FROM projects WHERE id=@Id", new { Id = ProjectId }, cancellationToken: ct));
+        var colleagueEdit = await Assert.ThrowsAsync<ApiException>(() =>
+            projects.UpdateAsync(conn, colleague, ProjectId, UpdateRequest(updatedAt), null, ct));
+        Assert.Equal((403, ProjectAccessService.OwnerOnlyMessage), (colleagueEdit.Status, colleagueEdit.Message));
+        await projects.UpdateAsync(conn, oldOwner, ProjectId, UpdateRequest(updatedAt), null, ct);
 
-        using (var detail = Json(await projects.DetailAsync(conn, oldOwner, ProjectId, ct)))
-            Assert.Equal(OldOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
-        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, newOwner, ProjectId, ct));
-        Assert.Equal(0UL, Total(await files.ListAsync(Context(oldOwner), ProjectId, ct)));
-        await AssertOutOfScopeAsync(() => files.ListAsync(Context(newOwner), ProjectId, ct));
-
-        var createdGroup = await groups.CreateAsync(conn, creator, CreateRequest(), null, ct);
-        var createdGroupId = Id(createdGroup);
-        var createdId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM projects WHERE project_group_id=@GroupId",
-            new { GroupId = createdGroupId }, cancellationToken: ct));
-        using (var created = Json(await projects.DetailAsync(conn, creator, createdId, ct)))
-        {
-            Assert.Equal(CreatorId, created.RootElement.GetProperty("responsibleUserId").GetUInt64());
-            Assert.Equal(7001UL, created.RootElement.GetProperty("sectionId").GetUInt64());
-        }
-        await AssertOutOfScopeAsync(() => projects.DetailAsync(conn, newOwner, createdId, ct));
+        var created = await projects.CreateAsync(conn, creator, CreateRequest(), null, ct);
+        Assert.Equal(CreatorId, created.ResponsibleUserId);
+        Assert.Equal(7001UL, created.SectionId);
+        Assert.Equal("IN_PROGRESS", created.Status);
+        Assert.False((await projects.DetailAsync(conn, newOwner, created.Id, ct)).CanManage);
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task TransferMovesOwnershipToEveryChildAndKeepsCreatorAccess()
+    public async Task TransferMovesOwnershipAndWithItTheRightToChangeTheProject()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
         await database.InitializeAsync(ct);
         await database.SeedAsync(SeedSql, ct);
         var audit = new AuditService([]);
-        var groupStatus = new ProjectGroupStatusService(audit);
-        var groups = new ProjectGroupService(audit, groupStatus);
-        var projects = new ProjectService(audit, database.Options, groupStatus);
+        var projects = new ProjectService(audit, database.Options);
         var admin = Internal(1, "admin");
-        var creator = Internal(CreatorId, "owner-creator");
         var oldOwner = Internal(OldOwnerId, "owner-old");
         var newOwner = Internal(NewOwnerId, "owner-new");
         await using var conn = await database.Database.OpenAsync(ct);
@@ -140,81 +117,36 @@ public sealed class OwnerAccessTests
         Assert.DoesNotContain(SupplierUserId, options);
         await AssertForbiddenAsync(() => projects.ProjectOwnerOptionsAsync(conn, oldOwner, ct));
 
-        await AssertForbiddenAsync(() => groups.TransferAsync(conn, oldOwner, ProjectGroupId,
-            new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
-        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
-            new ProjectGroupTransferRequest { ResponsibleUserId = OldOwnerId }, null, ct));
-        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
-            new ProjectGroupTransferRequest { ResponsibleUserId = NoPermissionOwnerId }, null, ct));
-        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
-            new ProjectGroupTransferRequest { ResponsibleUserId = SupplierUserId }, null, ct));
-        await AssertBadRequestAsync(() => groups.TransferAsync(conn, admin, ProjectGroupId,
-            new ProjectGroupTransferRequest(), null, ct));
+        // The owner lacks project:transfer here; the administrator may transfer any project.
+        await AssertForbiddenAsync(() => projects.TransferAsync(conn, oldOwner, ProjectId,
+            new ProjectTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
+        await AssertBadRequestAsync(() => projects.TransferAsync(conn, admin, ProjectId,
+            new ProjectTransferRequest { ResponsibleUserId = OldOwnerId }, null, ct));
+        await AssertBadRequestAsync(() => projects.TransferAsync(conn, admin, ProjectId,
+            new ProjectTransferRequest { ResponsibleUserId = NoPermissionOwnerId }, null, ct));
+        await AssertBadRequestAsync(() => projects.TransferAsync(conn, admin, ProjectId,
+            new ProjectTransferRequest { ResponsibleUserId = SupplierUserId }, null, ct));
+        await AssertBadRequestAsync(() => projects.TransferAsync(conn, admin, ProjectId,
+            new ProjectTransferRequest(), null, ct));
 
-        // Ended subprojects move too: access follows the owner.
+        // Ended projects move too.
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE projects SET status='COMPLETED' WHERE id=@Id",
             new { Id = ProjectId }, cancellationToken: ct));
 
-        using (var transferred = Json(await groups.TransferAsync(conn, admin, ProjectGroupId,
-                   new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct)))
-        {
-            Assert.Equal(NewOwnerId, transferred.RootElement.GetProperty("responsibleUserId").GetUInt64());
-            Assert.Equal(7001UL, transferred.RootElement.GetProperty("sectionId").GetUInt64());
-        }
-        Assert.Equal(NewOwnerId, await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-            "SELECT responsible_user_id FROM projects WHERE id=@Id", new { Id = ProjectId }, cancellationToken: ct)));
-        await ProjectAccessService.RequireViewAsync(conn, null, newOwner, ProjectId, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, creator, ProjectId, ct);
-        await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct));
+        var transferred = await projects.TransferAsync(conn, admin, ProjectId,
+            new ProjectTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct);
+        Assert.Equal(NewOwnerId, transferred.ResponsibleUserId);
+        Assert.Equal(7001UL, transferred.SectionId);
+        Assert.True((await projects.DetailAsync(conn, newOwner, ProjectId, ct)).CanManage);
+        Assert.False((await projects.DetailAsync(conn, oldOwner, ProjectId, ct)).CanManage);
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
-            "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_GROUP_TRANSFER' AND target_id=@Id",
-            new { Id = ProjectGroupId.ToString(CultureInfo.InvariantCulture) }, cancellationToken: ct)));
+            "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_UPDATE' AND target_type='project' AND target_id=@Id",
+            new { Id = ProjectId.ToString(CultureInfo.InvariantCulture) }, cancellationToken: ct)));
     }
 
     [Fact(Timeout = 120_000)]
-    public async Task SuppliersSeeNoFilesOfADraftSubprojectUntilItStarts()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
-        await database.InitializeAsync(ct);
-        await database.SeedAsync(SeedSql, ct);
-        await database.SeedAsync("""
-            INSERT INTO role_permissions(role_id,permission_id)
-            SELECT 9001,id FROM permissions WHERE code IN ('file:download','file:preview');
-            """, ct);
-        // A file carried into the draft by a copy: the draft passes no material to the supplier.
-        const string relative = "files/draft-visible.txt";
-        var path = Path.Combine(database.Options.StorageRoot, relative.Replace('/', Path.DirectorySeparatorChar));
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, "carried by a copy", ct);
-        await database.SeedAsync($"""
-            INSERT INTO files(id,project_id,uploader_id,direction,original_name,stored_name,ext,size_bytes,mime_type,sha256,storage_path,status,created_at)
-            VALUES(7001,{ProjectId},{CreatorId},'S2C','copied.txt','draft-visible.txt','txt',17,'text/plain',REPEAT('a',64),'{relative}','AVAILABLE',UTC_TIMESTAMP(3));
-            """, ct);
-        var supplier = new CurrentUser(SupplierUserId, "owner-supplier", "SUPPLIER", 8_001);
-        var oldOwner = Internal(OldOwnerId, "owner-old");
-        var files = FileService(database, new AuditService([]));
-
-        Assert.Equal(0UL, Total(await files.ListAsync(Context(supplier), ProjectId, ct)));
-        Assert.Equal(1UL, Total(await files.ListAsync(Context(oldOwner), ProjectId, ct)));
-        foreach (var inline in new[] { false, true })
-        {
-            var hidden = await Assert.ThrowsAsync<ApiException>(() => files.StreamAsync(Context(supplier), 7001, inline, ct));
-            Assert.Equal(404, hidden.Status);
-        }
-        var hiddenBatch = await Assert.ThrowsAsync<ApiException>(() =>
-            files.BatchDownloadAsync(Context(supplier), new BatchDownloadRequest([7001UL]), ct));
-        Assert.Equal(404, hiddenBatch.Status);
-
-        // Once the subproject starts the same supplier sees and downloads the file.
-        await database.SeedAsync($"UPDATE projects SET status='IN_PROGRESS' WHERE id={ProjectId}", ct);
-        Assert.Equal(1UL, Total(await files.ListAsync(Context(supplier), ProjectId, ct)));
-        Assert.NotNull(await files.StreamAsync(Context(supplier), 7001, inline: false, ct));
-    }
-
-    [Fact(Timeout = 120_000)]
-    public async Task OutOfScopeCallersAreRejectedBeforeAnyProjectRowLockIsRequested()
+    public async Task UnauthorizedWritersAreRejectedBeforeAnyProjectRowLockIsRequested()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
@@ -223,41 +155,39 @@ public sealed class OwnerAccessTests
         await database.SeedAsync("""
             INSERT INTO role_permissions(role_id,permission_id)
             SELECT 9001,id FROM permissions
-            WHERE code IN ('project:status','project:delete','project:transfer','message:create');
+            WHERE code IN ('project:status','project:transfer','message:create','file:upload');
             """, ct);
         var audit = new AuditService([]);
-        var groupStatus = new ProjectGroupStatusService(audit);
-        var groups = new ProjectGroupService(audit, groupStatus);
-        var projects = new ProjectService(audit, database.Options, groupStatus);
+        var projects = new ProjectService(audit, database.Options);
         var messages = new MessageService(audit, database.Options);
-        // Holds a permission-granted user's scope check out: neither the creator nor the owner of the project.
-        var outsider = Internal(OldMemberId, "owner-old-member");
+        // A colleague who can see the project and holds the permission points, but is not responsible for it.
+        var colleague = Internal(OldMemberId, "owner-old-member");
+        var otherSupplier = new CurrentUser(OtherSupplierUserId, "owner-other-supplier", "SUPPLIER", 8_002);
 
-        // Another transaction owns the main project and subproject row locks, as a running workflow write would.
+        // Another transaction owns the project row lock, as a running workflow write would.
         await using var holder = await database.Database.OpenAsync(ct);
         await using var holdTx = await holder.BeginTransactionAsync(ct);
-        await holder.QueryAsync<ulong>(new CommandDefinition(
-            "SELECT id FROM project_groups WHERE id=@Id FOR UPDATE", new { Id = ProjectGroupId }, holdTx, cancellationToken: ct));
         await holder.QueryAsync<ulong>(new CommandDefinition(
             "SELECT id FROM projects WHERE id=@Id FOR UPDATE", new { Id = ProjectId }, holdTx, cancellationToken: ct));
 
         await using var conn = await database.Database.OpenAsync(ct);
-        // Scope is authorized on an unlocked read first, so each call fails at once instead of queueing behind the lock.
-        await AssertRejectedWithoutWaitingAsync(() => projects.SetStatusAsync(conn, outsider, ProjectId,
-            new ProjectStatusRequest { Status = "IN_PROGRESS" }, null, ct));
-        await AssertRejectedWithoutWaitingAsync(() => projects.UpdateSubprojectAsync(conn, outsider, ProjectId,
-            new SubprojectUpdateRequest { Name = "越权编辑", ExpectedUpdatedAt = DateTime.UtcNow }, null, ct));
-        await AssertRejectedWithoutWaitingAsync(() => projects.DeleteAsync(conn, outsider, ProjectId, null, ct));
-        await AssertRejectedWithoutWaitingAsync(() => projects.ReopenAsync(conn, outsider, ProjectId,
+        // Ownership is authorized on an unlocked read first, so each call fails at once instead of queueing behind the lock.
+        await AssertRejectedWithoutWaitingAsync(() => projects.SetStatusAsync(conn, colleague, ProjectId,
+            new ProjectStatusRequest { Status = "TERMINATED" }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => projects.UpdateAsync(conn, colleague, ProjectId,
+            UpdateRequest(DateTime.UtcNow), null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => projects.DeleteAsync(conn, colleague, ProjectId, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => projects.ReopenAsync(conn, colleague, ProjectId,
             new ProjectReopenRequest { ExpectedUpdatedAt = DateTime.UtcNow, Reason = "越权重开" }, null, ct));
-        await AssertRejectedWithoutWaitingAsync(() => projects.ApproveMaterialsAsync(conn, outsider, ProjectId,
+        await AssertRejectedWithoutWaitingAsync(() => projects.ApproveMaterialsAsync(conn, colleague, ProjectId,
             new ProjectMaterialReviewRequest { ExpectedSupplierFileId = 1 }, null, ct));
-        await AssertRejectedWithoutWaitingAsync(() => groups.TransferAsync(conn, outsider, ProjectGroupId,
-            new ProjectGroupTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
-        await AssertRejectedWithoutWaitingAsync(() => groups.CreateSubprojectAsync(conn, outsider, ProjectGroupId,
-            new SubprojectUpsertRequest { Name = "越权新增" }, null, ct));
-        await AssertRejectedWithoutWaitingAsync(() => messages.CreateAsync(conn, outsider, ProjectId,
+        await AssertRejectedWithoutWaitingAsync(() => projects.TransferAsync(conn, colleague, ProjectId,
+            new ProjectTransferRequest { ResponsibleUserId = NewOwnerId }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => messages.CreateAsync(conn, colleague, ProjectId,
             new MessageCreateRequest { Content = "越权留言" }, null, ct));
+        await AssertRejectedWithoutWaitingAsync(() => ProjectAccessService.RequireFileUploadAsync(conn, null, colleague, ProjectId, ct));
+        await AssertRejectedWithoutWaitingAsync(() => messages.CreateAsync(conn, otherSupplier, ProjectId,
+            new MessageCreateRequest { Content = "其他厂商留言" }, null, ct));
         await holdTx.CommitAsync(ct);
     }
 
@@ -266,7 +196,6 @@ public sealed class OwnerAccessTests
         // A call that queued behind the held lock would hit the timeout (TimeoutException) instead of a 403.
         var error = await Assert.ThrowsAsync<ApiException>(() => action().WaitAsync(TimeSpan.FromSeconds(10)));
         Assert.Equal(403, error.Status);
-        Assert.Equal(40302, error.Code);
     }
 
     private static async Task AssertBadRequestAsync(Func<Task> action)
@@ -288,12 +217,15 @@ public sealed class OwnerAccessTests
         INSERT INTO roles(id,name,description,is_built_in,status)
         VALUES
           (9001,'负责人范围用户','项目列表、创建和更新',0,'ACTIVE'),
-          (9002,'负责人全局查看','项目全局查看',0,'ACTIVE'),
-          (9003,'负责人无项目权限','不含项目列表',0,'ACTIVE');
+          (9002,'负责人全局查看','仅项目列表',0,'ACTIVE'),
+          (9003,'负责人无项目权限','不含项目列表',0,'ACTIVE'),
+          (9004,'负责人测试厂商','厂商上传',0,'ACTIVE');
+        INSERT INTO role_permissions(role_id,permission_id)
+        SELECT 9004,id FROM permissions WHERE code IN ('project:list','file:upload','message:create');
         INSERT INTO role_permissions(role_id,permission_id)
         SELECT 9001,id FROM permissions WHERE code IN ('project:list','project:create','project:update');
         INSERT INTO role_permissions(role_id,permission_id)
-        SELECT 9002,id FROM permissions WHERE code IN ('project:list','project:view_all');
+        SELECT 9002,id FROM permissions WHERE code IN ('project:list');
         INSERT INTO users
           (id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
         VALUES
@@ -306,28 +238,21 @@ public sealed class OwnerAccessTests
           (9201,'owner-supplier','unused','匹配供应商用户','','SUPPLIER',8001,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
           (9202,'owner-other-supplier','unused','其他供应商用户','','SUPPLIER',8002,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO user_roles(user_id,role_id)
-        VALUES(9101,9001),(9102,9001),(9103,9001),(9104,9001),(9105,9002),(9201,9001),(9202,9001);
+        VALUES(9101,9001),(9102,9001),(9103,9001),(9104,9001),(9105,9002),(9201,9004),(9202,9004);
         INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
         VALUES(6002,8001,'OWNER-PART','负责人测试型号',1,'ACTIVE');
         INSERT INTO project_dictionaries(id,type,name,parent_id,sort_no,status)
         VALUES(6003,'PRIORITY','负责人测试优先级',NULL,1,'ACTIVE'),
               (1006003,'ROBOT_TYPE','负责人测试优先级-Robot类型',NULL,1,'ACTIVE');
-        INSERT INTO project_groups
+        INSERT INTO projects
           (id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,
            responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
         VALUES
-          (11001,'负责人范围主项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (11002,'无负责人历史主项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (11003,'无列表权限负责人主项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-        INSERT INTO projects
-          (id,project_group_id,name,description,supplier_id,status,created_by,machine_model,robot_part_id,
-           responsible_user_id,section_id,priority_id,robot_type_id,robot_owner_name,expected_completion_date,created_at,updated_at)
-        VALUES
-          (10001,11001,'负责人范围项目','范围测试',8001,'DRAFT',9101,'M1',6002,9103,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10002,11002,'无负责人历史项目','空负责人测试',8001,'DRAFT',9101,'M1',6002,NULL,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-          (10003,11003,'无列表权限负责人项目','权限门禁测试',8001,'DRAFT',9101,'M1',6002,9106,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-        INSERT INTO project_group_work_orders(project_group_id,work_order_no,sort_no)
-        VALUES(11001,'WO-OWNER',0),(11002,'WO-OWNERLESS',0),(11003,'WO-NO-LIST',0);
+          (10001,'负责人范围项目','范围测试',8001,'IN_PROGRESS',9101,'M1',6002,9103,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10002,'无负责人历史项目','空负责人测试',8001,'IN_PROGRESS',9101,'M1',6002,NULL,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+          (10003,'无列表权限负责人项目','权限门禁测试',8001,'IN_PROGRESS',9101,'M1',6002,9106,7001,6003,1006003,'Robot 负责人','2026-12-31',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+        INSERT INTO project_robot_owners(project_id,contact_id,sort_no)
+        VALUES(10001,10008001,0),(10002,10008001,0),(10003,10008001,0);
         INSERT INTO project_work_orders(project_id,work_order_no,sort_no)
         VALUES(10001,'WO-OWNER',0),(10002,'WO-OWNERLESS',0),(10003,'WO-NO-LIST',0);
         """;
@@ -359,7 +284,6 @@ public sealed class OwnerAccessTests
         RobotTypeId = 1006003,
         RobotOwnerContactIds = [10008001],
         ExpectedCompletionDate = "2027-01-31",
-        SubprojectNames = ["创建后子项目"],
     };
 
     private static FileService FileService(OwnerAccessDatabase database, AuditService audit)
@@ -390,13 +314,14 @@ public sealed class OwnerAccessTests
 
     private static CurrentUser Internal(ulong id, string employeeNo) => new(id, employeeNo, "INTERNAL", null);
 
-    private static async Task<ulong[]> ListedProjectGroupIdsAsync(
-        ProjectGroupService service,
+    private static async Task<ulong[]> ListedProjectIdsAsync(
+        ProjectService service,
         MySqlConnection conn,
         CurrentUser actor,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool mine = false)
     {
-        using var json = Json(await service.ListAsync(conn, actor, 1, 100, null, null, null, null, false, ct));
+        using var json = Json(await service.ListAsync(conn, actor, 1, 100, null, null, null, null, false, mine, ct));
         return json.RootElement.GetProperty("list").EnumerateArray()
             .Select(item => item.GetProperty("id").GetUInt64()).ToArray();
     }

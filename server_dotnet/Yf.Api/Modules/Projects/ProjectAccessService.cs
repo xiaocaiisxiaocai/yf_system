@@ -7,15 +7,21 @@ namespace Yf.Api.Modules.Projects;
 
 public sealed record ProjectAccess(
     ulong Id,
-    ulong? ProjectGroupId,
     ulong SupplierId,
     ulong CreatedBy,
     string Status,
     ulong? ResponsibleUserId = null,
     ulong? SectionId = null);
 
+/// <summary>
+/// Every internal account with <c>project:list</c> sees every project; supplier accounts see their company's
+/// projects. Internal writes additionally require the project's responsible user (<see cref="RequireOwner"/>),
+/// checked against the locked row inside the write transaction.
+/// </summary>
 public static class ProjectAccessService
 {
+    internal const string OwnerOnlyMessage = "仅项目负责人可以操作该项目";
+
     internal static async Task<IQueryable<ProjectEntity>> VisibleQueryAsync(
         YfDbContext db,
         CurrentUser current,
@@ -23,19 +29,39 @@ public static class ProjectAccessService
     {
         if (!await HasPermissionAsync(db, current.Id, "project:list", ct))
             throw ApiException.Forbidden();
-        if (!current.IsInternal)
-        {
-            if (current.SupplierId is null) throw ApiException.OutOfScope();
-            var supplierId = current.SupplierId.Value;
-            return db.Projects.Where(project => project.SupplierId == supplierId);
-        }
-        if (await HasPermissionAsync(db, current.Id, "project:view_all", ct)) return db.Projects;
+        if (current.IsInternal) return db.Projects;
+        if (current.SupplierId is null) throw ApiException.OutOfScope();
+        var supplierId = current.SupplierId.Value;
+        return db.Projects.Where(project => project.SupplierId == supplierId);
+    }
+
+    /// <summary>
+    /// Projects whose collaboration feed, unread counts, dashboard tasks and mail belong to the caller: an internal
+    /// account follows only the projects it is responsible for (it can still open every other one), a supplier
+    /// account follows its company's projects.
+    /// </summary>
+    internal static async Task<IQueryable<ProjectEntity>> InboxQueryAsync(
+        YfDbContext db,
+        CurrentUser current,
+        CancellationToken ct)
+    {
+        var visible = await VisibleQueryAsync(db, current, ct);
+        if (!current.IsInternal) return visible;
         var userId = current.Id;
-        var createdGroupIds = db.ProjectGroups.Where(group => group.CreatedBy == userId).Select(group => group.Id);
-        var supervisedSections = ProjectDeletionAuthorization.SectionsLedBy(db, userId);
-        return db.Projects.Where(project => project.ResponsibleUserId == userId
-            || createdGroupIds.Contains(project.ProjectGroupId)
-            || project.SectionId.HasValue && supervisedSections.Contains(project.SectionId.Value));
+        return visible.Where(project => project.ResponsibleUserId == userId);
+    }
+
+    /// <summary>Internal callers may change a project only while they are its responsible user.</summary>
+    internal static void RequireOwner(CurrentUser current, ProjectAccess access)
+    {
+        if (current.IsInternal && access.ResponsibleUserId != current.Id)
+            throw ApiException.Forbidden(OwnerOnlyMessage);
+    }
+
+    internal static void RequireOwner(CurrentUser current, ulong? responsibleUserId)
+    {
+        if (current.IsInternal && responsibleUserId != current.Id)
+            throw ApiException.Forbidden(OwnerOnlyMessage);
     }
 
     public static async Task<ProjectAccess> RequireViewAsync(
@@ -51,7 +77,7 @@ public static class ProjectAccessService
 
     /// <param name="lockRows">
     /// False for chunk writes: they are ordered against merge and abort by the upload-session row lock, and terminate
-    /// refuses while a session is active, so locking the main project and subproject per chunk only serialises uploads.
+    /// refuses while a session is active, so locking the project per chunk only serialises uploads.
     /// </param>
     public static async Task<ProjectAccess> RequireFileUploadAsync(
         MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ulong projectId,
@@ -64,7 +90,7 @@ public static class ProjectAccessService
             await owned.CommitAsync(ct);
             return result;
         }
-        var project = await RequireViewCoreAsync(conn, tx, actor, projectId, lockRows, ct);
+        var project = await RequireViewCoreAsync(conn, tx, actor, projectId, lockRows, ct, ownerOnly: true);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "file:upload", ct);
         if (project.Status != ProjectStatuses.InProgress) throw ApiException.Conflict("项目当前不可上传文件");
         return project;
@@ -82,27 +108,28 @@ public static class ProjectAccessService
             await owned.CommitAsync(ct);
             return result;
         }
-        var project = await RequireViewCoreAsync(conn, tx, actor, projectId, true, ct);
+        var project = await RequireViewCoreAsync(conn, tx, actor, projectId, true, ct, ownerOnly: true);
         await AccessService.RequirePermissionAsync(conn, tx, actor, "file:delete", ct);
         if (project.Status != ProjectStatuses.InProgress) throw ApiException.Conflict("项目当前不可删除文件");
         return project;
     }
 
     public static async Task<bool> CanDeleteFilesAsync(
-        MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, string projectStatus,
+        MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ProjectAccess project,
         CancellationToken ct = default)
     {
         if (tx is null)
         {
             await using var owned = await AppDb.BeginTransactionAsync(conn, ct);
-            var result = await CanDeleteFilesAsync(conn, owned, actor, projectStatus, ct);
+            var result = await CanDeleteFilesAsync(conn, owned, actor, project, ct);
             await owned.CommitAsync(ct);
             return result;
         }
         var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
         await using var db = EfDb.Use(conn, tx);
         return current.IsInternal
-            && projectStatus == ProjectStatuses.InProgress
+            && project.Status == ProjectStatuses.InProgress
+            && project.ResponsibleUserId == current.Id
             && await HasPermissionAsync(db, current.Id, "file:delete", ct);
     }
 
@@ -117,71 +144,61 @@ public static class ProjectAccessService
 
     internal static async Task<ProjectAccess> RequireViewCoreAsync(
         MySqlConnection conn, MySqlTransaction? tx, CurrentUser actor, ulong projectId, bool forUpdate,
-        CancellationToken ct)
+        CancellationToken ct, bool ownerOnly = false)
     {
         if (tx is null) throw new InvalidOperationException("Project access validation requires a transaction.");
         var current = forUpdate
             ? await AccessService.LockActorAsync(conn, tx, actor, ct)
             : await AccessService.ReadActorAsync(conn, tx, actor, ct);
-        return await RequireViewForValidatedActorAsync(conn, tx, current, projectId, forUpdate, ct);
+        return await RequireViewForValidatedActorAsync(conn, tx, current, projectId, forUpdate, ct, ownerOnly);
     }
 
+    /// <param name="ownerOnly">
+    /// Also require the internal caller to be the responsible user, on the unlocked read and again on the locked row,
+    /// so a colleague who can see the project never queues behind, or holds, its lock for a write it may not make.
+    /// </param>
     internal static async Task<ProjectAccess> RequireViewForValidatedActorAsync(
         MySqlConnection conn, MySqlTransaction? tx, CurrentUser current, ulong projectId, bool forUpdate,
-        CancellationToken ct)
+        CancellationToken ct, bool ownerOnly = false)
     {
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await using var db = EfDb.Use(conn, tx);
         var row = await db.Projects.Where(item => item.Id == projectId).Select(item => new ProjectAccess(
-            item.Id, (ulong?)item.ProjectGroupId, item.SupplierId, item.CreatedBy, item.Status,
+            item.Id, item.SupplierId, item.CreatedBy, item.Status,
             item.ResponsibleUserId, item.SectionId)).SingleOrDefaultAsync(ct);
         if (row is null) throw ApiException.NotFound();
         // Scope is checked on an unlocked read first: a caller outside the project's scope must not be
-        // able to queue behind, or hold, the row locks of a project it cannot see.
-        var visible = await AuthorizeAsync(db, current, row, ct);
+        // able to queue behind, or hold, the row lock of a project it cannot see.
+        var visible = Authorize(current, row);
+        if (ownerOnly) RequireOwner(current, visible);
         if (!forUpdate) return visible;
 
-        if (row.ProjectGroupId is not ulong groupId) throw ApiException.NotFound();
-        if (await db.Database.SqlQuery<ulong>(
-                $"SELECT id AS Value FROM project_groups WHERE id={groupId} FOR UPDATE")
-                .SingleOrDefaultAsync(ct) == 0)
-            throw ApiException.NotFound();
         var locked = await db.Database.SqlQuery<LockedProjectAccess>($"""
-            SELECT id AS Id,project_group_id AS ProjectGroupId,supplier_id AS SupplierId,
+            SELECT id AS Id,supplier_id AS SupplierId,
                    created_by AS CreatedBy,status AS Status,
                    responsible_user_id AS ResponsibleUserId,section_id AS SectionId
             FROM projects WHERE id={projectId} FOR UPDATE
             """).SingleOrDefaultAsync(ct);
         if (locked is null) throw ApiException.NotFound();
         // Ownership can change between the unlocked read and the lock, so authorise the locked values again.
-        return await AuthorizeAsync(db, current, new ProjectAccess(
-            locked.Id, locked.ProjectGroupId, locked.SupplierId, locked.CreatedBy,
-            locked.Status, locked.ResponsibleUserId, locked.SectionId), ct);
+        var lockedAccess = Authorize(current, new ProjectAccess(
+            locked.Id, locked.SupplierId, locked.CreatedBy,
+            locked.Status, locked.ResponsibleUserId, locked.SectionId));
+        if (ownerOnly) RequireOwner(current, lockedAccess);
+        return lockedAccess;
     }
 
-    private static async Task<ProjectAccess> AuthorizeAsync(
-        YfDbContext db, CurrentUser current, ProjectAccess access, CancellationToken ct)
+    private static ProjectAccess Authorize(CurrentUser current, ProjectAccess access)
     {
-        if (!current.IsInternal)
-        {
-            if (current.SupplierId is null || current.SupplierId.Value != access.SupplierId)
-                throw ApiException.OutOfScope();
-            return access;
-        }
-        if (access.ResponsibleUserId == current.Id
-            || await HasPermissionAsync(db, current.Id, "project:view_all", ct)
-            || access.ProjectGroupId is ulong groupId
-                && await db.ProjectGroups.AnyAsync(group => group.Id == groupId && group.CreatedBy == current.Id, ct)
-            || access.SectionId is ulong sectionId
-                && await ProjectDeletionAuthorization.SectionsLedBy(db, current.Id).AnyAsync(id => id == sectionId, ct))
-            return access;
-        throw ApiException.OutOfScope();
+        if (current.IsInternal) return access;
+        if (current.SupplierId is null || current.SupplierId.Value != access.SupplierId)
+            throw ApiException.OutOfScope();
+        return access;
     }
 
     private sealed class LockedProjectAccess
     {
         public ulong Id { get; init; }
-        public ulong? ProjectGroupId { get; init; }
         public ulong SupplierId { get; init; }
         public ulong CreatedBy { get; init; }
         public string Status { get; init; } = "";
@@ -192,7 +209,6 @@ public static class ProjectAccessService
 
 internal static class ProjectStatuses
 {
-    internal const string Draft = "DRAFT";
     internal const string InProgress = "IN_PROGRESS";
     internal const string Completed = "COMPLETED";
     internal const string Terminated = "TERMINATED";
@@ -218,18 +234,18 @@ internal static class UploadActivity
         CurrentUser actor,
         string projectStatus,
         bool canUpload,
-        bool canDeleteFiles,
-        bool canChangeStatus,
         ulong uploaderId,
         string uploaderUserType,
         ulong? uploaderSupplierId,
         bool isResponsibleUser)
     {
-        if (actor.Id == uploaderId) return canUpload;
-        // The responsible user reviews material without extra permissions, so they can also clear an abandoned
-        // supplier session that would otherwise block the review until it expires.
+        // Internal accounts act on a project only while they are its responsible user, including on their own
+        // sessions after a transfer. The responsible user can also clear an abandoned supplier session that would
+        // otherwise block the material review until it expires.
         if (actor.IsInternal)
-            return projectStatus == ProjectStatuses.InProgress && (canDeleteFiles || canChangeStatus || isResponsibleUser);
+            return isResponsibleUser && projectStatus == ProjectStatuses.InProgress
+                && (actor.Id != uploaderId || canUpload);
+        if (actor.Id == uploaderId) return canUpload;
         return actor.UserType == UserTypes.Supplier
             && actor.SupplierId is ulong supplierId
             && uploaderUserType == UserTypes.Supplier

@@ -12,8 +12,6 @@ internal static class ProjectQueries
 {
     internal static IQueryable<ProjectRow> Rows(YfDbContext db) =>
         from project in db.Projects.AsNoTracking()
-        join projectGroup in db.ProjectGroups on project.ProjectGroupId equals projectGroup.Id into projectGroups
-        from projectGroup in projectGroups.DefaultIfEmpty()
         join supplier in db.Suppliers on project.SupplierId equals supplier.Id into suppliers
         from supplier in suppliers.DefaultIfEmpty()
         join creator in db.Users on project.CreatedBy equals creator.Id into creators
@@ -32,8 +30,6 @@ internal static class ProjectQueries
         select new ProjectRow
         {
             Id = project.Id,
-            ProjectGroupId = project.ProjectGroupId,
-            ProjectGroupName = projectGroup.Name ?? "",
             Name = project.Name,
             Description = project.Description,
             SupplierId = project.SupplierId,
@@ -47,6 +43,7 @@ internal static class ProjectQueries
             RobotPartId = project.RobotPartId,
             RobotPartNumber = robotPart.PartNumber,
             RobotModelName = robotPart.Model ?? project.LegacyRobotModelName,
+            LegacyRobotModelName = project.LegacyRobotModelName,
             ResponsibleUserId = project.ResponsibleUserId,
             ResponsibleUserEmployeeNo = responsibleUser.EmployeeNo,
             ResponsibleUserName = responsibleUser.RealName,
@@ -59,6 +56,7 @@ internal static class ProjectQueries
             RobotTypeName = robotType.Name,
             ExpectedCompletionDate = project.ExpectedCompletionDate.HasValue
                 ? project.ExpectedCompletionDate.GetValueOrDefault().ToDateTime(TimeOnly.MinValue) : null,
+            CompletedAt = project.CompletedAt,
             MaterialReviewStatus = project.MaterialReviewStatus,
             MaterialReviewFileId = project.MaterialReviewFileId,
             MaterialReviewReason = project.MaterialReviewReason,
@@ -73,7 +71,7 @@ internal static class ProjectQueries
         };
 
     /// <summary>
-    /// Effective material review state of every in-progress subproject, computed in SQL with the same rule as
+    /// Effective material review state of every in-progress project, computed in SQL with the same rule as
     /// <see cref="ProjectWorkflowRules.EffectiveMaterialReview(ProjectRow)"/>. Callers apply their own scope.
     /// </summary>
     internal static IQueryable<MaterialStateRow> InProgressMaterial(YfDbContext db) =>
@@ -86,7 +84,6 @@ internal static class ProjectQueries
         select new MaterialStateRow
         {
             ProjectId = project.Id,
-            ProjectGroupId = project.ProjectGroupId,
             ResponsibleUserId = project.ResponsibleUserId,
             SupplierId = project.SupplierId,
             State = latestSupplierFileId == null
@@ -101,7 +98,6 @@ internal static class ProjectQueries
 internal sealed class MaterialStateRow
 {
     public ulong ProjectId { get; init; }
-    public ulong ProjectGroupId { get; init; }
     public ulong? ResponsibleUserId { get; init; }
     public ulong SupplierId { get; init; }
     public string State { get; init; } = string.Empty;

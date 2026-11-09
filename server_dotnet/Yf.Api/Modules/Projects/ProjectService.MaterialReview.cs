@@ -4,7 +4,7 @@ using Yf.Api.Infrastructure;
 
 namespace Yf.Api.Modules.Projects;
 
-// Responsible-user review of the supplier's returned material: approval completes the subproject, a return sends
+// Responsible-user review of the supplier's returned material: approval completes the project, a return sends
 // it back to the supplier. See Robot仿真协作流程调整方案.
 internal sealed partial class ProjectService
 {
@@ -24,7 +24,7 @@ internal sealed partial class ProjectService
             supplierFileId: latestSupplierFileId);
         await ProjectNotificationService.EnqueueMaterialReviewAsync(
             conn, tx, project, approved: true, null, current, options.WebBaseUrl, audit, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
+        var result = await ResultAsync(conn, tx, current, projectId, ct);
         await tx.CommitAsync(ct);
         return result;
     }
@@ -59,7 +59,7 @@ internal sealed partial class ProjectService
             "project", projectId, new { supplierFileId = latestSupplierFileId, reason }, ip, ct);
         await ProjectNotificationService.EnqueueMaterialReviewAsync(
             conn, tx, project, approved: false, reason, current, options.WebBaseUrl, audit, ct);
-        var result = ProjectJson.Project(await LoadProjectAsync(conn, tx, projectId, false, ct));
+        var result = await ResultAsync(conn, tx, current, projectId, ct);
         await tx.CommitAsync(ct);
         return result;
     }
