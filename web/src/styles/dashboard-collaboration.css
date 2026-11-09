@@ -74,12 +74,17 @@
 .dashboard-task-card .arco-list-item-extra-content { flex-shrink: 0; margin-left: 12px; }
 
 .dashboard-message-list .arco-list-item-meta-description { margin-top: 6px; }
+/* At most three lines per message; the full text is on the project's message tab (and in the title tooltip). */
 .dashboard-message-content {
-  display: block;
+  display: -webkit-box;
+  overflow: hidden;
   overflow-wrap: anywhere;
   color: var(--color-text-2);
   line-height: 20px;
   white-space: pre-wrap;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
 }
 
 .dashboard-pending-groups { border: 0; background: transparent; }
@@ -102,12 +107,16 @@
 
 .dashboard-overview { margin-bottom: 18px; }
 
-/* 桌面宽度下工作卡片铺到视口底部，空状态居中，避免大屏下半页留白。 */
+/* 桌面宽度下工作台正好占满一屏：卡片铺到视口底部、空状态居中；内容多时只在卡片内部滚动，
+   分页条留在卡片底部，页面本身不出现滚动条。窗口过矮时保留 560px 下限，改由页面滚动。 */
 @media (min-width: 992px) {
-  .dashboard-collaboration { display: flex; flex-direction: column; min-height: calc(100vh - 88px); }
-  .dashboard-workbench { flex: 1 0 auto; align-content: stretch; }
-  .dashboard-task-card { display: flex; flex-direction: column; }
-  .dashboard-task-card > .arco-card-body { display: flex; flex: 1 1 auto; flex-direction: column; }
+  .dashboard-collaboration { display: flex; flex-direction: column; height: calc(100dvh - 88px); min-height: 560px; }
+  .dashboard-workbench { flex: 1 1 0; min-height: 0; align-content: stretch; }
+  .dashboard-workbench > .arco-col { min-height: 0; }
+  .dashboard-task-card { display: flex; min-height: 0; flex-direction: column; }
+  .dashboard-task-card > .arco-card-body { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+  .dashboard-task-card > .arco-card-body > .dashboard-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .dashboard-task-card > .arco-card-body > .dashboard-pagination { flex: 0 0 auto; }
   .dashboard-task-card > .arco-card-body > .arco-empty,
   .dashboard-task-card > .arco-card-body > .dashboard-card-loading,
   .dashboard-task-card > .arco-card-body > .dashboard-feedback { margin: auto 0; }

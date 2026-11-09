@@ -354,7 +354,7 @@ export default function Dashboard() {
               <>
                 <Collapse
                   key={pendingPage}
-                  className="dashboard-pending-groups"
+                  className="dashboard-pending-groups dashboard-scroll"
                   bordered={false}
                   activeKey={pendingOpenKeys}
                   onChange={(_key, keys) => {
@@ -459,6 +459,7 @@ export default function Dashboard() {
               <>
                 <List
                   className="dashboard-message-list"
+                  wrapperClassName="dashboard-scroll"
                   dataSource={messageData.list}
                   render={(message) => {
                     const childLabel = message.projectName || `项目#${message.projectId}`
@@ -493,7 +494,7 @@ export default function Dashboard() {
                               <span className="dashboard-message-sender" title={message.senderName || '未知用户'}>{message.senderName || '未知用户'}</span>
                             </span>
                           )}
-                          description={<span className="dashboard-message-content">{message.content}</span>}
+                          description={<span className="dashboard-message-content" title={message.content}>{message.content}</span>}
                         />
                       </List.Item>
                     )
