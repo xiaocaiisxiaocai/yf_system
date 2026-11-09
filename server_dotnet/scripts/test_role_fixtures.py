@@ -12,7 +12,7 @@ TEST_ROLE_DENIED_GRANTS = {}
 TEST_ROLES = {
     "项目管理员": {"id": 2, "codes": (
         "dashboard", "project:list", "project:create", "project:update", "project:status",
-        "project:view_all", "file:upload", "file:download", "file:preview", "message:create",
+        "project:transfer", "file:upload", "file:download", "file:preview", "message:create",
     )},
     "内部成员": {"id": 3, "codes": (
         "dashboard", "project:list", "file:upload", "file:download", "file:preview",

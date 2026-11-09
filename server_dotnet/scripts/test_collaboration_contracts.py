@@ -247,7 +247,7 @@ def run_collaboration_checks(admin, Client, conn, check):
     section_id = _section(admin, secrets.token_hex(5))
     role_id = _role(admin, [
         "project:list", "project:create", "dashboard",
-        "message:create", "file:upload",
+        "message:create", "message:delete_any", "file:upload",
     ])
     first_user, first = _internal(admin, Client, conn, role_id, "协作甲", section_id)
     second_user, second = _internal(admin, Client, conn, role_id, "协作乙", section_id)
@@ -286,7 +286,8 @@ def run_collaboration_checks(admin, Client, conn, check):
           and all(message["id"] in message_activity_ids for message in messages))
 
     hidden_project = _project(second, admin, conn, second_supplier["id"])
-    hidden_message = admin.call(
+    # Only the responsible user (or the supplier) writes on a project.
+    hidden_message = second.call(
         "POST", f"/api/v1/projects/{hidden_project}/messages",
         {"content": "另一供应商不可见正文"},
     )
@@ -348,7 +349,7 @@ def run_collaboration_checks(admin, Client, conn, check):
 
     removed_content = messages[2]["content"]
     removed_activity = message_activity_ids[messages[2]["id"]]
-    admin.call("DELETE", f"/api/v1/messages/{messages[2]['id']}")
+    first.call("DELETE", f"/api/v1/messages/{messages[2]['id']}")
     removed_page = first_supplier_client.call(
         "GET", "/api/v1/collaboration/notifications?page=1&pageSize=100&unreadOnly=false")
     removed = next(item for item in removed_page["list"] if item["id"] == removed_activity)

@@ -3,7 +3,7 @@ import hashlib
 import secrets
 import time
 
-from test_business_acceptance import _create_project_group, _upload_chunks
+from test_business_acceptance import _create_project, _upload_chunks
 
 
 def wait_for_copy(client, job, timeout=40):
@@ -33,9 +33,8 @@ def submit_and_wait_copy(client, source_id, name):
 
 
 def run_background_copy_checks(client, conn, check, supplier_id):
-    group, source = _create_project_group(
+    source = _create_project(
         client, client, conn, supplier_id, "后台复制-" + secrets.token_hex(5))
-    client.call("PUT", f"/api/v1/projects/{source['id']}/status", {"status": "IN_PROGRESS"})
     payload = b"%PDF-1.4\n" + b"background-copy-fixture\n" * 25000 + b"%%EOF\n"
     # 内部发给供应商的资料须含 STEP（上传资料要求契约-2026-09-24），用 STEP 文件保持源项目只有一个文件。
     file_id, _, _ = _upload_chunks(client, source["id"], "background-copy.step", payload)
@@ -46,7 +45,7 @@ def run_background_copy_checks(client, conn, check, supplier_id):
     repeated = client.call("POST", f"/api/v1/projects/{source['id']}/copy", request, expected=202)
     check("background copy accepts a durable job and deduplicates a retried submission",
           job["jobId"] == repeated["jobId"] and job["sourceProjectId"] == source["id"]
-          and job["projectGroupId"] == group["id"] and job["targetName"] == name)
+          and "projectGroupId" not in job and job["targetName"] == name)
     client.call("POST", f"/api/v1/projects/{source['id']}/copy",
                 {**request, "name": name + "不同"}, expected=409)
     check("background copy idempotency key cannot be reused for another target", True)
@@ -57,7 +56,7 @@ def run_background_copy_checks(client, conn, check, supplier_id):
           and final["bytesCopied"] == final["bytesTotal"] == len(payload)
           and final["result"]["copyFileCount"] == 1 and final["completedAt"] is not None)
     target_id = final["result"]["projectId"]
-    listed = client.call("GET", f"/api/v1/project-groups/{group['id']}/copy-jobs")
+    listed = client.call("GET", "/api/v1/project-copy-jobs")
     restored = client.call("GET", f"/api/v1/project-copy-jobs/{job['jobId']}")
     check("background copy jobs remain discoverable after leaving the submit page",
           any(item["jobId"] == job["jobId"] for item in listed["jobs"])

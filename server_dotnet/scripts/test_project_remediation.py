@@ -13,7 +13,7 @@ from test_background_copy_contracts import submit_and_wait_copy
 
 from test_business_acceptance import (
     _approve_materials,
-    _create_project_group,
+    _create_project,
     _create_started_project,
     _ensure_project_metadata,
     _project_metadata,
@@ -268,7 +268,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     dashboardless_role_id = _new_role(client, ["project:list", "project:create"])
     dashboardless_user, dashboardless_client = _new_internal(
         client, Client, conn, dashboardless_role_id, "无工作台权限用户", section_id)
-    dashboardless_client.call("GET", "/api/v1/project-groups")
+    dashboardless_client.call("GET", "/api/v1/projects")
     dashboardless_client.call("GET", "/api/v1/dashboard/summary", expected=403)
     dashboardless_client.call("GET", "/api/v1/dashboard/pending-projects", expected=403)
     check("dashboard endpoints require the dashboard menu permission", True)
@@ -278,7 +278,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     _, no_project_client = _new_internal(
         client, Client, conn, no_project_role_id, "无项目菜单用户", section_id)
     creator_role_id = _new_role(client, ["project:list", "project:create"])
-    _, creator_client = _new_internal(
+    creator_user, creator_client = _new_internal(
         client, Client, conn, creator_role_id, "项目创建控制用户", section_id)
     create_only_role_id = _new_role(client, ["project:create"])
     _, create_only_client = _new_internal(
@@ -295,18 +295,17 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     client.call("PUT", f"/api/v1/admin/roles/{dashboardless_role_id}/permissions", {
         "permissionIds": [project_list_permission_id],
     })
-    no_project_client.call("GET", "/api/v1/project-groups", expected=403)
+    no_project_client.call("GET", "/api/v1/projects", expected=403)
     no_project_client.call("GET", f"/api/v1/projects/{access_project}", expected=403)
     no_project_client.call("GET", f"/api/v1/projects/{access_project}/messages", expected=403)
     no_project_client.call("GET", "/api/v1/supplier-options", expected=403)
     no_project_client.call("GET", "/api/v1/robot-parts?enabledOnly=true", expected=403)
     _ensure_project_metadata(client, supplier["id"])
-    create_only_client.call("POST", "/api/v1/project-groups", {
+    create_only_client.call("POST", "/api/v1/projects", {
         "name": "不应创建-" + secrets.token_hex(5),
         "description": "project menu gate regression",
         "supplierId": supplier["id"],
         **_project_metadata(conn, supplier["id"]),
-        "subprojectNames": ["不应创建-子项目-" + secrets.token_hex(5)],
     }, expected=403)
     scoped_supplier_options = dashboardless_client.call("GET", "/api/v1/supplier-options")
     creator_supplier_options = creator_client.call("GET", "/api/v1/supplier-options")
@@ -321,7 +320,9 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     }, expected=403)
     check(
         "project options require permissions and expose supplier-scoped robot parts",
-        {item["id"] for item in scoped_supplier_options} == {supplier["id"]}
+        # Every internal account sees every project, so every active supplier is a filter option.
+        {supplier["id"], unrelated_supplier["id"]}.issubset(
+            {item["id"] for item in scoped_supplier_options})
         and {supplier["id"], unrelated_supplier["id"]}.issubset(
             {item["id"] for item in creator_supplier_options})
         and creator_parts
@@ -337,49 +338,40 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         raise AssertionError(
             f"bootstrap admin must be the no-organization creator fixture: {bootstrap_admin!r}")
 
-    owned_group, owned_project = _create_project_group(
+    owned_project = _create_project(
         client, client, conn, supplier["id"],
         "服务端创建者归属-" + secrets.token_hex(5))
-    owned_detail = client.call(
-        "GET", f"/api/v1/project-groups/{owned_group['id']}")
-    owned_current = owned_detail["group"]
-    client.call("PUT", f"/api/v1/project-groups/{owned_group['id']}", {
-        "name": owned_current["name"] + "-已更新",
-        "description": owned_current["description"],
-        "supplierId": owned_current["supplierId"],
-        "workOrderNos": owned_current["workOrderNos"],
-        "machineModel": owned_current["machineModel"],
-        "robotPartId": owned_current["robotPartId"],
-        "priorityId": owned_current["priorityId"],
-        "robotTypeId": owned_current["robotTypeId"],
-        "robotOwnerContactIds": owned_current["robotOwnerContactIds"],
-        "expectedCompletionDate": owned_current["expectedCompletionDate"],
-        "expectedUpdatedAt": owned_current["updatedAt"],
+    client.call("PUT", f"/api/v1/projects/{owned_project['id']}", {
+        "name": owned_project["name"] + "-已更新",
+        "description": owned_project["description"],
+        "supplierId": owned_project["supplierId"],
+        "workOrderNos": owned_project["workOrderNos"],
+        "machineModel": owned_project["machineModel"],
+        "robotPartId": owned_project["robotPartId"],
+        "priorityId": owned_project["priorityId"],
+        "robotTypeId": owned_project["robotTypeId"],
+        "robotOwnerContactIds": owned_project["robotOwnerContactIds"],
+        "expectedCompletionDate": owned_project["expectedCompletionDate"],
+        "expectedUpdatedAt": owned_project["updatedAt"],
     })
-    added_child = client.call(
-        "POST", f"/api/v1/project-groups/{owned_group['id']}/projects", {
-            "name": "服务端归属新增子项目-" + secrets.token_hex(5),
-            "description": "inherits group owner",
-        })
-    copied = submit_and_wait_copy(client, owned_project["id"],
-                                  "服务端归属复制子项目-" + secrets.token_hex(5))
+    # A colleague copies someone else's project into a new project of their own.
+    copied = submit_and_wait_copy(creator_client, owned_project["id"],
+                                  "服务端归属复制项目-" + secrets.token_hex(5))
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT responsible_user_id,section_id FROM project_groups WHERE id=%s",
-            (owned_group["id"],),
+            "SELECT responsible_user_id,section_id,status FROM projects WHERE id=%s",
+            (owned_project["id"],),
         )
-        group_owner = cursor.fetchone()
+        owned_row = cursor.fetchone()
         cursor.execute(
-            "SELECT id,responsible_user_id,section_id FROM projects "
-            "WHERE id IN (%s,%s,%s) ORDER BY id",
-            (owned_project["id"], added_child["id"], copied["result"]["projectId"]),
+            "SELECT responsible_user_id,status FROM projects WHERE id=%s",
+            (copied["result"]["projectId"],),
         )
-        project_owners = cursor.fetchall()
+        copied_row = cursor.fetchone()
     check(
-        "project owner comes from the caller, survives update and is inherited by new and copied children",
-        group_owner == (bootstrap_admin[0], None)
-        and len(project_owners) == 3
-        and all(row[1:] == (bootstrap_admin[0], None) for row in project_owners),
+        "project owner comes from the caller and survives update; a copy belongs to whoever copied it",
+        owned_row == (bootstrap_admin[0], None, "IN_PROGRESS")
+        and copied_row == (creator_user["id"], "IN_PROGRESS"),
     )
 
     cross_supplier_name = "跨供应商料号拒绝-" + secrets.token_hex(5)
@@ -388,13 +380,12 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         "description": "robot part supplier validation regression",
         "supplierId": unrelated_supplier["id"],
         **_project_metadata(conn, supplier["id"]),
-        "subprojectNames": ["跨供应商料号拒绝子项目-" + secrets.token_hex(5)],
     }
     creator_client.call(
-        "POST", "/api/v1/project-groups", cross_supplier_payload, expected=400)
+        "POST", "/api/v1/projects", cross_supplier_payload, expected=400)
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT COUNT(*) FROM project_groups WHERE name=%s", (cross_supplier_name,))
+            "SELECT COUNT(*) FROM projects WHERE name=%s", (cross_supplier_name,))
         cross_supplier_writes = cursor.fetchone()[0]
     check(
         "project creation rejects a robot part owned by another supplier without writes",
@@ -410,7 +401,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
             "permissionIds": [item for item in supplier_role_permissions if item != project_list_id],
         })
-        supplier_client.call("GET", "/api/v1/project-groups", expected=403)
+        supplier_client.call("GET", "/api/v1/projects", expected=403)
         supplier_client.call("GET", f"/api/v1/projects/{access_project}", expected=403)
         supplier_client.call("GET", f"/api/v1/projects/{access_project}/messages", expected=403)
     finally:
@@ -421,7 +412,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
 
     role_id = _new_role(
         client, ["dashboard", "project:list", "project:create"])
-    view_all_role_id = _new_role(client, ["dashboard", "project:list", "project:view_all"])
+    view_all_role_id = _new_role(client, ["dashboard", "project:list"])
     old_user, old_client = _new_internal(client, Client, conn, role_id, "旧内部用户", section_id)
     view_all_user, view_all_client = _new_internal(
         client, Client, conn, view_all_role_id, "全局查看用户", section_id)
@@ -506,7 +497,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
     check("material approval refuses a supplier file committed while it waited",
           stale["code"] == 40903 and _assert_no_approval_side_effect(conn, newer_project))
 
-    # Only the responsible user reviews material: a global viewer neither approves nor gets the task,
+    # Only the responsible user reviews material: a colleague who sees the project neither approves nor gets the task,
     # and approval mails only active supplier contacts.
     notice_project = _new_project(
         old_client, client, conn, supplier["id"], "资料确认结果通知")
@@ -539,7 +530,7 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         submitted_mail = cursor.fetchone()[0]
     # Supplier mail goes only to active contacts; the fixture contact is disabled here, so the shared
     # login accounts are never mailed and nothing is queued.
-    check("material approval completes the subproject and mails no shared supplier account without contacts",
+    check("material approval completes the project and mails no shared supplier account without contacts",
           approved["status"] == "COMPLETED"
           and recipients == []
           and submitted_mail == 0)

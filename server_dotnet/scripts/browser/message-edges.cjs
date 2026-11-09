@@ -4,18 +4,16 @@ const { assert, OUT, s, f, record, login, api, projectMetadata, action, track } 
 
 async function createProjectGroup(context, token, supplierId, name, projectMetadataOptions) {
   const metadata = projectMetadataOptions ?? await projectMetadata(context, token, supplierId);
-  const group = await (await api(context, 'POST', '/project-groups', {
+  const project = await (await api(context, 'POST', '/projects', {
     name,
     description: '独立留言边界浏览器验收夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '留言边界机型',
     ...metadata,
-    subprojectNames: [name + ' 子项目'],
   }, token)).json();
-  const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
-  assert.equal(detail.projects.length, 1, 'message edges group must contain one subproject');
-  return detail.projects[0];
+  assert.equal(project.status, 'IN_PROGRESS', 'creating a project starts it');
+  return project;
 }
 
 (async () => {
@@ -44,7 +42,6 @@ async function createProjectGroup(context, token, supplierId, name, projectMetad
       context, admin.accessToken, f.suppliers.a.id,
       '留言边界-' + crypto.randomBytes(5).toString('hex'), supplierMetadata);
     await request('PUT', '/admin/supplier-contacts/' + activeContactId + '/status', { status: 'ACTIVE' });
-    await request('PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' });
     const endpoint = '/api/v1/projects/' + project.id + '/messages';
     const relative = '/projects/' + project.id + '/messages';
     const input = () => page.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
@@ -61,7 +58,6 @@ async function createProjectGroup(context, token, supplierId, name, projectMetad
         context, admin.accessToken, f.suppliers.a.id,
         '未读摘要竞态-' + crypto.randomBytes(4).toString('hex'));
       await request('PUT', '/admin/supplier-contacts/' + activeContactId + '/status', { status: 'ACTIVE' });
-      await request('PUT', '/projects/' + raceProject.id + '/status', { status: 'IN_PROGRESS' });
       const supplierContext = await browser.newContext();
       let release;
       const held = new Promise(resolve => { release = resolve; });

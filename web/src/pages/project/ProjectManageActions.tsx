@@ -245,6 +245,7 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
       </Modal>
 
       <Drawer
+        className="project-copy-jobs-drawer"
         width="min(560px, 100vw)"
         title="复制任务"
         visible={copyJobsOpen}

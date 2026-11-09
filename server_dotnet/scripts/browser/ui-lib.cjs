@@ -71,7 +71,7 @@ async function withRobotOwnerFixture(c,token,supplierId,fn){
  try{return await fn(contact);}finally{await rawStatus(c,token,contact.id,'DISABLED');}
 }
 async function api(c,method,url,data,token,expected=200){
- const fixtureOwner=method==='POST'&&url==='/project-groups'&&(data?.robotOwnerContactIds??[]).find(id=>robotOwnerFixtureIds.has(id));
+ const fixtureOwner=method==='POST'&&url==='/projects'&&(data?.robotOwnerContactIds??[]).find(id=>robotOwnerFixtureIds.has(id));
  if(fixtureOwner)await rawStatus(c,token,fixtureOwner,'ACTIVE');
  let r;
  try{r=await c.request.fetch(s.base+'/api/v1'+url,{method,data,headers:{Origin:s.base,Authorization:'Bearer '+token}});}

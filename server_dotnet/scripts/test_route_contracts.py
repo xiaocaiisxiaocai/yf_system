@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import secrets
 
-from test_business_acceptance import _create_project_group
+from test_business_acceptance import _create_project
 from test_project_remediation import _new_internal, _new_role, _new_supplier, _section
 
 
@@ -58,13 +58,13 @@ def run_recent_route_contracts(admin, Client, conn, check):
     role_id = _new_role(admin, ["project:list", "project:create", "message:create"])
     actor_user, actor = _new_internal(admin, Client, conn, role_id, "路由合同成员", section_id)
     transfer_role_id = _new_role(
-        admin, ["project:list", "project:view_all", "project:transfer"]
+        admin, ["project:list", "project:transfer"]
     )
     transfer_user, transfer_actor = _new_internal(
         admin, Client, conn, transfer_role_id, "路由合同转移员", section_id
     )
     supplier, _, supplier_actor = _new_supplier(admin, Client, conn)
-    group, project = _create_project_group(
+    project = _create_project(
         actor, admin, conn, supplier["id"], "路由合同项目-" + suffix
     )
     project_id = project["id"]
@@ -77,17 +77,26 @@ def run_recent_route_contracts(admin, Client, conn, check):
 
     actor.call(
         "PUT",
-        f"/api/v1/project-groups/{group['id']}/responsible",
-        {"responsibleUserId": actor_user["id"]},
+        f"/api/v1/projects/{project_id}/responsible",
+        {"responsibleUserId": transfer_user["id"]},
         expected=403,
     )
-    transferred = transfer_actor.call(
+    # Holding project:transfer is not enough for someone else's project outside one's organization.
+    transfer_actor.call(
         "PUT",
-        f"/api/v1/project-groups/{group['id']}/responsible",
+        f"/api/v1/projects/{project_id}/responsible",
+        {"responsibleUserId": transfer_user["id"]},
+        expected=403,
+    )
+    transferred = admin.call(
+        "PUT",
+        f"/api/v1/projects/{project_id}/responsible",
         {"responsibleUserId": transfer_user["id"]},
     )
-    check("responsible transfer requires transfer permission at the HTTP boundary",
+    check("responsible transfer requires transfer permission and owner, leader or administrator authority",
           transferred["responsibleUserId"] == transfer_user["id"])
+    # Hand it back so the original owner can keep writing below.
+    admin.call("PUT", f"/api/v1/projects/{project_id}/responsible", {"responsibleUserId": actor_user["id"]})
 
     dictionary = admin.call("POST", "/api/v1/project-dictionaries", {
         "type": "PRIORITY",
@@ -116,8 +125,7 @@ def run_recent_route_contracts(admin, Client, conn, check):
     check("robot-part supplier options require dict management permission",
           any(item["id"] == supplier["id"] for item in supplier_options))
 
-    # Drafts reject messages; the receipt contract below needs a started project.
-    admin.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "IN_PROGRESS"})
+    # Creating the project started it, so the responsible user can post right away.
     message = actor.call("POST", f"/api/v1/projects/{project_id}/messages", {
         "content": "路由合同消息-" + suffix,
     })
@@ -133,18 +141,23 @@ def run_recent_route_contracts(admin, Client, conn, check):
 
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT id,source_project_id FROM project_copies ORDER BY id DESC LIMIT 1"
+            "SELECT c.id,c.source_project_id,p.supplier_id FROM project_copies c "
+            "JOIN projects p ON p.id=c.source_project_id ORDER BY c.id DESC LIMIT 1"
         )
         latest_copy = cursor.fetchone()
     if latest_copy is None:
         raise AssertionError("background copy fixture must run before recent route contracts")
-    copy_id, source_project_id = latest_copy
+    copy_id, source_project_id, copy_supplier_id = latest_copy
+    if copy_supplier_id == supplier["id"]:
+        raise AssertionError("background copy fixture must belong to another supplier")
     source_history = admin.call("GET", f"/api/v1/projects/{source_project_id}/copy-history")
     copy_files = admin.call("GET", f"/api/v1/project-copies/{copy_id}/files?page=1&pageSize=20")
-    actor.call("GET", f"/api/v1/project-copies/{copy_id}/files?page=1&pageSize=20", expected=404)
+    # Every internal account sees every project; another supplier sees neither side of the copy.
+    colleague_files = actor.call("GET", f"/api/v1/project-copies/{copy_id}/files?page=1&pageSize=20")
+    supplier_actor.call("GET", f"/api/v1/project-copies/{copy_id}/files?page=1&pageSize=20", expected=404)
     check("copy history and file mappings are exposed only when both projects are visible",
           any(item["copyId"] == copy_id for item in source_history["copies"])
-          and copy_files["total"] >= 1)
+          and copy_files["total"] >= 1 and colleague_files["total"] == copy_files["total"])
 
     actor.call("POST", "/api/v1/admin/system/mail-retry", expected=403)
     supplier_actor.call("POST", "/api/v1/admin/system/mail-retry", expected=403)

@@ -4,8 +4,8 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
  b=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'layout');
  await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
  const detail=f.uiProjects?.a?.id;assert(detail,'Run business before layout to cover a real detail route');
- const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','Robot仿真协作'],['detail','/projects/'+detail,'/ 子项目'],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];
- routes.push(['group','/project-groups/'+f.uiProjects.a.groupId,'子项目'],['dictionaries','/system/dictionaries','数据字典']);
+ const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','Robot仿真协作'],['detail','/projects/'+detail,f.uiProjects.a.name],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];
+ routes.push(['dictionaries','/system/dictionaries','数据字典']);
  const results=[];
  // 整页 scrollWidth 查不到卡片内部的裁切（卡片 overflow 会把溢出藏起来）：窄屏下逐个核对标题、表格和操作按钮没有超出所在容器。
  const clippedInNarrowCards=name=>p.evaluate(page=>{
@@ -13,13 +13,9 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
   const inside=(label,element,container)=>{if(!element||!container)return bad.push(label+' missing');const a=box(element),b=box(container);if(a.right>b.right+1||a.left<b.left-1)bad.push(label+' outside container '+Math.round(a.left)+'-'+Math.round(a.right)+' vs '+Math.round(b.left)+'-'+Math.round(b.right))};
   const fits=(label,element)=>{if(!element)return bad.push(label+' missing');if(element.scrollWidth>element.clientWidth+1)bad.push(label+' scrollWidth '+element.scrollWidth+' > clientWidth '+element.clientWidth)};
   const q=selector=>document.querySelector(selector);
-  if(page==='detail'){
-   const card=q('.project-detail-summary-card');
-   fits('detail summary card',card);fits('detail heading',q('.project-detail-heading'));
-   inside('detail title block',q('.project-detail-title'),card);inside('detail title text',q('.project-detail-name h1'),card);
-  }else{
-   inside('group dock tab',q('.subproject-dock-tab'),q('.layout-content'));
-  }
+  const card=q('.project-detail-summary-card');
+  fits('detail summary card',card);fits('detail heading',q('.project-detail-heading'));
+  inside('detail title block',q('.project-detail-title'),card);inside('detail title text',q('.project-detail-name h1'),card);
   // 文件表：窄屏取舍列后不应再需要横向滚动，操作按钮必须落在自己的单元格内。
   const scroller=q('.file-table .arco-table-content-inner');if(scroller)fits('file table',scroller);
   for(const slots of document.querySelectorAll('.file-table .action-slots')){
@@ -36,7 +32,7 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
     if(name!=='password')await p.getByRole('button',{name:'账号菜单：系统管理员',exact:true}).waitFor();
     await p.waitForFunction(()=>![...document.querySelectorAll('.arco-spin-loading')].some(element=>element.getClientRects().length>0));
     const geometry=await p.evaluate(()=>({width:innerWidth,scroll:document.documentElement.scrollWidth}));assert(geometry.scroll<=geometry.width+1,name+' overflows page');
-    if(width<=720&&(name==='detail'||name==='group'))assert.deepStrictEqual(await clippedInNarrowCards(name),[],name+' has content clipped inside its cards at '+width+'px');
+    if(width<=720&&name==='detail')assert.deepStrictEqual(await clippedInNarrowCards(name),[],name+' has content clipped inside its cards at '+width+'px');
     await p.screenshot({path:OUT+'/layout-'+name+'-'+width+'x'+height+'.png',animations:'disabled'});results.push({name,route,width,height,status:'pass'});
    });
   }

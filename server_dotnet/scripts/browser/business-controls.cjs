@@ -20,29 +20,27 @@ async function loadProjectDefaults(context, token, supplierId) {
   };
 }
 
-async function createProjectGroup(context, token, supplierId, groupName, defaults) {
-  const group = await (await api(context, 'POST', '/project-groups', {
+async function createProject(context, token, supplierId, groupName, defaults) {
+  const project = await (await api(context, 'POST', '/projects', {
     name: groupName,
     description: '独立工作台、权限和控件验收夹具',
     supplierId,
     ...defaults,
-    subprojectNames: [groupName + ' 子项目'],
   }, token)).json();
-  const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
-  assert.equal(detail.projects.length, 1, 'project controls group must contain one subproject');
-  return { ...detail.projects[0], groupId: group.id, groupName };
+  assert.equal(project.status, 'IN_PROGRESS', 'creating a project starts it');
+  return project;
 }
 
-async function waitForCopyJob(context, token, groupId, jobId, timeout = 120000) {
+async function waitForCopyJob(context, token, jobId, timeout = 120000) {
   const deadline = Date.now() + timeout;
   let latest;
   for (;;) {
     const list = await (await api(
-      context, 'GET', '/project-groups/' + groupId + '/copy-jobs', undefined, token,
+      context, 'GET', '/project-copy-jobs', undefined, token,
     )).json();
     assert(Array.isArray(list.jobs), 'copy job list must contain jobs');
     latest = list.jobs.find(item => item.jobId === jobId);
-    assert(latest, 'copy job ' + jobId + ' must remain visible in its project group');
+    assert(latest, 'copy job ' + jobId + ' must remain visible to its requester');
     if (latest.status === 'succeeded') break;
     assert.notEqual(latest.status, 'failed', latest.error || 'copy job failed');
     assert(['pending', 'running'].includes(latest.status), 'unexpected copy job status ' + latest.status);
@@ -58,8 +56,7 @@ async function waitForCopyJob(context, token, groupId, jobId, timeout = 120000) 
   return detail;
 }
 
-const dashboardProjectLabel = project =>
-  `${project.groupName || project.projectGroupName || '主项目'} / ${project.name}`;
+const dashboardProjectLabel = project => project.name;
 
 async function choose(page, placeholder, optionName) {
   await page.locator('.arco-select').filter({ has: page.getByPlaceholder(placeholder, { exact: true }) }).click();
@@ -95,23 +92,20 @@ async function choose(page, placeholder, optionName) {
     const pendingProjects = [];
     const messageText = '工作台未读键盘跳转-' + marker;
     const defaults = await loadProjectDefaults(adminContext, adminToken, f.suppliers.a.id);
-    const childControlSource = await createProjectGroup(
-      adminContext, adminToken, f.suppliers.a.id, prefix + '-子项目控件', defaults);
+    const childControlSource = await createProject(
+      adminContext, adminToken, f.suppliers.a.id, prefix + '-复制源', defaults);
     const copiedFileName = prefix + '-复制源文件.pdf';
     const sourceOnlyMessage = '只属于复制源项目的留言-' + marker;
-    await api(adminContext, 'PUT', '/projects/' + childControlSource.id + '/status',
-      { status: 'IN_PROGRESS' }, adminToken);
     await uploadBytes(adminContext, adminToken, childControlSource.id, copiedFileName, tinyFile, { ensureStep: true });
     await api(adminContext, 'POST', '/projects/' + childControlSource.id + '/messages',
       { content: sourceOnlyMessage }, adminToken);
 
-    // API-only fixture setup: 11 subprojects with supplier-returned material awaiting the responsible user (admin)
+    // API-only fixture setup: 11 projects with supplier-returned material awaiting the responsible user (admin)
     // make the dashboard paginator real.
     for (let index = 0; index < 11; index += 1) {
-      const project = await createProjectGroup(
+      const project = await createProject(
         adminContext, adminToken, f.suppliers.a.id,
         prefix + '-' + String(index + 1).padStart(2, '0'), defaults);
-      await api(adminContext, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
       await uploadBytes(
         adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile, { ensureStep: true },
       );
@@ -124,7 +118,7 @@ async function choose(page, placeholder, optionName) {
       pendingProjects.push(project);
     }
 
-    await record('项目管理员可见非本人负责人项目且无系统管理菜单', async () => {
+    await record('其他内部账号可见非本人负责的项目但只读且无系统管理菜单', async () => {
       const managerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
       const managerPage = await managerContext.newPage();
       track(managerPage, 'business-controls-manager');
@@ -132,26 +126,31 @@ async function choose(page, placeholder, optionName) {
         const manager = await login(managerPage, f.users.manager.username, f.users.manager.changedPassword);
         assert.equal(typeof manager.user.realName, 'string');
         await managerPage.waitForURL(s.base + '/');
-        assert(manager.permissions.includes('project:view_all'), 'project manager fixture must have project:view_all');
         for (const label of ['供应商管理', '用户管理', '组织架构', '角色与权限', '操作日志', '系统参数']) {
           assert.equal(await managerPage.getByRole('menuitem', { name: label, exact: true }).count(), 0,
             'project manager must not expose system menu ' + label);
         }
         const listed = managerPage.waitForResponse(response => {
           const url = new URL(response.url());
-          return url.pathname === '/api/v1/project-groups' && url.searchParams.get('keyword') === pendingProjects[0].groupName
+          return url.pathname === '/api/v1/projects' && url.searchParams.get('keyword') === pendingProjects[0].name
             && response.status() === 200;
         });
         await managerPage.goto(s.base + '/projects');
-        const search = managerPage.getByPlaceholder('主项目名称', { exact: true });
-        await search.fill(pendingProjects[0].groupName);
+        const search = managerPage.getByPlaceholder('项目名称', { exact: true });
+        await search.fill(pendingProjects[0].name);
         await search.press('Enter');
         const body = await (await listed).json();
-        assert(body.list.some(item => item.id === pendingProjects[0].groupId),
-          'project:view_all must include a non-owner main project in the server result');
-        await managerPage.getByRole('link', { name: pendingProjects[0].groupName, exact: true }).click();
-        await managerPage.waitForURL(s.base + '/project-groups/' + pendingProjects[0].groupId);
-        await managerPage.getByText(pendingProjects[0].groupName, { exact: true }).waitFor();
+        const listedProject = body.list.find(item => item.id === pendingProjects[0].id);
+        assert(listedProject, 'every internal account must see a project it is not responsible for');
+        assert.equal(listedProject.canManage, false);
+        await managerPage.getByRole('link', { name: pendingProjects[0].name, exact: true }).click();
+        await managerPage.waitForURL(s.base + '/projects/' + pendingProjects[0].id);
+        await managerPage.getByRole('heading', { name: pendingProjects[0].name, exact: true }).waitFor();
+        await managerPage.getByRole('tab', { name: '文件', exact: true }).waitFor();
+        for (const label of ['编辑', '上传文件', '资料确认 OK', '退回资料', '终止']) {
+          assert.equal(await managerPage.getByRole('button', { name: label, exact: true }).count(), 0,
+            'a non-responsible account must not see ' + label);
+        }
       } finally {
         await managerContext.close();
       }
@@ -171,7 +170,7 @@ async function choose(page, placeholder, optionName) {
       const pendingFirst = await (await pendingFirstPromise).json();
       assert(summary.pendingTasks >= 11);
       assert(summary.unreadMessages >= 1);
-      for (const [title, value] of [['待审核资料子项目', summary.pendingTasks], ['未读留言', summary.unreadMessages]]) {
+      for (const [title, value] of [['待审核资料项目', summary.pendingTasks], ['未读留言', summary.unreadMessages]]) {
         const card = page.locator('.dashboard-stat-card').filter({ hasText: title });
         await card.getByText(String(value), { exact: true }).waitFor();
       }
@@ -200,7 +199,7 @@ async function choose(page, placeholder, optionName) {
       assert(target, 'page 2 must contain a dedicated pending fixture');
       await page.getByRole('link', { name: dashboardProjectLabel(target), exact: true }).click();
       await page.waitForURL(s.base + '/projects/' + target.id);
-      await page.getByRole('button', { name: '返回主项目', exact: true }).waitFor();
+      await page.getByRole('button', { name: '返回项目列表', exact: true }).waitFor();
 
       await page.goto(s.base + '/');
       const message = page.locator('.dashboard-message-item').filter({ hasText: messageText });
@@ -299,73 +298,42 @@ async function choose(page, placeholder, optionName) {
       page.expectedServerErrors.clear();
     });
 
-    await record('主项目详情显示服务端创建者且子项目资料待确认时仍可编辑公共资料', async () => {
+    await record('项目详情显示服务端负责人且资料待确认时仍可编辑公共资料', async () => {
       const pendingProject = pendingProjects[1];
-      const group = await (await api(
-        adminContext, 'GET', '/project-groups/' + pendingProject.groupId,
-        undefined, adminToken)).json();
-      assert.equal(group.group.responsibleUserId, admin.user.id);
-      assert.equal(group.group.materialPendingCount, 1);
-      assert(group.projects.some(item => item.id === pendingProject.id && item.materialReviewStatus === 'PENDING'));
-      await api(adminContext, 'PUT', '/project-groups/' + pendingProject.groupId, {
-        name: group.group.name,
+      const current = await (await api(
+        adminContext, 'GET', '/projects/' + pendingProject.id, undefined, adminToken)).json();
+      assert.equal(current.responsibleUserId, admin.user.id);
+      assert.equal(current.materialReviewStatus, 'PENDING');
+      assert.equal(current.canManage, true);
+      await api(adminContext, 'PUT', '/projects/' + pendingProject.id, {
+        name: current.name,
         description: '资料待确认时编辑-' + marker,
-        supplierId: group.group.supplierId,
-        workOrderNos: group.group.workOrderNos,
-        machineModel: group.group.machineModel,
-        robotPartId: group.group.robotPartId,
-        priorityId: group.group.priorityId,
-        robotTypeId: group.group.robotTypeId,
-        robotOwnerContactIds: group.group.robotOwnerContactIds,
-        expectedCompletionDate: group.group.expectedCompletionDate,
-        expectedUpdatedAt: group.group.updatedAt,
+        supplierId: current.supplierId,
+        workOrderNos: current.workOrderNos,
+        machineModel: current.machineModel,
+        robotPartId: current.robotPartId,
+        priorityId: current.priorityId,
+        robotTypeId: current.robotTypeId,
+        robotOwnerContactIds: current.robotOwnerContactIds,
+        expectedCompletionDate: current.expectedCompletionDate,
+        expectedUpdatedAt: current.updatedAt,
       }, adminToken);
     });
 
-    await record('子项目通过页面新增编辑复制删除且复制件含文件不含留言并显示履历', async () => {
-      const childName = prefix + '-页面新增';
-      const editedName = childName + '-已编辑';
+    await record('项目通过页面复制、编辑、终止后删除且复制件含文件不含留言并显示履历', async () => {
       const copyName = prefix + '-页面复制件';
-      // 主项目页以 Dock 面板承载子项目：先激活对应标签，再在面板内操作。
-      const tab = name => page.locator('.dv-tab').filter({
-        has: page.locator('.subproject-dock-tab-name').getByText(name, { exact: true }),
-      });
-      const pane = async (id, name) => {
-        await tab(name).click();
-        const located = page.locator('[data-subproject-id="' + id + '"]');
-        await located.waitFor();
-        return located;
-      };
+      const editedName = copyName + '-已编辑';
 
-      await page.goto(s.base + '/project-groups/' + childControlSource.groupId);
-      await page.getByText(childControlSource.groupName, { exact: true }).waitFor();
-      await page.getByRole('button', { name: '新增子项目', exact: true }).click();
-      let dialog = page.getByRole('dialog', { name: '新增子项目' });
-      await dialog.getByPlaceholder('子项目名称', { exact: true }).fill(childName);
-      await dialog.getByPlaceholder('选填', { exact: true }).fill('页面新增子项目说明');
-      const created = await action(page, '/project-groups/' + childControlSource.groupId + '/projects', 'POST',
-        () => dialog.getByRole('button', { name: '创建子项目', exact: true }).click());
-      assert.equal(created.name, childName);
-      await tab(childName).waitFor();
-
-      await (await pane(created.id, childName)).getByRole('button', { name: '编辑', exact: true }).click();
-      dialog = page.getByRole('dialog', { name: '编辑子项目' });
-      await dialog.getByPlaceholder('子项目名称', { exact: true }).fill(editedName);
-      await dialog.getByPlaceholder('选填', { exact: true }).fill('页面编辑后的子项目说明');
-      const edited = await action(page, '/projects/' + created.id, 'PUT',
-        () => dialog.getByRole('button', { name: '保存子项目', exact: true }).click());
-      assert.equal(edited.name, editedName);
-      await tab(editedName).waitFor();
-
-      await (await pane(childControlSource.id, childControlSource.name))
-        .getByRole('button', { name: '复制', exact: true }).click();
-      dialog = page.getByRole('dialog', { name: '复制子项目' });
-      await dialog.getByPlaceholder('新子项目名称', { exact: true }).fill(copyName);
+      await page.goto(s.base + '/projects/' + childControlSource.id);
+      await page.getByRole('heading', { name: childControlSource.name, exact: true }).waitFor();
+      await page.locator('.detail-actions').getByRole('button', { name: '复制', exact: true }).click();
+      let dialog = page.getByRole('dialog', { name: '复制项目' });
+      await dialog.getByPlaceholder('新项目名称', { exact: true }).fill(copyName);
       const acceptedJob = await action(page, '/projects/' + childControlSource.id + '/copy', 'POST',
         () => dialog.getByRole('button', { name: '创建复制任务', exact: true }).click(), 202);
       assert(Number.isSafeInteger(acceptedJob.jobId) && acceptedJob.jobId > 0);
       assert.equal(acceptedJob.sourceProjectId, childControlSource.id);
-      assert.equal(acceptedJob.projectGroupId, childControlSource.groupId);
+      assert(!('projectGroupId' in acceptedJob));
       assert.equal(acceptedJob.targetName, copyName);
       assert(['pending', 'running', 'succeeded'].includes(acceptedJob.status));
       assert.equal(acceptedJob.filesTotal, 3); // The internal-upload fixture also includes its required STEP and Excel.
@@ -373,22 +341,17 @@ async function choose(page, placeholder, optionName) {
       const jobCard = page.locator('[data-copy-job-id="' + acceptedJob.jobId + '"]');
       await jobCard.waitFor();
       await jobCard.getByText(copyName, { exact: true }).waitFor();
-      const copied = await waitForCopyJob(
-        adminContext, adminToken, childControlSource.groupId, acceptedJob.jobId,
-      );
+      const copied = await waitForCopyJob(adminContext, adminToken, acceptedJob.jobId);
       assert.equal(copied.result.copyFileCount, 3);
       assert(Number.isSafeInteger(copied.result.projectId) && copied.result.projectId > 0);
       await jobCard.getByText('已完成', { exact: true }).waitFor();
       await jobCard.getByText('已复制 3 个文件', { exact: true }).waitFor();
-      const jobsDrawer = page.locator('.project-copy-jobs-drawer');
-      await jobsDrawer.locator('.arco-drawer-close-icon').click();
-      await jobsDrawer.waitFor({ state: 'hidden' });
-      await tab(copyName).waitFor();
-
-      await (await pane(copied.result.projectId, copyName))
-        .getByRole('button', { name: '在独立页面打开' + copyName, exact: true }).click();
-      await page.waitForURL(s.base + '/projects/' + copied.result.projectId);
-      await page.getByLabel('子项目工作区', { exact: true }).waitFor({ state: 'detached' });
+      await jobCard.getByRole('button', { name: '进入副本', exact: true }).click();
+      await page.waitForURL(s.base + '/projects/' + copied.result.projectId + '?tab=files');
+      const copiedProject = await (await api(
+        adminContext, 'GET', '/projects/' + copied.result.projectId, undefined, adminToken)).json();
+      assert.equal(copiedProject.status, 'IN_PROGRESS', 'a copy starts at once');
+      assert.equal(copiedProject.responsibleUserId, admin.user.id, 'whoever copies owns the copy');
       await page.getByRole('row').filter({ hasText: copiedFileName }).waitFor();
       await page.getByRole('row').filter({ hasText: 'fixture-assembly.step' }).waitFor();
       await page.getByRole('row').filter({ hasText: 'fixture-motion-flow.xlsx' }).waitFor();
@@ -408,13 +371,25 @@ async function choose(page, placeholder, optionName) {
         undefined, adminToken)).json();
       assert.equal(copiedMessages.total, 0);
 
-      await page.getByRole('button', { name: '返回主项目', exact: true }).click();
-      await (await pane(created.id, editedName)).getByRole('button', { name: '删除', exact: true }).click();
-      await action(page, '/projects/' + created.id, 'DELETE', () =>
+      await page.locator('.detail-actions').getByRole('button', { name: '编辑', exact: true }).click();
+      dialog = page.getByRole('dialog', { name: '编辑项目' });
+      await dialog.getByPlaceholder('项目名称', { exact: true }).fill(editedName);
+      const edited = await action(page, '/projects/' + copied.result.projectId, 'PUT',
+        () => dialog.getByRole('button', { name: '保存', exact: true }).click());
+      assert.equal(edited.name, editedName);
+      await page.getByRole('heading', { name: editedName, exact: true }).waitFor();
+
+      // Only terminated projects can be deleted.
+      assert.equal(await page.locator('.detail-actions').getByRole('button', { name: '删除', exact: true }).count(), 0);
+      await api(adminContext, 'PUT', '/projects/' + copied.result.projectId + '/status',
+        { status: 'TERMINATED' }, adminToken);
+      await page.reload();
+      await page.locator('.detail-actions').getByRole('button', { name: '删除', exact: true }).click();
+      await action(page, '/projects/' + copied.result.projectId, 'DELETE', () =>
         page.locator('.arco-popconfirm:visible').last()
           .getByRole('button', { name: '确定', exact: true }).click());
-      await tab(editedName).waitFor({ state: 'detached' });
-      await api(adminContext, 'GET', '/projects/' + created.id, undefined, adminToken, 404);
+      await page.waitForURL(s.base + '/projects');
+      await api(adminContext, 'GET', '/projects/' + copied.result.projectId, undefined, adminToken, 404);
     });
 
     await record('内置角色名称禁止编辑而说明草稿可取消', async () => {
@@ -445,7 +420,7 @@ async function choose(page, placeholder, optionName) {
       await page.goto(s.base + '/logs');
       await page.getByRole('button', { name: '查询', exact: true }).waitFor();
       await choose(page, '具体操作', '开始项目');
-      await choose(page, '对象类型', '子项目');
+      await choose(page, '对象类型', '项目');
       const rangeInputs = page.locator('.audit-filter-panel .arco-picker input');
       assert.equal(await rangeInputs.count(), 2);
       await rangeInputs.nth(0).click();

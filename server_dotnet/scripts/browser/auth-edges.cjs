@@ -200,10 +200,7 @@ async function initializePassword(browser, user) {
         ), initialPending.list.length);
         await pendingCard.locator('.arco-tag').getByText(String(initialPending.total), { exact: true }).first().waitFor();
         const firstPending = initialPending.list[0];
-        const firstLabel = firstPending.projectGroupName
-          ? firstPending.projectGroupName + ' / ' + firstPending.name
-          : firstPending.name;
-        await pendingCard.getByRole('link', { name: firstLabel, exact: true }).first().waitFor();
+        await pendingCard.getByRole('link', { name: firstPending.name, exact: true }).first().waitFor();
       } else {
         assert.equal(initialPending.total, 0, 'empty first pending page must report zero total');
         await pendingCard.getByText('暂无待审核的资料', { exact: true }).waitFor();

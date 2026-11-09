@@ -9,18 +9,16 @@ const {
 const fileListPath = projectId => '/api/v1/projects/' + projectId + '/files';
 
 async function createProjectGroup(context, token, supplierId, name) {
-  const group = await (await api(context, 'POST', '/project-groups', {
+  const project = await (await api(context, 'POST', '/projects', {
     name,
     description: 'O26/O28 独立浏览器验收夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '文件边界机型',
     ...await projectMetadata(context, token, supplierId),
-    subprojectNames: [name + ' 子项目'],
   }, token)).json();
-  const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
-  assert.equal(detail.projects.length, 1, 'file fixture must contain one subproject');
-  return detail.projects[0];
+  assert.equal(project.status, 'IN_PROGRESS', 'creating a project starts it');
+  return project;
 }
 
 function workbookBytes(marker) {
@@ -83,10 +81,9 @@ async function assertExcelGrid(dialog, expectedRows) {
     await api(admin, 'PUT', '/admin/system/configs', {
       items: [{ key: 'upload.chunk_size', value: String(1024 * 1024) }],
     }, adminToken);
+    // The page uploads as admin, and only the responsible user writes, so admin creates (owns) the project.
     const project = await createProjectGroup(
-      internalApi, f.users.manager.token, f.suppliers.a.id, '文件边界验收-' + suffix);
-    await api(internalApi, 'PUT', '/projects/' + project.id + '/status',
-      { status: 'IN_PROGRESS' }, f.users.manager.token);
+      admin, adminToken, f.suppliers.a.id, '文件边界验收-' + suffix);
 
     const c2sNames = [];
     const s2cNames = [];
@@ -94,7 +91,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       // STEP 与压缩文件本身属于必需资料（上传资料要求契约-2026-09-24），C2S 夹具不会触发补传，计数保持不变。
       const name = prefix + '-c2s-' + String(index).padStart(2, '0') + (index === 0 ? '.step' : '.zip');
       const bytes = Buffer.from('C2S|' + suffix + '|' + index);
-      await uploadApi(internalApi, f.users.manager.token, project.id, name, bytes);
+      await uploadApi(admin, adminToken, project.id, name, bytes);
       c2sNames.push(name);
     }
     for (let index = 0; index < 6; index++) {

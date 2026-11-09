@@ -27,7 +27,7 @@ def _flatten_departments(nodes):
 def _activate_user(admin_client, Client, check, employee_no, initial_password, user_id, label):
     actor = Client(admin_client.base)
     first = actor.login(employee_no, initial_password)
-    actor.call("GET", "/api/v1/project-groups", expected=403)
+    actor.call("GET", "/api/v1/projects", expected=403)
     changed_password = _password()
     actor.call("PUT", "/api/v1/auth/password", {
         "oldPassword": initial_password,
@@ -46,7 +46,7 @@ def _activate_user(admin_client, Client, check, employee_no, initial_password, u
 
 
 def _upload_chunks(actor, project_id, file_name, content, *, ensure_step=False, signer_name=None):
-    """ensure_step=True: an internal actor uploading non-STEP material to a subproject that may not
+    """ensure_step=True: an internal actor uploading non-STEP material to a project that may not
     have a STEP 3D drawing yet first gets the fixture STEP file (上传资料要求契约-2026-09-24)."""
     initialized, state, merged = upload_bytes(
         actor, project_id, file_name, content, ensure_step=ensure_step, signer_name=signer_name)
@@ -64,7 +64,7 @@ ROBOT_OWNER_FIXTURE_NAME = "隔离回归 Robot 负责人"
 def _robot_owner_contact_id(conn, supplier_id):
     """The supplier's fixture contact used as Robot owner.
 
-    It is kept DISABLED except while a main project is created (see _create_project_group): a supplier with an
+    It is kept DISABLED except while a project is created (see _create_project): a supplier with an
     active contact must sign its messages and uploads and has its mail sent to contacts, which the shared
     suites do not exercise. A contact that is already selected may stay selected after it is disabled.
     """
@@ -158,27 +158,25 @@ def _ensure_project_metadata(admin_client, supplier_id):
         })
 
 
-def _create_project_group(creator_client, admin_client, conn, supplier_id, name):
-    """Create a main project as its actual owner and return it with its first child."""
+def _create_project(creator_client, admin_client, conn, supplier_id, name):
+    """Create a project as its actual owner. Creating a project starts it (项目协作契约-2026-11-09)."""
     _ensure_project_metadata(admin_client, supplier_id)
-    child_name = name + " 子项目"
     metadata = _project_metadata(conn, supplier_id)
     payload = {
         "name": name,
         "description": "owned isolated full business acceptance fixture",
         "supplierId": supplier_id,
         **metadata,
-        "subprojectNames": [child_name],
     }
     _set_robot_owner_contact_status(conn, supplier_id, "ACTIVE")
     try:
-        group = creator_client.call("POST", "/api/v1/project-groups", payload)
+        project = creator_client.call("POST", "/api/v1/projects", payload)
     finally:
         _set_robot_owner_contact_status(conn, supplier_id, "DISABLED")
-    detail = creator_client.call("GET", f"/api/v1/project-groups/{group['id']}")
-    current = detail.get("group") or {}
+    current = creator_client.call("GET", f"/api/v1/projects/{project['id']}")
     if (
-        current.get("robotPartId") != metadata["robotPartId"]
+        current.get("status") != "IN_PROGRESS"
+        or current.get("robotPartId") != metadata["robotPartId"]
         or not current.get("robotPartNumber")
         or not current.get("robotModelName")
         or current.get("robotOwnerName") != ROBOT_OWNER_FIXTURE_NAME
@@ -186,14 +184,10 @@ def _create_project_group(creator_client, admin_client, conn, supplier_id, name)
         or "robotVendorId" in current
         or "robotVendorName" in current
         or "robotModelId" in current
+        or "projectGroupId" in current
     ):
-        raise AssertionError(f"main project robot-part response contract mismatch: {current!r}")
-    projects = detail.get("projects") or []
-    if len(projects) != 1:
-        raise AssertionError(
-            f"main project creation did not return exactly one subproject: {projects!r}"
-        )
-    return group, projects[0]
+        raise AssertionError(f"project creation response contract mismatch: {current!r}")
+    return current
 
 
 def _audit_actions(admin_client, target_type, target_id):
@@ -233,7 +227,7 @@ def _exchange_messages(internal_client, supplier_client, project_id, internal_id
 
 
 def _approve_materials(reviewer_client, project_id):
-    """The responsible user confirms the latest supplier material, which completes the subproject."""
+    """The responsible user confirms the latest supplier material, which completes the project."""
     project = reviewer_client.call("GET", f"/api/v1/projects/{project_id}")
     return reviewer_client.call("POST", f"/api/v1/projects/{project_id}/materials/approve", {
         "expectedSupplierFileId": project["latestSupplierFileId"],
@@ -241,12 +235,7 @@ def _approve_materials(reviewer_client, project_id):
 
 
 def _create_started_project(creator_client, admin_client, conn, supplier_id, name):
-    _, project = _create_project_group(
-        creator_client, admin_client, conn, supplier_id, name)
-    admin_client.call("PUT", f"/api/v1/projects/{project['id']}/status", {
-        "status": "IN_PROGRESS",
-    })
-    return project["id"]
+    return _create_project(creator_client, admin_client, conn, supplier_id, name)["id"]
 
 
 def run_business_acceptance(client, Client, conn, check):
@@ -510,13 +499,9 @@ def run_business_acceptance(client, Client, conn, check):
         "供应商乙项目", check)
 
     project_ids_a = {item["id"] for item in supplier_a_client.call(
-        "GET", "/api/v1/project-groups?pageSize=100")["list"]}
+        "GET", "/api/v1/projects?pageSize=100")["list"]}
     project_ids_b = {item["id"] for item in supplier_b_client.call(
-        "GET", "/api/v1/project-groups?pageSize=100")["list"]}
-    project_group_a = internal_client.call(
-        "GET", f"/api/v1/projects/{project_a}")["projectGroupId"]
-    project_group_b = internal_client.call(
-        "GET", f"/api/v1/projects/{project_b}")["projectGroupId"]
+        "GET", "/api/v1/projects?pageSize=100")["list"]}
     with conn.cursor() as cursor:
         cursor.execute(
             "SELECT "
@@ -629,8 +614,8 @@ def run_business_acceptance(client, Client, conn, check):
         foreign_write_state_after = cursor.fetchone()
     check(
         "supplier project file upload content download batch and message data is isolated both ways",
-        project_group_a in project_ids_a and project_group_b not in project_ids_a
-        and project_group_b in project_ids_b and project_group_a not in project_ids_b
+        project_a in project_ids_a and project_b not in project_ids_a
+        and project_b in project_ids_b and project_a not in project_ids_b
         and foreign_write_state_after == foreign_write_state_before,
     )
 
@@ -691,13 +676,23 @@ def run_business_acceptance(client, Client, conn, check):
 
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT project_id,event_type,recipient_user_id,status,retry_count "
+            "SELECT project_id,event_type,recipient_user_id,status,retry_count,recipient_email "
             "FROM email_outbox WHERE project_id IN (%s,%s) ORDER BY id",
             (project_a, project_b),
         )
-        outbox = cursor.fetchall()
-    rows_a = {(event_type, recipient_id) for pid, event_type, recipient_id, _, _ in outbox if pid == project_a}
-    rows_b = {(event_type, recipient_id) for pid, event_type, recipient_id, _, _ in outbox if pid == project_b}
+        outbox = [row[:5] for row in cursor.fetchall()]
+        cursor.execute(
+            "SELECT o.recipient_email,u.email FROM email_outbox o JOIN users u ON u.id=o.recipient_user_id "
+            "WHERE o.project_id IN (%s,%s) AND u.user_type='SUPPLIER'",
+            (project_a, project_b),
+        )
+        supplier_rows = cursor.fetchall()
+    # Creating a project mails its START to the Robot owner contact, which the fixture enables only while
+    # creating; that row is anchored to a supplier account but addressed to the contact, never the login.
+    rows_a = {(event_type, recipient_id) for pid, event_type, recipient_id, _, _ in outbox
+              if pid == project_a and event_type != "PROJECT_STARTED"}
+    rows_b = {(event_type, recipient_id) for pid, event_type, recipient_id, _, _ in outbox
+              if pid == project_b and event_type != "PROJECT_STARTED"}
     check(
         "disabled mail worker leaves complete tenant-scoped notification outbox",
         len(outbox) > 0
@@ -714,5 +709,8 @@ def run_business_acceptance(client, Client, conn, check):
         and all(recipient_id not in (account_a["id"], account_b["id"])
                 for _, recipient_id in rows_a | rows_b)
         and all(recipient_id != account_b["id"] for _, recipient_id in rows_a)
-        and all(recipient_id != account_a["id"] for _, recipient_id in rows_b),
+        and all(recipient_id != account_a["id"] for _, recipient_id in rows_b)
+        and len(supplier_rows) >= 2
+        and all(recipient.lower().startswith("robot-owner-") and recipient != (login or "")
+                for recipient, login in supplier_rows),
     )

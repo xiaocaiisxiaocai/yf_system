@@ -12,7 +12,7 @@ from upload_contract import init_request
 from test_business_acceptance import (
     _activate_user,
     _approve_materials,
-    _create_project_group,
+    _create_project,
     _download_matches,
     _password,
     _upload_chunks,
@@ -65,6 +65,22 @@ def _project_snapshot(conn, project_id):
         )
         activities = tuple(cursor.fetchall())
     return project, history, outbox, files, messages, uploads, audit, activities
+
+
+def _edit_payload(detail):
+    return {
+        "name": detail["name"],
+        "description": "不可编辑",
+        "supplierId": detail["supplierId"],
+        "workOrderNos": detail["workOrderNos"],
+        "machineModel": detail["machineModel"],
+        "robotPartId": detail["robotPartId"],
+        "priorityId": detail["priorityId"],
+        "robotTypeId": detail["robotTypeId"],
+        "robotOwnerContactIds": detail["robotOwnerContactIds"],
+        "expectedCompletionDate": detail["expectedCompletionDate"],
+        "expectedUpdatedAt": detail["updatedAt"],
+    }
 
 
 def _expect_atomic_rejection(check, conn, actor, project_id, label, method, path,
@@ -185,18 +201,18 @@ def run_workflow_acceptance(client, Client, conn, check):
         internal_user["id"], "workflow project owner")
 
     menuless_role = client.call("POST", "/api/v1/admin/roles", {
-        "name": "全局查看无项目菜单-" + suffix,
+        "name": "无项目菜单-" + suffix,
         "description": "verifies notification recipients can actually open the project",
     })
     client.call("PUT", f"/api/v1/admin/roles/{menuless_role['id']}/permissions", {
-        "permissionIds": [permission_ids["dashboard"], permission_ids["project:view_all"]],
+        "permissionIds": [permission_ids["dashboard"]],
     })
     menuless_employee = "wf_menuless_" + suffix
     menuless_initial = _password()
     menuless_user = client.call("POST", "/api/v1/admin/users", {
         "employeeNo": menuless_employee,
         "password": menuless_initial,
-        "realName": "全局查看无项目菜单用户",
+        "realName": "无项目菜单用户",
         "email": menuless_employee + "@example.invalid",
         "departmentId": owner_section_id,
         "roleId": menuless_role["id"],
@@ -204,54 +220,47 @@ def run_workflow_acceptance(client, Client, conn, check):
     menuless_client = _activate_user(
         client, Client, check, menuless_employee, menuless_initial,
         menuless_user["id"], "workflow menu-less member")
-    menuless_client.call("GET", "/api/v1/project-groups", expected=403)
+    menuless_client.call("GET", "/api/v1/projects", expected=403)
 
-    group, created = _create_project_group(
+    created = _create_project(
         internal_client, client, conn, supplier["id"],
         "工作流完整验收项目-" + suffix)
     project_id = created["id"]
-    group_id = group["id"]
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT action,from_status,to_status FROM project_group_status_logs "
-            "WHERE project_group_id=%s ORDER BY id",
-            (group_id,),
-        )
-        draft_history = list(cursor.fetchall())
-        cursor.execute(
-            "SELECT COUNT(*) FROM email_outbox WHERE project_id=%s",
+            "SELECT action,from_status,to_status FROM project_status_logs WHERE project_id=%s ORDER BY id",
             (project_id,),
         )
-        draft_outbox = cursor.fetchone()[0]
+        creation_history = list(cursor.fetchall())
     check(
-        "project creation persists an auditable DRAFT without notifications",
-        created["status"] == "DRAFT"
+        "creating a project starts it with an auditable START",
+        created["status"] == "IN_PROGRESS"
+        and created["canManage"] is True
         and "confirmSide" not in created
         and "latestSubmissionId" not in created
-        and draft_history == [("CREATE", None, "DRAFT")]
-        and _audit_actions(conn, project_id) == ["PROJECT_CREATE"]
-        and draft_outbox == 0,
+        and creation_history == [("START", None, "IN_PROGRESS")]
+        and _audit_actions(conn, project_id) == ["PROJECT_CREATE", "PROJECT_START"],
     )
 
-    # The optional expectedStatus guard rejects a stale caller (409 / 40903) without changing anything, and a
-    # draft passes no material to the supplier: its file list is empty.
-    stale_status = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
-        "status": "IN_PROGRESS", "expectedStatus": "IN_PROGRESS",
+    # The optional expectedStatus guard rejects a stale caller (409 / 40903) without changing anything, and
+    # another internal account can read the project but not change it.
+    stale_status = internal_client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+        "status": "TERMINATED", "expectedStatus": "TERMINATED",
     }, expected=409)
-    draft_supplier_files = supplier_client.call(
-        "GET", f"/api/v1/projects/{project_id}/files?pageSize=100")
+    colleague_status = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+        "status": "TERMINATED",
+    }, expected=403)
+    colleague_view = client.call("GET", f"/api/v1/projects/{project_id}")
     check(
-        "stale expectedStatus is a 40903 conflict and drafts list no files to suppliers",
-        stale_status["code"] == 40903 and draft_supplier_files["total"] == 0,
+        "stale expectedStatus is a 40903 conflict and non-responsible accounts stay read-only",
+        stale_status["code"] == 40903 and colleague_status["code"] // 100 == 403
+        and colleague_view["id"] == project_id and colleague_view["canManage"] is False,
     )
 
-    started = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
-        "status": "IN_PROGRESS",
-    })
-    terminated = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+    terminated = internal_client.call("PUT", f"/api/v1/projects/{project_id}/status", {
         "status": "TERMINATED",
     })
-    restarted = client.call("PUT", f"/api/v1/projects/{project_id}/status", {
+    restarted = internal_client.call("PUT", f"/api/v1/projects/{project_id}/status", {
         "status": "IN_PROGRESS",
     })
     with conn.cursor() as cursor:
@@ -264,19 +273,18 @@ def run_workflow_acceptance(client, Client, conn, check):
         # Each management transition would mail the supplier's active contacts (one switch per event).
         cursor.execute(
             "SELECT o.event_type,u.user_type FROM email_outbox o "
-            "LEFT JOIN users u ON u.id=o.recipient_user_id WHERE o.project_id=%s",
+            "LEFT JOIN users u ON u.id=o.recipient_user_id "
+            "WHERE o.project_id=%s AND o.event_type IN ('PROJECT_TERMINATED','PROJECT_RESTARTED')",
             (project_id,),
         )
         management_outbox = list(cursor.fetchall())
     project_audits = _audit_actions(conn, project_id)
     check(
         "terminate and restart persist exact state history and audit",
-        started["status"] == "IN_PROGRESS"
-        and terminated["status"] == "TERMINATED"
+        terminated["status"] == "TERMINATED"
         and restarted["status"] == "IN_PROGRESS"
         and management_history == [
-            ("CREATE", None, "DRAFT"),
-            ("START", "DRAFT", "IN_PROGRESS"),
+            ("START", None, "IN_PROGRESS"),
             ("TERMINATE", "IN_PROGRESS", "TERMINATED"),
             ("RESTART", "TERMINATED", "IN_PROGRESS"),
         ]
@@ -314,17 +322,14 @@ def run_workflow_acceptance(client, Client, conn, check):
     owner_pending = internal_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
     owner_summary = internal_client.call("GET", "/api/v1/dashboard/summary")
     supplier_pending = supplier_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100")
-    pending_group = supplier_client.call("GET", f"/api/v1/project-groups/{group_id}")
-    pending_list = internal_client.call("GET", "/api/v1/project-groups?page=1&pageSize=100")
-    pending_group_item = next(item for item in pending_list["list"] if item["id"] == group_id)
+    pending_list = internal_client.call("GET", "/api/v1/projects?materialState=PENDING&page=1&pageSize=100")
     check(
-        "pending material is the owner's dashboard task and the main project's pending count",
+        "pending material is the owner's dashboard task and filters the project list",
         any(item["id"] == project_id and item["materialReviewStatus"] == "PENDING"
             for item in owner_pending["list"])
         and owner_summary["pendingTasks"] >= 1
         and all(item["id"] != project_id for item in supplier_pending["list"])
-        and pending_group["group"]["materialPendingCount"] == 1
-        and pending_group_item["materialPendingCount"] == 1,
+        and any(item["id"] == project_id for item in pending_list["list"]),
     )
     menuless_client.call("GET", "/api/v1/dashboard/pending-projects?page=1&pageSize=100", expected=403)
     check("dashboard tasks require project:list", True)
@@ -376,7 +381,6 @@ def run_workflow_acceptance(client, Client, conn, check):
     completed_once = internal_client.call("POST", material_path + "/approve", {
         "expectedSupplierFileId": second_file,
     })
-    group_after_approval = internal_client.call("GET", f"/api/v1/project-groups/{group_id}")["group"]
 
     reopen_path = f"/api/v1/projects/{project_id}/reopen"
     reopen_body = {"expectedUpdatedAt": completed_once["updatedAt"], "reason": "动作节拍需要返工"}
@@ -393,22 +397,19 @@ def run_workflow_acceptance(client, Client, conn, check):
         check, conn, internal_client, project_id, "reopen against an older version", "POST", reopen_path,
         {"expectedUpdatedAt": completed_once["createdAt"], "reason": "陈旧版本"})
     reopened = internal_client.call("POST", reopen_path, reopen_body)
-    group_after_reopen = internal_client.call("GET", f"/api/v1/project-groups/{group_id}")["group"]
     completed = internal_client.call("POST", material_path + "/approve", {
         "expectedSupplierFileId": second_file,
     })
-    group_after_completion = internal_client.call("GET", f"/api/v1/project-groups/{group_id}")["group"]
     check(
         "approval completes, reopening returns the material, and approval completes again",
         completed_once["status"] == "COMPLETED"
         and completed_once["materialReviewStatus"] is None
-        and group_after_approval["status"] == "COMPLETED"
+        and completed_once["completedAt"] is not None
         and stale_reopen["code"] == 40903
         and (reopened["status"], reopened["materialReviewStatus"], reopened["materialReviewReason"])
         == ("IN_PROGRESS", "RETURNED", "动作节拍需要返工")
-        and group_after_reopen["status"] == "IN_PROGRESS"
-        and completed["status"] == "COMPLETED"
-        and group_after_completion["status"] == "COMPLETED",
+        and reopened["completedAt"] is None
+        and completed["status"] == "COMPLETED",
     )
     _check_equal(
         check,
@@ -489,6 +490,14 @@ def run_workflow_acceptance(client, Client, conn, check):
     _expect_atomic_rejection(
         check, conn, supplier_client, project_id, "completed message create",
         "POST", f"/api/v1/projects/{project_id}/messages", {"content": "不可新增"})
+    # Only the responsible user writes, so hand the completed project to the administrator, who also holds
+    # the delete permissions: the remaining rejections then come from the completed state itself.
+    _expect_atomic_rejection(
+        check, conn, client, project_id, "completed project edit by a non-responsible account",
+        "PUT", f"/api/v1/projects/{project_id}", _edit_payload(detail), expected=403)
+    admin_id = client.call("GET", "/api/v1/auth/profile")["user"]["id"]
+    client.call("PUT", f"/api/v1/projects/{project_id}/responsible", {"responsibleUserId": admin_id})
+    detail = client.call("GET", f"/api/v1/projects/{project_id}")
     _expect_atomic_rejection(
         check, conn, client, project_id, "completed message delete",
         "DELETE", f"/api/v1/messages/{message['id']}")
@@ -497,14 +506,9 @@ def run_workflow_acceptance(client, Client, conn, check):
         "DELETE", f"/api/v1/files/{file_id}")
     _expect_atomic_rejection(
         check, conn, client, project_id, "completed project edit",
-        "PUT", f"/api/v1/projects/{project_id}", {
-            "name": created["name"],
-            "description": "不可编辑",
-            "supplierId": supplier["id"],
-            "expectedUpdatedAt": detail["updatedAt"],
-        })
+        "PUT", f"/api/v1/projects/{project_id}", _edit_payload(detail))
     _expect_atomic_rejection(
-        check, conn, internal_client, project_id, "completed material return",
+        check, conn, client, project_id, "completed material return",
         "POST", f"/api/v1/projects/{project_id}/materials/return",
         {"expectedSupplierFileId": second_file, "reason": "已完成"})
     _expect_atomic_rejection(

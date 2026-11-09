@@ -37,7 +37,7 @@ from test_system_contracts import run_system_checks
 from test_project_remediation import run_project_remediation_checks
 from test_route_contracts import run_anonymous_route_contracts, run_recent_route_contracts
 from test_collaboration_contracts import run_collaboration_checks
-from test_business_acceptance import _create_project_group, run_business_acceptance
+from test_business_acceptance import _create_project, run_business_acceptance
 from test_workflow_acceptance import run_workflow_acceptance
 from test_manual_supplier_roles import run_manual_supplier_role_checks
 from test_supplier_contacts import run_supplier_contact_checks
@@ -527,12 +527,12 @@ try:
                     f"Loopback test host readiness failed: {error}; "
                     + api_log_path.read_text(errors="replace")[-1800:]
                 ) from error
-            client.call("GET", "/api/v1/project-groups", expected=401)
+            client.call("GET", "/api/v1/projects", expected=401)
             check("anonymous API denied", True)
             run_anonymous_route_contracts(client, check)
             result = client.login("admin", initial)
             check("bootstrap direct login enforces password change without CAPTCHA", result["mustChangePassword"])
-            client.call("GET", "/api/v1/project-groups", expected=403)
+            client.call("GET", "/api/v1/projects", expected=403)
             weak_change = client.call("PUT", "/api/v1/auth/password", {
                 "oldPassword": initial, "newPassword": "abcde"
             }, expected=400)
@@ -574,17 +574,16 @@ try:
                 run_system_checks(client, conn, check)
             supplier = client.call("POST", "/api/v1/admin/suppliers", {"name": ".NET 隔离供应商", "remark": "temporary"})
             sid = supplier["id"]
-            _, project = _create_project_group(
-                client, client, conn, sid, ".NET 隔离项目")
-            pid = project["id"]
-            # Starting requires an enabled supplier account that can upload files.
+            # Creating a project starts it, which requires an enabled supplier account that can upload files.
             flow_password = "Yf9!" + secrets.token_urlsafe(9)
             changed_flow_password = "Yf9!" + secrets.token_urlsafe(9)
             flow_user = client.call("POST", f"/api/v1/admin/suppliers/{sid}/accounts", {"employeeNo": "workflow_supplier", "password": flow_password})
-            client.call("PUT", f"/api/v1/projects/{pid}/status", {"status": "IN_PROGRESS"})
-            check("supplier/project creation and project start", True)
+            project = _create_project(
+                client, client, conn, sid, ".NET 隔离项目")
+            pid = project["id"]
+            check("supplier/project creation starts the project", project["status"] == "IN_PROGRESS")
             pdf = b"%PDF-1.4\n" + b"test data\n" * 40000 + b"%%EOF\n"
-            # Internal (company-to-supplier) upload on a fresh subproject: opt in to the Excel + STEP prerequisite fixtures.
+            # Internal (company-to-supplier) upload on a fresh project: opt in to the Excel + STEP prerequisite fixtures.
             upload = init_upload(client, pid, "regression.pdf", pdf, ensure_step=True)
             session = upload["sessionId"]
             size = upload["chunkSize"]
@@ -639,14 +638,14 @@ try:
             check("project detail and collaboration read routes", True)
             supplier_client = Client(base)
             first_flow_login = supplier_client.login("workflow_supplier", flow_password)
-            supplier_client.call("GET", "/api/v1/project-groups", expected=403)
+            supplier_client.call("GET", "/api/v1/projects", expected=403)
             supplier_client.call("PUT", "/api/v1/auth/password", {"oldPassword": flow_password, "newPassword": changed_flow_password})
             supplier_client.call("GET", "/api/v1/auth/profile", expected=401)
             second_flow_login = supplier_client.login("workflow_supplier", changed_flow_password)
             check("workflow supplier changes initial password through API", first_flow_login["mustChangePassword"] and not second_flow_login["mustChangePassword"] and second_flow_login["user"]["id"] == flow_user["id"])
-            supplier_groups = supplier_client.call("GET", "/api/v1/project-groups")
-            check("supplier account sees its supplier enterprise groups",
-                  any(item["id"] == project["projectGroupId"] for item in supplier_groups["list"]))
+            supplier_projects = supplier_client.call("GET", "/api/v1/projects")
+            check("supplier account sees its supplier enterprise projects",
+                  any(item["id"] == pid for item in supplier_projects["list"]))
             supplier_return = b"%PDF-1.4\nsupplier returned material\n%%EOF\n"
             returned_upload = init_upload(supplier_client, pid, "supplier-return.pdf", supplier_return)
             put_chunk(supplier_client, returned_upload["sessionId"], 0, supplier_return)

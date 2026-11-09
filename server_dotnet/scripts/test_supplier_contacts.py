@@ -31,16 +31,15 @@ def run_supplier_contact_checks(client, Client, conn, check):
     check("internal users list the supplier's contacts for Robot owners; suppliers cannot",
           names[:2] == ["张三", "李四"] and all(set(item) == {"id", "name", "enabled"} for item in options))
 
-    group = client.call("GET", f"/api/v1/projects/{project_id}")
-    detail = client.call("GET", f"/api/v1/project-groups/{group['projectGroupId']}")["group"]
-    updated = client.call("PUT", f"/api/v1/project-groups/{detail['id']}", {
+    detail = client.call("GET", f"/api/v1/projects/{project_id}")
+    updated = client.call("PUT", f"/api/v1/projects/{project_id}", {
         "name": detail["name"], "description": detail["description"], "supplierId": sid,
         "workOrderNos": detail["workOrderNos"], "machineModel": detail["machineModel"],
         "robotPartId": detail["robotPartId"], "priorityId": detail["priorityId"],
         "robotTypeId": detail["robotTypeId"], "robotOwnerContactIds": [li["id"], zhang["id"]],
         "expectedCompletionDate": detail["expectedCompletionDate"], "expectedUpdatedAt": detail["updatedAt"],
     })
-    check("main projects store several Robot owners and their joined-name snapshot",
+    check("projects store several Robot owners and their joined-name snapshot",
           updated["robotOwnerContactIds"] == [li["id"], zhang["id"]]
           and updated["robotOwnerName"] == "李四、张三"
           and client.call("GET", f"/api/v1/projects/{project_id}")["robotOwnerName"] == "李四、张三")

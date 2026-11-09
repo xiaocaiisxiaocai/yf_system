@@ -53,19 +53,15 @@ function workbookBytes(marker) {
 }
 
 async function createProjectGroup(context, token, supplierId, name) {
-  const group = await (await api(context, 'POST', '/project-groups', {
+  const project = await (await api(context, 'POST', '/projects', {
     name,
     description: '独立文件控件浏览器验收夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '文件控件机型',
     ...await projectMetadata(context, token, supplierId),
-    subprojectNames: [name + ' 子项目'],
   }, token)).json();
-  const detail = await (await api(
-    context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
-  assert.equal(detail.projects.length, 1, 'file controls group must contain one subproject');
-  return detail.projects[0];
+  return project;
 }
 
 async function assertCanvasRendered(canvas) {
@@ -145,7 +141,6 @@ async function assertInsideViewport(locator, page, label) {
     const prefix = '文件控件-' + suffix;
     const project = await createProjectGroup(
       context, auth.accessToken, f.suppliers.a.id, prefix + '-项目');
-    await json('PUT', `/projects/${project.id}/status`, { status: 'IN_PROGRESS' });
     assert.equal((await json('GET', `/projects/${project.id}`)).status, 'IN_PROGRESS');
 
     const deleteName = prefix + '-delete.pdf';

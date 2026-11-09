@@ -34,7 +34,7 @@ def _new_download_actor(admin, conn):
     })
     admin.call("PUT", f"/api/v1/admin/roles/{role['id']}/permissions", {
         "permissionIds": [permission_ids[code] for code in (
-            "project:list", "project:view_all", "file:download", "file:preview")],
+            "project:list", "file:download", "file:preview")],
     })
     department = admin.call("POST", "/api/v1/admin/departments", {
         "name": "原生下载测试组织-" + secrets.token_hex(5),

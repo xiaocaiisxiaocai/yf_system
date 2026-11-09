@@ -36,9 +36,9 @@ def init_request(project_id, file_name, content, file_last_modified=FIXTURE_LAST
     }
 
 
-# 公司内部发给供应商的其它文件要求子项目已有动作流程 Excel 与 STEP/压缩文件（上传资料要求契约-2026-09-24）。
+# 公司内部发给供应商的其它文件要求项目已有动作流程 Excel 与 STEP/压缩文件（上传资料要求契约-2026-09-24）。
 # 夹具默认不做任何补救：规则拒绝会原样抛出。只有显式传 ensure_step=True 的调用方（内部账号向可能还没有
-# 这些资料的子项目上传其它夹具）才会在遇到该拒绝时先补传一个 STEP 和一个 Excel 文件再重试；
+# 这些资料的项目上传其它夹具）才会在遇到该拒绝时先补传一个 STEP 和一个 Excel 文件再重试；
 # 规则本身在 test_file_contracts.run_upload_material_checks 中显式验证。
 MATERIAL_REQUIRED_MARKER = "需要同时包含动作流程 Excel"
 COMPANY_STEP_FIXTURE_NAME = "fixture-assembly.step"

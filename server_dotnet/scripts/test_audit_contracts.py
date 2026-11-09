@@ -26,7 +26,7 @@ import uuid
 
 import pymysql
 
-from test_business_acceptance import _create_project_group
+from test_business_acceptance import _create_project
 
 
 class CheckFailure(AssertionError):
@@ -199,13 +199,11 @@ def run_audit_checks(client, conn, check):
     })
     project_old_name = "审计旧项目-" + secrets.token_hex(4)
     project_new_name = "审计新项目-" + secrets.token_hex(4)
-    group, project = _create_project_group(
+    project = _create_project(
         client, client, conn, supplier["id"], project_old_name)
     project_id = project["id"]
-    group_id = group["id"]
-    group_detail = client.call("GET", f"/api/v1/project-groups/{group_id}")
-    current_group = group_detail["group"]
-    client.call("PUT", f"/api/v1/project-groups/{group_id}", {
+    current_group = client.call("GET", f"/api/v1/projects/{project_id}")
+    client.call("PUT", f"/api/v1/projects/{project_id}", {
         "name": project_new_name,
         "description": "修改后说明",
         "supplierId": supplier["id"],
@@ -218,11 +216,11 @@ def run_audit_checks(client, conn, check):
         "expectedCompletionDate": current_group["expectedCompletionDate"],
         "expectedUpdatedAt": current_group["updatedAt"],
     })
-    project_update = _latest(client, "PROJECT_GROUP_UPDATE", group_id)
-    check("main project update audit reports exact labeled before and after values",
+    project_update = _latest(client, "PROJECT_UPDATE", project_id)
+    check("project update audit reports exact labeled before and after values",
           project_update["targetName"] == project_new_name
           and project_update["detail"]["changes"] == [
-              {"field": "name", "label": "主项目名称", "before": project_old_name, "after": project_new_name},
+              {"field": "name", "label": "项目名称", "before": project_old_name, "after": project_new_name},
               {"field": "description", "label": "项目说明",
                "before": "owned isolated full business acceptance fixture", "after": "修改后说明"},
           ])

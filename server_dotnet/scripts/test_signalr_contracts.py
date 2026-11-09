@@ -29,7 +29,7 @@ import uuid
 
 import pymysql
 
-from test_business_acceptance import _create_project_group
+from test_business_acceptance import _create_project
 
 
 class CheckFailure(AssertionError):
@@ -240,7 +240,8 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
     _assign_admin_section(admin, conn, secrets.token_hex(4), admin_id)
     permissions = {item["code"]: item["id"] for item in admin.call("GET", "/api/v1/permissions")}
     supplier_role = _create_role(admin, permissions, ["project:list", "message:create"], "SignalR供应商角色")
-    outsider_role = _create_role(admin, permissions, ["project:list"], "SignalR外部项目角色")
+    # Every internal account with project:list sees every project; the outsider lacks it.
+    outsider_role = _create_role(admin, permissions, ["dashboard"], "SignalR外部项目角色")
     check("fixtures use explicit custom roles and permission codes",
           supplier_role > 1 and outsider_role > 1 and supplier_role != outsider_role)
 
@@ -264,7 +265,7 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
     supplier.login(supplier_employee, shared_password)
     outsider.login(outsider_employee, shared_password)
 
-    _, project = _create_project_group(
+    project = _create_project(
         admin, admin, conn, supplier_row["id"],
         "SignalR项目-" + secrets.token_hex(5))
     project_id = project["id"]
@@ -300,7 +301,7 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
 
     marks = _mark(probe, ("admin", "supplier", "outsider"))
     activity_started = int(time.time() * 1000)
-    admin.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "IN_PROGRESS"})
+    admin.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "TERMINATED"})
     admin_activity = _wait_event(probe, "admin", marks["admin"], project_id, "activity")
     supplier_activity = _wait_event(probe, "supplier", marks["supplier"], project_id, "activity")
     check("authorized project users receive exact activity event within two seconds",
@@ -309,6 +310,7 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
           and 0 <= admin_activity["receivedAt"] - activity_started < 2000
           and 0 <= supplier_activity["receivedAt"] - activity_started < 2000)
 
+    admin.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "IN_PROGRESS"})
     marks = _mark(probe, ("admin", "supplier"))
     message_started = int(time.time() * 1000)
     message = admin.call("POST", f"/api/v1/projects/{project_id}/messages", {

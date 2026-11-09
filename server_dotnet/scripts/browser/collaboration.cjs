@@ -18,18 +18,16 @@ async function json(context, token, method, path, body, expected = 200) {
 }
 
 async function createProjectGroup(context, token, supplierId, name) {
-  const group = await json(context, token, 'POST', '/project-groups', {
+  const project = await json(context, token, 'POST', '/projects', {
     name,
     description: '浏览器协作通知独立夹具',
     supplierId,
     workOrderNos: ['WO-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '浏览器协作机型',
     ...await projectMetadata(context, token, supplierId),
-    subprojectNames: [name + ' 子项目'],
   });
-  const detail = await json(context, token, 'GET', `/project-groups/${group.id}`);
-  assert.equal(detail.projects.length, 1, 'project group fixture must contain one subproject');
-  return { ...detail.projects[0], projectGroupId: group.id };
+  assert.equal(project.status, 'IN_PROGRESS', 'creating a project starts it');
+  return project;
 }
 
 async function waitResponse(page, path, method = 'GET', status = 200, timeout = 12000) {
@@ -132,9 +130,6 @@ async function chooseNotificationTab(drawer, name) {
     const project = await createProjectGroup(
       adminContext, adminToken, f.suppliers.a.id, '协作联动-' + marker);
     const projectName = project.name;
-    await json(adminContext, adminToken, 'PUT', `/projects/${project.id}/status`, {
-      status: 'IN_PROGRESS',
-    });
 
     const supplierInput = () => supplierPage.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
     const adminInput = () => adminPage.getByPlaceholder('输入留言，Ctrl+Enter 发送', { exact: true });
@@ -188,6 +183,11 @@ async function chooseNotificationTab(drawer, name) {
     });
 
     await record('二十二条真实未查看通知形成两页积压且翻页无重复', async () => {
+      // Leave the message tab first: messages shown there are marked read, which also clears their notifications.
+      await adminPage.goto(s.base + '/');
+      await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
+      // Listen before posting: the coalesced realtime refresh can land while the posts are still going out.
+      const summaryReached = waitSummary(adminPage, value => value.unreadCount >= 22, 60000);
       for (let index = 0; index < 22; index += 1) {
         await json(supplierContext, supplierToken, 'POST',
           `/projects/${project.id}/messages`, {
@@ -195,7 +195,7 @@ async function chooseNotificationTab(drawer, name) {
             signerName: supplierSigner ?? undefined,
           });
       }
-      const summary = await waitSummary(adminPage, value => value.unreadCount >= 22);
+      const summary = await summaryReached;
       assert(summary.unreadCount >= 22);
       const drawer = await openNotifications(adminPage);
       await chooseNotificationTab(drawer, '未查看');
@@ -302,7 +302,7 @@ async function chooseNotificationTab(drawer, name) {
     await record('供应商补传资料后管理员工作台待确认区自动出现项目', async () => {
       await adminPage.goto(s.base + '/');
       await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
-      await adminPage.getByRole('heading', { name: '待审核资料子项目', exact: true }).waitFor();
+      await adminPage.getByRole('heading', { name: '待审核资料项目', exact: true }).waitFor();
       const beforePending = await json(adminContext, adminToken, 'GET',
         '/dashboard/pending-projects?page=1&pageSize=100');
       assert(!beforePending.list.some(item => item.id === project.id), 'returned material is not the owner\'s task');
@@ -324,9 +324,7 @@ async function chooseNotificationTab(drawer, name) {
       await dialog.waitFor({ state: 'hidden' });
       const pending = await pendingReload;
       assert(pending.list.some(item => item.id === project.id && item.materialReviewStatus === 'PENDING'));
-      const projectLabel = project.projectGroupName
-        ? `${project.projectGroupName} / ${projectName}` : projectName;
-      await adminPage.getByRole('link', { name: projectLabel, exact: true }).waitFor();
+      await adminPage.getByRole('link', { name: projectName, exact: true }).waitFor();
       await supplierPage.getByText('资料待审核', { exact: true }).first().waitFor();
       assert.equal(await supplierPage.getByRole('button', { name: '资料确认 OK', exact: true }).count(), 0);
       assert.equal(await supplierPage.getByRole('button', { name: '退回资料', exact: true }).count(), 0);
@@ -455,13 +453,13 @@ async function chooseNotificationTab(drawer, name) {
       supplierBPage.setDefaultTimeout(12000);
       const supplierBAuth = await login(supplierBPage, f.users.b.username, f.users.b.changedPassword);
       await supplierBPage.waitForURL(s.base + '/');
-      const visibleProjects = await json(supplierBContext, supplierBAuth.accessToken, 'GET', '/project-groups?page=1&pageSize=100');
+      const visibleProjects = await json(supplierBContext, supplierBAuth.accessToken, 'GET', '/projects?page=1&pageSize=100');
       const visibleIds = new Set(visibleProjects.list.map(item => item.id));
-      assert(!visibleIds.has(project.projectGroupId));
+      assert(!visibleIds.has(project.id));
       const ownNotifications = await listNotifications(supplierBContext, supplierBAuth.accessToken, false);
-      assert(ownNotifications.list.every(item => item.projectGroupName !== project.projectGroupName));
+      assert(ownNotifications.list.every(item => item.projectId !== project.id));
       assert((await listDashboardMessages(supplierBContext, supplierBAuth.accessToken, false))
-        .every(item => item.projectGroupName !== project.projectGroupName));
+        .every(item => item.projectId !== project.id));
       await json(supplierBContext, supplierBAuth.accessToken, 'GET', `/projects/${project.id}`, undefined, 403);
       const drawer = await openNotifications(supplierBPage);
       await chooseNotificationTab(drawer, '全部');

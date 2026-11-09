@@ -11,7 +11,7 @@ from pathlib import Path
 import secrets
 
 from file_blob_fixture import insert_blob_file
-from test_business_acceptance import _create_project_group
+from test_business_acceptance import _create_project
 from upload_contract import (
     FINGERPRINT_SAMPLE_SIZE,
     file_fingerprint,
@@ -352,7 +352,7 @@ def run_file_checks(client, conn, check, pid, fid):
     # Preview and download are independent permissions. Inline documents have a
     # common 50 MiB cap; video uses a short-lived file-scoped cookie and Range stream.
     preview_client = _new_internal_with_permissions(
-        client, conn, ["project:list", "project:view_all", "file:preview"])
+        client, conn, ["project:list", "file:preview"])
     preview_pdf, _ = preview_client.call("GET", f"/api/v1/files/{fid}/content", raw=True)
     preview_client.call("GET", f"/api/v1/files/{fid}/download", expected=403)
     image_payloads = {
@@ -379,13 +379,24 @@ def run_file_checks(client, conn, check, pid, fid):
     )
 
     no_preview_client = _new_internal_with_permissions(
-        client, conn, ["project:list", "project:view_all"])
+        client, conn, ["project:list"])
     no_preview_client.call(
         "GET", f"/api/v1/files/{image_file_ids['png']}/content", expected=403)
     check("image preview denies a project-visible user without file preview permission", True)
 
-    out_of_scope_client = _new_internal_with_permissions(
-        client, conn, ["project:list", "file:preview"])
+    # Every internal account sees every project, so the out-of-scope caller is another supplier's account.
+    other_supplier = client.call("POST", "/api/v1/admin/suppliers", {
+        "name": "文件范围外供应商-" + secrets.token_hex(5), "remark": "file scope fixture",
+    })
+    other_employee = "filescope_" + secrets.token_hex(5)
+    other_password = _password()
+    other_account = client.call("POST", f"/api/v1/admin/suppliers/{other_supplier['id']}/accounts", {
+        "employeeNo": other_employee, "password": other_password,
+    })
+    with conn.cursor() as cursor:
+        cursor.execute("UPDATE users SET must_change_password=0 WHERE id=%s", (other_account["id"],))
+    out_of_scope_client = type(client)(client.base)
+    out_of_scope_client.login(other_employee, other_password)
     out_of_scope_client.call(
         "GET", f"/api/v1/files/{image_file_ids['png']}/content", expected=404)
     check("image preview hides file existence from a permitted user outside the project scope", True)
@@ -478,10 +489,9 @@ def run_file_checks(client, conn, check, pid, fid):
 
 
 def run_upload_material_checks(client, conn, check, supplier_id):
-    """Company-to-supplier material rules (docs/上传资料要求契约-2026-09-24.md) on a fresh subproject."""
-    _, project = _create_project_group(client, client, conn, supplier_id, "上传资料要求-" + secrets.token_hex(5))
+    """Company-to-supplier material rules (docs/上传资料要求契约-2026-09-24.md) on a fresh project."""
+    project = _create_project(client, client, conn, supplier_id, "上传资料要求-" + secrets.token_hex(5))
     project_id = project["id"]
-    client.call("PUT", f"/api/v1/projects/{project_id}/status", {"status": "IN_PROGRESS"})
     pdf = b"%PDF-1.4\nupload material rules\n%%EOF\n"
     step = b"ISO-10303-21; upload material rules"
     archive = b"7z\xbc\xaf\x27\x1c upload material archive"

@@ -101,7 +101,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       const second = await context.newPage();
       track(second, 'second-tab');
       await navigate(second, '/projects');
-      await second.getByRole('button', { name: '新建主项目', exact: true }).waitFor();
+      await second.getByRole('button', { name: '新建项目', exact: true }).waitFor();
       await page.getByRole('button', { name: '账号菜单：系统管理员', exact: true }).click();
       // 本地先退出并跳到登录页，服务端登出随后在后台发送；等它完成再验证访问令牌已撤销。
       const serverLogout = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/auth/logout'

@@ -6,18 +6,16 @@ const { fs, assert, OUT, s, f, record, login, api, projectMetadata, action, trac
 const { uploadFixture: uploadApi } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/upload-contract.cjs');
 
 async function createProject(context, token, supplierId, name) {
-  const group = await (await api(context, 'POST', '/project-groups', {
+  const project = await (await api(context, 'POST', '/projects', {
     name,
     description: '图片、PPTX、视频和留言图片浏览器预览夹具',
     supplierId,
     workOrderNos: ['PREVIEW-' + crypto.randomBytes(4).toString('hex')],
     machineModel: '预览验收机型',
     ...await projectMetadata(context, token, supplierId),
-    subprojectNames: [name + ' 子项目'],
   }, token)).json();
-  const detail = await (await api(context, 'GET', '/project-groups/' + group.id, undefined, token)).json();
-  assert.equal(detail.projects.length, 1);
-  return detail.projects[0];
+  assert.equal(project.status, 'IN_PROGRESS');
+  return project;
 }
 
 async function createBrowserMedia(browser, marker) {
@@ -170,7 +168,6 @@ async function createPptx(marker) {
 
     const project = await createProject(admin, adminToken, f.suppliers.a.id,
       '附加预览验收-' + suffix);
-    await api(admin, 'PUT', '/projects/' + project.id + '/status', { status: 'IN_PROGRESS' }, adminToken);
     const imageName = 'browser-image-' + suffix + '.png';
     const pptxName = 'browser-slides-' + suffix + '.pptx';
     const videoName = 'browser-video-' + suffix + '.webm';

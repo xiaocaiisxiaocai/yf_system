@@ -142,7 +142,7 @@ const captured = async () => {
       const robotProjectStart = !originalRobot.events.projectStarted;
       await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'Robot 仿真协作' })
         .evaluate(element => element.click());
-      await switchTo('开始子项目邮件提醒', robotProjectStart);
+      await switchTo('开始项目邮件提醒', robotProjectStart);
       await page.getByRole('button', { name: '保存邮件提醒', exact: true }).click();
       await page.getByText('邮件提醒设置已保存', { exact: true }).waitFor();
       const robotSaved = await readConfigs();
@@ -166,7 +166,7 @@ const captured = async () => {
 
       await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'Robot 仿真协作' })
         .evaluate(element => element.click());
-      await switchTo('开始子项目邮件提醒', originalRobot.events.projectStarted);
+      await switchTo('开始项目邮件提醒', originalRobot.events.projectStarted);
       await page.getByRole('button', { name: '保存邮件提醒', exact: true }).click();
       await page.getByText('邮件提醒设置已保存', { exact: true }).waitFor();
       await page.locator('.system-reminder-card .arco-radio-button').filter({ hasText: 'ODM/OEMA' })
@@ -228,15 +228,13 @@ const captured = async () => {
         track(mailManagerPage, 'mail-notifications-manager');
         const mailManager = await login(mailManagerPage, f.users.manager.username, f.users.manager.changedPassword);
         await mailManagerPage.waitForURL(s.base + '/');
-        const group = await (await api(mailManagerContext, 'POST', '/project-groups', {
+        // Creating a project starts it and queues the START mail (项目协作契约-2026-11-09).
+        const project = await (await api(mailManagerContext, 'POST', '/projects', {
           name: 'SMTP 隔离验收-' + Date.now(), description: '独立临时数据库', supplierId,
           ...defaults, machineModel: 'SMTP 隔离验收机型',
-          workOrderNos: ['SMTP-' + Date.now()], subprojectNames: ['SMTP 邮件队列验收'],
+          workOrderNos: ['SMTP-' + Date.now()],
         }, mailManager.accessToken)).json();
-        const detail = await read('GET', '/project-groups/' + group.id);
-        const project = detail.projects[0];
-        await api(mailManagerContext, 'PUT', `/projects/${project.id}/status`,
-          { status: 'IN_PROGRESS', expectedStatus: 'DRAFT' }, mailManager.accessToken);
+        assert.equal(project.status, 'IN_PROGRESS');
       const queued = await fetch(s.base + '/__test/mail/outbox', {
         headers: { 'X-Test-Key': s.smtpCapture.token },
       });

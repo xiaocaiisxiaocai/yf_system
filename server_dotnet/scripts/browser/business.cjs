@@ -54,7 +54,7 @@ async function confirm(page, label, url) {
   return result;
 }
 
-// Material approval completes the subproject, so it goes through a dialog instead of a popconfirm.
+// Material approval completes the project, so it goes through a dialog instead of a popconfirm.
 async function approveMaterial(page, projectId) {
   await page.getByRole('button', { name: '资料确认 OK', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '资料确认 OK' });
@@ -169,15 +169,13 @@ async function preview(page, name, kind, label) {
     const projects = {};
 
     for (const key of ['a', 'b']) {
-      await record(key + ' 主项目及子项目通过页面创建、启动并显示负责人', async () => {
-        const { groupName, childName, group } = await withRobotOwnerFixture(admin.context, admin.token, f.suppliers[key].id, async (contact) => {
+      await record(key + ' 项目通过页面创建即开始、进入上传页并显示负责人', async () => {
+        const { name, created } = await withRobotOwnerFixture(admin.context, admin.token, f.suppliers[key].id, async (contact) => {
           await navigate(creatorPage, '/projects');
-          await creatorPage.getByRole('button', { name: '新建主项目', exact: true }).click();
+          await creatorPage.getByRole('button', { name: '新建项目', exact: true }).click();
           const modal = creatorPage.getByRole('dialog');
-          const groupName = '自动验收' + key + '主项目-' + Date.now();
-          const childName = groupName + ' 子项目';
-          await modal.getByPlaceholder('主项目名称', { exact: true }).fill(groupName);
-          await addToken(modal, '输入子项目名称后按回车，可一次创建多个', childName);
+          const name = '自动验收' + key + '项目-' + Date.now();
+          await modal.getByPlaceholder('项目名称', { exact: true }).fill(name);
           await addToken(modal, '输入工令号后按回车，可填写多个', 'WO-' + crypto.randomBytes(4).toString('hex'));
           await modal.getByPlaceholder('请输入机型', { exact: true }).fill('自动验收机型');
           await choose(creatorPage, modal, '选择 Robot 厂商', f.suppliers[key].name);
@@ -194,24 +192,19 @@ async function preview(page, name, kind, label) {
           await date.press('Enter');
           const created = await action(
             creatorPage,
-            '/project-groups',
+            '/projects',
             'POST',
-            () => modal.getByRole('button', { name: '创建主项目', exact: true }).click(),
+            () => modal.getByRole('button', { name: '创建并开始', exact: true }).click(),
           );
-          return { groupName, childName, group: created };
+          return { name, created };
         });
-        const detail = await json(creator.context, creator.token, 'GET', '/project-groups/' + group.id);
-        assert.equal(detail.projects.length, 1);
-        const project = detail.projects[0];
-        projects[key] = { id: project.id, groupId: group.id, groupName, name: project.name };
-        await creatorPage.getByRole('link', { name: groupName, exact: true }).waitFor();
-        await creatorPage.getByRole('link', { name: groupName, exact: true }).click();
-        await creatorPage.locator('.subproject-dock-tab-name').getByText(childName, { exact: true }).waitFor();
-        await creatorPage.getByRole('button', { name: '在独立页面打开当前子项目', exact: true }).click();
-        await creatorPage.waitForURL(s.base + '/projects/' + project.id);
-        await creatorPage.getByRole('button', { name: '开始', exact: true }).waitFor();
-        await action(creatorPage, '/projects/' + project.id + '/status', 'PUT',
-          () => creatorPage.getByRole('button', { name: '开始', exact: true }).click());
+        assert.equal(created.status, 'IN_PROGRESS', 'creating a project starts it');
+        projects[key] = { id: created.id, name };
+        // Creation lands on the new project's file tab, ready for the first upload.
+        await creatorPage.waitForURL(s.base + '/projects/' + created.id + '?tab=files');
+        await creatorPage.getByRole('button', { name: '上传文件', exact: true }).waitFor();
+        await creatorPage.getByText('进行中', { exact: true }).first().waitFor();
+        assert.equal(await creatorPage.getByRole('button', { name: '开始', exact: true }).count(), 0);
         // The creator is the owner; match the owner label (name + employee no.), not the header's own name.
         await creatorPage.getByText(creator.user.realName + '（' + creator.user.employeeNo + '）', { exact: false }).first().waitFor();
         f.uiProjects = projects;
@@ -278,7 +271,7 @@ async function preview(page, name, kind, label) {
       });
     }
 
-    await record('甲乙公司无法读取对方主项目、文件或留言', async () => {
+    await record('甲乙公司无法读取对方项目、文件或留言', async () => {
       for (const [key, other] of [['a', 'b'], ['b', 'a']]) {
         const session = sessions[key];
         const project = projects[other];
@@ -331,7 +324,7 @@ async function preview(page, name, kind, label) {
       await internal.screenshot({ path: OUT + '/a-completed.png', fullPage: true });
     });
 
-    await record('负责人确认资料完成子项目及公司项目动态', async () => {
+    await record('负责人确认资料完成项目及公司项目动态', async () => {
       const project = projects.b;
       await navigate(vendorB, '/projects/' + project.id);
       await vendorB.getByText('资料待审核', { exact: true }).waitFor();
@@ -346,7 +339,7 @@ async function preview(page, name, kind, label) {
 
     await record('窄桌面项目详情可用且无页面横向溢出', async () => {
       await internal.setViewportSize({ width: 1024, height: 900 });
-      assert(await internal.getByRole('button', { name: '返回主项目', exact: true }).isVisible());
+      assert(await internal.getByRole('button', { name: '返回项目列表', exact: true }).isVisible());
       const width = await internal.evaluate(() => ({ scroll: document.documentElement.scrollWidth, view: innerWidth }));
       assert(width.scroll <= width.view + 1);
       await internal.screenshot({ path: OUT + '/compact-project.png', fullPage: true });
