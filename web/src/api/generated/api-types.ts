@@ -322,6 +322,10 @@ export interface MailQueueCounts {
   cancelled: number
 }
 
+export interface MailRetryResponse {
+  rescheduled: number
+}
+
 export interface MailStatusResponse {
   configured: boolean
   host: string | null
@@ -1663,6 +1667,7 @@ export interface ApiResponses {
   "GET /admin/system/configs": Array<SystemConfigResponse>
   "PUT /admin/system/configs": EmptyResponse
   "GET /admin/system/mail-logs": PageResponseOfMailAuditEntry
+  "POST /admin/system/mail-retry": MailRetryResponse
   "GET /admin/system/mail-settings": SmtpSettingsView
   "PUT /admin/system/mail-settings": SmtpSettingsView
   "POST /admin/system/mail-settings/diagnose": SmtpDiagnosisResponse

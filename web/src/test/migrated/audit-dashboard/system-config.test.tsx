@@ -4,9 +4,9 @@ import { Message } from '@arco-design/web-react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }))
+const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }))
 
-vi.mock('../../../api/client', () => ({ default: { get: mocks.get, put: mocks.put } }))
+vi.mock('../../../api/client', () => ({ default: { get: mocks.get, put: mocks.put, post: mocks.post } }))
 
 import SysConfig from '../../../pages/system/SysConfig'
 
@@ -159,6 +159,35 @@ describe('系统参数与 SMTP 生产界面', () => {
 
     fireEvent.click(log.querySelector<HTMLElement>('.arco-pagination-item-next')!)
     await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 2, pageSize: 20 }))
+  })
+
+  it('retry now resumes paused delivery from the failure alert and refreshes the queue', async () => {
+    const failure = {
+      id: 31, action: 'EMAIL_RETRY', targetType: 'email_outbox', targetId: '9', createdAt: '2026-11-08T02:37:10Z',
+      detail: { failedStep: '连接与加密', diagnosis: '服务器中途断开连接（ConnectionReset）', reason: 'SMTP_UNAVAILABLE', reconnects: 2 },
+    }
+    let recovered = false
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/system/mail-settings') return { data: baseSmtp }
+      if (url === '/admin/system/mail-status') return { data: recovered
+        ? { ...baseMail, queue: { ...baseMail.queue, sent: 11 }, latestSentAt: '2026-11-08T03:00:00Z', latestFailedAt: failure.createdAt, latestFailure: failure }
+        : { ...baseMail, queue: { ...baseMail.queue, pending: 11 }, latestFailedAt: failure.createdAt, latestFailure: failure } }
+      if (url === '/admin/system/mail-logs') return { data: { page: 1, pageSize: 20, total: 1, list: [failure] } }
+      return { data: [] }
+    })
+    mocks.post.mockImplementation(async () => { recovered = true; return { data: { rescheduled: 11 } } })
+    const success = vi.spyOn(Message, 'success').mockImplementation(() => () => undefined)
+    const user = userEvent.setup()
+    renderConfig()
+    await openSmtp(user)
+
+    const log = document.querySelector<HTMLElement>('.system-mail-log')!
+    await user.click(await within(log).findByRole('button', { name: '立即重试' }))
+
+    expect(mocks.post).toHaveBeenCalledWith('/admin/system/mail-retry')
+    expect(success).toHaveBeenCalledWith('已恢复发送，11 封邮件正在重新发送')
+    await waitFor(() => expect(within(log).queryByRole('button', { name: '立即重试' })).not.toBeInTheDocument())
+    success.mockRestore()
   })
 
   it('SMTP editor preserves authorization codes, retries failed saves, and keeps unrelated edits', async () => {

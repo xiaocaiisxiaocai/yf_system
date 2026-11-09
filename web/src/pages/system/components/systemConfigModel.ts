@@ -141,6 +141,7 @@ export interface MailDetail {
   failedStep?: string
   diagnosis?: string
   nextAttemptAt?: string
+  reconnects?: number
 }
 
 export interface MailRecent {

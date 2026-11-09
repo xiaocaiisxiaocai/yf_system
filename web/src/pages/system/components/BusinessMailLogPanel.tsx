@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Alert, Button, Card, Descriptions, Pagination, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, Descriptions, Message, Pagination, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http from '../../../api/client'
 import type { ApiResponses } from '../../../api/generated/api-types'
@@ -36,6 +36,7 @@ function MailLogDetail({ row, formatTime }: { row: MailRecent; formatTime: (valu
     { label: '原因', value: detail.diagnosis || detail.error },
     { label: '处理', value: mailReasonText(detail.reason) },
     { label: '重试次数', value: detail.retryCount == null ? '' : String(detail.retryCount) },
+    { label: '重连次数', value: detail.reconnects ? String(detail.reconnects) : '' },
     { label: '下次重试', value: detail.nextAttemptAt ? formatTime(detail.nextAttemptAt) : '' },
   ].filter(item => item.value)
   return <Descriptions size="small" column={2} data={items} />
@@ -89,13 +90,26 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
   }, [beginLogsRequest, data, visibleScope, result, page, logsKey])
   useLoadEffect(loadLogs)
 
+  const [retrying, setRetrying] = useState(false)
+  const refresh = () => (visibleScope === 'collaboration' ? onRefresh?.() : load())
+  const retryNow = async () => {
+    setRetrying(true)
+    try {
+      const response = await http.post<ApiResponses['POST /admin/system/mail-retry']>('/admin/system/mail-retry')
+      const count = Number(response.data.rescheduled ?? 0)
+      Message.success(count > 0 ? `已恢复发送，${count} 封邮件正在重新发送` : '已恢复发送，待发送邮件正在重新发送')
+      await refresh()
+    } catch { Message.error('恢复发送失败，请重试') }
+    finally { setRetrying(false) }
+  }
+
   const failure = data ? currentFailure(data) : null
   const pageLogs = logs?.key === logsKey ? logs : null
   return <Card className="page-card system-mail-card system-mail-log" title="邮件日志" extra={<Space wrap>
     {canManageOem && <Select aria-label="邮件日志业务" style={{ width: 145 }} value={scope} onChange={(value: Scope) => { setScope(value); setSnapshot(null); setError(''); setPage(1) }}>
       {Object.entries(LABELS).map(([key, label]) => <Select.Option key={key} value={key}>{label}</Select.Option>)}
     </Select>}
-    <Button size="small" loading={loading} onClick={() => void (visibleScope === 'collaboration' ? onRefresh?.() : load())?.catch(() => undefined)}>刷新</Button>
+    <Button size="small" loading={loading} onClick={() => void refresh()?.catch(() => undefined)}>刷新</Button>
     {visibleScope !== 'oem' && <Button size="small" onClick={onViewLogs}>{visibleScope === 'all' ? 'Robot 日志' : '全部日志'}</Button>}
     {visibleScope !== 'collaboration' && canViewOemLogs && <Button size="small" onClick={() => navigate('/oem/admin/audit')}>ODM/OEMA 日志</Button>}
   </Space>}>
@@ -111,7 +125,8 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
         <Typography.Text type="secondary">已取消 <strong>{data.queue.cancelled}</strong></Typography.Text>
       </Space>
       <Space wrap size={20}><Typography.Text type="secondary">最近成功：{formatTime(data.latestSentAt)}</Typography.Text><Typography.Text type={failure ? 'error' : 'secondary'}>最近失败：{formatTime(data.latestFailedAt)}</Typography.Text></Space>
-      {failure && <Alert type="error" className="system-mail-failure" content={`${formatTime(failure.createdAt)} 发送失败：${mailFailureCause(failure)}。${data.queue.pending + data.queue.sending} 封待发送，恢复后自动补发`} />}
+      {failure && <Alert type="error" className="system-mail-failure" content={`${formatTime(failure.createdAt)} 发送失败：${mailFailureCause(failure)}。${data.queue.pending + data.queue.sending} 封待发送，恢复后自动补发`}
+        action={<Button size="mini" type="primary" status="danger" loading={retrying} onClick={() => void retryNow()}>立即重试</Button>} />}
       {visibleScope !== 'oem' && data.missingEmailCount > 0 && <Typography.Text type="warning">{data.missingEmailCount} 个启用内部账号未填写邮箱，相关通知不会入队。示例：{data.missingEmailAccounts.map(account => `${account.realName}（${account.employeeNo}）`).join('、')}</Typography.Text>}
       {visibleScope !== 'collaboration' && (data.missingOemContactCompanyCount ?? 0) > 0 && <Space wrap><Typography.Text type="warning">{data.missingOemContactCompanyCount} 家启用的 ODM/OEMA 厂商没有启用联络人邮箱，无法接收厂商邮件。</Typography.Text>{auth.hasPerm('oem:company_manage') && <Button size="mini" type="text" onClick={() => navigate('/oem/admin/companies')}>维护联络人</Button>}</Space>}
       <div className="system-mail-log-toolbar">

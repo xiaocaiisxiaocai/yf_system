@@ -62,7 +62,15 @@ public sealed class MailService
 
     /// <summary>First pause after SMTP itself is unavailable; doubles on every consecutive failure.</summary>
     internal static readonly TimeSpan BreakerInitialDelay = TimeSpan.FromMinutes(1);
-    internal static readonly TimeSpan BreakerMaximumDelay = TimeSpan.FromMinutes(30);
+    /// <summary>Kept short so delivery resumes within minutes of an intermittent network fault clearing.</summary>
+    internal static readonly TimeSpan BreakerMaximumDelay = TimeSpan.FromMinutes(5);
+    /// <summary>
+    /// Waits before reconnecting after a fast connect/TLS failure (e.g. a reset during the TLS handshake) in the
+    /// same delivery, before the breaker is tripped. Nothing was sent at that stage, so reconnecting cannot duplicate mail.
+    /// </summary>
+    internal TimeSpan[] ConnectRetryDelays { get; init; } = [TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(10)];
+    internal const string RetryNowAuditAction = "EMAIL_RETRY_NOW";
+    private readonly SemaphoreSlim wake = new(0, 1);
     internal static readonly TimeSpan ExpirySweepInterval = TimeSpan.FromMinutes(1);
     internal const string ExpiredPendingReason = "待发送邮件超过有效期，已取消";
     internal const string ExpiredPendingAuditReason = "PENDING_EXPIRED";
@@ -297,7 +305,7 @@ public sealed class MailService
             if (parsed.RootElement.ValueKind != JsonValueKind.Object) return output;
             foreach (var property in parsed.RootElement.EnumerateObject())
             {
-                if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId", "failedStep", "diagnosis", "nextAttemptAt" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
+                if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId", "failedStep", "diagnosis", "nextAttemptAt", "reconnects" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
                 if (property.Value.ValueKind == JsonValueKind.String && property.Name == "recipient") output[property.Name] = MaskEmail(property.Value.GetString()!);
                 if (property.Value.ValueKind == JsonValueKind.String && property.Name == "error") output[property.Name] = SanitizeError(property.Value.GetString()!);
             }
@@ -581,13 +589,33 @@ public sealed class MailService
         string? auditReason = null;
         string? failedStep = null;
         string? diagnosis = null;
+        var reconnects = 0;
         try
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeout.CancelAfter(TimeSpan.FromSeconds(60));
-            var delivery = await batch.SendAsync(resolved.Options,
-                new(mail.RecipientEmail, mail.Subject, MailLinks.ForRecipient(mail.Body, options,
-                    MailLinks.IsInternalStaff(mail.RecipientUserType, mail.RecipientRealm, mail.OemTransferId))), timeout.Token);
+            var envelope = new SmtpEnvelope(mail.RecipientEmail, mail.Subject, MailLinks.ForRecipient(mail.Body, options,
+                MailLinks.IsInternalStaff(mail.RecipientUserType, mail.RecipientRealm, mail.OemTransferId)));
+            SmtpDeliveryResult delivery;
+            while (true)
+            {
+                try
+                {
+                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    timeout.CancelAfter(TimeSpan.FromSeconds(60));
+                    delivery = await batch.SendAsync(resolved.Options, envelope, timeout.Token);
+                    break;
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested && reconnects < ConnectRetryDelays.Length
+                                           && IsFastConnectFailure(ex))
+                {
+                    var wait = ConnectRetryDelays[reconnects++];
+                    logger.LogWarning(
+                        "SMTP connection for outbox {OutboxId} failed ({Diagnostic}); reconnecting in {Delay} (attempt {Attempt}/{Maximum}).",
+                        mail.Id, SmtpStage.Describe(ex), wait, reconnects, ConnectRetryDelays.Length);
+                    await Task.Delay(wait, ct);
+                }
+            }
+            if (reconnects > 0)
+                logger.LogInformation("SMTP message {OutboxId} was delivered after {Reconnects} reconnect(s).", mail.Id, reconnects);
             if (delivery.DisconnectFailureType is not null)
                 logger.LogWarning("SMTP message {OutboxId} was accepted, but connection cleanup failed ({ErrorType}).",
                     mail.Id, delivery.DisconnectFailureType);
@@ -678,6 +706,7 @@ public sealed class MailService
             if (auditReason is not null) detail["reason"] = auditReason;
             if (failedStep is not null) detail["failedStep"] = failedStep;
             if (diagnosis is not null) detail["diagnosis"] = diagnosis;
+            if (reconnects > 0) detail["reconnects"] = reconnects;
             if (status == MailStatuses.Pending && nextAttemptAt is { } next)
                 detail["nextAttemptAt"] = DateTime.SpecifyKind(next, DateTimeKind.Utc);
             await audit.WriteAsync(conn, tx, null, action, "email_outbox", mail.Id, detail, null, completionToken);
@@ -720,6 +749,78 @@ public sealed class MailService
             or OperationCanceledException => SmtpFailureKind.ServiceUnavailable,
         _ => SmtpFailureKind.Transient,
     };
+
+    /// <summary>
+    /// A connect/TLS failure that came back quickly (reset, refused, handshake error) and is worth an immediate
+    /// reconnect. Timeouts are excluded: they already used the whole attempt budget. Login and send failures are
+    /// excluded: a rejected login does not heal in seconds, and a send failure might follow partial delivery.
+    /// </summary>
+    internal static bool IsFastConnectFailure(Exception error)
+    {
+        if (SmtpStage.Of(error) != SmtpStage.Connect || ClassifyFailure(error) != SmtpFailureKind.ServiceUnavailable) return false;
+        for (var current = error; current is not null; current = current.InnerException)
+            if (current is OperationCanceledException or TimeoutException) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Administrator's "retry now": closes the breaker and makes every mail that is waiting because of an earlier
+    /// failure due immediately, then wakes the worker. Untouched rows (e.g. a Robot notice inside its coalescing
+    /// window) keep their schedule. Returns how many rows were brought forward.
+    /// </summary>
+    public async Task<MailRetryResponse> RetryNowAsync(CurrentUser actor, string? ip, CancellationToken ct)
+    {
+        int rescheduled;
+        await using (var conn = await db.OpenAsync(ct))
+        {
+            await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+            actor = await AccessService.LockActorAsync(conn, tx, actor, ct);
+            AccessService.RequireInternal(actor);
+            await AccessService.RequirePermissionAsync(conn, tx, actor, "config:manage", ct);
+            rescheduled = await BringWaitingMailForwardAsync(conn, tx, ct);
+            await audit.WriteAsync(conn, tx, actor.Id, RetryNowAuditAction, "email_outbox", null,
+                new { rescheduled, breakerDelaySeconds = (int)CurrentBreakerDelay.TotalSeconds }, ip, ct);
+            await tx.CommitAsync(ct);
+        }
+        logger.LogInformation("Mail delivery retry requested by user {UserId}; {Count} waiting message(s) are due now.", actor.Id, rescheduled);
+        ResumeDelivery();
+        return new MailRetryResponse(rescheduled);
+    }
+
+    /// <summary>Makes PENDING mail that is waiting after a failed attempt due now; returns the row count.</summary>
+    internal static async Task<int> BringWaitingMailForwardAsync(MySqlConnection conn, MySqlTransaction tx, CancellationToken ct)
+    {
+        await using var context = EfDb.Use(conn, tx);
+        var now = await DatabaseUtcNowAsync(context, ct);
+        return await context.EmailOutbox.Where(item =>
+                item.Status == MailStatuses.Pending
+                && item.SentAt == null
+                && item.LastError != null
+                && item.NextAttemptAt > now)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.NextAttemptAt, now), ct);
+    }
+
+    /// <summary>Closes the circuit breaker and wakes the worker.</summary>
+    internal void ResumeDelivery()
+    {
+        // Not ResetBreaker(): a manual retry is not proof that SMTP works, so it must not advance the success
+        // epoch that the per-message poison detection relies on.
+        lock (breakerGate)
+        {
+            breakerDelay = TimeSpan.Zero;
+            breakerOpenUntil = DateTimeOffset.MinValue;
+        }
+        Wake();
+    }
+
+    /// <summary>Lets the worker run a flush now instead of at its next tick.</summary>
+    internal void Wake()
+    {
+        try { wake.Release(); }
+        catch (SemaphoreFullException) { /* a wake-up is already pending */ }
+    }
+
+    internal Task<bool> WaitForWakeAsync(TimeSpan timeout, CancellationToken ct) => wake.WaitAsync(timeout, ct);
 
     /// <summary>The current circuit-breaker pause (zero while SMTP is healthy).</summary>
     internal TimeSpan CurrentBreakerDelay
@@ -1226,9 +1327,8 @@ public sealed class MailWorker(MailService mail, AppOptions options, ILogger<Mai
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!options.WorkerEnabled) return;
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
         var nextPurge = DateTime.MinValue;
-        do
+        while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
@@ -1245,6 +1345,9 @@ public sealed class MailWorker(MailService mail, AppOptions options, ILogger<Mai
             {
                 MailService.LogWorkerFailure(logger, ex);
             }
-        } while (await timer.WaitForNextTickAsync(stoppingToken));
+            // Every 30 seconds, or at once when an administrator asks to retry now.
+            try { await mail.WaitForWakeAsync(TimeSpan.FromSeconds(30), stoppingToken); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+        }
     }
 }

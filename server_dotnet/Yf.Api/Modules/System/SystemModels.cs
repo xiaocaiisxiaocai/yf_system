@@ -55,6 +55,9 @@ public sealed record MailAuditEntry(
     IReadOnlyDictionary<string, object?> Detail,
     DateTime CreatedAt);
 
+/// <summary>Result of an administrator's "retry now": how many waiting messages were made due immediately.</summary>
+public sealed record MailRetryResponse(int Rescheduled);
+
 public sealed record MailStatusResponse(
     bool Configured,
     string? Host,

@@ -55,7 +55,10 @@ public static class SystemModule
             return await service.LogsAsync(scope, ctx.Request.Query["result"].FirstOrDefault() ?? "all",
                 QueryValues.OptionalUInt64(ctx.Request, "page") ?? 1, QueryValues.OptionalUInt64(ctx.Request, "pageSize") ?? 20, ct);
         }).Produces<PageResponse<MailAuditEntry>>();
-        config.MapPost("/mail-settings/test", (SmtpTestRequest body, HttpContext ctx, SmtpTestService service, CancellationToken ct) =>
+        config.MapPost("/mail-retry", (HttpContext ctx, MailService service, CancellationToken ct) =>
+            service.RetryNowAsync(AccessService.GetCurrent(ctx),
+                ClientIp.Resolve(ctx, ctx.RequestServices.GetRequiredService<AppOptions>()), ct)).Produces<MailRetryResponse>();
+        config.MapPost("/mail-settings/test",(SmtpTestRequest body, HttpContext ctx, SmtpTestService service, CancellationToken ct) =>
             service.TestAsync(body, AccessService.GetCurrent(ctx), ct)).Produces<SmtpTestResponse>();
         config.MapPost("/mail-settings/diagnose", (HttpContext ctx, SmtpTestService service, CancellationToken ct) =>
             service.DiagnoseAsync(AccessService.GetCurrent(ctx), ct)).Produces<SmtpDiagnosisResponse>();
@@ -309,7 +312,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
         ["MESSAGE"] = "MESSAGE_CREATE MESSAGE_DELETE MESSAGE_WITHDRAW MESSAGE_RESTORE MESSAGE_READ".Split(' '),
         ["ORG"] = "USER_CREATE USER_UPDATE USER_STATUS USER_RESET_PASSWORD USER_ASSIGN_ROLE USER_ASSIGN_ROLES DEPT_CREATE DEPT_UPDATE DEPT_STATUS DEPT_DELETE USER_DELETE ROLE_CREATE ROLE_UPDATE ROLE_STATUS ROLE_ASSIGN_PERMS ROLE_DELETE".Split(' '),
         ["SUPPLIER"] = "SUPPLIER_CREATE SUPPLIER_UPDATE SUPPLIER_STATUS SUPPLIER_DELETE SUPPLIER_ACCOUNT_CREATE SUPPLIER_ACCOUNT_UPDATE SUPPLIER_ACCOUNT_STATUS SUPPLIER_ACCOUNT_RESET_PASSWORD SUPPLIER_ACCOUNT_DELETE SUPPLIER_CONTACT_CREATE SUPPLIER_CONTACT_UPDATE SUPPLIER_CONTACT_STATUS".Split(' '),
-        ["SYSTEM"] = "CONFIG_UPDATE STORAGE_PATH_SET STORAGE_MIGRATION_START STORAGE_MIGRATION_CANCEL STORAGE_MIGRATION_RETRY STORAGE_MIGRATION_COMPLETE STORAGE_MIGRATION_FAILED PROJECT_DICTIONARY_CREATE PROJECT_DICTIONARY_UPDATE PROJECT_DICTIONARY_DELETE ROBOT_PART_CREATE ROBOT_PART_UPDATE ROBOT_PART_DELETE AUDIT_LOG_DELETE AUDIT_LOG_RETENTION EMAIL_SENT EMAIL_FAILED EMAIL_RETRY EMAIL_SKIPPED_MISSING_EMAIL EMAIL_CANCELLED_STALE EMAIL_TEST_STARTED EMAIL_TEST_SENT EMAIL_TEST_FAILED EMAIL_TEST_UNKNOWN EMAIL_TEST_DIAGNOSE".Split(' ')
+        ["SYSTEM"] = "CONFIG_UPDATE STORAGE_PATH_SET STORAGE_MIGRATION_START STORAGE_MIGRATION_CANCEL STORAGE_MIGRATION_RETRY STORAGE_MIGRATION_COMPLETE STORAGE_MIGRATION_FAILED PROJECT_DICTIONARY_CREATE PROJECT_DICTIONARY_UPDATE PROJECT_DICTIONARY_DELETE ROBOT_PART_CREATE ROBOT_PART_UPDATE ROBOT_PART_DELETE AUDIT_LOG_DELETE AUDIT_LOG_RETENTION EMAIL_SENT EMAIL_FAILED EMAIL_RETRY EMAIL_SKIPPED_MISSING_EMAIL EMAIL_CANCELLED_STALE EMAIL_TEST_STARTED EMAIL_TEST_SENT EMAIL_TEST_FAILED EMAIL_TEST_UNKNOWN EMAIL_TEST_DIAGNOSE EMAIL_RETRY_NOW".Split(' ')
     };
 }
 

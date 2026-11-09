@@ -4762,6 +4762,35 @@
         }
       }
     },
+    "/api/v1/admin/system/mail-retry": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MailRetryResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/system/mail-settings/test": {
       "post": {
         "tags": [
@@ -9050,6 +9079,19 @@
           "cancelled": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MailRetryResponse": {
+        "required": [
+          "rescheduled"
+        ],
+        "type": "object",
+        "properties": {
+          "rescheduled": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false

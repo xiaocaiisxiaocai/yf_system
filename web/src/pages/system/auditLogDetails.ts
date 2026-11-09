@@ -157,6 +157,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   EMAIL_TEST_DIAGNOSE: action('SMTP 连接检测', 'SYSTEM', '系统', 'arcoblue'),
   EMAIL_FAILED: action('邮件发送失败', 'SYSTEM', '系统', 'red'),
   EMAIL_RETRY: action('邮件发送重试', 'SYSTEM', '系统', 'orange'),
+  EMAIL_RETRY_NOW: action('手动恢复邮件发送', 'SYSTEM', '系统', 'arcoblue'),
   EMAIL_SKIPPED_MISSING_EMAIL: action('邮件未入队（缺少邮箱）', 'SYSTEM', '系统', 'orange'),
   EMAIL_CANCELLED_STALE: action('已取消过期验收邮件', 'SYSTEM', '系统', 'orange'),
 }
@@ -470,6 +471,12 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
   }
   if (detail.retryCount != null && (row.action === 'EMAIL_FAILED' || row.action === 'EMAIL_RETRY')) {
     notes.push({ label: '重试次数', value: formatAuditValue(detail.retryCount), tone: 'normal' })
+  }
+  if (detail.reconnects != null && ['EMAIL_SENT', 'EMAIL_FAILED', 'EMAIL_RETRY'].includes(row.action)) {
+    notes.push({ label: '重连次数', value: formatAuditValue(detail.reconnects), tone: 'normal' })
+  }
+  if (row.action === 'EMAIL_RETRY_NOW' && detail.rescheduled != null) {
+    notes.push({ label: '提前发送', value: `${formatAuditValue(detail.rescheduled)} 封`, tone: 'normal' })
   }
   return notes
 }

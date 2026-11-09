@@ -145,3 +145,16 @@ def run_recent_route_contracts(admin, Client, conn, check):
     check("copy history and file mappings are exposed only when both projects are visible",
           any(item["copyId"] == copy_id for item in source_history["copies"])
           and copy_files["total"] >= 1)
+
+    actor.call("POST", "/api/v1/admin/system/mail-retry", expected=403)
+    supplier_actor.call("POST", "/api/v1/admin/system/mail-retry", expected=403)
+    retried = admin.call("POST", "/api/v1/admin/system/mail-retry")
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT detail FROM audit_logs WHERE action='EMAIL_RETRY_NOW' ORDER BY id DESC LIMIT 1"
+        )
+        retry_audit = cursor.fetchone()
+    check("mail retry-now requires config management and is audited",
+          isinstance(retried.get("rescheduled"), int) and retried["rescheduled"] >= 0
+          and retry_audit is not None
+          and json.loads(retry_audit[0])["rescheduled"] == retried["rescheduled"])

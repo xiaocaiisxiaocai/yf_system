@@ -745,6 +745,115 @@ public sealed class MailDeliveryTests
         Assert.Equal(0L, await scope.ScalarAsync<long>("SELECT COUNT(*) FROM audit_logs WHERE action='EMAIL_FAILED'", ct));
     }
 
+    private static Exception ResetDuringTls()
+    {
+        var error = new IOException("Unable to read data from the transport connection.",
+            new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionReset));
+        SmtpStage.Tag(error, SmtpStage.Connect);
+        return error;
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task IntermittentTlsResetIsAbsorbedByReconnectingWithinTheSameDelivery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        var resets = 2;
+        var delivery = new ScriptedDelivery(_ => resets-- > 0 ? ResetDuringTls() : null);
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery) { ConnectRetryDelays = [TimeSpan.Zero, TimeSpan.Zero] };
+
+        Assert.Equal(1, await service.FlushAsync(ct));
+
+        Assert.Equal(3, delivery.Attempts.Count);
+        Assert.Equal(TimeSpan.Zero, service.CurrentBreakerDelay);
+        var row = await scope.OutboxAsync(1, ct);
+        Assert.Equal(("SENT", 0), (row.Status, row.RetryCount));
+        using var detail = JsonDocument.Parse(await scope.ScalarAsync<string>(
+            "SELECT detail FROM audit_logs WHERE action='EMAIL_SENT'", ct));
+        Assert.Equal(2, detail.RootElement.GetProperty("reconnects").GetInt32());
+        var logged = Assert.Single((await service.LogsAsync("collaboration", "sent", 1, 20, ct)).List);
+        Assert.Contains("reconnects", JsonSerializer.Serialize(logged, TestJson.Web));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task PersistentTlsResetTripsTheBreakerOnlyAfterTheReconnectsAreUsed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        var delivery = new ScriptedDelivery(_ => ResetDuringTls());
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery) { ConnectRetryDelays = [TimeSpan.Zero, TimeSpan.Zero] };
+
+        Assert.Equal(0, await service.FlushAsync(ct));
+
+        Assert.Equal(3, delivery.Attempts.Count);
+        Assert.Equal(MailService.BreakerInitialDelay, service.CurrentBreakerDelay);
+        var row = await scope.OutboxAsync(1, ct);
+        Assert.Equal(("PENDING", 0), (row.Status, row.RetryCount));
+        using var detail = JsonDocument.Parse(await scope.ScalarAsync<string>(
+            "SELECT detail FROM audit_logs WHERE action='EMAIL_RETRY'", ct));
+        Assert.Equal(2, detail.RootElement.GetProperty("reconnects").GetInt32());
+        Assert.Equal(MailService.SmtpUnavailableAuditReason, detail.RootElement.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void OnlyFastConnectFailuresAreRetriedInPlace()
+    {
+        Assert.True(MailService.IsFastConnectFailure(ResetDuringTls()));
+        var refused = new System.Net.Sockets.SocketException((int)System.Net.Sockets.SocketError.ConnectionRefused);
+        SmtpStage.Tag(refused, SmtpStage.Connect);
+        Assert.True(MailService.IsFastConnectFailure(refused));
+
+        var timeout = new TimeoutException("connect timed out");
+        SmtpStage.Tag(timeout, SmtpStage.Connect);
+        Assert.False(MailService.IsFastConnectFailure(timeout));
+        var login = new MailKit.Security.AuthenticationException("535 bad credentials");
+        SmtpStage.Tag(login, SmtpStage.Authenticate);
+        Assert.False(MailService.IsFastConnectFailure(login));
+        var midSend = new IOException("reset");
+        SmtpStage.Tag(midSend, SmtpStage.Send);
+        Assert.False(MailService.IsFastConnectFailure(midSend));
+        Assert.False(MailService.IsFastConnectFailure(new IOException("untagged")));
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task RetryNowClosesTheBreakerAndBringsOnlyFailedMailForward()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        var clock = new ManualUtcClock(new DateTimeOffset(2026, 11, 8, 0, 0, 0, TimeSpan.Zero));
+        var delivery = new ScriptedDelivery(_ => ResetDuringTls());
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]),
+            NullLogger<MailService>.Instance, delivery, clock) { ConnectRetryDelays = [] };
+        Assert.Equal(0, await service.FlushAsync(ct));
+        Assert.Equal(MailService.BreakerInitialDelay, service.CurrentBreakerDelay);
+        // A Robot notice still inside its coalescing window: scheduled, but no failure behind it.
+        await scope.ExecuteAsync("""
+            INSERT INTO email_outbox(id,event_type,recipient_email,subject,body,status,retry_count,next_attempt_at)
+            VALUES(2,'TEST_NOTIFICATION','second@example.invalid','subject','body','PENDING',0,UTC_TIMESTAMP() + INTERVAL 2 MINUTE)
+            """, ct);
+
+        delivery.Failure = _ => null;
+        Assert.Equal(0, await service.FlushAsync(ct));
+        Assert.Single(delivery.Attempts);
+
+        await using (var conn = await scope.Database.OpenAsync(ct))
+        {
+            await using var tx = await conn.BeginTransactionAsync(ct);
+            Assert.Equal(1, await MailService.BringWaitingMailForwardAsync(conn, tx, ct));
+            await tx.CommitAsync(ct);
+        }
+        service.ResumeDelivery();
+        Assert.Equal(TimeSpan.Zero, service.CurrentBreakerDelay);
+
+        Assert.Equal(1, await service.FlushAsync(ct));
+        Assert.Equal("SENT", (await scope.OutboxAsync(1, ct)).Status);
+        var waiting = await scope.OutboxAsync(2, ct);
+        Assert.Equal("PENDING", waiting.Status);
+        Assert.NotNull(waiting.NextAttemptAt);
+    }
+
     [Fact(Timeout = 60_000)]
     public async Task PermanentRecipientRejectionFailsOnlyThatMessage()
     {
