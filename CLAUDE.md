@@ -56,7 +56,10 @@ dotnet ef migrations add <Name> --project .\Yf.Api
 dotnet ef migrations has-pending-model-changes --project .\Yf.Api   # sanity check; doesn't connect
 
 # Unit/integration tests (xUnit v3 via VSTest). NOTE: `dotnet test --project` is .NET 10-only syntax
-# and fails on SDK 8 with MSB1001 — pass the csproj positionally.
+# and fails on SDK 8 with MSB1001 — pass the csproj positionally. Each DB test creates its own schema and
+# runs all EF migrations; tests/xunit.runner.json caps maxParallelThreads at 6 (MySQL DDL contention made
+# full runs time out), so a full run takes ~23 min — use --filter while iterating. Investigate slow tests
+# with --logger trx (duration vs. Timeout) instead of raising a single test's Timeout.
 dotnet test .\tests\Yf.Api.Tests.csproj
 dotnet test .\tests\Yf.Api.Tests.csproj --filter "FullyQualifiedName~ProjectsWorkflowTests"
 
@@ -94,7 +97,9 @@ Python test layout: the `scripts/test_*.py` files are mostly contract *modules* 
 
 Key env vars: `YF_CONFIG_PATH` (absolute path to external appsettings for local/prod), `YF_BOOTSTRAP_PASSWORD` (init only, unset after use), `YF_EF_DESIGN_CONNECTION` (design-time `dotnet ef` only), `YF_TEST_DATABASE_URL` (test suites only — `mysql://user:urlencoded_pass@127.0.0.1:port/ignored`, must be localhost/127.0.0.1/::1 for maintenance tests). Config precedence: `appsettings.json` → environment config → `appsettings.Local.json` → `YF_CONFIG_PATH` file → env vars → CLI args. Production IIS only honors `YF_CONFIG_PATH` and rejects `App__*`/`App:*` overrides.
 
-IIS packaging/maintenance (`scripts/publish-iis.ps1`, `deploy/install-iis.ps1`, `deploy/maintain-iis.ps1`): see the `iis-release` skill and `deploy/README.md`.
+IIS packaging/maintenance (`scripts/publish-iis.ps1`, `deploy/install-iis.ps1`, `deploy/maintain-iis.ps1`): see the `iis-release` skill and `deploy/README.md`. The stored SMTP authorization code is encrypted with a key derived from `App:JwtSecret`: an upgrade or restore must keep the site's original JWT secret (and DB config), or SMTP can no longer decrypt its password and every issued token is invalidated.
+
+Known pitfalls found in this repo (symptom, root cause, workaround) are recorded in root `HANDOFF.md`; read it before starting a task and update it when you confirm a new one.
 
 ## Backend architecture (server_dotnet)
 
