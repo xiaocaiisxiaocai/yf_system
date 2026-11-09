@@ -111,7 +111,8 @@
    分页条留在卡片底部，页面本身不出现滚动条。窗口过矮时保留 560px 下限，改由页面滚动。 */
 @media (min-width: 992px) {
   .dashboard-collaboration { display: flex; flex-direction: column; height: calc(100dvh - 88px); min-height: 560px; }
-  .dashboard-workbench { flex: 1 1 0; min-height: 0; align-content: stretch; }
+  /* nowrap: in a wrapping flex row a line is as tall as its content, so the cards could not be bounded. */
+  .dashboard-workbench { flex: 1 1 0; flex-wrap: nowrap; min-height: 0; align-content: stretch; }
   .dashboard-workbench > .arco-col { min-height: 0; }
   .dashboard-task-card { display: flex; min-height: 0; flex-direction: column; }
   .dashboard-task-card > .arco-card-body { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
