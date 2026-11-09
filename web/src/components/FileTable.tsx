@@ -37,8 +37,10 @@ interface Props {
   /** 父组件在提交/终止失败或另一处取消上传后递增。 */
   uploadRefresh?: number
   onUploadActivityChanged?: () => void
-  /** 主项目页的子项目面板较窄：收紧列宽、改用小号表格，说明文字收进提示。 */
+  /** 窄面板：收紧列宽、改用小号表格，说明文字收进提示。 */
   compact?: boolean
+  /** 当前账号可在本项目上传（内部账号仅限负责人）。 */
+  canUpload?: boolean
 }
 
 // 每列宽度：[常规, 紧凑]；紧凑模式的横向滚动宽度由列宽求和，避免列之间出现大段空白。
@@ -76,7 +78,7 @@ function WatermarkedPreview({ employeeNo, realName, children }: { employeeNo?: s
 
 export default function FileTable({
   projectId, projectStatus, targetId, onOpenCopyHistory, compact = false,
-  uploadRefresh = 0, onUploadActivityChanged,
+  uploadRefresh = 0, onUploadActivityChanged, canUpload = true,
 }: Props) {
   const w = compact ? 1 : 0
   const hostRef = useRef<HTMLDivElement>(null)
@@ -88,7 +90,7 @@ export default function FileTable({
     observer.observe(host)
     return () => observer.disconnect()
   }, [])
-  // 按表格实际可用宽度取舍列：主项目页的窄面板和手机宽度的整页都走同一套规则，
+  // 按表格实际可用宽度取舍列：窄面板和手机宽度的整页都走同一套规则，
   // 避免“方向”被切一半、“操作”要横向滚动才出现。宽度未知（首帧或测试环境）时按完整列处理。
   const compactMedium = hostWidth > 0 && hostWidth < COMPACT_MEDIUM_WIDTH
   const compactNarrow = hostWidth > 0 && hostWidth < COMPACT_NARROW_WIDTH
@@ -349,7 +351,7 @@ export default function FileTable({
               打包下载（{selected.length}）
             </Button>
           )}
-          {!targetId && hasPerm('file:upload') && projectStatus === 'IN_PROGRESS' && (
+          {!targetId && canUpload && hasPerm('file:upload') && projectStatus === 'IN_PROGRESS' && (
             <Button type="primary" size={compact ? 'small' : undefined} icon={<IconUpload />} onClick={startUpload}>
               上传文件
             </Button>

@@ -321,13 +321,13 @@ describe('工作台协作生产界面', () => {
     expect(pendingRequests[0].params).toEqual({ page: 1, pageSize: 10 })
 
     await act(async () => pendingRequests[0].request.reject(new Error('pending projects unavailable')))
-    expect(await screen.findByText('待审核资料子项目加载失败')).toBeVisible()
+    expect(await screen.findByText('待审核资料项目加载失败')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '重试' }))
     await waitFor(() => expect(pendingRequests).toHaveLength(2))
 
-    const firstPage = [{ id: 11, name: '待确认项目 A', projectGroupId: 2, projectGroupName: '主项目 A', materialReviewStatus: 'PENDING', updatedAt: '2026-09-10T01:00:00Z' }]
+    const firstPage = [{ id: 11, name: '待确认项目 A', materialReviewStatus: 'PENDING', updatedAt: '2026-09-10T01:00:00Z' }]
     await act(async () => pendingRequests[1].request.resolve({ data: { list: firstPage, total: 11, page: 1, pageSize: 10 } }))
-    expect(await screen.findByRole('link', { name: '主项目 A / 待确认项目 A' })).toHaveAttribute('href', '/projects/11')
+    expect(await screen.findByRole('link', { name: '待确认项目 A' })).toHaveAttribute('href', '/projects/11')
     expect(screen.getByText('资料待审核')).toBeVisible()
 
     await user.click(screen.getByLabelText('第 2 页'))
@@ -348,8 +348,8 @@ describe('工作台协作生产界面', () => {
   it('supplier dashboard lists material to send back while internal wording stays role-specific', async () => {
     mocks.auth.user = { id: 2, realName: '供应商用户', userType: 'SUPPLIER' }
     render(dashboardView())
-    expect(await screen.findByRole('heading', { name: '待回传资料子项目' })).toBeVisible()
-    expect(await screen.findByText('暂无待回传资料的子项目')).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '待回传资料项目' })).toBeVisible()
+    expect(await screen.findByText('暂无待回传资料的项目')).toBeVisible()
   })
 
   it('dashboard without its menu permission stays local and does not call dashboard APIs', async () => {

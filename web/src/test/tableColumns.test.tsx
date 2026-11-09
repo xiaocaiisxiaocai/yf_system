@@ -27,9 +27,9 @@ vi.mock('../store/collaboration', () => ({
 
 import ProjectList from '../pages/project/ProjectList'
 
-const storageKey = columnLayoutStorageKey('project-groups', 7)
+const storageKey = columnLayoutStorageKey('projects', 7)
 const specs: ColumnLayoutSpec[] = [
-  { key: 'name', title: '主项目名称', defaultWidth: 120, minWidth: 96, locked: true },
+  { key: 'name', title: '项目名称', defaultWidth: 120, minWidth: 96, locked: true },
   { key: 'sectionName', title: '课别', defaultWidth: 72, minWidth: 64, maxWidth: 480 },
   { key: 'actions', title: '操作', defaultWidth: 140, minWidth: 108, maxWidth: 280, locked: true },
 ]
@@ -41,7 +41,7 @@ function savedLayout() {
 
 function renderList() {
   mocks.get.mockImplementation((url: string) => {
-    if (url === '/project-groups') return Promise.resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } })
+    if (url === '/projects') return Promise.resolve({ data: { list: [], total: 0, page: 1, pageSize: 10 } })
     if (url === '/supplier-options') return Promise.resolve({ data: [] })
     if (url === '/project-dictionaries') return Promise.resolve({ data: [] })
     return Promise.reject(new Error(`unexpected GET ${url}`))
@@ -96,7 +96,7 @@ describe('column layout storage', () => {
 describe('applyColumnLayout', () => {
   it('throws in fatal mode when a column or its title does not match', () => {
     expect(() => applyColumnLayout(
-      [{ key: 'name', title: '主项目名称' }, { key: 'mystery', title: '未知' }],
+      [{ key: 'name', title: '项目名称' }, { key: 'mystery', title: '未知' }],
       specs,
       { hidden: [], widths: {} },
       true,
@@ -113,7 +113,7 @@ describe('applyColumnLayout', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     expect(applyColumnLayout(
       [
-        { key: 'name', title: '主项目名称', width: 10 },
+        { key: 'name', title: '项目名称', width: 10 },
         { key: 'sectionName', title: '旧标题', width: 10 },
         { key: 'mystery', title: '未知', width: 33 },
       ],
@@ -121,7 +121,7 @@ describe('applyColumnLayout', () => {
       { hidden: [], widths: { sectionName: 90 } },
       false,
     )).toEqual([
-      { key: 'name', title: '主项目名称', width: 120 },
+      { key: 'name', title: '项目名称', width: 120 },
       { key: 'sectionName', title: '课别', width: 90 },
       { key: 'mystery', title: '未知', width: 33 },
     ])
@@ -167,13 +167,13 @@ describe('project list columns', () => {
 
     await user.click(screen.getByRole('button', { name: '显示列' }))
     const picker = await screen.findByRole('group', { name: '显示列' })
-    expect(within(picker).getByRole('checkbox', { name: '主项目名称' })).toBeDisabled()
+    expect(within(picker).getByRole('checkbox', { name: '项目名称' })).toBeDisabled()
     expect(within(picker).getByRole('checkbox', { name: '操作' })).toBeDisabled()
     fireEvent.click(within(picker).getByRole('checkbox', { name: '课别' }))
 
     await waitFor(() => expect(screen.queryByRole('columnheader', { name: /课别/ })).not.toBeInTheDocument())
     expect(savedLayout()?.hidden).toEqual(['sectionName'])
-    expect(screen.getByRole('columnheader', { name: /主项目名称/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /项目名称/ })).toBeInTheDocument()
 
     view.unmount()
     renderList()
@@ -199,7 +199,7 @@ describe('project list columns', () => {
 
     await waitFor(() => {
       const widths = [...document.querySelectorAll('col')].map((col) => (col as HTMLElement).style.width)
-      // 表头、表体各一份。只有工令号从 96 变成 176；剩下的 96 是机型和状态列，Robot 厂商、Robot 类型和子项目进度仍是默认的 112。
+      // 表头、表体各一份。只有工令号从 96 变成 176；剩下的 96 是机型和状态列，Robot 厂商、Robot 类型和资料状态仍是默认的 112。
       expect(widths.filter((width) => width === '176px')).toHaveLength(2)
       expect(widths.filter((width) => width === '96px')).toHaveLength(4)
       expect(widths.filter((width) => width === '112px')).toHaveLength(6)

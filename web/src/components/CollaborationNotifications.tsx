@@ -37,7 +37,7 @@ const ACTION_LABEL: Record<string, string> = {
   REJECT: '验收驳回',
   WITHDRAW: '撤回验收申请',
   TERMINATE: '终止项目',
-  REOPEN: '重开子项目',
+  REOPEN: '重开项目',
   MATERIAL_APPROVE: '确认资料 OK 并完成',
   MATERIAL_RETURN: '退回回传资料',
   UPDATE: '更新',
@@ -315,9 +315,7 @@ export default function CollaborationNotifications() {
                       <div className="collaboration-notification-footer">
                         <div className="collaboration-notification-meta">
                           <span>{item.actorName}</span>
-                          <span title={item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}>
-                            {item.projectGroupName ? `${item.projectGroupName} / ${item.projectName}` : item.projectName}
-                          </span>
+                          <span title={item.projectName}>{item.projectName}</span>
                           <time dateTime={item.occurredAt}>{fmtTime(item.occurredAt)}</time>
                         </div>
                         {!item.read && (

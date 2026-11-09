@@ -11,7 +11,7 @@ describe('overdueDays', () => {
 
   it('counts whole business days past the due date for unfinished projects only', () => {
     expect(overdueDays('2026-10-28', 'IN_PROGRESS', now)).toBe(3)
-    expect(overdueDays('2026-10-30', 'DRAFT', now)).toBe(1)
+    expect(overdueDays('2026-10-30', 'IN_PROGRESS', now)).toBe(1)
     expect(overdueDays('2026-10-31', 'IN_PROGRESS', now)).toBeNull()
     expect(overdueDays('2026-11-02', 'IN_PROGRESS', now)).toBeNull()
     expect(overdueDays('2026-10-01', 'COMPLETED', now)).toBeNull()
@@ -28,7 +28,7 @@ describe('overdueDays', () => {
     expect(overdueDays('2026-10-30', 'IN_PROGRESS', new Date('2026-10-30T16:30:00Z'))).toBe(1)
     expect(overdueDays('2026-10-31', 'IN_PROGRESS', new Date('2026-10-30T16:30:00Z'))).toBeNull()
     // 西半球凌晨（本地时间仍是前一天）也按业务日计算。
-    expect(overdueDays('2026-10-30', 'DRAFT', new Date('2026-10-30T20:00:00-08:00'))).toBe(1)
+    expect(overdueDays('2026-10-30', 'IN_PROGRESS', new Date('2026-10-30T20:00:00-08:00'))).toBe(1)
   })
 
   it('uses the system clock when no instant is passed', () => {

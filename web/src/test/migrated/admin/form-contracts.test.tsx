@@ -196,7 +196,7 @@ describe('管理员表单契约', () => {
     expect(screen.getByRole('button', { name: '新增角色' })).toBeVisible()
     expect(screen.getByRole('button', { name: '新增供应商' })).toBeVisible()
     expect(screen.getByRole('button', { name: '新增用户' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '新建主项目' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '新建项目' })).toBeVisible()
     views.forEach((view) => view.unmount())
   })
 

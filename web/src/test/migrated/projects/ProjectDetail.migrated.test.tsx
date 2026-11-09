@@ -63,8 +63,6 @@ import ProjectDetail from '../../../pages/project/ProjectDetail'
 function project(id = 1, overrides = {}) {
   return {
     id,
-    projectGroupId: 3,
-    projectGroupName: '主项目',
     name: `项目 ${id}`,
     description: null,
     status: 'IN_PROGRESS',
@@ -88,7 +86,6 @@ function project(id = 1, overrides = {}) {
 function defaultGet(url: string) {
   if (url === '/projects/1') return Promise.resolve({ data: project() })
   if (url === '/projects/1/summary') return Promise.resolve({ data: { unreadMessages: 0, activityRevision: 'a1' } })
-  if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project()] } })
   throw new Error(`unexpected GET ${url}`)
 }
 
@@ -134,7 +131,6 @@ describe('ProjectDetail migrated behavior', () => {
       if (url === '/projects/1') return first.promise
       if (url === '/projects/2') return Promise.resolve({ data: project(2) })
       if (url === '/projects/2/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
-      if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project(2)] } })
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -158,7 +154,6 @@ describe('ProjectDetail migrated behavior', () => {
         return Promise.resolve({ data: project(1, { name: '操作后项目' }) })
       }
       if (url === '/projects/1/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
-      if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project()] } })
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -191,7 +186,6 @@ describe('ProjectDetail migrated behavior', () => {
         return Promise.reject({ isAxiosError: true, response: { status: 403 } })
       }
       if (url === '/projects/1/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
-      if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project()] } })
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -200,7 +194,7 @@ describe('ProjectDetail migrated behavior', () => {
     await user.click(screen.getByRole('button', { name: '完成操作后刷新' }))
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent(/^\/projects$/))
     expect(warning).toHaveBeenCalledTimes(1)
-    expect(warning).toHaveBeenCalledWith('该子项目负责人已变更或权限已调整，您已无权访问')
+    expect(warning).toHaveBeenCalledWith('您已无权访问该项目，权限可能已调整')
     expect(screen.queryByRole('heading', { name: '敏感项目' })).not.toBeInTheDocument()
     expect(screen.queryByText('项目加载失败或没有访问权限')).not.toBeInTheDocument()
   })
@@ -233,7 +227,6 @@ describe('ProjectDetail migrated behavior', () => {
         summaryCalls += 1
         return Promise.resolve({ data: { unreadMessages: summaryCalls, activityRevision: `a${summaryCalls}` } })
       }
-      if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project()] } })
       throw new Error(`unexpected GET ${url}`)
     })
     const view = renderDetail('/projects/1?tab=messages')
@@ -257,7 +250,7 @@ describe('ProjectDetail migrated behavior', () => {
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent(/^\/projects$/))
     expect(projectCalls).toBe(2)
     expect(warning).toHaveBeenCalledTimes(1)
-    expect(warning).toHaveBeenCalledWith('该子项目已被删除')
+    expect(warning).toHaveBeenCalledWith('该项目已被删除')
     expect(screen.queryByRole('heading', { name: '待删除项目' })).not.toBeInTheDocument()
   })
 
@@ -367,7 +360,6 @@ describe('ProjectDetail migrated behavior', () => {
         summaries.push(request)
         return request.promise
       }
-      if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project()] } })
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -386,7 +378,6 @@ describe('ProjectDetail migrated behavior', () => {
       calls.push({ url, config })
       if (url === '/projects/1') return Promise.resolve({ data: project(1, { hasCopyHistory: true, copySource: { projectId: 2, name: '原项目' } }) })
       if (url === '/projects/1/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
-      if (url === '/project-groups/3') return Promise.resolve({ data: { projects: [project()] } })
       if (url === '/projects/1/copy-history') return Promise.resolve({ data: {
         source: { copyId: 16, projectId: 2, name: '原项目', fileCount: 21, totalBytes: 2048, copiedByName: '管理员', createdAt: '2026-09-15T01:00:00Z' },
         copies: [],

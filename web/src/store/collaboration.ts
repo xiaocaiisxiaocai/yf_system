@@ -69,7 +69,6 @@ function parseCollaborationNotification(value: unknown): CollaborationNotificati
     || typeof value.action !== 'string'
     || !isPositiveInteger(value.projectId)
     || typeof value.projectName !== 'string'
-    || typeof value.projectGroupName !== 'string'
     || typeof value.actorName !== 'string'
     || typeof value.title !== 'string'
     || (value.summary !== null && typeof value.summary !== 'string')
@@ -83,7 +82,6 @@ function parseCollaborationNotification(value: unknown): CollaborationNotificati
     action: value.action,
     projectId: value.projectId,
     projectName: value.projectName,
-    projectGroupName: value.projectGroupName,
     actorName: value.actorName,
     title: value.title,
     summary: value.summary,

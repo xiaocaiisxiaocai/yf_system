@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Button, Card, Collapse, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
 import { IconRight, IconRefresh } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -16,7 +16,6 @@ interface DashboardMessage {
   id: number
   projectId: number
   projectName?: string
-  projectGroupName?: string
   content: string
   senderName?: string
   createdAt: string
@@ -34,16 +33,8 @@ interface Summary {
 interface PendingProject {
   id: number
   name: string
-  projectGroupId?: number
-  projectGroupName?: string
   materialReviewStatus: MaterialReviewStatus
   updatedAt: string
-}
-
-interface PendingProjectGroup {
-  groupId: number
-  groupName: string
-  items: PendingProject[]
 }
 
 interface PendingProjectPage {
@@ -71,7 +62,6 @@ function isAuthorizationError(error: unknown): boolean {
 
 export default function Dashboard() {
   const [pendingPage, setPendingPage] = useState(1)
-  const [collapsedPendingGroups, setCollapsedPendingGroups] = useState<Set<number>>(() => new Set())
   const [messagePage, setMessagePage] = useState(1)
   const [unreadOnly, setUnreadOnly] = useState(true)
   const observedRevision = useRef<string | null>(null)
@@ -99,16 +89,16 @@ export default function Dashboard() {
   const dashboardQueryKey = useMemo(() => ['dashboard', sessionScope] as const, [sessionScope])
   const isSupplier = user?.userType === 'SUPPLIER'
   const taskCopy = isSupplier ? {
-    cardTitle: '待回传资料子项目',
+    cardTitle: '待回传资料项目',
     cardAction: '查看待回传',
-    heading: '待回传资料子项目',
-    error: '待回传资料子项目加载失败',
-    empty: '暂无待回传资料的子项目',
+    heading: '待回传资料项目',
+    error: '待回传资料项目加载失败',
+    empty: '暂无待回传资料的项目',
   } : {
-    cardTitle: '待审核资料子项目',
+    cardTitle: '待审核资料项目',
     cardAction: '查看待审核',
-    heading: '待审核资料子项目',
-    error: '待审核资料子项目加载失败',
+    heading: '待审核资料项目',
+    error: '待审核资料项目加载失败',
     empty: '暂无待审核的资料',
   }
 
@@ -176,27 +166,6 @@ export default function Dashboard() {
     queryClient.removeQueries({ queryKey: dashboardQueryKey })
   }, [dashboardAuthorizationError, dashboardQueryKey])
 
-  const pendingGroups = useMemo<PendingProjectGroup[]>(() => {
-    const order: number[] = []
-    const groups = new Map<number, PendingProjectGroup>()
-    for (const project of pendingData.list) {
-      const groupId = project.projectGroupId ?? 0
-      let group = groups.get(groupId)
-      if (!group) {
-        group = { groupId, groupName: project.projectGroupName || '未命名主项目', items: [] }
-        groups.set(groupId, group)
-        order.push(groupId)
-      }
-      group.items.push(project)
-    }
-    return order.map((groupId) => groups.get(groupId)!)
-  }, [pendingData.list])
-  const pendingOpenKeys = useMemo(
-    () => pendingGroups
-      .filter((group) => !collapsedPendingGroups.has(group.groupId))
-      .map((group) => String(group.groupId)),
-    [collapsedPendingGroups, pendingGroups],
-  )
 
   useEffect(() => {
     const next = pendingQuery.data
@@ -244,8 +213,8 @@ export default function Dashboard() {
   }
 
   const cards = [
-    { title: '可见主项目', value: data?.projectCount, to: '/projects', action: '查看主项目' },
-    { title: '进行中主项目', value: data?.activeProjectCount, to: '/projects', action: '查看主项目' },
+    { title: '我的项目', value: data?.projectCount, to: '/projects?mine=1', action: '查看项目' },
+    { title: '进行中项目', value: data?.activeProjectCount, to: '/projects?mine=1&status=IN_PROGRESS', action: '查看项目' },
     { title: taskCopy.cardTitle, value: data?.pendingTasks, href: '#dashboard-pending', action: taskCopy.cardAction },
     { title: '近30天未读留言', value: data?.unreadMessages, href: '#dashboard-messages', action: '查看留言' },
   ]
@@ -352,57 +321,26 @@ export default function Dashboard() {
               </div>
             ) : pendingData.list.length > 0 ? (
               <>
-                <Collapse
+                <List
                   key={pendingPage}
-                  className="dashboard-pending-groups dashboard-scroll"
-                  bordered={false}
-                  activeKey={pendingOpenKeys}
-                  onChange={(_key, keys) => {
-                    const open = new Set(keys)
-                    setCollapsedPendingGroups(new Set(
-                      pendingGroups
-                        .filter((group) => !open.has(String(group.groupId)))
-                        .map((group) => group.groupId),
-                    ))
-                  }}
-                >
-                  {pendingGroups.map((group) => (
-                    <Collapse.Item
-                      key={group.groupId}
-                      name={String(group.groupId)}
-                      header={(
-                        <span className="dashboard-pending-group-header">
-                          <span className="dashboard-pending-group-name">{group.groupName}</span>
-                          <Tag color="orange">{group.items.length}</Tag>
-                        </span>
-                      )}
+                  className="dashboard-pending-list dashboard-scroll"
+                  dataSource={pendingData.list}
+                  render={(project) => (
+                    <List.Item
+                      key={project.id}
+                      extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
                     >
-                      <List
-                        className="dashboard-pending-list"
-                        dataSource={group.items}
-                        render={(project) => (
-                          <List.Item
-                            key={project.id}
-                            extra={<Typography.Text type="secondary">更新于 {fmtTime(project.updatedAt)}</Typography.Text>}
-                          >
-                            <List.Item.Meta
-                              title={(
-                                <Link
-                                  className="dashboard-pending-link"
-                                  to={`/projects/${project.id}`}
-                                  aria-label={project.projectGroupName ? `${project.projectGroupName} / ${project.name}` : project.name}
-                                >
-                                  {project.name}
-                                </Link>
-                              )}
-                              description={<Tag color={MATERIAL_REVIEW[project.materialReviewStatus]?.color}>{MATERIAL_REVIEW[project.materialReviewStatus]?.text ?? project.materialReviewStatus}</Tag>}
-                            />
-                          </List.Item>
+                      <List.Item.Meta
+                        title={(
+                          <Link className="dashboard-pending-link" to={`/projects/${project.id}`} aria-label={project.name}>
+                            {project.name}
+                          </Link>
                         )}
+                        description={<Tag color={MATERIAL_REVIEW[project.materialReviewStatus]?.color}>{MATERIAL_REVIEW[project.materialReviewStatus]?.text ?? project.materialReviewStatus}</Tag>}
                       />
-                    </Collapse.Item>
-                  ))}
-                </Collapse>
+                    </List.Item>
+                  )}
+                />
                 {pendingData.total > pendingData.pageSize && (
                   <div className="dashboard-pagination">
                     <Pagination
@@ -462,8 +400,7 @@ export default function Dashboard() {
                   wrapperClassName="dashboard-scroll"
                   dataSource={messageData.list}
                   render={(message) => {
-                    const childLabel = message.projectName || `项目#${message.projectId}`
-                    const projectLabel = message.projectGroupName ? `${message.projectGroupName} / ${childLabel}` : childLabel
+                    const projectLabel = message.projectName || `项目#${message.projectId}`
                     const target = `/projects/${message.projectId}?tab=messages&target=${message.id}`
                     return (
                       <List.Item

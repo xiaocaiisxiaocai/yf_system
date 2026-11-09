@@ -25,7 +25,6 @@ function deferred<T>() {
 const finishedJob: ProjectCopyJob = {
   jobId: 5,
   sourceProjectId: 9,
-  projectGroupId: 3,
   targetName: '副本',
   status: 'succeeded',
   filesTotal: 1,
@@ -68,17 +67,17 @@ describe('useProjectCopyJobs', () => {
     const first = deferred<{ data: { jobs: ProjectCopyJob[] } }>()
     const second = deferred<{ data: { jobs: ProjectCopyJob[] } }>()
     mocks.list.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
-    const rendered = renderHook(({ generation }) => useProjectCopyJobs(3, true, generation), {
+    const rendered = renderHook(({ generation }) => useProjectCopyJobs(true, generation), {
       initialProps: { generation: 0 },
     })
 
     await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(1))
-    const firstSignal = mocks.list.mock.calls[0][1] as AbortSignal
+    const firstSignal = mocks.list.mock.calls[0][0] as AbortSignal
     rendered.rerender({ generation: 1 })
     expect(firstSignal.aborted).toBe(true)
     expect(rendered.result.current.jobs).toEqual([])
     await waitFor(() => expect(mocks.list).toHaveBeenCalledTimes(2))
-    const secondSignal = mocks.list.mock.calls[1][1] as AbortSignal
+    const secondSignal = mocks.list.mock.calls[1][0] as AbortSignal
     rendered.unmount()
     expect(secondSignal.aborted).toBe(true)
   })
@@ -87,7 +86,7 @@ describe('useProjectCopyJobs', () => {
     mocks.list
       .mockResolvedValueOnce({ data: { jobs: [finishedJob] } })
       .mockRejectedValueOnce({ response: { status: 403 } })
-    const rendered = renderHook(() => useProjectCopyJobs(3, true, 0))
+    const rendered = renderHook(() => useProjectCopyJobs(true, 0))
 
     await waitFor(() => expect(rendered.result.current.jobs).toHaveLength(1))
     await act(async () => { await rendered.result.current.refresh() })
@@ -99,7 +98,7 @@ describe('useProjectCopyJobs', () => {
     mocks.list
       .mockResolvedValueOnce({ data: { jobs: [finishedJob] } })
       .mockRejectedValueOnce(new Error('temporary network failure'))
-    const rendered = renderHook(() => useProjectCopyJobs(3, true, 0))
+    const rendered = renderHook(() => useProjectCopyJobs(true, 0))
 
     await waitFor(() => expect(rendered.result.current.jobs).toHaveLength(1))
     await act(async () => { await rendered.result.current.refresh() })
@@ -110,7 +109,7 @@ describe('useProjectCopyJobs', () => {
 
   it('does not retain a previous group snapshot after disabled permission state', async () => {
     mocks.list.mockResolvedValue({ data: { jobs: [finishedJob] } })
-    const rendered = renderHook(({ enabled }) => useProjectCopyJobs(3, enabled, 0), {
+    const rendered = renderHook(({ enabled }) => useProjectCopyJobs(enabled, 0), {
       initialProps: { enabled: true },
     })
     await waitFor(() => expect(rendered.result.current.jobs).toHaveLength(1))
@@ -127,7 +126,7 @@ describe('useProjectCopyJobs', () => {
       .mockResolvedValueOnce({ data: { jobs: [runningJob] } })
       .mockReturnValueOnce(second.promise)
       .mockReturnValueOnce(third.promise)
-    const rendered = renderHook(() => useProjectCopyJobs(3, true, 0))
+    const rendered = renderHook(() => useProjectCopyJobs(true, 0))
     await flush()
     expect(rendered.result.current.ready).toBe(true)
     expect(rendered.result.current.loading).toBe(false)

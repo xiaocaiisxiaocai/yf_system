@@ -31,7 +31,7 @@ function largeChunkPolicy(): Plugin {
 
 export default defineConfig({
   plugins: [react(), pdfAssets(), contentSecurityPolicyPlugin(), largeChunkPolicy()],
-  // 懒加载路由里的依赖（如 dockview-react）若首次访问才被发现，Vite 会重新预构建并让已加载页面拿到 504 Outdated Optimize Dep；
+  // 懒加载路由里的依赖若首次访问才被发现，Vite 会重新预构建并让已加载页面拿到 504 Outdated Optimize Dep；
   // 启动时扫描全部源码，一次性预构建。
   optimizeDeps: {
     entries: ['index.html', 'src/**/*.{ts,tsx}', '!src/test/**', '!src/**/*.test.{ts,tsx}'],

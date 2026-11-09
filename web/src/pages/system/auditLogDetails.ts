@@ -96,7 +96,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE: action('更新内部验收通知', 'PROJECT', '项目协作', 'arcoblue'),
   PROJECT_TERMINATE: action('终止项目', 'PROJECT', '项目协作', 'red'),
   PROJECT_RESTART: action('重新开始项目', 'PROJECT', '项目协作', 'arcoblue'),
-  PROJECT_REOPEN: action('重开子项目', 'PROJECT', '项目协作', 'orange'),
+  PROJECT_REOPEN: action('重开项目', 'PROJECT', '项目协作', 'orange'),
   PROJECT_DELETE: action('删除项目', 'PROJECT', '项目协作', 'red'),
   PROJECT_MEMBERS: action('调整项目成员', 'PROJECT', '项目协作', 'purple'),
   FILE_UPLOAD: action('上传文件', 'FILE', '文件', 'arcoblue'),
@@ -168,7 +168,7 @@ export const CATEGORY_OPTIONS = [
 ] as const
 
 export const TARGET_LABELS: Record<string, string> = {
-  user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '子项目', project_group: '主项目',
+  user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目', project_group: '主项目（已停用）',
   file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志',
   system_config: '系统参数', email_outbox: '邮件队列', project_dictionary: '数据字典', robot_part: 'Robot 料号',
 }

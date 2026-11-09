@@ -29,10 +29,13 @@ import ProjectWorkflowPanel from '../../../components/ProjectWorkflowPanel'
 
 const reviewProject = (latestSupplierFileId = 5, materialReviewStatus = 'PENDING', responsibleUserId = 1) => ({
   id: 17, status: 'IN_PROGRESS', responsibleUserId, materialReviewStatus, latestSupplierFileId,
+  // The backend sets canManage only for the internal responsible user.
+  canManage: responsibleUserId === 1,
 }) as never
 
 const completedProject = (updatedAt = '2026-10-31T08:00:00.000Z', responsibleUserId = 1) => ({
   id: 17, status: 'COMPLETED', responsibleUserId, updatedAt, materialReviewStatus: null,
+  canManage: responsibleUserId === 1,
 }) as never
 
 async function confirmPopover() {
@@ -64,30 +67,30 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     expect(screen.queryByRole('button', { name: '重开' })).not.toBeInTheDocument()
   })
 
-  it('project workflow status commands are limited to start, terminate and restart', async () => {
+  it('project workflow status commands are limited to terminate and restart', async () => {
     mocks.auth.permissions = ['project:status']
     const changed = vi.fn()
     const user = userEvent.setup()
-    const { rerender } = render(<ProjectWorkflowPanel project={{ id: 1, status: 'DRAFT' } as never} onChanged={changed} />)
+    const { rerender } = render(<ProjectWorkflowPanel project={{ id: 1, status: 'IN_PROGRESS', canManage: true } as never} onChanged={changed} />)
+    expect(screen.queryByRole('button', { name: '开始' })).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: '开始' }))
-    expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'IN_PROGRESS', expectedStatus: 'DRAFT' })
-
-    rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'IN_PROGRESS' } as never} onChanged={changed} />)
     await user.click(screen.getByRole('button', { name: '终止' }))
     await confirmPopover()
     expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'TERMINATED', expectedStatus: 'IN_PROGRESS' })
 
-    rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'TERMINATED' } as never} onChanged={changed} />)
+    rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'TERMINATED', canManage: true } as never} onChanged={changed} />)
     await user.click(screen.getByRole('button', { name: '重新开始' }))
     expect(mocks.put).toHaveBeenLastCalledWith('/projects/1/status', { status: 'IN_PROGRESS', expectedStatus: 'TERMINATED' })
 
-    rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'COMPLETED' } as never} onChanged={changed} />)
+    rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'COMPLETED', canManage: true } as never} onChanged={changed} />)
+    expect(screen.queryByRole('button', { name: /开始|终止/ })).not.toBeInTheDocument()
+
+    // A colleague who holds project:status but is not responsible for the project sees no commands.
+    rerender(<ProjectWorkflowPanel project={{ id: 1, status: 'IN_PROGRESS', canManage: false } as never} onChanged={changed} />)
     expect(screen.queryByRole('button', { name: /开始|终止/ })).not.toBeInTheDocument()
   })
 
   it.each([
-    ['DRAFT', '开始'],
     ['TERMINATED', '重新开始'],
   ])('keeps %s unchanged when the supplier has no active account and allows retry', async (status, label) => {
     mocks.auth.permissions = ['project:status']
@@ -96,7 +99,7 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
       message: '项目所属厂商尚未添加启用的用户，请先添加或启用厂商用户后再开始项目',
     } } })
     const changed = vi.fn()
-    render(<ProjectWorkflowPanel project={{ id: 17, status } as never} onChanged={changed} />)
+    render(<ProjectWorkflowPanel project={{ id: 17, status, canManage: true } as never} onChanged={changed} />)
 
     await userEvent.click(screen.getByRole('button', { name: label }))
     await waitFor(() => expect(screen.getByRole('button', { name: label })).not.toHaveClass('arco-btn-loading'))
@@ -112,13 +115,13 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     mocks.auth.permissions = ['project:status']
     mocks.put.mockRejectedValue({ isAxiosError: true, response: { data: { code: 40903 } } })
     const changed = vi.fn()
-    render(<ProjectWorkflowPanel project={{ id: 17, status: 'DRAFT' } as never} onChanged={changed} />)
+    render(<ProjectWorkflowPanel project={{ id: 17, status: 'TERMINATED', canManage: true } as never} onChanged={changed} />)
 
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+    await userEvent.click(screen.getByRole('button', { name: '重新开始' }))
 
     await waitFor(() => expect(changed).toHaveBeenCalledOnce())
     expect(mocks.put).toHaveBeenCalledOnce()
-    expect(mocks.put).toHaveBeenCalledWith('/projects/17/status', { status: 'IN_PROGRESS', expectedStatus: 'DRAFT' })
+    expect(mocks.put).toHaveBeenCalledWith('/projects/17/status', { status: 'IN_PROGRESS', expectedStatus: 'TERMINATED' })
   })
 
   it.each([
@@ -189,7 +192,7 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     expect(mocks.post).toHaveBeenCalledOnce()
   })
 
-  it('only the responsible user reopens a completed subproject, with a reason and the version shown', async () => {
+  it('only the responsible user reopens a completed project, with a reason and the version shown', async () => {
     const changed = vi.fn()
     const user = userEvent.setup()
     const { rerender } = render(<ProjectWorkflowPanel project={completedProject(undefined, 9)} onChanged={changed} />)
@@ -242,8 +245,8 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     const request = deferred<{ data: unknown }>()
     mocks.put.mockImplementation(() => request.promise)
     const changed = vi.fn()
-    render(<ProjectWorkflowPanel project={{ id: 17, status: 'DRAFT' } as never} onChanged={changed} />)
-    const start = screen.getByRole('button', { name: '开始' })
+    render(<ProjectWorkflowPanel project={{ id: 17, status: 'TERMINATED', canManage: true } as never} onChanged={changed} />)
+    const start = screen.getByRole('button', { name: '重新开始' })
     fireEvent.click(start)
     fireEvent.click(start)
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))

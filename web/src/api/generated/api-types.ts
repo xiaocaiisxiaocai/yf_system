@@ -62,7 +62,6 @@ export interface CollaborationNotification {
   action: string
   projectId: number
   projectName: string
-  projectGroupName: string
   actorName: string
   title: string
   summary: string | null
@@ -99,7 +98,6 @@ export interface DashboardMessage {
   id: number
   projectId: number
   projectName: string
-  projectGroupName: string
   content: string
   senderName: string
   createdAt: string
@@ -109,8 +107,6 @@ export interface DashboardMessage {
 export interface DashboardPendingProject {
   id: number
   name: string
-  projectGroupId: number
-  projectGroupName: string
   materialReviewStatus: string
   updatedAt: string
 }
@@ -990,8 +986,8 @@ export interface PageResponseOfMessageResponse {
   pageSize: number
 }
 
-export interface PageResponseOfProjectGroupResponse {
-  list: Array<ProjectGroupResponse>
+export interface PageResponseOfProjectResponse {
+  list: Array<ProjectResponse>
   total: number
   page: number
   pageSize: number
@@ -1090,7 +1086,6 @@ export interface ProjectCopyJobListResponse {
 export interface ProjectCopyJobResponse {
   jobId: number
   sourceProjectId: number
-  projectGroupId: number
   targetName: string
   status: string
   filesTotal: number
@@ -1138,12 +1133,25 @@ export interface ProjectDictionaryUpsertRequest {
   enabled: boolean
 }
 
-export interface ProjectGroupDetailResponse {
-  group: ProjectGroupResponse
-  projects: Array<ProjectResponse>
+export interface ProjectMaterialReviewRequest {
+  expectedSupplierFileId?: number | null
+  reason?: string | null
 }
 
-export interface ProjectGroupResponse {
+export interface ProjectOwnerOption {
+  id: number
+  employeeNo: string
+  realName: string
+  sectionId: number | null
+  sectionName: string | null
+}
+
+export interface ProjectReopenRequest {
+  expectedUpdatedAt?: string | null
+  reason?: string | null
+}
+
+export interface ProjectResponse {
   id: number
   name: string
   description: string | null
@@ -1169,73 +1177,16 @@ export interface ProjectGroupResponse {
   robotTypeId: number | null
   robotTypeName: string | null
   expectedCompletionDate: string | null
-  completedAt: string | null
-  createdAt: string
-  updatedAt: string
-  subprojectCount: number
-  completedCount: number
-  materialPendingCount: number
-  terminatedCount: number
-  unreadMessages: number
-  canDelete: boolean
-}
-
-export interface ProjectGroupTransferRequest {
-  responsibleUserId?: number | null
-  expectedResponsibleUserId?: number | null
-}
-
-export interface ProjectMaterialReviewRequest {
-  expectedSupplierFileId?: number | null
-  reason?: string | null
-}
-
-export interface ProjectOwnerOption {
-  id: number
-  employeeNo: string
-  realName: string
-  sectionId: number | null
-  sectionName: string | null
-}
-
-export interface ProjectReopenRequest {
-  expectedUpdatedAt?: string | null
-  reason?: string | null
-}
-
-export interface ProjectResponse {
-  id: number
-  projectGroupId: number
-  projectGroupName: string
-  name: string
-  description: string | null
-  supplierId: number
-  supplierName: string | null
-  status: string
-  createdBy: number
-  createdByName: string | null
-  workOrderNos: Array<string>
-  machineModel: string | null
-  robotPartId: number | null
-  robotPartNumber: string | null
-  robotModelName: string | null
-  responsibleUserId: number | null
-  responsibleUserEmployeeNo: string | null
-  responsibleUserName: string | null
-  robotOwnerName: string | null
-  sectionId: number | null
-  sectionName: string | null
-  priorityId: number | null
-  priorityName: string | null
-  robotTypeId: number | null
-  robotTypeName: string | null
-  expectedCompletionDate: string | null
   materialReviewStatus: string | null
   materialReviewReason: string | null
   latestSupplierFileId: number | null
   hasCopyHistory: boolean
   unreadMessages: number
   copySource: ProjectCopySourceRef | null
+  completedAt: string | null
+  canManage: boolean
+  canDelete: boolean
+  canTransfer: boolean
   createdAt: string
   updatedAt: string
 }
@@ -1248,6 +1199,11 @@ export interface ProjectStatusRequest {
 export interface ProjectSummaryResponse {
   unreadMessages: number
   activityRevision: string
+}
+
+export interface ProjectTransferRequest {
+  responsibleUserId?: number | null
+  expectedResponsibleUserId?: number | null
 }
 
 export interface ProjectUploadSessionItemResponse {
@@ -1283,7 +1239,6 @@ export interface ProjectUpsertRequest {
   robotOwnerContactIds?: Array<number> | null
   robotTypeId?: number | null
   expectedCompletionDate?: string | null
-  subprojectNames?: Array<string> | null
   expectedUpdatedAt?: string | null
 }
 
@@ -1437,17 +1392,6 @@ export interface StorageMigrationRequest {
 
 export interface SubmitUploadMd5Request {
   fileMd5: string
-}
-
-export interface SubprojectUpdateRequest {
-  name?: string | null
-  description?: string | null
-  expectedUpdatedAt?: string | null
-}
-
-export interface SubprojectUpsertRequest {
-  name?: string | null
-  description?: string | null
 }
 
 export interface SupplierAccountCreate {
@@ -1781,20 +1725,15 @@ export interface ApiResponses {
   "POST /oem/uploads/{sessionId}/merge": OemUploadedFileResponse
   "GET /permissions": Array<PermissionResponse>
   "GET /project-copies/{copyId}/files": PageResponseOfFileCopyHistoryItem
+  "GET /project-copy-jobs": ProjectCopyJobListResponse
   "GET /project-copy-jobs/{jobId}": ProjectCopyJobResponse
   "GET /project-dictionaries": Array<ProjectDictionaryResponse>
   "POST /project-dictionaries": ProjectDictionaryResponse
   "DELETE /project-dictionaries/{id}": EmptyResponse
   "PUT /project-dictionaries/{id}": ProjectDictionaryResponse
-  "GET /project-groups": PageResponseOfProjectGroupResponse
-  "POST /project-groups": ProjectGroupResponse
-  "GET /project-groups/{groupId}/copy-jobs": ProjectCopyJobListResponse
-  "DELETE /project-groups/{id}": EmptyResponse
-  "GET /project-groups/{id}": ProjectGroupDetailResponse
-  "PUT /project-groups/{id}": ProjectGroupResponse
-  "POST /project-groups/{id}/projects": ProjectResponse
-  "PUT /project-groups/{id}/responsible": ProjectGroupResponse
   "GET /project-owner-options": Array<ProjectOwnerOption>
+  "GET /projects": PageResponseOfProjectResponse
+  "POST /projects": ProjectResponse
   "DELETE /projects/{id}": EmptyResponse
   "GET /projects/{id}": ProjectResponse
   "PUT /projects/{id}": ProjectResponse
@@ -1807,6 +1746,7 @@ export interface ApiResponses {
   "GET /projects/{id}/messages": PageResponseOfMessageResponse
   "POST /projects/{id}/messages": MessageResponse
   "POST /projects/{id}/reopen": ProjectResponse
+  "PUT /projects/{id}/responsible": ProjectResponse
   "PUT /projects/{id}/status": ProjectResponse
   "GET /projects/{id}/summary": ProjectSummaryResponse
   "GET /projects/{projectId}/files": PageResponseOfFileListItem

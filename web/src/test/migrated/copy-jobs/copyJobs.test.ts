@@ -9,7 +9,6 @@ import type { ProjectCopyJob } from '../../../api/types'
 const validJob: ProjectCopyJob = {
   jobId: 7,
   sourceProjectId: 9,
-  projectGroupId: 3,
   targetName: '复制件',
   status: 'succeeded',
   filesTotal: 2,

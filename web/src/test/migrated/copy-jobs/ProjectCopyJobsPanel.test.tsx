@@ -8,7 +8,6 @@ function job(overrides: Partial<ProjectCopyJob> = {}): ProjectCopyJob {
   return {
     jobId: 1,
     sourceProjectId: 9,
-    projectGroupId: 3,
     targetName: '后台副本',
     status: 'running',
     filesTotal: 4,

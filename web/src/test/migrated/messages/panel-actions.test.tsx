@@ -169,15 +169,16 @@ describe('留言撰写、发送与分页', () => {
     expect(renderedMessageIds(container)).toEqual([2, 1])
   })
 
-  it('draft projects explain that messages open after the project starts', async () => {
-    setMessagePermissions('message:create')
-    messageMocks.get.mockResolvedValue(messagePage([]))
-    const view = renderMessagePanel({ projectStatus: 'DRAFT' })
-    expect(await screen.findByText('项目尚未开始，暂不能留言')).toBeVisible()
+  it('only accounts allowed to write on the project get the composer and delete controls', async () => {
+    setMessagePermissions('message:create', 'message:delete_any')
+    messageMocks.get.mockResolvedValue(messagePage([messageRow(1, { content: '他人项目留言' })]))
+    // An internal colleague can read someone else's project but neither post nor delete there.
+    const view = renderMessagePanel({ projectStatus: 'IN_PROGRESS', writable: false })
+    await screen.findByText('他人项目留言')
     expect(screen.queryByPlaceholderText('输入留言，Ctrl+Enter 发送')).not.toBeInTheDocument()
-    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" />)
+    expect(screen.queryByRole('button', { name: /删除/ })).not.toBeInTheDocument()
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" writable />)
     expect(await screen.findByPlaceholderText('输入留言，Ctrl+Enter 发送')).toBeVisible()
-    expect(screen.queryByText('项目尚未开始，暂不能留言')).not.toBeInTheDocument()
   })
 
   it('completed and terminated projects hide message delete controls', async () => {

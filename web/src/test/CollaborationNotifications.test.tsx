@@ -74,7 +74,6 @@ function notification(overrides: Record<string, unknown> = {}) {
     action: 'CREATE',
     projectId: 11,
     projectName: '协作项目',
-    projectGroupName: '主项目 A',
     actorName: '张三',
     title: '新增留言',
     summary: '请核对附件',
@@ -113,7 +112,7 @@ describe('协作通知行为', () => {
 
     expect(await screen.findByTitle('发送留言')).toHaveTextContent('留言')
     expect(screen.queryByText(/不等同于留言已读/)).toBeNull()
-    expect(screen.getByText('主项目 A / 协作项目')).toBeVisible()
+    expect(screen.getByText('协作项目')).toBeVisible()
 
     const title = screen.getByRole('button', { name: '查看通知：新增留言' })
     const article = title.closest('article')
@@ -165,7 +164,7 @@ describe('协作通知行为', () => {
   })
 
   it('拒绝格式错误的网络条目，并向用户呈现可重试状态', async () => {
-    mocks.get.mockResolvedValue({ data: page(notification({ projectGroupName: undefined })) })
+    mocks.get.mockResolvedValue({ data: page(notification({ projectName: undefined })) })
     const user = userEvent.setup()
     renderNotifications()
 

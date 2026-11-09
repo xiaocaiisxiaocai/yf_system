@@ -70,15 +70,14 @@ function copyJobsReducer(state: CopyJobsSnapshot, action: CopyJobsAction): CopyJ
 }
 
 /**
- * 按主项目作用域加载并轮询持久化复制任务。generation 变化时会先清空旧
+ * 加载并轮询当前账号发起的持久化复制任务。generation 变化时会先清空旧
  * 快照并 abort 旧请求，避免路由、权限或刷新后的迟到响应污染当前页面。
  */
 export function useProjectCopyJobs(
-  groupId: number,
   enabled: boolean,
   generation: number,
 ): ProjectCopyJobsState {
-  const scopeKey = `${groupId}:${generation}:${enabled ? 'enabled' : 'disabled'}`
+  const scopeKey = `${generation}:${enabled ? 'enabled' : 'disabled'}`
   const [snapshot, dispatch] = useReducer(copyJobsReducer, {
     scopeKey,
     jobs: [],
@@ -100,7 +99,7 @@ export function useProjectCopyJobs(
     requestRef.current = { sequence, controller }
     if (!background && !readyRef.current) dispatch({ type: 'loading' })
     try {
-      const response = await listProjectCopyJobs(groupId, controller.signal)
+      const response = await listProjectCopyJobs(controller.signal)
       if (controller.signal.aborted || sequence !== sequenceRef.current) return
       const next = response.data?.jobs
       if (!Array.isArray(next) || !next.every(isCopyJob)) throw new Error('复制任务列表响应格式无效')
@@ -120,7 +119,7 @@ export function useProjectCopyJobs(
         requestRef.current = null
       }
     }
-  }, [enabled, groupId])
+  }, [enabled])
 
   useEffect(() => {
     sequenceRef.current += 1

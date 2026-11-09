@@ -24,7 +24,6 @@ vi.mock('../../../store/auth', () => ({
     { getState: () => ({ generation: 1 }) },
   ),
 }))
-vi.mock('dockview-react', () => import('../../dockviewMock'))
 vi.mock('../../../components/FileTable', () => ({ default: () => <div>file table</div> }))
 vi.mock('../../../components/MessagePanel', () => ({ default: () => <div>messages</div> }))
 vi.mock('../../../components/ProjectActivityPanel', () => ({ default: () => <div>activity</div> }))
@@ -33,7 +32,7 @@ vi.mock('../../../store/collaboration', () => ({
 }))
 
 import RoleList from '../../../pages/rbac/RoleList'
-import ProjectGroupDetail from '../../../pages/project/ProjectGroupDetail'
+import ProjectDetail from '../../../pages/project/ProjectDetail'
 import SupplierList from '../../../pages/supplier/SupplierList'
 
 function deferred<T>() {
@@ -45,8 +44,8 @@ function deferred<T>() {
 
 function projectView() {
   return (
-    <MemoryRouter initialEntries={['/project-groups/3']}>
-      <Routes><Route path="/project-groups/:id" element={<ProjectGroupDetail />} /></Routes>
+    <MemoryRouter initialEntries={['/projects/101']}>
+      <Routes><Route path="/projects/:id" element={<ProjectDetail />} /></Routes>
     </MemoryRouter>
   )
 }
@@ -133,20 +132,19 @@ describe('UI 事件失败保护', () => {
     }
   })
 
-  it('subproject status failure resolves the action handler and re-enables the same row for retry', async () => {
+  it('project status failure resolves the action handler and re-enables the same button for retry', async () => {
     const project = {
-      id: 101, projectGroupId: 3, projectGroupName: '主项目', name: '失败重试子项目', supplierId: 8, supplierName: '供应商', status: 'DRAFT',
-      createdByName: '创建人', updatedAt: '',
+      id: 101, name: '失败重试项目', supplierId: 8, supplierName: '供应商', status: 'TERMINATED', canManage: true,
+      responsibleUserId: 999, createdByName: '创建人', updatedAt: '', workOrderNos: [],
     }
-    const group = { id: 3, name: '主项目', status: 'IN_PROGRESS', subprojectCount: 1, completedCount: 0, pendingCount: 0, terminatedCount: 0 }
     const firstWrite = deferred<{ data: unknown }>()
     let projectGets = 0
     let attempts = 0
     mocks.permissions = ['project:list', 'project:status']
     mocks.get.mockImplementation(async (url: string) => {
-      if (url === '/project-groups/3') { projectGets += 1; return { data: { group, projects: [project] } } }
-      if (url === '/projects/101') return { data: { ...project, workOrderNos: [] } }
+      if (url === '/projects/101') { projectGets += 1; return { data: project } }
       if (url === '/projects/101/summary') return { data: { unreadMessages: 0 } }
+      if (url === '/projects/101/upload-sessions') return { data: { total: 0, items: [] } }
       throw new Error(`unexpected GET ${url}`)
     })
     mocks.put.mockImplementation(async (url: string) => {
@@ -157,7 +155,7 @@ describe('UI 事件失败保护', () => {
     const user = userEvent.setup()
     render(projectView())
 
-    const start = await screen.findByRole('button', { name: '开始' })
+    const start = await screen.findByRole('button', { name: '重新开始' })
     await user.click(start)
     await waitFor(() => expect(start).toHaveClass('arco-btn-loading'))
     await user.click(start)
@@ -165,7 +163,7 @@ describe('UI 事件失败保护', () => {
     await act(async () => firstWrite.reject(new Error('status failed')))
     await waitFor(() => expect(start).not.toHaveClass('arco-btn-loading'))
     expect(projectGets).toBe(1)
-    expect(screen.getByRole('region', { name: '失败重试子项目' })).toBeVisible()
+    expect(screen.getByRole('heading', { name: '失败重试项目' })).toBeVisible()
 
     await user.click(start)
     await waitFor(() => expect(attempts).toBe(2))

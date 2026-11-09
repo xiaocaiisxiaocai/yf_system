@@ -64,17 +64,17 @@ describe('useProjectAccessLost', () => {
   afterEach(() => { messages.warning.mockReset(); navigate.mockReset() })
 
   it('warns once with the matching reason and replaces the route with the project list', () => {
-    const { result } = renderHook(() => useProjectAccessLost('子项目'), { wrapper })
+    const { result } = renderHook(() => useProjectAccessLost('项目'), { wrapper })
     expect(result.current(404)).toBe(true)
     expect(result.current(403)).toBe(true)
     expect(messages.warning).toHaveBeenCalledOnce()
-    expect(messages.warning).toHaveBeenCalledWith('该子项目已被删除')
+    expect(messages.warning).toHaveBeenCalledWith('该项目已被删除')
     expect(navigate).toHaveBeenCalledOnce()
     expect(navigate).toHaveBeenCalledWith('/projects', { replace: true })
   })
 
   it('does nothing after the page has unmounted', () => {
-    const { result, unmount } = renderHook(() => useProjectAccessLost('主项目'), { wrapper })
+    const { result, unmount } = renderHook(() => useProjectAccessLost(), { wrapper })
     const handle = result.current
     unmount()
     expect(handle(403)).toBe(true)

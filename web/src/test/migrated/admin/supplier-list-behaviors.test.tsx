@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -46,7 +46,6 @@ import SupplierList from '../../../pages/supplier/SupplierList'
 import UserList from '../../../pages/org/UserList'
 import RoleList from '../../../pages/rbac/RoleList'
 import ProjectList from '../../../pages/project/ProjectList'
-import ProjectGroupDetail from '../../../pages/project/ProjectGroupDetail'
 import FileTable from '../../../components/FileTable'
 import AuditLog from '../../../pages/system/AuditLog'
 import { queryClient } from '../../../api/queryClient'
@@ -133,22 +132,14 @@ describe('供应商与分页列表行为', () => {
 
   it('project interaction wording and navigation match the current supplier access model', async () => {
     installGet(async (url: string) => {
-      if (url === '/project-groups') return { data: page() }
-      if (url === '/project-groups/3') return { data: { group: { id: 3, name: '主项目', status: 'IN_PROGRESS', subprojectCount: 0, completedCount: 0, pendingCount: 0, terminatedCount: 0 }, projects: [] } }
+      if (url === '/projects') return { data: page() }
       if (url === '/projects/9/files') return { data: page([{ id: 4, originalName: '复制件.pdf', ext: 'pdf', sizeBytes: 1, direction: 'C2S', createdAt: '', isCopiedReference: true }]) }
       return { data: [] }
     })
     const user = userEvent.setup()
     let view = render(<MemoryRouter><ProjectList /></MemoryRouter>)
-    await user.click(await screen.findByRole('button', { name: '新建主项目' }))
-    expect(screen.getByText(/全部启用账号均可访问此主项目及其子项目/)).toBeVisible()
-    view.unmount()
-
-    view = render(<MemoryRouter initialEntries={['/project-groups/3']}><Routes><Route path="/project-groups/:id" element={<ProjectGroupDetail />} /></Routes></MemoryRouter>)
-    await user.click(await screen.findByRole('button', { name: '查看资料' }))
-    expect(screen.getByText('工令号')).toBeVisible()
-    // 访问范围说明只在新建主项目时提示，详情页资料区不再重复。
-    expect(screen.queryByText(/全部启用账号均可访问/)).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: '新建项目' }))
+    expect(screen.getByText(/全部启用账号均可访问此项目/)).toBeVisible()
     view.unmount()
 
     view = render(<FileTable projectId={9} projectStatus="IN_PROGRESS" />)
@@ -250,7 +241,7 @@ describe('供应商与分页列表行为', () => {
 
   it('paginated lists and file table expose a retry state after the main GET fails', async () => {
     const cases = [
-      { api: '/project-groups', render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>) },
+      { api: '/projects', render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>) },
       { api: '/admin/suppliers', render: () => render(<SupplierList />) },
       { api: '/admin/users', render: () => render(<UserList />) },
       { api: '/admin/roles', render: () => render(<RoleList />) },
@@ -423,7 +414,7 @@ describe('重复搜索运行时注册用例', () => {
   })
 
   const cases = [
-    { title: 'pages/project/ProjectList.tsx: repeated identical searches finish and reload', api: '/project-groups', placeholder: '主项目名称', render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>) },
+    { title: 'pages/project/ProjectList.tsx: repeated identical searches finish and reload', api: '/projects', placeholder: '项目名称', render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>) },
     { title: 'pages/supplier/SupplierList.tsx: repeated identical searches finish and reload', api: '/admin/suppliers', placeholder: '供应商名称', render: () => render(<SupplierList />) },
     { title: 'pages/org/UserList.tsx: repeated identical searches finish and reload', api: '/admin/users', placeholder: '账号 / 姓名 / 邮箱', render: () => render(<UserList />) },
     { title: 'components/FileTable.tsx: repeated identical searches finish and reload', api: '/projects/1/files', placeholder: '文件名', render: () => render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />) },

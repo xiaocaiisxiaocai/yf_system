@@ -357,7 +357,7 @@ describe('系统参数与 SMTP 生产界面', () => {
     await openRules(user)
 
     expect(screen.queryByRole('switch', { name: '提交验收邮件提醒' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('switch', { name: '终止子项目邮件提醒' }))
+    await user.click(screen.getByRole('switch', { name: '终止项目邮件提醒' }))
     await user.click(screen.getByRole('switch', { name: '到期提醒发给厂商' }))
     const days = screen.getByRole('spinbutton', { name: '到期提前提醒天数' })
     await user.clear(days)

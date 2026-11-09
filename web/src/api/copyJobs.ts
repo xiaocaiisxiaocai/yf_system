@@ -26,7 +26,6 @@ export function isCopyJob(value: unknown): value is ProjectCopyJob {
   )
   return isSafePositiveInteger(candidate.jobId)
     && isSafePositiveInteger(candidate.sourceProjectId)
-    && isSafePositiveInteger(candidate.projectGroupId)
     && typeof candidate.targetName === 'string'
     && candidate.targetName.trim().length > 0
     && (candidate.status === 'pending' || candidate.status === 'running' || candidate.status === 'succeeded' || candidate.status === 'failed')
@@ -64,9 +63,10 @@ export function createProjectCopyJob(sourceId: number, request: CreateProjectCop
   )
 }
 
-export function listProjectCopyJobs(groupId: number, signal?: AbortSignal) {
+/** 当前账号发起的复制任务：全部进行中的和最近 20 个已结束的。 */
+export function listProjectCopyJobs(signal?: AbortSignal) {
   return http.get<ProjectCopyJobsResponse>(
-    `/project-groups/${groupId}/copy-jobs`,
+    '/project-copy-jobs',
     { signal, quietNetworkError: true } as QuietRequestConfig,
   )
 }

@@ -61,6 +61,8 @@ interface Props {
   active?: boolean
   receiptRevision?: string
   realtimeConnected?: boolean
+  /** 当前账号可在本项目留言和删除留言（内部账号仅限负责人）。 */
+  writable?: boolean
 }
 
 export default function MessagePanel({
@@ -72,6 +74,7 @@ export default function MessagePanel({
   active = true,
   receiptRevision = '',
   realtimeConnected = false,
+  writable = true,
 }: Props) {
   const hasPerm = useAuth(state => state.hasPerm)
   const user = useAuth(state => state.user)
@@ -114,11 +117,11 @@ export default function MessagePanel({
   const draftScopeKey = JSON.stringify([user?.id ?? null, generation, projectId])
   const draftScope = useRef(draftScopeKey)
 
-  const canWrite = hasPerm('message:create') && projectStatus !== 'DRAFT' && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+  const canWrite = writable && hasPerm('message:create') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const signsMessages = user?.userType === 'SUPPLIER'
   // 签名每条留言都要重新输入，发送成功后清空，不记住上一次的姓名。
   const [signerName, setSignerName] = useState('')
-  const canDelete = hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
+  const canDelete = writable && hasPerm('message:delete_any') && projectStatus !== 'COMPLETED' && projectStatus !== 'TERMINATED'
   const loading = feedQuery.isPending || feedQuery.isFetchingNextPage
   const loadError = feedQuery.isError && !feedQuery.data
   const appendError = feedQuery.isFetchNextPageError
@@ -397,10 +400,6 @@ export default function MessagePanel({
         <Typography.Text type="secondary" role="status" className="message-locate-notice">
           未在最近加载的留言中找到目标，可能已删除；可继续加载更早留言。
         </Typography.Text>
-      )}
-
-      {projectStatus === 'DRAFT' && hasPerm('message:create') && (
-        <Typography.Text type="secondary" role="status" className="message-locate-notice">项目尚未开始，暂不能留言</Typography.Text>
       )}
 
       {canWrite && !accessRevoked && (

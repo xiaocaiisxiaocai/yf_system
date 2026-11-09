@@ -41,7 +41,6 @@ import DeptManage from '../../../pages/org/DeptManage'
 import UserList from '../../../pages/org/UserList'
 import RoleList from '../../../pages/rbac/RoleList'
 import SupplierList from '../../../pages/supplier/SupplierList'
-import ProjectList from '../../../pages/project/ProjectList'
 
 function page(list: unknown[] = [], pageSize = 10) {
   return { list, total: list.length, page: 1, pageSize }
@@ -311,11 +310,6 @@ describe('组织、角色与权限行为', () => {
 
   it('hard delete actions require their dedicated delete permission', async () => {
     const cases = [
-      {
-        render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>),
-        pagePermission: 'project:update', deletePermission: 'project:delete', rowText: '可删主项目',
-        setup: () => { mocks.get.mockImplementation(async (url: string) => ({ data: url === '/project-groups' ? page([{ id: 1, name: '可删主项目', status: 'DRAFT', subprojectCount: 0 }]) : [] })) },
-      },
       {
         render: () => render(<SupplierList />),
         pagePermission: 'supplier:manage', deletePermission: 'supplier:delete', rowText: '可删供应商',

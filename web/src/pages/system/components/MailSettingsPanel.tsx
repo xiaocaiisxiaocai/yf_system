@@ -123,7 +123,7 @@ export function renderMailSettingsPanel({
                 />
               </div>
               <div className="system-notification-row">
-                <div><Typography.Text>负责人</Typography.Text><Typography.Text type="secondary">子项目负责人</Typography.Text></div>
+                <div><Typography.Text>负责人</Typography.Text><Typography.Text type="secondary">项目负责人</Typography.Text></div>
                 <Switch aria-label="到期提醒发给负责人" checked={notificationDraft.due.internalEnabled} disabled={notificationSaving} onChange={(checked) => onNotificationDraftChange((current) => ({ ...current, due: { ...current.due, internalEnabled: checked } }))} />
               </div>
               <div className="system-notification-row">

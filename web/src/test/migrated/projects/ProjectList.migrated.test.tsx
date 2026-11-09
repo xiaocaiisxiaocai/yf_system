@@ -50,6 +50,12 @@ function renderList() {
 }
 
 const locationProbe = { search: '' }
+const pathProbe = { value: '' }
+function PathProbe() {
+  const { pathname, search } = useLocation()
+  useEffect(() => { pathProbe.value = `${pathname}${search}` }, [pathname, search])
+  return null
+}
 function LocationProbe() {
   const { search } = useLocation()
   useEffect(() => { locationProbe.search = search }, [search])
@@ -80,7 +86,7 @@ async function enterCreatedOption(id: string, value: string) {
 }
 
 function successfulGet(url: string, config?: GetConfig) {
-  if (url === '/project-groups') return Promise.resolve({ data: page() })
+  if (url === '/projects') return Promise.resolve({ data: page() })
   if (url === '/supplier-options') return Promise.resolve({ data: suppliers })
   if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
   if (url === '/supplier-contacts') return Promise.resolve({ data: contactsBySupplier[config?.params?.supplierId ?? 0] ?? [] })
@@ -112,37 +118,34 @@ describe('ProjectList migrated behavior', () => {
     mocks.delete.mockResolvedValue({ data: {} })
   })
 
-  it('shows main-project deletion to a supervisor with scoped API capability but no global delete grant', async () => {
+  it('offers deletion of terminated projects the API marks deletable, without a global delete grant', async () => {
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
-      if (url === '/project-groups') return Promise.resolve({ data: page([{
-        id: 77, name: '主管辖区空主项目', supplierId: 8, supplierName: '厂商甲', status: 'DRAFT',
-        workOrderNos: [], unreadMessages: 0, subprojectCount: 0, completedCount: 0,
-        materialPendingCount: 0, terminatedCount: 0, canDelete: true,
+      if (url === '/projects') return Promise.resolve({ data: page([{
+        id: 77, name: '主管辖区已终止项目', supplierId: 8, supplierName: '厂商甲', status: 'TERMINATED',
+        workOrderNos: [], unreadMessages: 0, canManage: false, canDelete: true,
       }, {
-        id: 78, name: '主管辖区含子项目主项目', supplierId: 8, supplierName: '厂商甲', status: 'IN_PROGRESS',
-        workOrderNos: [], unreadMessages: 0, subprojectCount: 1, completedCount: 0,
-        materialPendingCount: 0, terminatedCount: 0, canDelete: true,
+        id: 78, name: '他人进行中项目', supplierId: 8, supplierName: '厂商甲', status: 'IN_PROGRESS',
+        workOrderNos: [], unreadMessages: 0, canManage: false, canDelete: false,
       }]) })
       return successfulGet(url, config)
     })
     const user = userEvent.setup()
     renderList()
 
-    expect(await screen.findByText('主管辖区空主项目')).toBeInTheDocument()
-    expect(await screen.findByText('主管辖区含子项目主项目')).toBeInTheDocument()
-    const emptyProjectRow = screen.getByText('主管辖区空主项目').closest('tr')!
-    const nonEmptyProjectRow = screen.getByText('主管辖区含子项目主项目').closest('tr')!
-    const emptyProjectDelete = within(emptyProjectRow).getByRole('button', { name: '删除' })
-    const nonEmptyProjectDelete = within(nonEmptyProjectRow).getByRole('button', { name: '删除' })
-    expect(nonEmptyProjectDelete).toBeDisabled()
-    await user.click(emptyProjectDelete)
-    expect(await screen.findByText(/确认删除空主项目/)).toBeInTheDocument()
+    expect(await screen.findByText('主管辖区已终止项目')).toBeInTheDocument()
+    const terminatedRow = screen.getByText('主管辖区已终止项目').closest('tr')!
+    const otherRow = screen.getByText('他人进行中项目').closest('tr')!
+    // Someone else's project is read-only: no edit, no delete.
+    expect(within(otherRow).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+    expect(within(otherRow).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
+    await user.click(within(terminatedRow).getByRole('button', { name: '删除' }))
+    expect(await screen.findByText(/确认删除项目“主管辖区已终止项目”/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '确定' }))
-    await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/project-groups/77'))
+    await waitFor(() => expect(mocks.delete).toHaveBeenCalledWith('/projects/77'))
     expect(mocks.auth.permissions).not.toContain('project:delete')
   })
 
-  it('robot part selection ignores late vendors, rejects stale parts, and submits only the new contract', async () => {
+  it('robot part selection ignores late vendors, rejects stale parts, creates and opens the started project', async () => {
     // The date picker opens the current month; keep the selected September date deterministic.
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2026, 8, 15, 12))
@@ -153,13 +156,13 @@ describe('ProjectList migrated behavior', () => {
       pending.set(config!.params!.supplierId!, request)
       return request.promise
     })
+    mocks.post.mockResolvedValue({ data: { id: 99, status: 'IN_PROGRESS' } })
     const user = userEvent.setup()
-    renderList()
-    await user.click(await screen.findByRole('button', { name: '新建主项目' }))
+    render(<MemoryRouter><ProjectList /><PathProbe /></MemoryRouter>)
+    await user.click(await screen.findByRole('button', { name: '新建项目' }))
     const dialog = await screen.findByRole('dialog')
 
-    await user.type(within(dialog).getByPlaceholderText('主项目名称'), '新项目')
-    await enterCreatedOption('subprojectNames_input', '子项目-A')
+    await user.type(within(dialog).getByPlaceholderText('项目名称'), '新项目')
     await enterCreatedOption('workOrderNos_input', 'WO-1')
     await user.type(within(dialog).getByPlaceholderText('请输入机型'), 'M1')
 
@@ -193,12 +196,12 @@ describe('ProjectList migrated behavior', () => {
     fireEvent.click(await screen.findByText('30', { selector: '.arco-picker-cell-in-view .arco-picker-date-value' }))
     await waitFor(() => expect(completionDate).toHaveValue('2026-09-30'))
     await waitFor(() => expect(document.querySelector('.arco-picker-container')).not.toBeInTheDocument())
-    const createButton = within(dialog).getByRole('button', { name: '创建主项目' })
+    const createButton = within(dialog).getByRole('button', { name: '创建并开始' })
     await waitFor(() => expect(createButton).toBeEnabled())
     await user.click(createButton)
 
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1))
-    expect(mocks.post).toHaveBeenCalledWith('/project-groups', {
+    expect(mocks.post).toHaveBeenCalledWith('/projects', {
       name: '新项目',
       description: undefined,
       supplierId: 9,
@@ -209,23 +212,24 @@ describe('ProjectList migrated behavior', () => {
       robotTypeId: 21,
       robotOwnerContactIds: [41],
       expectedCompletionDate: '2026-09-30',
-      subprojectNames: ['子项目-A'],
     })
     expect(mocks.post.mock.calls[0][1]).not.toHaveProperty('robotVendorId')
     expect(mocks.post.mock.calls[0][1]).not.toHaveProperty('responsibleUserId')
+    expect(mocks.post.mock.calls[0][1]).not.toHaveProperty('subprojectNames')
+    // Creating starts the project, so the user lands on its files to upload material.
+    await waitFor(() => expect(pathProbe.value).toBe('/projects/99?tab=files'))
   })
 
   it('historical main projects preserve their owner and legacy model without selecting a catalog part', async () => {
     const historical = {
-      id: 3, name: '历史项目', description: null, supplierId: 8, supplierName: '历史厂商', status: 'DRAFT',
+      id: 3, name: '历史项目', description: null, supplierId: 8, supplierName: '历史厂商', status: 'IN_PROGRESS', canManage: true,
       workOrderNos: ['WO-OLD'], machineModel: 'M1', robotPartId: null, robotPartNumber: null, robotModelName: '历史型号',
       responsibleUserId: 5, responsibleUserEmployeeNo: '0004', responsibleUserName: '旧负责人', sectionId: null, sectionName: null,
       priorityId: 14, priorityName: '普通', robotTypeId: null, robotTypeName: null, expectedCompletionDate: '2026-09-30',
-      updatedAt: '2026-09-01T00:00:00.000000Z',
-      subprojectCount: 0, completedCount: 0, materialPendingCount: 0, terminatedCount: 0, unreadMessages: 0,
+      updatedAt: '2026-09-01T00:00:00.000000Z', unreadMessages: 0,
     }
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
-      if (url === '/project-groups') return Promise.resolve({ data: page([historical]) })
+      if (url === '/projects') return Promise.resolve({ data: page([historical]) })
       if (url === '/supplier-options') return Promise.resolve({ data: [{ id: 8, name: '历史厂商' }] })
       if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
       if (url === '/robot-parts') return Promise.reject(new Error('catalog temporarily unavailable'))
@@ -239,40 +243,39 @@ describe('ProjectList migrated behavior', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByDisplayValue('旧负责人（0004）')).toHaveAttribute('readonly')
     expect(within(dialog).getByDisplayValue('历史型号')).toHaveAttribute('readonly')
-    await waitFor(() => expect(within(dialog).getByRole('button', { name: '保存并同步' })).toBeEnabled())
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: '保存' })).toBeEnabled())
     // Projects created before Robot 类型 existed have none; it is required, so saving asks for it first.
-    await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
     expect(await within(dialog).findByText('请选择 Robot 类型')).toBeInTheDocument()
     expect(within(dialog).getByText('请选择 Robot 负责人')).toBeInTheDocument()
     expect(mocks.put).not.toHaveBeenCalled()
     await selectById('robotTypeId_input', '六轴')
     await selectOwner('李四')
-    await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
     expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({
       robotPartId: null, supplierId: 8, robotTypeId: 21, robotOwnerContactIds: [32], expectedUpdatedAt: '2026-09-01T00:00:00.000000Z',
     }))
     expect(mocks.put.mock.calls[0][1]).not.toHaveProperty('responsibleUserId')
-    expect(await screen.findByText('主项目资料已保存，并同步到未完成的子项目')).toBeInTheDocument()
+    expect(await screen.findByText('项目资料已保存')).toBeInTheDocument()
   })
 
   function editableGroup(updatedAt: string, name = '并发项目') {
     return {
-      id: 3, name, description: null, supplierId: 8, supplierName: '厂商甲', status: 'DRAFT',
+      id: 3, name, description: null, supplierId: 8, supplierName: '厂商甲', status: 'IN_PROGRESS', canManage: true,
       workOrderNos: ['WO-1'], machineModel: 'M1', robotPartId: 101, robotPartNumber: 'A-101', robotModelName: '甲厂商型号',
       responsibleUserId: 5, responsibleUserEmployeeNo: '0004', responsibleUserName: '旧负责人', sectionId: null, sectionName: null,
       priorityId: 14, priorityName: '普通', robotTypeId: 21, robotTypeName: '六轴', robotOwnerName: '张三',
-      robotOwnerContactIds: [31], expectedCompletionDate: '2026-09-30', updatedAt,
-      subprojectCount: 0, completedCount: 0, materialPendingCount: 0, terminatedCount: 0, unreadMessages: 0,
+      robotOwnerContactIds: [31], expectedCompletionDate: '2026-09-30', updatedAt, unreadMessages: 0,
     }
   }
 
   async function editGroupName(rows: () => unknown[]) {
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
-      if (url === '/project-groups') return Promise.resolve({ data: page(rows()) })
-      if (url === '/project-groups/3') {
-        const group = rows()[0]
-        return group ? Promise.resolve({ data: { group, projects: [] } }) : Promise.reject({ isAxiosError: true, response: { status: 404, data: { code: 40401 } } })
+      if (url === '/projects') return Promise.resolve({ data: page(rows()) })
+      if (url === '/projects/3') {
+        const project = rows()[0]
+        return project ? Promise.resolve({ data: project }) : Promise.reject({ isAxiosError: true, response: { status: 404, data: { code: 40401 } } })
       }
       return successfulGet(url, config)
     })
@@ -281,16 +284,16 @@ describe('ProjectList migrated behavior', () => {
     const row = await screen.findByRole('row', { name: /并发项目/ })
     await user.click(within(row).getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog')
-    const name = within(dialog).getByPlaceholderText('主项目名称')
+    const name = within(dialog).getByPlaceholderText('项目名称')
     await user.clear(name)
     await user.type(name, '我的名称')
-    const save = within(dialog).getByRole('button', { name: '保存并同步' })
+    const save = within(dialog).getByRole('button', { name: '保存' })
     await waitFor(() => expect(save).toBeEnabled())
     await user.click(save).catch(() => undefined)
     return { user, dialog }
   }
 
-  it('a 40903 keeps the main-project dialog and adopts the refreshed updatedAt', async () => {
+  it('a 40903 keeps the project dialog and adopts the refreshed updatedAt', async () => {
     const t1 = '2026-10-01T00:00:00.000000Z'
     const t2 = '2026-10-01T00:01:00.000000Z'
     let current = editableGroup(t1)
@@ -301,28 +304,28 @@ describe('ProjectList migrated behavior', () => {
     const { user, dialog } = await editGroupName(() => [current])
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
     expect(mocks.put.mock.calls[0][1]).toEqual(expect.objectContaining({ name: '我的名称', expectedUpdatedAt: t1 }))
-    expect(await within(dialog).findByText(/主项目已被他人修改，已刷新为最新数据（当前名称：他人改名）/)).toBeInTheDocument()
-    expect(within(dialog).getByPlaceholderText('主项目名称')).toHaveValue('我的名称')
+    expect(await within(dialog).findByText(/项目已被他人修改，已刷新为最新数据（当前名称：他人改名）/)).toBeInTheDocument()
+    expect(within(dialog).getByPlaceholderText('项目名称')).toHaveValue('我的名称')
     mocks.put.mockResolvedValueOnce({ data: {} })
-    await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
     expect(mocks.put.mock.calls[1][1]).toEqual(expect.objectContaining({ name: '我的名称', expectedUpdatedAt: t2 }))
   })
 
-  it('a 40901 does not treat a main-project save as a version conflict', async () => {
+  it('a 40901 does not treat a project save as a version conflict', async () => {
     const t1 = '2026-10-01T00:00:00.000000Z'
     const current = editableGroup(t1)
     mocks.put.mockRejectedValue({ isAxiosError: true, response: { status: 409, data: { code: 40901, message: '名称已存在' } } })
     const { user, dialog } = await editGroupName(() => [current])
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
     expect(within(dialog).queryByText(/已被他人修改/)).not.toBeInTheDocument()
-    expect(within(dialog).getByPlaceholderText('主项目名称')).toHaveValue('我的名称')
-    await user.click(within(dialog).getByRole('button', { name: '保存并同步' }))
+    expect(within(dialog).getByPlaceholderText('项目名称')).toHaveValue('我的名称')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
     expect(mocks.put.mock.calls[1][1]).toEqual(expect.objectContaining({ expectedUpdatedAt: t1 }))
   })
 
-  it('closes the main-project dialog when the 40903 refresh finds the group gone', async () => {
+  it('closes the project dialog when the 40903 refresh finds the project gone', async () => {
     const t1 = '2026-10-01T00:00:00.000000Z'
     let rows = [editableGroup(t1)]
     mocks.put.mockImplementationOnce(() => {
@@ -330,35 +333,35 @@ describe('ProjectList migrated behavior', () => {
       return Promise.reject({ isAxiosError: true, response: { status: 409, data: { code: 40903 } } })
     })
     await editGroupName(() => rows)
-    expect(await screen.findByText('主项目已不可编辑或已被删除，请刷新后查看')).toBeInTheDocument()
+    expect(await screen.findByText('项目已不可编辑或已被删除，请刷新后查看')).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('main projects with material awaiting review stay editable and show the pending count', async () => {
+  it('own projects with material awaiting review stay editable and show the material state', async () => {
     const pendingGroup = {
-      id: 3, name: '资料待确认主项目', supplierId: 8, status: 'IN_PROGRESS', workOrderNos: [], unreadMessages: 0,
-      subprojectCount: 2, completedCount: 0, materialPendingCount: 1, terminatedCount: 0,
+      id: 3, name: '资料待确认项目', supplierId: 8, status: 'IN_PROGRESS', workOrderNos: [], unreadMessages: 0,
+      canManage: true, materialReviewStatus: 'PENDING',
     }
     mocks.get.mockImplementation((url: string) => {
-      if (url === '/project-groups') return Promise.resolve({ data: page([pendingGroup]) })
+      if (url === '/projects') return Promise.resolve({ data: page([pendingGroup]) })
       if (url === '/supplier-options') return Promise.resolve({ data: suppliers })
       return Promise.resolve({ data: [] })
     })
     renderList()
-    const row = await screen.findByRole('row', { name: /资料待确认主项目/ })
+    const row = await screen.findByRole('row', { name: /资料待确认项目/ })
     expect(within(row).getByRole('button', { name: '编辑' })).toBeEnabled()
-    expect(within(row).getByText('待审核 1')).toBeInTheDocument()
+    expect(within(row).getByText('资料待审核')).toBeInTheDocument()
   })
 
   it('filters by material state and overdue through the address bar and marks overdue main projects', async () => {
     const seen: Array<Record<string, unknown>> = []
     const overdueGroup = {
       id: 4, name: '逾期主项目', supplierId: 8, status: 'IN_PROGRESS', workOrderNos: [], unreadMessages: 0,
-      subprojectCount: 1, completedCount: 0, materialPendingCount: 0, terminatedCount: 0, expectedCompletionDate: '2000-01-01',
+      expectedCompletionDate: '2000-01-01',
     }
     const doneGroup = { ...overdueGroup, id: 5, name: '已完成主项目', status: 'COMPLETED' }
     mocks.get.mockImplementation((url: string, config?: { params?: Record<string, unknown> }) => {
-      if (url === '/project-groups') {
+      if (url === '/projects') {
         seen.push(config?.params ?? {})
         return Promise.resolve({ data: page([overdueGroup, doneGroup]) })
       }
@@ -375,12 +378,17 @@ describe('ProjectList migrated behavior', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: '仅看逾期' }))
     await waitFor(() => expect(seen.at(-1)).toMatchObject({ materialState: 'RETURNED', overdue: true }))
     expect(locationProbe.search).toContain('overdue=1')
+
+    // Internal accounts see every project; "只看我负责的" narrows the list through the address bar too.
+    fireEvent.click(screen.getByRole('checkbox', { name: '只看我负责的' }))
+    await waitFor(() => expect(seen.at(-1)).toMatchObject({ materialState: 'RETURNED', overdue: true, mine: true }))
+    expect(locationProbe.search).toContain('mine=1')
   })
 
   it('project creation explains missing prerequisites and refreshes without discarding entered data', async () => {
     let ready = false
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
-      if (url === '/project-groups') return Promise.resolve({ data: page() })
+      if (url === '/projects') return Promise.resolve({ data: page() })
       if (url === '/supplier-options') return Promise.resolve({ data: ready ? suppliers : [] })
       if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config, ready) })
       if (url === '/robot-parts') return Promise.resolve({ data: [] })
@@ -388,14 +396,14 @@ describe('ProjectList migrated behavior', () => {
     })
     const user = userEvent.setup()
     renderList()
-    await user.click(await screen.findByRole('button', { name: '新建主项目' }))
+    await user.click(await screen.findByRole('button', { name: '新建项目' }))
     const dialog = await screen.findByRole('dialog')
-    const name = within(dialog).getByPlaceholderText('主项目名称')
+    const name = within(dialog).getByPlaceholderText('项目名称')
     await user.type(name, '已填写项目')
     expect(await within(dialog).findByText(/暂无启用的供应商，请先新增或启用供应商。/)).toBeInTheDocument()
     expect(within(dialog).getByText(/暂无启用的优先级，请在数据字典中维护。/)).toBeInTheDocument()
     expect(within(dialog).getByText(/暂无启用的 Robot 类型，请在数据字典中维护。/)).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: '创建主项目' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: '创建并开始' })).toBeDisabled()
 
     ready = true
     await user.click(within(dialog).getByRole('button', { name: '刷新基础数据' }))
@@ -407,10 +415,11 @@ describe('ProjectList migrated behavior', () => {
     const firstSupplier = deferred<{ data: unknown[] }>()
     let supplierAttempts = 0
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
-      if (url === '/project-groups') return Promise.resolve({ data: page() })
+      if (url === '/projects') return Promise.resolve({ data: page() })
       if (url === '/supplier-options') {
         supplierAttempts += 1
-        return supplierAttempts === 1 ? firstSupplier.promise : Promise.resolve({ data: suppliers })
+        // The list loads its own filter options first; the dialog's first request is the second one.
+        return supplierAttempts === 2 ? firstSupplier.promise : Promise.resolve({ data: suppliers })
       }
       if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
       if (url === '/robot-parts') return Promise.resolve({ data: [] })
@@ -418,23 +427,23 @@ describe('ProjectList migrated behavior', () => {
     })
     const user = userEvent.setup()
     renderList()
-    const create = await screen.findByRole('button', { name: '新建主项目' })
+    const create = await screen.findByRole('button', { name: '新建项目' })
     expect(create).toBeEnabled()
     await user.click(create)
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText('正在加载创建所需的基础数据…')).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: '创建主项目' })).toBeDisabled()
+    expect(await within(dialog).findByText('正在加载创建所需的基础数据…')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '创建并开始' })).toBeDisabled()
     firstSupplier.reject(new Error('offline'))
     expect(await within(dialog).findByText('Robot 厂商选项加载失败，请刷新基础数据后重试。')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '刷新基础数据' }))
     await waitFor(() => expect(within(dialog).queryByText('Robot 厂商选项加载失败，请刷新基础数据后重试。')).not.toBeInTheDocument())
-    expect(supplierAttempts).toBe(2)
+    expect(supplierAttempts).toBe(3)
   })
 
   it('project pages contain no round entry points or project round selectors', async () => {
     const user = userEvent.setup()
     renderList()
-    await user.click(await screen.findByRole('button', { name: '新建主项目' }))
+    await user.click(await screen.findByRole('button', { name: '新建项目' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).queryByText(/轮次/)).not.toBeInTheDocument()
     expect(within(dialog).queryByRole('combobox', { name: /轮次/ })).not.toBeInTheDocument()
@@ -443,7 +452,7 @@ describe('ProjectList migrated behavior', () => {
 
   it('shows a full error before any list has loaded and keeps the last rows after a later failure', async () => {
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
-      if (url === '/project-groups') return Promise.reject(new Error('down'))
+      if (url === '/projects') return Promise.reject(new Error('down'))
       return successfulGet(url, config)
     })
     const failed = renderList()
@@ -452,12 +461,12 @@ describe('ProjectList migrated behavior', () => {
     failed.unmount()
 
     const historical = {
-      id: 3, name: '历史项目', supplierId: 8, supplierName: '历史厂商', status: 'DRAFT',
-      workOrderNos: ['WO-OLD'], unreadMessages: 0, subprojectCount: 0, completedCount: 0, materialPendingCount: 0, terminatedCount: 0,
+      id: 3, name: '历史项目', supplierId: 8, supplierName: '历史厂商', status: 'IN_PROGRESS',
+      workOrderNos: ['WO-OLD'], unreadMessages: 0,
     }
     let failList = false
     mocks.get.mockImplementation((url: string, config?: GetConfig) => {
-      if (url === '/project-groups') {
+      if (url === '/projects') {
         if (failList) return Promise.reject(new Error('down'))
         return Promise.resolve({ data: page([historical]) })
       }
@@ -465,10 +474,10 @@ describe('ProjectList migrated behavior', () => {
     })
     const view = renderList()
     expect(await screen.findByText('历史项目')).toBeInTheDocument()
-    const callsBeforeStatus = mocks.get.mock.calls.filter(([url]) => url === '/project-groups').length
+    const callsBeforeStatus = mocks.get.mock.calls.filter(([url]) => url === '/projects').length
     mocks.collaboration.status = 'error'
     view.rerender(<MemoryRouter><ProjectList /></MemoryRouter>)
-    expect(mocks.get.mock.calls.filter(([url]) => url === '/project-groups')).toHaveLength(callsBeforeStatus)
+    expect(mocks.get.mock.calls.filter(([url]) => url === '/projects')).toHaveLength(callsBeforeStatus)
 
     failList = true
     mocks.collaboration.revision = '2'
@@ -484,7 +493,7 @@ describe('ProjectList migrated behavior', () => {
   })
 
   it('restores filters and paging from the address and writes searches back to it', async () => {
-    mocks.get.mockImplementation((url: string) => url === '/project-groups'
+    mocks.get.mockImplementation((url: string) => url === '/projects'
       ? Promise.resolve({ data: { list: [], total: 0, page: 2, pageSize: 20 } })
       : Promise.resolve({ data: url === '/supplier-options' ? suppliers : [] }))
     render(
@@ -493,10 +502,10 @@ describe('ProjectList migrated behavior', () => {
         <LocationProbe />
       </MemoryRouter>,
     )
-    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/project-groups', expect.objectContaining({
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
       params: { page: 2, pageSize: 20, keyword: '旧关键字', status: 'IN_PROGRESS', supplierId: 8 },
     })))
-    const search = screen.getByPlaceholderText('主项目名称')
+    const search = screen.getByPlaceholderText('项目名称')
     expect(search).toHaveValue('旧关键字')
     fireEvent.change(search, { target: { value: '新关键字' } })
     fireEvent.keyDown(search, { key: 'Enter', code: 'Enter', keyCode: 13 })
@@ -509,13 +518,13 @@ describe('ProjectList migrated behavior', () => {
 
   it('ignores invalid address parameters and the supplier filter for supplier accounts', async () => {
     mocks.auth.user = { ...mocks.auth.user, userType: 'SUPPLIER' }
-    mocks.get.mockImplementation((url: string) => Promise.resolve({ data: url === '/project-groups' ? page() : [] }))
+    mocks.get.mockImplementation((url: string) => Promise.resolve({ data: url === '/projects' ? page() : [] }))
     render(
       <MemoryRouter initialEntries={['/projects?status=BOGUS&supplier=8&page=-1&pageSize=5000']}>
         <ProjectList />
       </MemoryRouter>,
     )
-    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/project-groups', expect.objectContaining({
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
       params: { page: 1, pageSize: 10, keyword: undefined, status: undefined, supplierId: undefined },
     })))
   })

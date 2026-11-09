@@ -14,7 +14,7 @@ export function projectAccessLostStatus(error: unknown): 403 | 404 | undefined {
  * 提示一次并替换跳转回项目列表，避免停留在空白或“加载失败”页面。
  * 返回的函数在已处理（或组件已卸载）时返回 true，调用方据此跳过本地的错误状态。
  */
-export function useProjectAccessLost(label: '主项目' | '子项目') {
+export function useProjectAccessLost(label: string = '项目') {
   const navigate = useNavigate()
   // navigate 的引用会随路由变化；用 ref 持有，使返回的回调稳定，不触发调用方的重新请求。
   const navigateRef = useRef(navigate)
@@ -32,7 +32,7 @@ export function useProjectAccessLost(label: '主项目' | '子项目') {
     handled.current = true
     Message.warning(status === 404
       ? `该${label}已被删除`
-      : `该${label}负责人已变更或权限已调整，您已无权访问`)
+      : `您已无权访问该${label}，权限可能已调整`)
     navigateRef.current('/projects', { replace: true })
     return true
   }, [label])

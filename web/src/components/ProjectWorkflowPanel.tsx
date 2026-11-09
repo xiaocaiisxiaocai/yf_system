@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Button, Form, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
-import { IconCheckCircle, IconCloseCircle, IconPlayArrow, IconStop, IconUndo } from '@arco-design/web-react/icon'
+import { IconCheckCircle, IconCloseCircle, IconStop, IconUndo } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { isVersionConflict } from '../api/versionConflict'
 import { MATERIAL_REVIEW, type Project, PROJECT_STATUS } from '../api/types'
@@ -65,10 +65,11 @@ export default function ProjectWorkflowPanel({
     size: compact ? 'small' as const : undefined,
   })
   const isInternal = user?.userType === 'INTERNAL'
-  const canStatus = isInternal && hasPerm('project:status')
+  // 内部账号只能操作自己负责的项目（以后端返回的 canManage 为准）。
+  const isOwner = isInternal && project.canManage
+  const canStatus = isOwner && hasPerm('project:status')
   const isInProgress = project.status === 'IN_PROGRESS'
   const materialReview = isInProgress ? project.materialReviewStatus ?? null : null
-  const isOwner = isInternal && project.responsibleUserId === user?.id
   const canApproveMaterial = isOwner && (materialReview === 'PENDING' || materialReview === 'RETURNED')
   const canReturnMaterial = isOwner && materialReview === 'PENDING'
   const canReopen = isOwner && project.status === 'COMPLETED'
@@ -110,9 +111,7 @@ export default function ProjectWorkflowPanel({
         // 以页面当前展示的状态为期望值：别处已改变状态时由后端以 40903 拒绝，而不是按过期画面执行。
         expectedStatus: project.status,
       })
-      Message.success(status === 'IN_PROGRESS'
-        ? (project.status === 'TERMINATED' ? '项目已重新开始' : '项目已开始')
-        : '项目已终止')
+      Message.success(status === 'IN_PROGRESS' ? '项目已重新开始' : '项目已终止')
       onChanged()
     } catch (error) {
       // 终止失败时刷新活动上传。只有 40903 才刷新项目；40901 保持当前画面以便重试。
@@ -164,7 +163,7 @@ export default function ProjectWorkflowPanel({
       await http.post<ApiResponses['POST /projects/{id}/materials/approve']>(`/projects/${project.id}/materials/approve`, {
         expectedSupplierFileId: approval.supplierFileId,
       })
-      Message.success('资料已确认 OK，子项目已完成')
+      Message.success('资料已确认 OK，项目已完成')
       closeApproval()
       onChanged()
     } catch (error) {
@@ -225,13 +224,13 @@ export default function ProjectWorkflowPanel({
         reason: values.reason.trim(),
         expectedUpdatedAt: reopenVersion,
       })
-      Message.success('子项目已重开，资料已退回厂商')
+      Message.success('项目已重开，资料已退回厂商')
       closeReopen()
       onChanged()
     } catch (error) {
       if (!isVersionConflict(error)) return
       // 保留弹窗和已填原因，刷新项目基线后由负责人重新确认再提交。
-      Message.info('子项目已被他人修改，请确认最新状态后再重开')
+      Message.info('项目已被他人修改，请确认最新状态后再重开')
       reopenConflictFrom.current = project
       onChanged()
     } finally {
@@ -240,7 +239,7 @@ export default function ProjectWorkflowPanel({
   }
 
   const status = PROJECT_STATUS[project.status]
-  const showActions = (canStatus && ['DRAFT', 'IN_PROGRESS', 'TERMINATED'].includes(project.status))
+  const showActions = (canStatus && ['IN_PROGRESS', 'TERMINATED'].includes(project.status))
     || canApproveMaterial || canReturnMaterial || canReopen
   const materialTag = materialReview ? MATERIAL_REVIEW[materialReview] : undefined
 
@@ -271,11 +270,6 @@ export default function ProjectWorkflowPanel({
 
       {showActions && (
         <Space className="project-workflow-actions" wrap>
-          {canStatus && project.status === 'DRAFT' && (
-            <Button type="primary" icon={<IconPlayArrow />} {...actionProps('start')} onClick={() => changeStatus('IN_PROGRESS')}>
-              开始
-            </Button>
-          )}
           {canStatus && project.status === 'TERMINATED' && (
             <Button type="primary" icon={<IconUndo />} {...actionProps('start')} onClick={() => changeStatus('IN_PROGRESS')}>
               重新开始
@@ -328,7 +322,7 @@ export default function ProjectWorkflowPanel({
         cancelText="取消"
       >
         <Space direction="vertical" size={8}>
-          <Typography.Text>确认后子项目将完成并冻结，不能再上传文件或留言。</Typography.Text>
+          <Typography.Text>确认后项目将完成并冻结，不能再上传文件或留言。</Typography.Text>
           {approval?.loading ? <Spin size={16} /> : approval?.fileCount !== undefined && (
             <Typography.Text type="secondary">
               厂商回传文件 {approval.fileCount} 个{approval.latestName ? `，最新：${approval.latestName}` : ''}
@@ -364,7 +358,7 @@ export default function ProjectWorkflowPanel({
 
       <Modal
         className="form-dialog"
-        title="重开子项目"
+        title="重开项目"
         visible={reopenVersion !== null}
         confirmLoading={busy}
         closable={!busy}

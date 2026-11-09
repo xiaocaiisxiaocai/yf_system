@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Drawer, Empty, Spin, Table, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Drawer, Empty, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import { IconDown, IconLeft, IconUp } from '@arco-design/web-react/icon'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
@@ -9,7 +9,6 @@ import {
   type ProjectCopyFileMapping,
   type ProjectCopyHistory,
   type ProjectCopySummary,
-  type ProjectSummary,
   PROJECT_STATUS,
   fmtSize,
   fmtTime,
@@ -19,12 +18,13 @@ import MessagePanel from '../../components/MessagePanel'
 import ProjectActivityPanel from '../../components/ProjectActivityPanel'
 import OverdueTag from '../../components/OverdueTag'
 import ProjectWorkflowPanel from '../../components/ProjectWorkflowPanel'
-import { confirmUploadLeave } from '../../components/uploadLeave'
 import { useDisconnectedPoll } from '../../hooks/useDisconnectedPoll'
 import { projectAccessLostStatus, useProjectAccessLost } from '../../hooks/useProjectAccessLost'
 import { useCoalescedRefresh } from '../../hooks/useCoalescedRefresh'
 import { useCollaboration } from '../../store/collaboration'
+import { useAuth } from '../../store/auth'
 import { isAxiosError } from 'axios'
+import ProjectManageActions from './ProjectManageActions'
 import './ProjectDetail.css'
 import type { ApiResponses } from '../../api/types'
 
@@ -184,7 +184,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const reconnected = useCollaboration((state) => state.reconnectRevision ?? 0)
   // 实时信号合并后再重拉，请求进行中不被后续信号中止（见 useCoalescedRefresh）。
   const { refreshKey: detailRefreshKey, begin: beginDetail, end: endDetail } = useCoalescedRefresh(`${liveActivity}|${reconnected}`)
-  const { refreshKey: siblingsRefreshKey, begin: beginSiblings, end: endSiblings } = useCoalescedRefresh(`${liveActivity}|${reconnected}`)
   const { refreshKey: summaryRefreshKey, begin: beginSummary, end: endSummary } = useCoalescedRefresh(`${liveActivity}|${liveMessages}|${reconnected}`)
   const realtimeConnected = useCollaboration((state) => state.realtimeStatus === 'connected')
   const projectSeq = useRef(0)
@@ -199,13 +198,12 @@ function ProjectDetailContent({ id }: { id?: string }) {
   const [historyReloadKey, setHistoryReloadKey] = useState(0)
   const [loadErrorFor, setLoadErrorFor] = useState<number | null>(null)
   const [missingProjectFor, setMissingProjectFor] = useState<number | null>(null)
-  const [siblings, setSiblings] = useState<ProjectSummary[]>([])
   const [uploadActivityRefresh, setUploadActivityRefresh] = useState(0)
   const bumpUploadActivity = () => setUploadActivityRefresh((value) => value + 1)
   // 曾成功展示过本项目后，刷新得到 403/404 说明权限已调整或项目已删除：提示后回到列表。
   const everLoaded = useRef(false)
-  const handleAccessLost = useProjectAccessLost('子项目')
-  const currentGroupId = project?.id === pid ? project.projectGroupId : undefined
+  const handleAccessLost = useProjectAccessLost('项目')
+  const isInternal = useAuth((state) => state.user?.userType === 'INTERNAL')
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const tab = requestedTab === 'files' || requestedTab === 'messages' || requestedTab === 'activity'
@@ -354,28 +352,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
   }, [beginDetail, endDetail, detailRefreshKey, fetchProject, handleAccessLost, pid, validProjectId])
 
   useEffect(() => {
-    if (!currentGroupId) return
-    let active = true
-    const controller = new AbortController()
-    beginSiblings()
-    http.get<ApiResponses['GET /project-groups/{id}']>(`/project-groups/${currentGroupId}`, { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
-      .then((response) => {
-        if (!active) return
-        const data = response.data as { projects?: ProjectSummary[] }
-        setSiblings(Array.isArray(data.projects) ? data.projects : [])
-      })
-      .catch(() => { if (active) setSiblings([]) })
-      .finally(() => { if (active) endSiblings() })
-    return () => { active = false; controller.abort() }
-  }, [currentGroupId, beginSiblings, endSiblings, siblingsRefreshKey])
-
-  const switchProject = useCallback((nextId: number) => {
-    if (nextId === pid) return
-    // 切换子项目会卸载当前上传器；replace 不经路由层的离开确认，这里显式确认。
-    confirmUploadLeave(() => navigate(tab === 'files' ? `/projects/${nextId}` : `/projects/${nextId}?tab=${tab}`, { replace: true }))
-  }, [navigate, pid, tab])
-
-  useEffect(() => {
     if (project?.id !== pid) return
     // Summary is the external server state synchronized after the project becomes available.
     let active = true
@@ -465,14 +441,11 @@ function ProjectDetailContent({ id }: { id?: string }) {
       <Card className="page-card project-detail-summary-card">
         <div className="detail-heading project-detail-heading">
           <div className="project-detail-title">
-            <Tooltip content="返回主项目">
-              <Button className="project-detail-back" shape="circle" size="small" icon={<IconLeft />} aria-label="返回主项目"
-                onClick={() => navigate(project.projectGroupId ? `/project-groups/${project.projectGroupId}` : '/projects')} />
+            <Tooltip content="返回项目列表">
+              <Button className="project-detail-back" shape="circle" size="small" icon={<IconLeft />} aria-label="返回项目列表"
+                onClick={() => navigate('/projects')} />
             </Tooltip>
             <div className="project-detail-title-text">
-              <Typography.Text type="secondary" className="project-detail-breadcrumb" title={project.projectGroupName || undefined}>
-                {project.projectGroupName || '主项目'} / 子项目
-              </Typography.Text>
               <div className="project-detail-name">
                 <h1 title={project.name}>{project.name}</h1>
                 <Tag color={PROJECT_STATUS[project.status]?.color}>
@@ -483,6 +456,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
             </div>
           </div>
           <div className="detail-actions">
+            <Space wrap size={8}>
+              <ProjectManageActions project={project} onChanged={() => { loadProject(); loadSummary() }} />
+            </Space>
             <ProjectWorkflowPanel
               compact
               project={project}
@@ -495,24 +471,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
             />
           </div>
         </div>
-        {currentGroupId && siblings.length > 1 && (
-          <div className="subproject-switch" role="tablist" aria-label="同一主项目下的子项目">
-            {siblings.map((sibling) => (
-              <button
-                key={sibling.id}
-                type="button"
-                role="tab"
-                aria-selected={sibling.id === pid}
-                className={`subproject-switch-tab${sibling.id === pid ? ' is-active' : ''}`}
-                onClick={() => switchProject(sibling.id)}
-              >
-                <span className="subproject-switch-name" title={sibling.name}>{sibling.name}</span>
-                <Tag size="small" color={PROJECT_STATUS[sibling.status]?.color}>{PROJECT_STATUS[sibling.status]?.text || sibling.status}</Tag>
-                {!!sibling.unreadMessages && <Badge count={sibling.unreadMessages} dot={false} />}
-              </button>
-            ))}
-          </div>
-        )}
         <div className="project-detail-facts-row">
           <dl className="project-group-summary-facts project-detail-facts">
             <div><dt>Robot 厂商</dt><dd title={project.supplierName || undefined}>{detailText(project.supplierName)}</dd></div>
@@ -583,6 +541,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
               targetId={filesTargetId}
               uploadRefresh={uploadActivityRefresh}
               onUploadActivityChanged={bumpUploadActivity}
+              canUpload={!isInternal || project.canManage}
               onOpenCopyHistory={project.hasCopyHistory ? () => setHistoryOpen(true) : undefined}
             />
           </Tabs.TabPane>
@@ -610,6 +569,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
                 : `poll:${summary.activityRevision ?? ''}:${liveMessages}:${reconnected}`}
               receiptRevision={`${liveReceipts}:${reconnected}`}
               realtimeConnected={realtimeConnected}
+              writable={!isInternal || project.canManage}
             />
           </Tabs.TabPane>
           <Tabs.TabPane key="activity" title="项目动态">
@@ -634,7 +594,7 @@ function ProjectDetailContent({ id }: { id?: string }) {
       >
         <div className="project-copy-history">
           <div className="project-copy-history-note">
-            复制项目会生成独立的文件记录（内容与原项目共享，互不影响）并保留复制履历；留言、流程及验收状态、已读回执和通知不会复制。
+            复制项目会生成独立的文件记录（内容与原项目共享，互不影响）并保留复制履历；留言、资料确认结果、已读回执和通知不会复制。
           </div>
           {historyLoading && !copyHistory ? (
             <div className="project-copy-load-state"><Spin size={28} /></div>
