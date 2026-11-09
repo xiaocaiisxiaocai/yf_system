@@ -22,19 +22,11 @@ public sealed record OutboxMailInfo(
     string RecipientEmail,
     string? RecipientRealm,
     ulong? RecipientAccountId,
-    ulong? OemTransferId,
-    string? Subject = null,
-    string? Body = null);
+    ulong? OemTransferId);
 
-public sealed record OutboxDecision(
-    bool Allowed,
-    string? Reason,
-    string? AuditReason,
-    string? ReplacementSubject = null,
-    string? ReplacementBody = null)
+public sealed record OutboxDecision(bool Allowed, string? Reason, string? AuditReason)
 {
     public static readonly OutboxDecision Allow = new(true, null, null);
-    public static OutboxDecision Rewrite(string subject, string body) => new(true, null, null, subject, body);
     public static OutboxDecision Cancel(string reason, string auditReason) => new(false, reason, auditReason);
 }
 
@@ -931,32 +923,8 @@ public sealed class MailService
             mail.RecipientEmail,
             mail.RecipientRealm,
             mail.RecipientAccountId,
-            mail.OemTransferId,
-            mail.Subject,
-            mail.Body), ct);
-        if (decision.Allowed)
-        {
-            if (decision.ReplacementSubject is not null && decision.ReplacementBody is not null)
-            {
-                if (mail.Subject != decision.ReplacementSubject || mail.Body != decision.ReplacementBody)
-                {
-                    var rewritten = await context.EmailOutbox.Where(item =>
-                            item.Id == mail.Id
-                            && item.Status == MailStatuses.Sending
-                            && item.NextAttemptAt == lease)
-                        .ExecuteUpdateAsync(setters => setters
-                            .SetProperty(item => item.Subject, decision.ReplacementSubject)
-                            .SetProperty(item => item.Body, decision.ReplacementBody), ct);
-                    if (rewritten != 1) throw new InvalidOperationException("待发送邮件重写失败");
-                }
-                // SMTP receives this in-memory MailRow after the transaction commits.
-                // Updating both values here protects the transport even when the durable
-                // row already matched and MySQL therefore reported no changed columns.
-                mail.Subject = decision.ReplacementSubject;
-                mail.Body = decision.ReplacementBody;
-            }
-            return true;
-        }
+            mail.OemTransferId), ct);
+        if (decision.Allowed) return true;
 
         var cancelled = await context.EmailOutbox.Where(item =>
                 item.Id == mail.Id

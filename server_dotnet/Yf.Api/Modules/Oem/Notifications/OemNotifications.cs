@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
@@ -118,129 +117,10 @@ internal static class OemRecipients
             .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName, null)).SingleOrDefaultAsync(ct);
 }
 
-internal sealed record OemMailContent(string Subject, string Body);
-
-/// <summary>
-/// Rebuilds every OEM message from fixed event copy and stable database identifiers.
-/// It deliberately accepts no transfer title, file name, person name, company name or
-/// free-text reason, so both new and pre-upgrade queued mail share the same privacy boundary.
-/// </summary>
-internal static class OemMailContentBuilder
-{
-    private static readonly Regex SafeAttachmentLine = new(
-        @"\A附件：[0-9]+ 个，共 [0-9]+(?:\.[0-9]{1,2})? (?:B|KB|MB|GB)\z",
-        RegexOptions.CultureInvariant);
-
-    public static OemMailContent Build(
-        AppOptions options,
-        string eventType,
-        OemTransfer transfer,
-        string? recipientRealm,
-        int fileCount,
-        ulong totalBytes)
-    {
-        var (action, lead) = Copy(eventType, transfer.LifecycleStatus);
-        var direction = transfer.Direction == TransferDirections.InternalToOem
-            ? "公司 → ODM/OEMA"
-            : "ODM/OEMA → 公司";
-        var sender = transfer.InternalSenderUserId is ulong internalUserId
-            ? $"内部账号 #{internalUserId}"
-            : $"ODM/OEMA 账号 #{transfer.OemSenderAccountId}";
-        var area = recipientRealm == OemRealms.Oem ? "oem-portal" : "oem";
-        var lines = new List<string>
-        {
-            "您好：", string.Empty, lead, string.Empty,
-            $"传递单编号：#{transfer.Id}",
-            $"方向：{direction}",
-            $"发送方：{sender}",
-            $"附件：{fileCount} 个，共 {HumanSize(totalBytes)}",
-        };
-        if (SafeFixedReason(transfer) is { } fixedReason)
-            lines.Add($"状态说明：{fixedReason}");
-        lines.AddRange([
-            string.Empty,
-            $"请登录 ODM/OEMA 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/{area}/transfers/{transfer.Id}",
-            string.Empty,
-            "此邮件由系统自动发送，请勿直接回复。",
-        ]);
-        return new(
-            Truncate($"[ODM/OEMA 文件传递] {action} · 传递单 #{transfer.Id}", 255),
-            string.Join("\n", lines));
-    }
-
-    public static bool MatchesCurrentTemplate(
-        AppOptions options,
-        string eventType,
-        OemTransfer transfer,
-        string? recipientRealm,
-        string? subject,
-        string? body)
-    {
-        if (subject is null || body is null) return false;
-        var expected = Build(options, eventType, transfer, recipientRealm, 0, 0);
-        if (subject != expected.Subject) return false;
-        var actualLines = body.Split('\n');
-        var expectedLines = expected.Body.Split('\n');
-        if (actualLines.Length != expectedLines.Length) return false;
-        for (var index = 0; index < expectedLines.Length; index++)
-        {
-            if (expectedLines[index].StartsWith("附件：", StringComparison.Ordinal))
-            {
-                if (!SafeAttachmentLine.IsMatch(actualLines[index])) return false;
-            }
-            else if (actualLines[index] != expectedLines[index])
-            {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static (string Action, string Lead) Copy(string eventType, string lifecycle) => eventType switch
-    {
-        OemMailEvents.ApprovalPending => ("待审批", "有一张公司发往 ODM/OEMA 厂商的文件传递单等待您审批。"),
-        OemMailEvents.TransferReleased => ("新文件已送达", "有新的文件传递给您，请登录平台查看和下载。"),
-        OemMailEvents.SenderReleased => ("已发布", "您发送的文件传递单已通过检查并发布给接收方。"),
-        OemMailEvents.TransferClosed => lifecycle switch
-        {
-            TransferLifecycle.Rejected => ("已驳回", "您发送的文件传递单已被审批驳回，如需重新发送请创建新的传递单。"),
-            TransferLifecycle.Blocked => ("已阻断", "您发送的文件传递单未能发布，已被阻断，附件将被自动清理。"),
-            _ => ("已终止", "您发送的文件传递单已被管理员终止。"),
-        },
-        OemMailEvents.ApprovalBlocked => ("审批异常", "文件传递单的审批因审批人不可用而暂停，请登录平台处置或查看进度。"),
-        OemMailEvents.ValidationFailed => ("附件未通过文件校验", "草稿中有附件未通过文件校验，请登录平台移除后再发送。"),
-        OemMailEvents.FileMissing => ("附件不可用", "传递单中有附件不可用，请登录平台查看并按需重新创建传递单。"),
-        OemMailEvents.FirstReceipt => ("文件已被接收", "接收方已完整下载传递单中的附件。"),
-        OemMailEvents.FilePurged => ("附件已按策略删除", "传递单中的附件已按删除策略从服务器删除，相关记录仍可在平台查看。"),
-        OemMailEvents.PurgeFailing => ("附件清理持续失败", "有到期附件多次清理失败，请检查 ODM/OEMA 存储目录权限和占用情况。"),
-        _ => ("状态更新", "文件传递单状态已更新，请登录平台查看。"),
-    };
-
-    private static string? SafeFixedReason(OemTransfer transfer) =>
-        transfer.LifecycleStatus == TransferLifecycle.Blocked ? transfer.ClosedReason switch
-        {
-            OemTransferProgression.RecipientUnavailableReason => OemTransferProgression.RecipientUnavailableReason,
-            OemTransferProgression.MissingFilesReason => OemTransferProgression.MissingFilesReason,
-            "附件未通过文件校验" => "附件未通过文件校验",
-            _ => null,
-        } : null;
-
-    private static string HumanSize(ulong bytes) => bytes switch
-    {
-        >= 1024UL * 1024 * 1024 => $"{(bytes / 1024d / 1024 / 1024).ToString("0.##", CultureInfo.InvariantCulture)} GB",
-        >= 1024UL * 1024 => $"{(bytes / 1024d / 1024).ToString("0.##", CultureInfo.InvariantCulture)} MB",
-        >= 1024UL => $"{(bytes / 1024d).ToString("0.##", CultureInfo.InvariantCulture)} KB",
-        _ => $"{bytes} B",
-    };
-
-    private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
-}
-
 /// <summary>
 /// Turns OEM domain events into queued mail inside the business transaction (outbox
 /// pattern): one message per recipient, deduplicated by event + recipient, never
-/// carrying attachments, file names, sender-entered transfer titles or download
-/// credentials — only a stable transfer number and a pointer to the page.
+/// carrying attachments, file names or download links — only a pointer to the page.
 /// </summary>
 public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter audit) : IOemEventHandler
 {
@@ -263,7 +143,7 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
                     var activation = task.ActivatedAt?.ToString("yyyyMMddHHmmssfff", CultureInfo.InvariantCulture) ?? "0";
                     if (await OemRecipients.InternalUserAsync(uow.Db, task.ApproverUserId, ct) is { } approver)
                         await EnqueueAsync(uow, settings, OemMailEvents.ApprovalPending, $"oem:approval:{taskId}:{activation}", approver, facts,
-                            ct);
+                            $"待审批：{transfer.Title}", "有一张公司发往 ODM/OEMA 厂商的文件传递单等待您审批。", null, ct);
                 }
                 break;
             case TransferReleasedEvent:
@@ -275,15 +155,20 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
                         new { eventType = OemMailEvents.TransferReleased, reason = "厂商没有启用的联络人邮箱，通知未入队" }, ct);
                 foreach (var recipient in recipients)
                     await EnqueueAsync(uow, settings, OemMailEvents.TransferReleased, $"oem:released:{transfer.Id}:{OemRecipients.DedupeRecipient(recipient)}",
-                        recipient, facts, ct);
+                        recipient, facts, $"新文件已送达：{transfer.Title}", "有新的文件传递给您，请登录平台查看和下载。", null, ct);
                 foreach (var releasedSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
                     await EnqueueAsync(uow, settings, OemMailEvents.SenderReleased, $"oem:sender-released:{transfer.Id}:{OemRecipients.DedupeRecipient(releasedSender)}", releasedSender, facts,
-                        ct);
+                        $"已发布：{transfer.Title}", "您发送的文件传递单已通过检查并发布给接收方。", null, ct);
                 break;
             case TransferClosedEvent closed:
                 foreach (var closedSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
                     await EnqueueAsync(uow, settings, OemMailEvents.TransferClosed, $"oem:closed:{transfer.Id}:{OemRecipients.DedupeRecipient(closedSender)}", closedSender, facts,
-                        ct);
+                        $"{TransferStateMachine.Label(closed.Lifecycle)}：{transfer.Title}", closed.Lifecycle switch
+                        {
+                            TransferLifecycle.Rejected => "您发送的文件传递单已被审批驳回，如需重新发送请创建新的传递单。",
+                            TransferLifecycle.Blocked => "您发送的文件传递单未能发布，已被阻断，附件将被自动清理。阻断原因见下方说明。",
+                            _ => "您发送的文件传递单已被管理员终止。",
+                        }, closed.Reason, ct);
                 break;
             case ApprovalBlockedEvent blocked:
                 var stamp = uow.Now.Ticks.ToString(CultureInfo.InvariantCulture);
@@ -292,46 +177,52 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
                 audience.AddRange(await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.ApprovalRecover));
                 foreach (var person in audience.DistinctBy(item => (item.Realm, item.Id, item.ContactId)))
                     await EnqueueAsync(uow, settings, OemMailEvents.ApprovalBlocked, $"oem:blocked:{transfer.Id}:{stamp}:{OemRecipients.DedupeRecipient(person)}", person, facts,
-                        ct);
+                        $"审批异常：{transfer.Title}", "文件传递单的审批因审批人不可用而暂停，需要具有异常处置权限的管理员改派或终止。", blocked.Reason, ct);
                 break;
             case DraftFileValidationFailedEvent failed:
                 foreach (var draftSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
                     await EnqueueAsync(uow, settings, OemMailEvents.ValidationFailed, $"oem:validationfail:{failed.FileId}:{OemRecipients.DedupeRecipient(draftSender)}", draftSender, facts,
-                        ct);
+                        $"附件未通过文件校验：{transfer.Title}", "草稿中有附件未通过文件校验，请移除该附件后再发送。", null, ct);
                 break;
             case FileMissingEvent missing:
                 foreach (var missingSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
                     await EnqueueAsync(uow, settings, OemMailEvents.FileMissing, $"oem:missing:{missing.FileId}:{OemRecipients.DedupeRecipient(missingSender)}", missingSender, facts,
-                        ct);
+                        $"附件不可用：{transfer.Title}", missing.PayloadStatus == PayloadStatuses.MissingUnverified
+                            ? "系统恢复后发现传递单中有附件不可用（原因待核实），如需继续传递请重新创建传递单。"
+                            : "传递单中有附件在存储中丢失，已禁止下载，如需继续传递请重新创建传递单。", null, ct);
                 break;
             case FirstReceiptEvent receipt:
                 foreach (var receiptSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
                     await EnqueueAsync(uow, settings, OemMailEvents.FirstReceipt, $"oem:receipt:{receipt.FileId}:{OemRecipients.DedupeRecipient(receiptSender)}", receiptSender, facts,
-                        ct);
+                        $"文件已被接收：{transfer.Title}", "接收方已完整下载传递单中的附件。", null, ct);
                 break;
             case FilePurgedEvent purged:
                 foreach (var purgedSender in await OemRecipients.SenderRecipientsAsync(uow.Db, transfer, ct))
                     await EnqueueAsync(uow, settings, OemMailEvents.FilePurged, $"oem:purged:{purged.FileId}:{OemRecipients.DedupeRecipient(purgedSender)}", purgedSender, facts,
-                        ct);
+                        $"附件已按策略删除：{transfer.Title}", "传递单中的附件已按删除策略从服务器删除，相关记录仍可在平台查看。", null, ct);
                 break;
             case FilePurgeFailingEvent failing:
                 foreach (var admin in await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.FilePolicyManage))
                     await EnqueueAsync(uow, settings, OemMailEvents.PurgeFailing, $"oem:purgefail:{failing.FileId}:{failing.Attempts}:{admin.Id}", admin, facts,
-                        ct);
+                        "ODM/OEMA 附件清理持续失败", "有到期附件多次清理失败，请检查 ODM/OEMA 存储目录权限和占用情况。", $"已重试 {failing.Attempts} 次", ct);
                 break;
         }
     }
 
-    private sealed record TransferFactsForMail(OemTransfer Transfer, int FileCount, ulong TotalBytes);
+    private sealed record TransferFactsForMail(OemTransfer Transfer, string CompanyName, string SenderName, int FileCount, ulong TotalBytes);
 
     private static async Task<TransferFactsForMail> FactsAsync(YfDbContext db, OemTransfer transfer, CancellationToken ct)
     {
+        var company = await db.OemCompanies.AsNoTracking().Where(item => item.Id == transfer.OemCompanyId).Select(item => item.Name).SingleAsync(ct);
+        var sender = transfer.InternalSenderUserId is ulong userId
+            ? await db.Users.AsNoTracking().Where(user => user.Id == userId).Select(user => user.RealName).SingleOrDefaultAsync(ct)
+            : await db.OemAccounts.AsNoTracking().Where(account => account.Id == transfer.OemSenderAccountId).Select(account => account.EmployeeNo).SingleOrDefaultAsync(ct);
         var sizes = await OemTransferFiles.Members(db, transfer.Id).Select(file => file.SizeBytes).ToArrayAsync(ct);
-        return new TransferFactsForMail(transfer, sizes.Length, sizes.Aggregate(0UL, (sum, size) => sum + size));
+        return new TransferFactsForMail(transfer, company, sender ?? "-", sizes.Length, sizes.Aggregate(0UL, (sum, size) => sum + size));
     }
 
     private async Task EnqueueAsync(OemUnitOfWork uow, OemSettings settings, string eventType, string dedupeKey, MailRecipient recipient,
-        TransferFactsForMail facts, CancellationToken ct)
+        TransferFactsForMail facts, string subject, string lead, string? reason, CancellationToken ct)
     {
         if (!OemMailEvents.Allowed(settings, eventType)) return;
         if (string.IsNullOrWhiteSpace(recipient.Email))
@@ -341,8 +232,22 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
             return;
         }
         var transfer = facts.Transfer;
-        var content = OemMailContentBuilder.Build(
-            options, eventType, transfer, recipient.Realm, facts.FileCount, facts.TotalBytes);
+        var direction = transfer.Direction == TransferDirections.InternalToOem
+            ? $"公司 → ODM/OEMA（{facts.CompanyName}）"
+            : $"ODM/OEMA（{facts.CompanyName}）→ 公司";
+        var lines = new List<string>
+        {
+            $"{recipient.Name}，您好：", string.Empty, lead, string.Empty,
+            $"传递单：{transfer.Title}", $"方向：{direction}", $"发送方：{facts.SenderName}",
+            $"附件：{facts.FileCount} 个，共 {HumanSize(facts.TotalBytes)}",
+        };
+        if (!string.IsNullOrWhiteSpace(reason)) lines.Add($"说明：{reason}");
+        // Vendors use their own portal; internal staff use the OEM section of the company site.
+        var area = recipient.Realm == OemRealms.Oem ? "oem-portal" : "oem";
+        lines.AddRange([string.Empty, $"请登录 ODM/OEMA 文件传递平台查看：{options.WebBaseUrl.TrimEnd('/')}/{area}/transfers/{transfer.Id}", string.Empty,
+            "此邮件由系统自动发送，请勿直接回复。"]);
+        var body = string.Join("\n", lines);
+        var fullSubject = Truncate("[ODM/OEMA 文件传递] " + subject, 255);
         var key = Truncate(dedupeKey, 128);
         // Idempotent enqueue (a documented raw-SQL boundary): a repeated event never mails twice.
         // Only a dedupe-key conflict is ignored; unlike INSERT IGNORE, truncation or other data
@@ -350,10 +255,18 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
         await uow.Db.Database.ExecuteSqlInterpolatedAsync($@"INSERT INTO email_outbox
             (event_type, dedupe_key, project_id, recipient_user_id, recipient_email, subject, body, status, retry_count, next_attempt_at,
              created_at, recipient_realm, recipient_account_id, oem_transfer_id)
-            VALUES ({eventType}, {key}, NULL, NULL, {recipient.Email.Trim()}, {content.Subject}, {content.Body}, 'PENDING', 0, NULL,
+            VALUES ({eventType}, {key}, NULL, NULL, {recipient.Email.Trim()}, {fullSubject}, {body}, 'PENDING', 0, NULL,
              UTC_TIMESTAMP(3), {recipient.Realm}, {recipient.Id}, {transfer.Id})
             ON DUPLICATE KEY UPDATE id = id", ct);
     }
+
+    private static string HumanSize(ulong bytes) => bytes switch
+    {
+        >= 1024UL * 1024 * 1024 => $"{bytes / 1024d / 1024 / 1024:0.##} GB",
+        >= 1024UL * 1024 => $"{bytes / 1024d / 1024:0.##} MB",
+        >= 1024UL => $"{bytes / 1024d:0.##} KB",
+        _ => $"{bytes} B",
+    };
 
     private static string Truncate(string value, int max) => value.Length <= max ? value : value[..max];
 }
@@ -363,7 +276,7 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
 /// the collaboration ones) apply, and each message is re-validated against the live
 /// recipient, account/vendor status and the transfer or task it is about.
 /// </summary>
-public sealed class OemOutboxPolicy(AppOptions options) : IOutboxRecipientPolicy
+public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
 {
     public string EventTypePrefix => OemMailEvents.Prefix;
     public string AuditActionPrefix => "OEM_";
@@ -393,7 +306,7 @@ public sealed class OemOutboxPolicy(AppOptions options) : IOutboxRecipientPolicy
             if (mail.EventType == OemMailEvents.TransferReleased
                 && (transfer.Direction != TransferDirections.InternalToOem || transfer.LifecycleStatus != TransferLifecycle.Released))
                 return Stale();
-            return await RewriteAsync(db, transfer, mail, ct);
+            return OutboxDecision.Allow;
         }
         if (mail.RecipientRealm != OemRealms.Internal) return OutboxDecision.Cancel("未知收件人类型", "OEM_MAIL_INVALID");
         var internalRecipient = await OemRecipients.InternalUserAsync(db, recipientId, ct);
@@ -404,48 +317,21 @@ public sealed class OemOutboxPolicy(AppOptions options) : IOutboxRecipientPolicy
                 var taskId = TaskIdFrom(mail.DedupeKey);
                 var stillPending = taskId is ulong id && await db.OemFlowTasks.AnyAsync(task => task.Id == id && task.ApproverUserId == recipientId
                     && task.Status == Approval.FlowTaskStatuses.Pending, ct);
-                return stillPending ? await RewriteAsync(db, transfer, mail, ct) : Stale();
+                return stillPending ? OutboxDecision.Allow : Stale();
             case OemMailEvents.TransferReleased:
                 if (transfer.Direction != TransferDirections.OemToInternal || transfer.LifecycleStatus != TransferLifecycle.Released) return Stale();
                 var holders = await OemRecipients.InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
-                return holders.Any(holder => holder.Id == recipientId) ? await RewriteAsync(db, transfer, mail, ct) : Stale();
+                return holders.Any(holder => holder.Id == recipientId) ? OutboxDecision.Allow : Stale();
             case OemMailEvents.ApprovalBlocked:
                 var stillBlocked = await db.OemFlowInstances.AnyAsync(instance => instance.TransferId == transferId
                     && instance.Status == Yf.Api.Modules.Oem.Approval.FlowInstanceStatuses.ApprovalBlocked, ct);
                 if (!stillBlocked) return Stale();
-                if (transfer.InternalSenderUserId == recipientId) return await RewriteAsync(db, transfer, mail, ct);
+                if (transfer.InternalSenderUserId == recipientId) return OutboxDecision.Allow;
                 var recoverers = await OemRecipients.InternalWithAllAsync(db, ct, OemPermissions.ApprovalRecover);
-                return recoverers.Any(recoverer => recoverer.Id == recipientId) ? await RewriteAsync(db, transfer, mail, ct) : Stale();
+                return recoverers.Any(recoverer => recoverer.Id == recipientId) ? OutboxDecision.Allow : Stale();
             default:
-                return await RewriteAsync(db, transfer, mail, ct);
+                return OutboxDecision.Allow;
         }
-    }
-
-    private async Task<OutboxDecision> RewriteAsync(
-        YfDbContext db,
-        OemTransfer transfer,
-        OutboxMailInfo mail,
-        CancellationToken ct)
-    {
-        if (OemMailContentBuilder.MatchesCurrentTemplate(
-            options,
-            mail.EventType,
-            transfer,
-            mail.RecipientRealm,
-            mail.Subject,
-            mail.Body))
-            return OutboxDecision.Allow;
-        var sizes = await OemTransferFiles.Members(db, transfer.Id)
-            .Select(file => file.SizeBytes)
-            .ToArrayAsync(ct);
-        var content = OemMailContentBuilder.Build(
-            options,
-            mail.EventType,
-            transfer,
-            mail.RecipientRealm,
-            sizes.Length,
-            sizes.Aggregate(0UL, (sum, size) => sum + size));
-        return OutboxDecision.Rewrite(content.Subject, content.Body);
     }
 
     private static OutboxDecision Stale() => OutboxDecision.Cancel("收件人已无权接收该通知", "OEM_RECIPIENT_UNAUTHORIZED");

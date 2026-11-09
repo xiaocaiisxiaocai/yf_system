@@ -66,7 +66,7 @@ python .\scripts\test-isolated.py
 python .\scripts\test-isolated.py --files-only   # files-only subset
 
 # Script self-tests (no DB needed); run from scripts/
-python -m unittest test_script_safety test_publish_defaults test_browser_step_evidence test_smtp_capture test_test_host_artifacts test_maintenance_optimization_guard test_verify_all_guards
+python -m unittest test_script_safety test_publish_defaults test_browser_step_evidence test_test_host_artifacts test_maintenance_optimization_guard test_verify_all_guards
 
 # All local non-browser gates, including script self-tests and precompression. By default this
 # requires YF_TEST_DATABASE_URL plus full DB/HTTP coverage; intentional partial runs use -AllowSkips.

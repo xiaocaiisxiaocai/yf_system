@@ -1,8 +1,6 @@
 """Loopback-only TLS SMTP capture for disposable browser acceptance; never relays mail."""
 import base64
 import contextlib
-from email import policy
-from email.parser import BytesParser
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -11,28 +9,6 @@ import socketserver
 import ssl
 import tempfile
 import threading
-
-
-def parse_mime_message(raw):
-    """Return decoded MIME fields used by acceptance assertions."""
-    message = BytesParser(policy=policy.default).parsebytes(raw)
-    plain, html = [], []
-    parts = message.walk() if message.is_multipart() else [message]
-    for part in parts:
-        if part.is_multipart() or part.get_content_disposition() == 'attachment':
-            continue
-        content_type = part.get_content_type()
-        if content_type not in ('text/plain', 'text/html'):
-            continue
-        content = part.get_content()
-        if not isinstance(content, str):
-            content = content.decode(part.get_content_charset() or 'utf-8', errors='replace')
-        (plain if content_type == 'text/plain' else html).append(content)
-    return {
-        'subject': str(message.get('subject', '')),
-        'text': '\n'.join(plain),
-        'html': '\n'.join(html),
-    }
 
 
 class SmtpCapture:
@@ -115,14 +91,7 @@ class SmtpCapture:
                                 owner.attempts += 1
                                 reject = owner.mode == 'transient' and owner.failures_left > 0
                                 if reject: owner.failures_left -= 1
-                                else:
-                                    raw_message = b''.join(lines)
-                                    owner.messages.append({
-                                        'sender': sender,
-                                        'recipients': recipients[:],
-                                        'body': raw_message.decode(errors='replace'),
-                                        **parse_mime_message(raw_message),
-                                    })
+                                else: owner.messages.append({'sender': sender, 'recipients': recipients[:], 'body': b''.join(lines).decode(errors='replace')})
                             if reject: self.reply('451 Temporary fixture failure')
                             elif owner.mode == 'accept_drop': return  # accepted payload but no acknowledgment: outcome is unknown to client
                             else: self.reply('250 Accepted by local capture')

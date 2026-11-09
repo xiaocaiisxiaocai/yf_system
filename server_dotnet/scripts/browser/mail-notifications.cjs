@@ -1,6 +1,6 @@
 const { chromium } = require('playwright');
 const {
-  fs, assert, OUT, s, f, save, record, login, api, navigate, action, track, projectMetadata,
+  assert, OUT, s, f, save, record, login, api, navigate, action, track, projectMetadata,
 } = require(process.env.YF_BROWSER_SUPPORT_DIR + '/ui-lib.cjs');
 
 const pathOf = response => new URL(response.url()).pathname;
@@ -16,6 +16,7 @@ const captured = async () => {
   assert.equal(result.status, 200, 'local SMTP capture evidence');
   return result.json();
 };
+
 (async () => {
   let browser;
   let page;
@@ -252,8 +253,6 @@ const captured = async () => {
       assert(oemRows.length >= f.oem.contacts.length, 'OEM release mail fans out to all active company contacts');
       for (const contact of f.oem.contacts)
         assert(oemRows.some(item => item.recipientEmail === contact.email), 'active OEM contact receives mail: ' + contact.email);
-      const oemTransfer = await read('GET', '/oem/transfers/' + f.oem.outboundId);
-      const oemDetails = new Map([[String(oemTransfer.summary.id), oemTransfer]]);
 
       await capture(context, 'transient', 1);
       const firstDrain = await fetch(s.base + '/__test/mail/drain', {
@@ -298,111 +297,6 @@ const captured = async () => {
       for (const contact of generated) assert(deliveredRecipients.includes(contact.email));
       assert(!deliveredRecipients.includes('auto_supplier_a'), 'shared supplier login is never an SMTP recipient');
       assert(delivered.messages.some(message => message.recipients.length === 1), 'mail is sent per recipient');
-      const oemPrefix = '[ODM/OEMA 文件传递] ';
-      const sentOemRows = finalRows.filter(item => item.eventType.startsWith('OEM_') && item.status === 'SENT');
-      const deliveredOem = delivered.messages.filter(message =>
-        typeof message.subject === 'string' && message.subject.startsWith(oemPrefix));
-      const recipientHas = (message, address) =>
-        message.recipients.some(recipient => recipient.toLowerCase().includes(address.toLowerCase()));
-      const pathsFrom = values => values.map(value => {
-        try { return new URL(value).pathname; } catch { return null; }
-      }).filter(Boolean);
-      const textPaths = value => pathsFrom(value.match(/https?:\/\/[^\s<>"']+/g) ?? []);
-      const htmlPaths = value => pathsFrom([...value.matchAll(/href="([^"]+)"/g)].map(match => match[1]));
-      const fixedAction = (eventType, lifecycle) => {
-        if (eventType === 'OEM_APPROVAL_PENDING') return '待审批';
-        if (eventType === 'OEM_TRANSFER_RELEASED') return '新文件已送达';
-        if (eventType === 'OEM_SENDER_RELEASED') return '已发布';
-        if (eventType === 'OEM_TRANSFER_CLOSED')
-          return lifecycle === 'REJECTED' ? '已驳回' : lifecycle === 'BLOCKED' ? '已阻断' : '已终止';
-        if (eventType === 'OEM_APPROVAL_BLOCKED') return '审批异常';
-        if (eventType === 'OEM_VALIDATION_FAILED') return '附件未通过文件校验';
-        if (eventType === 'OEM_FILE_MISSING') return '附件不可用';
-        if (eventType === 'OEM_FIRST_RECEIPT') return '文件已被接收';
-        if (eventType === 'OEM_FILE_PURGED') return '附件已按策略删除';
-        if (eventType === 'OEM_PURGE_FAILING') return '附件清理持续失败';
-        return '状态更新';
-      };
-      const unusedMessages = new Set(deliveredOem.map((_message, index) => index));
-      const correlations = [];
-      const matched = [];
-      for (const row of sentOemRows) {
-        const transferId = String(row.oemTransferId ?? '');
-        let detail = oemDetails.get(transferId);
-        if (transferId && !detail) {
-          detail = await read('GET', '/oem/transfers/' + transferId);
-          oemDetails.set(transferId, detail);
-        }
-        const action = fixedAction(row.eventType, detail?.summary?.lifecycleStatus);
-        const expectedSubject = oemPrefix + action + ' · 传递单 #' + transferId;
-        const messageIndex = [...unusedMessages].find(index =>
-          deliveredOem[index].subject === expectedSubject
-          && recipientHas(deliveredOem[index], row.recipientEmail));
-        const message = messageIndex === undefined ? null : deliveredOem[messageIndex];
-        if (messageIndex !== undefined) unusedMessages.delete(messageIndex);
-        const area = row.recipientRealm === 'oem' ? 'oem-portal' : 'oem';
-        const expectedPath = '/' + area + '/transfers/' + transferId;
-        const actualTextPaths = message ? textPaths(message.text ?? '') : [];
-        const actualHtmlPaths = message ? htmlPaths(message.html ?? '') : [];
-        correlations.push({
-          outboxId: row.id,
-          eventType: row.eventType,
-          transferId: row.oemTransferId,
-          recipientRealm: row.recipientRealm,
-          expectedPath,
-          actualTextPaths,
-          actualHtmlPaths,
-          matched: Boolean(message),
-        });
-        matched.push({ row, transferId, detail, action, expectedSubject, expectedPath, message });
-      }
-      fs.writeFileSync(OUT + '/mail-mime-correlation.json', JSON.stringify({
-        sentOemRows: sentOemRows.length,
-        parsedOemMessages: deliveredOem.length,
-        unmatchedParsedMessages: unusedMessages.size,
-        correlations,
-      }, null, 2));
-
-      assert.equal(deliveredOem.length, sentOemRows.length,
-        'every sent OEM outbox row must be represented by one parsed MIME message');
-      assert.equal(unusedMessages.size, 0, 'parsed OEM MIME messages are consumed exactly once');
-      assert(correlations.every(item => item.matched), 'each sent OEM row matches envelope recipient, event and transfer number');
-      for (const item of matched) {
-        const { row, transferId, detail, expectedSubject, expectedPath, message } = item;
-        assert(row.oemTransferId && ['internal', 'oem'].includes(row.recipientRealm),
-          'test outbox exposes stable transfer and recipient realm metadata');
-        assert(message && message.subject === expectedSubject,
-          'OEM MIME subject uses fixed event copy and the row transfer number');
-        assert(typeof message.text === 'string' && typeof message.html === 'string'
-          && message.text.length > 0 && message.html.length > 0,
-        'OEM MIME contains decoded text/plain and text/html');
-        assert(message.text.includes('传递单编号：#' + transferId),
-          'OEM text/plain uses the same transfer number as its outbox row');
-        assert(textPaths(message.text).includes(expectedPath),
-          'OEM text/plain uses the recipient realm entry: ' + expectedPath);
-        assert(message.html.includes('传递单编号') && message.html.includes('#' + transferId),
-          'OEM text/html uses the same transfer number as its outbox row');
-        assert(htmlPaths(message.html).includes(expectedPath),
-          'OEM text/html uses the recipient realm entry: ' + expectedPath);
-        const safeSender = detail.summary.direction === 'INTERNAL_TO_OEM'
-          ? /发送方：内部账号 #\d+/
-          : /发送方：ODM\/OEMA 账号 #\d+/;
-        assert(safeSender.test(message.text), 'OEM text/plain keeps only a safe sender account id');
-        const sensitive = [detail.summary.title, ...detail.files.map(file => file.originalName)].filter(Boolean);
-        for (const value of sensitive) {
-          assert(!message.subject.includes(value), 'OEM subject does not expose title/file name: ' + value);
-          assert(!message.text.includes(value), 'OEM text/plain does not expose title/file name: ' + value);
-          assert(!message.html.includes(value), 'OEM text/html does not expose title/file name: ' + value);
-        }
-      }
-      for (const contact of f.oem.contacts) {
-        assert(matched.some(item => item.row.eventType === 'OEM_TRANSFER_RELEASED'
-          && String(item.row.oemTransferId) === String(f.oem.outboundId)
-          && item.row.recipientRealm === 'oem'
-          && item.row.recipientEmail === contact.email
-          && item.message && recipientHas(item.message, contact.email)),
-          'target outbound RELEASED mail reaches its expected active OEM contact: ' + contact.email);
-      }
       const robotLogs = await readMail('collaboration');
       assert(robotLogs.recent.some(item => item.action === 'EMAIL_SENT'));
       const oemLogs = await readMail('oem');
