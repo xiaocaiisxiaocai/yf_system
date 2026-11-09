@@ -5,12 +5,14 @@ namespace Yf.Api.Modules.Files;
 /// <summary>
 /// Bounds actual collaboration file responses, including Range requests made with an already-issued cookie.
 /// One budget is shared by downloads and previews so an account cannot move pressure between endpoints.
+/// Supplier logins are shared by a vendor's staff, so the per-account budget must cover several people at once;
+/// stalled transfers are reclaimed by <see cref="GuardedFileResult"/> rather than by a tight concurrency cap.
 /// </summary>
 public sealed class FileStreamLimiter
 {
-    internal const int MaximumConcurrentPerUser = 4;
-    internal const int MaximumConcurrentGlobal = 32;
-    internal const int MaximumRequestsPerMinute = 120;
+    internal const int MaximumConcurrentPerUser = 16;
+    internal const int MaximumConcurrentGlobal = 128;
+    internal const int MaximumRequestsPerMinute = 300;
     private const int MaximumWindows = 10_000;
     private static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
     private readonly object gate = new();
@@ -75,8 +77,10 @@ public sealed class FileStreamLimiter
 }
 
 /// <summary>
-/// Holds a stream-concurrency lease for the complete HTTP response and aborts a response that outlives its
-/// hard deadline. The wrapped file result retains ASP.NET Core's normal conditional and Range semantics.
+/// Holds a stream-concurrency lease for the complete HTTP response and aborts a response whose client stops
+/// accepting data (fewer than 64 KiB in a minute, e.g. a paused video or a dead connection), so the slot is
+/// reclaimed; a slow but progressing download is never cut off before the generous hard deadline.
+/// The wrapped file result retains ASP.NET Core's normal conditional and Range semantics.
 /// </summary>
 internal sealed class GuardedFileResult(
     IResult inner,
@@ -84,7 +88,7 @@ internal sealed class GuardedFileResult(
     TransferWatchdogLimits? limits = null) : IResult
 {
     internal static readonly TransferWatchdogLimits DefaultLimits =
-        new(0, TransferWatchdogLimits.DefaultWindow, TimeSpan.FromMinutes(120));
+        new(64 * 1024, TransferWatchdogLimits.DefaultWindow, TimeSpan.FromHours(24));
     private static readonly Action<ILogger, TransferWatchdogVerdict, Exception?> LogWatchdogAbort =
         LoggerMessage.Define<TransferWatchdogVerdict>(
             LogLevel.Warning, new EventId(1, nameof(GuardedFileResult)),
@@ -100,6 +104,8 @@ internal sealed class GuardedFileResult(
             if (watchdog.Verdict != TransferWatchdogVerdict.Healthy) httpContext.Abort();
         });
         httpContext.RequestAborted = watchdog.Token;
+        var originalBody = httpContext.Response.Body;
+        httpContext.Response.Body = new ProgressStream(originalBody, watchdog);
         try
         {
             await inner.ExecuteAsync(httpContext);
@@ -114,7 +120,38 @@ internal sealed class GuardedFileResult(
         }
         finally
         {
+            httpContext.Response.Body = originalBody;
             httpContext.RequestAborted = originalAbort;
+        }
+    }
+
+    /// <summary>Reports the bytes the response body accepted, which is the watchdog's progress signal.</summary>
+    private sealed class ProgressStream(Stream inner, TransferWatchdog watchdog) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            inner.Write(buffer, offset, count);
+            watchdog.Report(count);
+        }
+
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
+            WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await inner.WriteAsync(buffer, cancellationToken);
+            watchdog.Report(buffer.Length);
         }
     }
 

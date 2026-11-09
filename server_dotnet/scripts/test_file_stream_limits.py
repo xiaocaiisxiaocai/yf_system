@@ -15,7 +15,7 @@ from file_blob_fixture import insert_blob_file
 from test_native_download_contracts import _new_download_actor
 
 
-_PER_USER_LIMIT = 4
+_PER_USER_LIMIT = 16
 _LARGE_BYTES = 64 * 1024 * 1024
 _INLINE_BYTES = 32 * 1024 * 1024
 _SHORT_RANGE = "bytes=0-7"
@@ -117,7 +117,7 @@ def _exercise_path(base, path, headers, total_size, check, label, other=None):
         if other is not None:
             other_path, other_headers = other
             _expect_short_range(base, other_path, other_headers, total_size)
-        check(f"{label} rejects the fifth active stream with 42902", True)
+        check(f"{label} rejects the stream beyond the per-user limit with 42902", True)
 
         held.pop().close()
         _wait_for_short_range(base, path, headers, total_size)
@@ -227,7 +227,7 @@ def run_file_stream_limit_checks(admin, conn, check, source_file_id):
         (inline_path, shared_token_headers),
         (shared_native_path, shared_native_headers),
         (shared_media_path, shared_media_headers),
-    ]
+    ] * (_PER_USER_LIMIT // 4)
     held = []
     try:
         held = [_open_slow(admin.base, path, headers) for path, headers in shared_specs]

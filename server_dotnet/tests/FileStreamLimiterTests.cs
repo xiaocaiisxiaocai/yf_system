@@ -88,6 +88,38 @@ public sealed class FileStreamLimiterTests
     }
 
     [Fact]
+    public async Task StalledResponseIsAbortedAndReleasesItsLease()
+    {
+        var limiter = new FileStreamLimiter();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stallOnly = new TransferWatchdogLimits(1, TimeSpan.FromMilliseconds(50), TimeSpan.FromHours(1));
+        var result = new GuardedFileResult(new WaitingResult(entered), limiter.Acquire(11, Now), stallOnly);
+
+        var execution = result.ExecuteAsync(Context(TestContext.Current.CancellationToken));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        AssertFullUserCapacity(limiter, 11);
+    }
+
+    [Fact]
+    public async Task BytesWrittenThroughTheResponseKeepASlowTransferAlive()
+    {
+        var limiter = new FileStreamLimiter();
+        var context = Context(TestContext.Current.CancellationToken);
+        var originalBody = new MemoryStream();
+        context.Response.Body = originalBody;
+        // Window 25x the write interval, so a loaded test machine still sees progress in every window.
+        var limits = new TransferWatchdogLimits(1, TimeSpan.FromMilliseconds(500), TimeSpan.FromHours(1));
+
+        await new GuardedFileResult(new TrickleResult(8, TimeSpan.FromMilliseconds(20)), limiter.Acquire(12, Now), limits)
+            .ExecuteAsync(context);
+
+        Assert.Equal(8, originalBody.Length);
+        Assert.Same(originalBody, context.Response.Body);
+        AssertFullUserCapacity(limiter, 12);
+    }
+
+    [Fact]
     public async Task GuardPreservesAspNetRangeResponses()
     {
         var limiter = new FileStreamLimiter();
@@ -133,6 +165,19 @@ public sealed class FileStreamLimiterTests
     private sealed class CompletedResult : IResult
     {
         public Task ExecuteAsync(HttpContext httpContext) => Task.CompletedTask;
+    }
+
+    /// <summary>Writes one byte per delay; aborts (throws) if the watchdog cancels the request.</summary>
+    private sealed class TrickleResult(int bytes, TimeSpan delay) : IResult
+    {
+        public async Task ExecuteAsync(HttpContext httpContext)
+        {
+            for (var index = 0; index < bytes; index++)
+            {
+                await Task.Delay(delay, httpContext.RequestAborted);
+                await httpContext.Response.Body.WriteAsync(new byte[] { 1 }, httpContext.RequestAborted);
+            }
+        }
     }
 
     private sealed class WaitingResult(TaskCompletionSource entered) : IResult
