@@ -193,7 +193,6 @@ public class SystemTests
     [Fact]
     public void MailDiagnosticsDoNotExposeCredentials()
     {
-        Assert.Equal("a***@example.invalid", MailService.MaskEmail("alice@example.invalid"));
         Assert.Equal("SMTP 认证失败", MailService.SanitizeError("authentication failed alice@example.invalid password=my-secret"));
         Assert.Equal("SMTP 连接失败", MailService.SanitizeError("TLS connection smtp.private.invalid"));
     }

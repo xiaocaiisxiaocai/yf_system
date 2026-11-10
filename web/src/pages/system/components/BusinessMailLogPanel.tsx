@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Alert, Button, Card, Descriptions, Message, Pagination, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, Message, Pagination, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import http from '../../../api/client'
 import type { ApiResponses } from '../../../api/generated/api-types'
@@ -39,7 +39,9 @@ function MailLogDetail({ row, formatTime }: { row: MailRecent; formatTime: (valu
     { label: '重连次数', value: detail.reconnects ? String(detail.reconnects) : '' },
     { label: '下次重试', value: detail.nextAttemptAt ? formatTime(detail.nextAttemptAt) : '' },
   ].filter(item => item.value)
-  return <Descriptions size="small" column={2} data={items} />
+  return <dl className="system-mail-log-detail">
+    {items.map(item => <div key={item.label} className="system-mail-log-detail-item"><dt>{item.label}</dt><dd>{item.value}</dd></div>)}
+  </dl>
 }
 
 export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onViewLogs }: {

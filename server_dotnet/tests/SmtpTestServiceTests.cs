@@ -9,7 +9,7 @@ namespace Yf.Api.Tests;
 public sealed class SmtpTestServiceTests
 {
     [Fact(Timeout = 180_000)]
-    public async Task ManualTestsWriteMaskedActorAuditAndAppearInMailStatusWithoutQueueOrRetries()
+    public async Task ManualTestsWriteActorAuditAndAppearInMailStatusWithoutQueueOrRetries()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var scope = await MigratedTestDatabase.CreateOrSkipAsync(ct);
@@ -41,7 +41,7 @@ public sealed class SmtpTestServiceTests
         await using var connection = await scope.Database.OpenAsync(ct);
         var logs = (await connection.QueryAsync<(string Action, ulong UserId, string Detail)>("SELECT action, user_id AS UserId, detail FROM audit_logs WHERE action LIKE 'EMAIL_TEST_%' ORDER BY id")).ToArray();
         Assert.Equal(["EMAIL_TEST_STARTED", "EMAIL_TEST_SENT", "EMAIL_TEST_STARTED", "EMAIL_TEST_FAILED", "EMAIL_TEST_STARTED", "EMAIL_TEST_UNKNOWN", "EMAIL_TEST_STARTED", "EMAIL_TEST_UNKNOWN"], logs.Select(log => log.Action));
-        Assert.All(logs, log => { Assert.Equal(1UL, log.UserId); Assert.Contains("r***@example.invalid", log.Detail); Assert.DoesNotContain("private-test-secret", log.Detail); Assert.DoesNotContain("recipient@example.invalid", log.Detail); });
+        Assert.All(logs, log => { Assert.Equal(1UL, log.UserId); Assert.Contains("recipient@example.invalid", log.Detail); Assert.DoesNotContain("private-test-secret", log.Detail); });
         Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM email_outbox"));
         await connection.DisposeAsync();
         var status = await new MailService(scope.Database, scope.Options, audit, NullLogger<MailService>.Instance).StatusAsync(ct);

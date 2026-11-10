@@ -133,13 +133,6 @@ public sealed class MailService
         return query;
     }
 
-    public static string MaskEmail(string address)
-    {
-        var text = address.Trim();
-        var at = text.IndexOf('@');
-        return at < 0 ? text.Length == 0 ? "未配置" : "***" : (at == 0 ? "*" : text[..1]) + "***" + text[at..];
-    }
-
     public static string SanitizeError(string message)
     {
         if (new[] { "SMTP 认证失败", "SMTP 连接超时", "SMTP 连接失败", "SMTP 发送失败", "收件地址或发件地址无效" }.Contains(message)) return message;
@@ -201,12 +194,12 @@ public sealed class MailService
             .Select(user => new MissingEmailAccount(user.Id, user.EmployeeNo, user.RealName, user.UserType, user.Status))
             .ToListAsync(ct);
         var auditActions = MailLogActions(scope, "all");
-        var recent = await ReadMailLogsAsync(context.AuditLogs.Where(log => Enumerable.Contains(auditActions, log.Action)), 0, 10, ct);
+        var recent = await ReadMailLogsAsync(context, context.AuditLogs.Where(log => Enumerable.Contains(auditActions, log.Action)), 0, 10, ct);
         var latestSentAt = await queue.Where(mail => mail.Status == MailStatuses.Sent)
             .Select(mail => mail.SentAt).MaxAsync(ct);
         // Retries count as failures here: while SMTP is unavailable mail keeps its retry budget and never reaches FAILED.
         var failureActions = MailLogActions(scope, "problem");
-        var latestFailure = (await ReadMailLogsAsync(
+        var latestFailure = (await ReadMailLogsAsync(context,
             context.AuditLogs.Where(log => Enumerable.Contains(failureActions, log.Action)), 0, 1, ct)).FirstOrDefault();
         var missingOemContacts = scope == "collaboration" ? 0UL : checked((ulong)await context.OemCompanies.LongCountAsync(
             company => company.Status == "ACTIVE" && !context.OemCompanyContacts.Any(contact => contact.OemCompanyId == company.Id
@@ -215,7 +208,7 @@ public sealed class MailService
             configured,
             configured ? cfg.Host : null,
             configured ? cfg.Port : null,
-            configured ? MaskEmail(cfg.From) : null,
+            configured ? cfg.From.Trim() : null,
             notificationPolicy.GlobalEnabled,
             notificationPolicy.ToResponse(),
             new MailQueueCounts(counts.GetValueOrDefault(MailStatuses.Pending), counts.GetValueOrDefault(MailStatuses.Sending),
@@ -269,11 +262,11 @@ public sealed class MailService
         await using var context = EfDb.Use(conn);
         var query = context.AuditLogs.Where(log => Enumerable.Contains(actions, log.Action));
         var total = checked((ulong)await query.LongCountAsync(ct));
-        var list = await ReadMailLogsAsync(query, checked((int)((actualPage - 1) * size)), (int)size, ct);
+        var list = await ReadMailLogsAsync(context, query, checked((int)((actualPage - 1) * size)), (int)size, ct);
         return new(list, total, actualPage, size);
     }
 
-    private static async Task<MailAuditEntry[]> ReadMailLogsAsync(
+    private static async Task<MailAuditEntry[]> ReadMailLogsAsync(YfDbContext context,
         IQueryable<Infrastructure.Entities.AuditLog> query, int skip, int take, CancellationToken ct)
     {
         var rows = await query
@@ -290,10 +283,20 @@ public sealed class MailService
                 CreatedAt = log.CreatedAt,
             })
             .ToListAsync(ct);
-        return rows.Select(x => new MailAuditEntry(x.Id, x.Action, x.TargetType, x.TargetId, SafeDetail(x.Detail), x.CreatedAt)).ToArray();
+        // Older audit rows stored a masked address; the outbox row (while retained) still has the full one.
+        var outboxIds = rows
+            .Select(x => x.TargetType == "email_outbox" && ulong.TryParse(x.TargetId, out var id) ? id : 0UL)
+            .Where(id => id != 0).Distinct().ToArray();
+        var recipients = outboxIds.Length == 0 ? new Dictionary<ulong, string>() : await context.EmailOutbox
+            .Where(mail => outboxIds.Contains(mail.Id))
+            .Select(mail => new { mail.Id, mail.RecipientEmail })
+            .ToDictionaryAsync(mail => mail.Id, mail => mail.RecipientEmail, ct);
+        return rows.Select(x => new MailAuditEntry(x.Id, x.Action, x.TargetType, x.TargetId,
+            SafeDetail(x.Detail, x.TargetType == "email_outbox" && ulong.TryParse(x.TargetId, out var id)
+                && recipients.TryGetValue(id, out var recipient) ? recipient : null), x.CreatedAt)).ToArray();
     }
 
-    private static IReadOnlyDictionary<string, object?> SafeDetail(string? detail)
+    private static IReadOnlyDictionary<string, object?> SafeDetail(string? detail, string? outboxRecipient = null)
     {
         var output = new Dictionary<string, object?>();
         if (detail is null) return output;
@@ -306,7 +309,7 @@ public sealed class MailService
             foreach (var property in parsed.RootElement.EnumerateObject())
             {
                 if (new[] { "eventType", "status", "reason", "employeeNo", "realName", "retryCount", "userId", "failedStep", "diagnosis", "nextAttemptAt", "reconnects" }.Contains(property.Name)) output[property.Name] = property.Value.Clone();
-                if (property.Value.ValueKind == JsonValueKind.String && property.Name == "recipient") output[property.Name] = MaskEmail(property.Value.GetString()!);
+                if (property.Value.ValueKind == JsonValueKind.String && property.Name == "recipient") output[property.Name] = outboxRecipient ?? property.Value.GetString();
                 if (property.Value.ValueKind == JsonValueKind.String && property.Name == "error") output[property.Name] = SanitizeError(property.Value.GetString()!);
             }
         }
@@ -455,7 +458,7 @@ public sealed class MailService
                     .SetProperty(item => item.NextAttemptAt, (DateTime?)null), ct);
                 if (abandoned == 1)
                     await audit.WriteAsync(claimConnection, claimTransaction, null, AuditAction(mail.EventType, "EMAIL_FAILED"),
-                        "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = MaskEmail(mail.RecipientEmail),
+                        "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = mail.RecipientEmail,
                             status = MailStatuses.Failed, retryCount = mail.RetryCount + 1, error = InterruptedSendError }, null, ct);
                 await claimTransaction.CommitAsync(ct);
                 return DeliveryOutcome.Skipped;
@@ -698,7 +701,7 @@ public sealed class MailService
             var detail = new Dictionary<string, object?>
             {
                 ["eventType"] = mail.EventType,
-                ["recipient"] = MaskEmail(mail.RecipientEmail),
+                ["recipient"] = mail.RecipientEmail,
                 ["status"] = status,
                 ["retryCount"] = retries,
                 ["error"] = error,

@@ -84,7 +84,7 @@ public sealed class SmtpTestService : IDisposable
                 resolved = await settings.ResolveAsync(connection, null, ct);
                 if (!resolved.Configured) throw ApiException.BadRequest("请先填写并保存完整的 SMTP 配置；授权码无法读取时请重新填写");
                 await audit.WriteAsync(connection, null, actor.Id, "EMAIL_TEST_STARTED", "system_config", null,
-                    new { recipient = MailService.MaskEmail(recipient), reason = "管理员手动测试，立即发送，不入队且不自动重试" }, null, ct);
+                    new { recipient, reason = "管理员手动测试，立即发送，不入队且不自动重试" }, null, ct);
             }
             SmtpTestResponse result;
             try { result = await SendAsync(delivery, resolved.Options, recipient, ct, logger); }
@@ -113,7 +113,7 @@ public sealed class SmtpTestService : IDisposable
             await using var connection = await db.OpenAsync(completion.Token);
             var action = result.Success ? "EMAIL_TEST_SENT" : result.DeliveryUncertain ? "EMAIL_TEST_UNKNOWN" : "EMAIL_TEST_FAILED";
             await audit.WriteAsync(connection, null, actor.Id, action, "system_config", null,
-                new { recipient = MailService.MaskEmail(recipient), reason = result.Message }, null, completion.Token);
+                new { recipient, reason = result.Message }, null, completion.Token);
             return true;
         }
         catch (Exception error)

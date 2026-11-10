@@ -51,7 +51,7 @@ public sealed record MailAuditEntry(
     string Action,
     string? TargetType,
     string? TargetId,
-    // Allow-listed, masked detail fields only.
+    // Allow-listed detail fields only (recipient addresses are shown in full).
     IReadOnlyDictionary<string, object?> Detail,
     DateTime CreatedAt);
 
