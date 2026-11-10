@@ -79,6 +79,20 @@ describe('Excel preview request and frame boundary', () => {
     await waitFor(() => expect(frame).toHaveStyle({ visibility: 'visible' }))
   })
 
+  it('Excel preview reads bytes from a supplied loader instead of the collaboration endpoint', async () => {
+    const loadContent = vi.fn().mockResolvedValue(new Uint8Array([0x50, 0x4b, 3, 4]).buffer)
+    render(<ExcelPreview fileId={11} ext="xlsx" loadContent={loadContent} />)
+    const frame = screen.getByTitle('Excel 预览内容') as HTMLIFrameElement
+    const postMessage = vi.fn()
+    installFrameWindow(frame, postMessage)
+
+    fireEvent.load(frame)
+    await waitFor(() => expect(postMessage).toHaveBeenCalledOnce())
+    expect(loadContent).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(mocks.get).not.toHaveBeenCalled()
+    expect((postMessage.mock.calls[0][0] as PostedMessage).type).toBe('excel:load')
+  })
+
   it('Excel preview retry fetches a new buffer and waits for the replacement frame', async () => {
     const resolvers: Array<(value: { data: ArrayBuffer }) => void> = []
     mocks.get.mockImplementation(() => new Promise((resolve) => { resolvers.push(resolve) }))

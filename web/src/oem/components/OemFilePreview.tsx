@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { Button, Modal, Result, Spin } from '@arco-design/web-react'
 import { IconClose } from '@arco-design/web-react/icon'
 import { PreviewWatermark } from '../../components/PreviewWatermark'
@@ -10,6 +10,9 @@ import { oemPreviewKind } from './oemPreview'
 
 const PdfPreview = lazy(() => import('../../components/PdfPreview'))
 const ImagePreview = lazy(() => import('../../components/ImagePreview'))
+const ExcelPreview = lazy(() => import('../../components/ExcelPreview'))
+const PptxPreview = lazy(() => import('../../components/PptxPreview'))
+const DocxPreview = lazy(() => import('../../components/DocxPreview'))
 
 /** Watermark identity of whoever is looking: the internal user or the OEM vendor account. */
 function useViewerIdentity(): { employeeNo?: string; realName?: string } {
@@ -21,7 +24,7 @@ function useViewerIdentity(): { employeeNo?: string; realName?: string } {
     : { employeeNo: internalUser?.employeeNo, realName: internalUser?.realName }
 }
 
-function OemImage({ file }: { file: TransferFile }) {
+function OemImage({ file, toolbarContainer }: { file: TransferFile; toolbarContainer: HTMLElement | null }) {
   const { api } = useOem()
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<{ url?: string; failed?: boolean }>({})
@@ -45,7 +48,7 @@ function OemImage({ file }: { file: TransferFile }) {
       extra={<Button onClick={() => { setState({}); setAttempt((value) => value + 1) }}>重试图片预览</Button>} />
   }
   if (!state.url) return <div role="status" style={{ textAlign: 'center', padding: 60 }}><Spin /> 正在加载图片…</div>
-  return <ImagePreview sourceUrl={state.url} name={file.originalName} />
+  return <ImagePreview sourceUrl={state.url} name={file.originalName} toolbarContainer={toolbarContainer} />
 }
 
 /**
@@ -57,6 +60,11 @@ export default function OemFilePreview({ file, onClose }: { file: TransferFile |
   const { employeeNo, realName } = useViewerIdentity()
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
   const kind = file ? oemPreviewKind(file.ext) : null
+  const fileId = file?.id
+  const loadContent = useCallback(
+    async (signal: AbortSignal) => (await api.previewBlob(fileId!, signal)).arrayBuffer(),
+    [api, fileId],
+  )
   return (
     <Modal
       className="file-preview-modal"
@@ -76,10 +84,11 @@ export default function OemFilePreview({ file, onClose }: { file: TransferFile |
       {file && kind && (
         <div className="file-preview-surface">
           <Suspense fallback={<div role="status">加载预览…</div>}>
-            {kind === 'pdf'
-              ? <PdfPreview fileId={file.id} toolbarContainer={toolbar}
-                loadContent={async (signal) => (await api.previewBlob(file.id, signal)).arrayBuffer()} />
-              : <OemImage file={file} />}
+            {kind === 'pdf' && <PdfPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
+            {kind === 'image' && <OemImage file={file} toolbarContainer={toolbar} />}
+            {kind === 'excel' && <ExcelPreview fileId={file.id} ext={file.ext} loadContent={loadContent} />}
+            {kind === 'pptx' && <PptxPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
+            {kind === 'docx' && <DocxPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
           </Suspense>
           <PreviewWatermark employeeNo={employeeNo} realName={realName} />
         </div>

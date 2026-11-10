@@ -159,6 +159,8 @@ def _insert_available_file(conn, project_id, uploader_id, storage_root, extensio
         "zip": "application/zip",
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
         "mp4": "video/mp4",
     }[extension]
     original_name = secrets.token_hex(8) + "." + extension
@@ -411,6 +413,15 @@ def run_file_checks(client, conn, check, pid, fid):
         conn, pid, uploader_id, storage_root, "pptx", content=pptx_bytes)
     pptx_preview, pptx_headers = preview_client.call(
         "GET", f"/api/v1/files/{pptx_fid}/content", raw=True)
+    docx_bytes = b"PK\x03\x04docx preview contract"
+    docx_fid = _insert_available_file(
+        conn, pid, uploader_id, storage_root, "docx", content=docx_bytes)
+    docx_preview, _ = preview_client.call(
+        "GET", f"/api/v1/files/{docx_fid}/content", raw=True)
+    assert docx_preview == docx_bytes
+    legacy_doc_fid = _insert_available_file(
+        conn, pid, uploader_id, storage_root, "doc", content=b"\xd0\xcf\x11\xe0legacy word")
+    preview_client.call("GET", f"/api/v1/files/{legacy_doc_fid}/content", expected=400)
     preview_client.call("GET", f"/api/v1/files/{zip_fid}/content", expected=400)
     preview_client.call("GET", f"/api/v1/files/{oversized_xlsx_fid}/content", expected=400)
     downloaded_zip, _ = client.call("GET", f"/api/v1/files/{zip_fid}/download", raw=True)

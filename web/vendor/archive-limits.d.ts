@@ -9,5 +9,6 @@ export interface ArchiveLimits {
 
 export const spreadsheetArchiveLimits: ArchiveLimits
 export const presentationArchiveLimits: ArchiveLimits
+export const documentArchiveLimits: ArchiveLimits
 
 export function assertArchiveWithinLimits(input: ArrayBuffer | ArrayBufferView, limits: ArchiveLimits): Promise<void>

@@ -733,6 +733,7 @@ public sealed class FileService(
         || extension.Equals("xlsm", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("xlsb", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("pptx", StringComparison.OrdinalIgnoreCase)
+        || extension.Equals("docx", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("png", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("jpg", StringComparison.OrdinalIgnoreCase)
         || extension.Equals("jpeg", StringComparison.OrdinalIgnoreCase)

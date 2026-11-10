@@ -36,6 +36,7 @@ vi.mock('../../../components/ChunkUploader', () => ({
 vi.mock('../../../components/PdfPreview', () => ({ default: () => <div data-testid="pdf-preview" /> }))
 vi.mock('../../../components/ExcelPreview', () => ({ default: () => <div data-testid="excel-preview" /> }))
 vi.mock('../../../components/PptxPreview', () => ({ default: () => <div data-testid="pptx-preview" /> }))
+vi.mock('../../../components/DocxPreview', () => ({ default: () => <div data-testid="docx-preview" /> }))
 vi.mock('../../../components/VideoPreview', () => ({ default: () => <div data-testid="video-preview" /> }))
 vi.mock('../../../components/ImagePreview', () => ({ default: () => <div data-testid="image-preview" /> }))
 
@@ -112,6 +113,7 @@ describe('FileTable DOM contracts', () => {
       row(5, 'movie.ogv', 'ogv', 1024 * 1024 * 1024),
       row(6, 'inside.png', 'png', limit),
       row(8, 'inside.JPEG', 'JPEG', limit),
+      row(14, 'inside.DOCX', 'DOCX', limit),
     ]
     const unsupported = [
       row(2, 'outside.pptx', 'pptx', limit + 1),
@@ -121,6 +123,8 @@ describe('FileTable DOM contracts', () => {
       row(11, 'page.html', 'html', 1024),
       row(12, 'legacy.avi', 'avi', 1024),
       row(13, 'legacy.mkv', 'mkv', 1024),
+      row(15, 'outside.docx', 'docx', limit + 1),
+      row(16, 'legacy.doc', 'doc', 1024),
     ]
     const firstView = await renderTable(supported)
 
@@ -263,6 +267,7 @@ describe('FileTable DOM contracts', () => {
       row(3, 'picture.png', 'png', 1),
       row(4, 'slides.pptx', 'pptx', 1),
       row(5, 'movie.mp4', 'mp4', 1024),
+      row(6, 'report.docx', 'docx', 1),
     ]
 
     for (const file of previews) {
