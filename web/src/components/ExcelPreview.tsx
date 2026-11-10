@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Result, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/excel-viewer.html?raw'
-import { createPreviewDeadline } from './previewDeadline'
+import { createPreviewDeadline, createRenderDeadline, type PreviewContentLoader } from './previewDeadline'
 
-function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
+function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: PreviewContentLoader }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [channel] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join(''))
   const [attempt, setAttempt] = useState(0)
@@ -18,7 +18,10 @@ function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
     let buffer: ArrayBuffer | undefined
     let sent = false
     const controller = new AbortController()
-    const deadline = createPreviewDeadline(() => { controller.abort(); if (active) setState('error') })
+    const timedOut = () => { controller.abort(); if (active) setState('error') }
+    // 外部取数没有下载进度，只对渲染阶段计时；协作域下载按“无进度”计时。
+    const external = loadContent
+    const deadline = external ? createRenderDeadline(timedOut) : createPreviewDeadline(timedOut)
     const receive = (event: MessageEvent) => {
       if (!active || event.source !== frame.current?.contentWindow || event.data?.channel !== channel) return
       if (event.data.type === 'excel:rendered') { deadline.clear(); setState('ready') }
@@ -38,14 +41,16 @@ function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
       frame.current?.contentWindow?.postMessage({ type: 'excel:load', channel, buffer, xls: convert }, '*', [buffer])
       buffer = undefined
     }
-    void http.get<ArrayBuffer>(`/files/${fileId}/content`, {
-      responseType: 'arraybuffer', signal: controller.signal, quietNetworkError: true,
-      timeout: 0, onDownloadProgress: (event) => deadline.progress(event.loaded),
-    } as QuietRequestConfig)
-      .then(response => { if (active) { deadline.downloaded(); buffer = response.data; send.current() } })
+    void (external
+      ? external(controller.signal)
+      : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
+        responseType: 'arraybuffer', signal: controller.signal, quietNetworkError: true,
+        timeout: 0, onDownloadProgress: (event) => deadline.progress(event.loaded),
+      } as QuietRequestConfig).then(response => response.data))
+      .then(data => { if (active) { deadline.downloaded(); buffer = data; send.current() } })
       .catch(() => { if (active) { deadline.clear(); setState('error') } })
     return () => { active = false; deadline.clear(); controller.abort(); window.removeEventListener('message', receive); send.current = () => {} }
-  }, [fileId, ext, channel, attempt])
+  }, [fileId, ext, channel, attempt, loadContent])
 
   return <div className="excel-source-preview">
     <iframe key={attempt} ref={frame} className="excel-source-frame" title="Excel 预览内容"
@@ -59,6 +64,6 @@ function ExcelDocument({ fileId, ext }: { fileId: number; ext?: string }) {
   </div>
 }
 
-export default function ExcelPreview({ fileId, ext }: { fileId: number; ext?: string }) {
-  return <ExcelDocument key={fileId} fileId={fileId} ext={ext} />
+export default function ExcelPreview({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: PreviewContentLoader }) {
+  return <ExcelDocument key={fileId} fileId={fileId} ext={ext} loadContent={loadContent} />
 }

@@ -16,6 +16,29 @@ vi.mock('../../components/PdfPreview', () => ({
     return <div data-testid="pdf-preview" />
   },
 }))
+const officeProps = vi.hoisted(() => ({
+  excel: undefined as undefined | { ext?: string; loadContent?: (signal: AbortSignal) => Promise<ArrayBuffer> },
+  pptx: undefined as undefined | { loadContent?: (signal: AbortSignal) => Promise<ArrayBuffer> },
+  docx: undefined as undefined | { loadContent?: (signal: AbortSignal) => Promise<ArrayBuffer> },
+}))
+vi.mock('../../components/DocxPreview', () => ({
+  default: (props: NonNullable<typeof officeProps.docx>) => {
+    officeProps.docx = props
+    return <div data-testid="docx-preview" />
+  },
+}))
+vi.mock('../../components/ExcelPreview', () => ({
+  default: (props: NonNullable<typeof officeProps.excel>) => {
+    officeProps.excel = props
+    return <div data-testid="excel-preview" />
+  },
+}))
+vi.mock('../../components/PptxPreview', () => ({
+  default: (props: NonNullable<typeof officeProps.pptx>) => {
+    officeProps.pptx = props
+    return <div data-testid="pptx-preview" />
+  },
+}))
 
 import { OemApi } from '../../oem/api/OemApi'
 import { PORTAL_AUTH_LOCK_NAME, PORTAL_STORAGE_LOCK_KEY, withPortalStorageLease } from '../../oem/api/portalAuthLock'
@@ -253,5 +276,28 @@ describe('D. ODM/OEMA 预览带水印', () => {
     const bytes = await pdfProps.loadContent!(new AbortController().signal)
     expect(bytes.byteLength).toBe(4)
     expect(previewBlob).toHaveBeenCalledWith(88, expect.any(AbortSignal))
+  })
+
+  it.each([
+    ['xlsx', 'excel-preview', () => officeProps.excel],
+    ['xls', 'excel-preview', () => officeProps.excel],
+    ['pptx', 'pptx-preview', () => officeProps.pptx],
+    ['docx', 'docx-preview', () => officeProps.docx],
+  ] as const)('%s 复用协作预览组件，经 ODM/OEMA 内容接口取数并叠加水印', async (ext, testId, props) => {
+    usePortalAuth.setState({ account, token: 't' })
+    const previewBlob = vi.fn().mockResolvedValue(new Blob(['PK\u0003\u0004']))
+    render(<OemProvider value={context({ previewBlob }, 'oem')}><OemFilePreview file={file(ext)} onClose={() => undefined} /></OemProvider>)
+
+    expect(await screen.findByTestId(testId)).toBeInTheDocument()
+    expect(document.querySelector('.file-preview-surface .preview-watermark')?.textContent).toContain('OEM31')
+    const bytes = await props()!.loadContent!(new AbortController().signal)
+    expect(bytes.byteLength).toBe(4)
+    expect(previewBlob).toHaveBeenCalledWith(88, expect.any(AbortSignal))
+    if (testId === 'excel-preview') expect(officeProps.excel?.ext).toBe(ext)
+  })
+
+  it.each(['doc', 'ppt', 'tif', 'dwg', 'zip'])('%s 不提供页内预览（仅下载）', (ext) => {
+    render(<OemProvider value={context({ previewBlob: vi.fn() }, 'oem')}><OemFilePreview file={file(ext)} onClose={() => undefined} /></OemProvider>)
+    expect(document.querySelector('.file-preview-modal')).toBeNull()
   })
 })

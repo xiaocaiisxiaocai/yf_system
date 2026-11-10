@@ -33,6 +33,13 @@ export const presentationArchiveLimits = {
   requireZip: true,
 }
 
+export const documentArchiveLimits = {
+  maxEntries: 5000,
+  maxEntryUncompressed: 128 * 1024 * 1024,
+  maxTotalUncompressed: 512 * 1024 * 1024,
+  requireZip: true,
+}
+
 const eocdSignature = 0x06054b50
 const centralSignature = 0x02014b50
 const localSignature = 0x04034b50

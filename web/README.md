@@ -6,7 +6,7 @@ React、TypeScript、Vite 和 Arco Design。API 通过 `/api/v1` 访问；开发
 
 在本目录执行 `npm run dev`、`npm run build`、`npm run lint` 和 `npm test`。首次安装依赖使用 `npm ci`；开发环境使用 Node.js 22.13+ 或 24+。
 
-`npm run dev` 和 `npm run build` 会先生成 Excel、PPTX 预览页面。`generated/`、`.excel-preview-build/`、`.pptx-preview-build/` 和 `dist/` 均为项目内构建产物，不应手工编辑。
+`npm run dev` 和 `npm run build` 会先生成 Excel、PPTX、Word 预览页面。`generated/`、`.excel-preview-build/`、`.pptx-preview-build/`、`.docx-preview-build/` 和 `dist/` 均为项目内构建产物，不应手工编辑。
 
 ## 文件预览
 

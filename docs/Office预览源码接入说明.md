@@ -10,6 +10,7 @@ Excel、PDF 和 PPTX 预览接入用户提供的 `vue-office源码2024-12-30.zip
 | Excel 适配源码 | `web/vendor/vue-office-excel`，原始 JS 包 1.7.14 |
 | PDF 适配源码 | `web/vendor/vue-office-pdf`，原始 JS 包 2.0.10 |
 | PPTX 适配源码 | `web/vendor/vue-office-pptx`，原始 Vue 封装 0.0.6，渲染内核 `pptx-preview` 固定 0.0.19 |
+| Word 适配源码 | `web/vendor/vue-office-docx`，原始 Vue 封装 1.6.3，渲染内核 `docx-preview` 固定 0.3.7；仅 `.docx`，Robot 协作文件列表与 ODM/OEMA 传递单均启用（2026-11-10） |
 | React 入口 | `web/src/components/ExcelPreview.tsx`、`PdfPreview.tsx` |
 | Excel 解析依赖 | ExcelJS 4.4.0；旧 XLS 转换沿用 SheetJS 0.20.3 |
 | PDF 解析依赖 | 沿用项目 PDF.js 6.3.289，不使用源码包内旧版引擎或外部 CDN |

@@ -21,6 +21,7 @@ import { PreviewWatermark } from './PreviewWatermark'
 // Excel 解析器仅在用户真正打开工作簿预览时按需加载
 const ExcelPreview = lazy(() => import('./ExcelPreview'))
 const PptxPreview = lazy(() => import('./PptxPreview'))
+const DocxPreview = lazy(() => import('./DocxPreview'))
 const VideoPreview = lazy(() => import('./VideoPreview'))
 const ImagePreview = lazy(() => import('./ImagePreview'))
 
@@ -56,11 +57,13 @@ const COMPACT_NARROW_ACTIONS_WIDTH = 76
 
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 /** 文档在浏览器解析；视频由授权接口按需分段播放。 */
-function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'video' | 'image' | 'none' {
+function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'docx' | 'video' | 'image' | 'none' {
   ext = ext.toLowerCase()
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'].includes(ext) && sizeBytes <= 50 * 1024 * 1024) return 'image'
   if (['mp4', 'webm', 'ogv'].includes(ext)) return 'video'
   if (ext === 'pptx' && sizeBytes <= 50 * 1024 * 1024) return 'pptx'
+  // 仅 .docx；旧版 .doc 是 OLE2 二进制，浏览器内无法渲染。
+  if (ext === 'docx' && sizeBytes <= 50 * 1024 * 1024) return 'docx'
   // Excel 需要在浏览器内完整解析工作簿，限制在线预览体积以避免页面 OOM。
   // .xlsb 由预览器先经 SheetJS 转换（ExcelJS 无法解析二进制工作簿）。
   if (['xls', 'xlsx', 'xlsm', 'xlsb'].includes(ext) && sizeBytes <= 50 * 1024 * 1024) return 'excel'
@@ -436,6 +439,11 @@ export default function FileTable({
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
           <Suspense fallback={<PreviewLoading text="加载 PPTX 渲染器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
+          </Suspense>
+        )}
+        {preview && previewKind(preview.ext, preview.sizeBytes) === 'docx' && (
+          <Suspense fallback={<PreviewLoading text="加载 Word 渲染器…" />}>
+            <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><DocxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (

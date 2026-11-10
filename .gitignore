@@ -53,6 +53,7 @@ pnpm-debug.log*
 /web/generated/
 /web/.excel-preview-build/
 /web/.pptx-preview-build/
+/web/.docx-preview-build/
 
 # Claude Code runtime state
 .claude/scheduled_tasks.lock

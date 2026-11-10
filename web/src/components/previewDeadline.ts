@@ -3,12 +3,32 @@ export const PREVIEW_STALL_MS = 60_000
 /** 下载完成后留给渲染的时间。 */
 export const PREVIEW_RENDER_MS = 60_000
 
+/** 非协作域（如 ODM/OEMA）的预览取数；不传时预览组件读取 `/files/{id}/content`。 */
+export type PreviewContentLoader = (signal: AbortSignal) => Promise<ArrayBuffer>
+
 export interface PreviewDeadline {
   /** 下载进度回调；只有字节数增加才续期。 */
   progress: (loadedBytes: number) => void
   /** 内容已到手，从此改按渲染时限计时。 */
   downloaded: () => void
   clear: () => void
+}
+
+/** 外部取数（{@link PreviewContentLoader}）没有下载进度，只对内容到手后的渲染阶段计时。 */
+export function createRenderDeadline(onTimeout: () => void): PreviewDeadline {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const clear = () => {
+    if (timer !== undefined) clearTimeout(timer)
+    timer = undefined
+  }
+  return {
+    progress: () => {},
+    downloaded: () => {
+      clear()
+      timer = setTimeout(() => { timer = undefined; onTimeout() }, PREVIEW_RENDER_MS)
+    },
+    clear,
+  }
 }
 
 /**

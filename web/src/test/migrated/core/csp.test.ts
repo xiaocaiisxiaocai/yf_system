@@ -36,7 +36,7 @@ test('a viewer with an unexpected script count fails the build instead of shippi
 test('generated viewers, when built, each carry one hashable inline script', () => {
   const documents = VIEWER_FILES.map(file => readFileSync(resolve(file), 'utf8'))
   const policy = directives(contentSecurityPolicy(documents))
-  expect(policy.get('script-src')!.filter(source => source.startsWith("'sha256-"))).toHaveLength(2)
+  expect(policy.get('script-src')!.filter(source => source.startsWith("'sha256-"))).toHaveLength(VIEWER_FILES.length)
   for (const html of documents) {
     const parsed = new DOMParser().parseFromString(html, 'text/html')
     const scripts = [...parsed.querySelectorAll('script')]

@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { Plugin } from 'vite'
 
-// The Excel/PPTX viewers render in sandboxed srcdoc iframes, which inherit this page's policy.
+// The Excel/PPTX/Word viewers render in sandboxed srcdoc iframes, which inherit this page's policy.
 // Their single inline script carries a nonce chosen at runtime, so the parent policy allows those
 // exact scripts by content hash instead of allowing inline script in general.
-export const VIEWER_FILES = ['generated/excel-viewer.html', 'generated/pptx-viewer.html']
+export const VIEWER_FILES = ['generated/excel-viewer.html', 'generated/pptx-viewer.html', 'generated/docx-viewer.html']
 
 const INLINE_SCRIPT = /<script\b(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script\s*>/gi
 

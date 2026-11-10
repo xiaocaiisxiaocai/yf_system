@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "pretest": "npm run build:excel-preview && npm run build:pptx-preview",
+    "pretest": "npm run build:excel-preview && npm run build:pptx-preview && npm run build:docx-preview",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "vite",
@@ -14,9 +14,10 @@
     "lint": "oxlint --deny-warnings",
     "preview": "vite preview",
     "build:excel-preview": "node scripts/build-excel-preview.mjs",
-    "predev": "npm run build:excel-preview && npm run build:pptx-preview",
-    "prebuild": "npm run build:excel-preview && npm run build:pptx-preview",
+    "predev": "npm run build:excel-preview && npm run build:pptx-preview && npm run build:docx-preview",
+    "prebuild": "npm run build:excel-preview && npm run build:pptx-preview && npm run build:docx-preview",
     "build:pptx-preview": "node scripts/build-pptx-preview.mjs",
+    "build:docx-preview": "node scripts/build-docx-preview.mjs",
     "generate:api-types": "node scripts/generate-api-types.mjs"
   },
   "dependencies": {
@@ -25,6 +26,7 @@
     "@tanstack/react-query": "5.103.2",
     "axios": "^1.20.0",
     "dayjs": "1.11.23",
+    "docx-preview": "0.3.7",
     "exceljs": "4.4.0",
     "lodash": "4.18.1",
     "pako": "1.0.11",
@@ -55,8 +57,8 @@
     "vitest": "5.0.5"
   },
   "yfDependencyPolicy": {
-    "bundledPreviewRuntimeDependencies": ["dayjs", "exceljs", "lodash", "pako", "pptx-preview", "tinycolor2", "xlsx"],
-    "reason": "These packages are imported by the vendored Excel/PPTX viewer sources and bundled into production preview assets.",
+    "bundledPreviewRuntimeDependencies": ["dayjs", "docx-preview", "exceljs", "lodash", "pako", "pptx-preview", "tinycolor2", "xlsx"],
+    "reason": "These packages are imported by the vendored Excel/PPTX/Word viewer sources and bundled into production preview assets.",
     "exceljsOverrides": "The viewer imports the prebuilt exceljs/dist bundle, so exceljs' Node-only archiver/unzipper chain never ships. glob and minimatch are pinned to patched releases for npm audit; archiver's glob.sync still works, while rimraf 2 (fstream) loses glob-pattern deletes, which nothing here uses."
   },
   "overrides": {

@@ -12,7 +12,7 @@ import { isVersionConflict } from '../../api/versionConflict'
 import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
 import OemFilePreview from '../components/OemFilePreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
-import { oemPreviewKind } from '../components/oemPreview'
+import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
 import { ApprovalTag, LifecycleTag, PayloadTag, ValidationTag } from '../components/StatusTags'
 import { transferClosedNotice } from '../components/statusLabels'
 import Counterpart from '../components/Counterpart'
@@ -257,7 +257,7 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
       key: 'actions', title: '操作',
       render: (_: unknown, file: TransferFile) => actionSlots([
         file.downloadable && <Button key="download" size="small" icon={<IconDownload />} onClick={() => onDownload(file)}>下载</Button>,
-        file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= 50 * 1024 * 1024 && (
+        file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES && (
           <Button key="preview" size="small" icon={<IconEye />} onClick={() => onPreview(file)}>预览</Button>
         ),
         canEdit && (
@@ -446,7 +446,7 @@ export default function TransferDetailPage() {
     }
   }
   const preview = (file: TransferFile) => {
-    // PDF and images open in-page with the viewer watermark. Other formats are not offered.
+    // PDF, images, Excel, PPTX and Word (.docx) open in-page with the viewer watermark; other formats are download-only.
     if (oemPreviewKind(file.ext)) setPreviewing(file)
   }
   const removeFile = async (file: TransferFile) => {

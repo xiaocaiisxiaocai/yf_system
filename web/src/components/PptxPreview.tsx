@@ -4,7 +4,7 @@ import { Button, InputNumber, Result, Select, Spin } from '@arco-design/web-reac
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/pptx-viewer.html?raw'
 import './PptxPreview.css'
-import { createPreviewDeadline } from './previewDeadline'
+import { createPreviewDeadline, createRenderDeadline, type PreviewContentLoader } from './previewDeadline'
 
 type PreviewState = 'loading' | 'ready' | 'error'
 type ZoomValue = 'page' | 'fit' | string
@@ -18,8 +18,9 @@ function finiteNumber(value: unknown, minimum: number, maximum: number) {
   return Number.isFinite(number) && number >= minimum && number <= maximum ? number : undefined
 }
 
-function PptxDocument({ fileId, toolbarContainer, onRetry }: {
+function PptxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
   fileId: number
+  loadContent?: PreviewContentLoader
   toolbarContainer?: HTMLElement | null
   onRetry: () => void
 }) {
@@ -41,13 +42,15 @@ function PptxDocument({ fileId, toolbarContainer, onRetry }: {
     let buffer: ArrayBuffer | undefined
     let sent = false
     const controller = new AbortController()
-    const deadline = createPreviewDeadline(() => {
+    const timedOut = () => {
       controller.abort()
       if (active) {
         setMessage('PPTX 加载或渲染超时，请重试。')
         setState('error')
       }
-    })
+    }
+    const external = loadContent
+    const deadline = external ? createRenderDeadline(timedOut) : createPreviewDeadline(timedOut)
     const fail = (text: string) => {
       deadline.clear()
       setMessage(text)
@@ -94,14 +97,14 @@ function PptxDocument({ fileId, toolbarContainer, onRetry }: {
       frameRef.current?.contentWindow?.postMessage({ type: 'pptx:load', channel, buffer }, '*', [buffer])
       buffer = undefined
     }
-    void http.get<ArrayBuffer>(`/files/${fileId}/content`, {
+    void (external ? external(controller.signal) : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
       responseType: 'arraybuffer',
       signal: controller.signal,
       quietNetworkError: true,
       timeout: 0,
       onDownloadProgress: (event) => deadline.progress(event.loaded),
-    } as QuietRequestConfig).then(response => {
-      if (active) { deadline.downloaded(); buffer = response.data; sendBuffer.current() }
+    } as QuietRequestConfig).then(response => response.data)).then(data => {
+      if (active) { deadline.downloaded(); buffer = data; sendBuffer.current() }
     }).catch(() => {
       if (active) fail('PPTX 文件读取失败，请检查网络后重试。')
     })
@@ -112,7 +115,7 @@ function PptxDocument({ fileId, toolbarContainer, onRetry }: {
       window.removeEventListener('message', receive)
       sendBuffer.current = () => {}
     }
-  }, [fileId, channel])
+  }, [fileId, channel, loadContent])
 
   const command = (name: 'page' | 'zoom', value: number | string) => {
     if (state !== 'ready') return
@@ -155,10 +158,11 @@ function PptxDocument({ fileId, toolbarContainer, onRetry }: {
   </section>
 }
 
-export default function PptxPreview({ fileId, toolbarContainer }: {
+export default function PptxPreview({ fileId, loadContent, toolbarContainer }: {
   fileId: number
+  loadContent?: PreviewContentLoader
   toolbarContainer?: HTMLElement | null
 }) {
   const [attempt, setAttempt] = useState(0)
-  return <PptxDocument key={`${fileId}:${attempt}`} fileId={fileId} toolbarContainer={toolbarContainer} onRetry={() => setAttempt(value => value + 1)} />
+  return <PptxDocument key={`${fileId}:${attempt}`} fileId={fileId} loadContent={loadContent} toolbarContainer={toolbarContainer} onRetry={() => setAttempt(value => value + 1)} />
 }
