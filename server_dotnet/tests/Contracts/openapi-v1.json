@@ -271,6 +271,35 @@
         }
       }
     },
+    "/api/v1/outsource/sync-status": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceSyncStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/users": {
       "get": {
         "tags": [
@@ -8240,6 +8269,45 @@
         }
       }
     },
+    "/api/v1/outsource/settings/sync-time": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceSyncTimeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceSyncStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/items": {
       "get": {
         "tags": [
@@ -8509,6 +8577,45 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/sync": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceSyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceSyncStatusResponse"
                 }
               }
             }
@@ -12835,6 +12942,104 @@
           "expectedUpdatedAt": {
             "type": "string",
             "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceSyncRequest": {
+        "required": [
+          "itemIds"
+        ],
+        "type": "object",
+        "properties": {
+          "itemIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceSyncStatusResponse": {
+        "required": [
+          "ipmsConfigured",
+          "lastChanged",
+          "lastClosed",
+          "lastError",
+          "lastFinishedAt",
+          "lastMissing",
+          "lastProcessed",
+          "lastStartedAt",
+          "lastSuccessAt",
+          "lastTrigger",
+          "running",
+          "syncTime"
+        ],
+        "type": "object",
+        "properties": {
+          "syncTime": {
+            "type": "string"
+          },
+          "ipmsConfigured": {
+            "type": "boolean"
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "lastStartedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFinishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastTrigger": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastProcessed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lastChanged": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lastClosed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "lastMissing": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceSyncTimeRequest": {
+        "required": [
+          "syncTime"
+        ],
+        "type": "object",
+        "properties": {
+          "syncTime": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false

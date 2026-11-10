@@ -55,6 +55,7 @@ public sealed class SchemaShapeTests
         "20261109135314_RemoveProjectGroups",
         "20261110072141_AddOutsourceSettings",
         "20261110101732_AddOutsourceItems",
+        "20261110105542_AddOutsourceSyncState",
     ];
 
     [Fact]

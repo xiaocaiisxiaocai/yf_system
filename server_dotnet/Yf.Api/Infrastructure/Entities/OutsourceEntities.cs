@@ -97,6 +97,35 @@ public sealed class OutsourceItem
     public DateTime UpdatedAt { get; set; }
 }
 
+/// <summary>
+/// Single-row (<c>id=1</c>) IPMS synchronization state: the daily time, a database-clock lease that keeps
+/// scheduled and manual runs from overlapping, and the outcome of the last run.
+/// </summary>
+public sealed class OutsourceSyncState
+{
+    public byte Id { get; set; }
+    /// <summary>Daily run time in business time (UTC+8), "HH:mm".</summary>
+    public string SyncTime { get; set; } = null!;
+    /// <summary>Business date the scheduled run last started for; a scheduled run happens at most once a day.</summary>
+    public DateOnly? ScheduledFor { get; set; }
+    public DateTime? LeaseUntil { get; set; }
+    public DateTime? LastStartedAt { get; set; }
+    public DateTime? LastFinishedAt { get; set; }
+    public DateTime? LastSuccessAt { get; set; }
+    public string? LastError { get; set; }
+    public string? LastTrigger { get; set; }
+    public int LastProcessed { get; set; }
+    public int LastChanged { get; set; }
+    public int LastClosed { get; set; }
+    public int LastMissing { get; set; }
+}
+
+/// <summary>EDIT, IPMS_SCHEDULED or IPMS_MANUAL.</summary>
+    public string Source { get; set; } = null!;
+    public ulong? ActorUserId { get; set; }
+    public DateTime ChangedAt { get; set; }
+}
+
 public sealed class OutsourceVendorConfig : IEntityTypeConfiguration<OutsourceVendor>
 {
     public void Configure(EntityTypeBuilder<OutsourceVendor> b)
@@ -223,5 +252,28 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.HasIndex(x => new { x.ClosedAt, x.OutsourceDate, x.Id }).HasDatabaseName("idx_outsource_items_open_date");
         b.HasOne<OutsourceVendor>().WithMany().HasForeignKey(x => x.VendorId)
             .HasConstraintName("fk_outsource_items_vendor").OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class OutsourceSyncStateConfig : IEntityTypeConfiguration<OutsourceSyncState>
+{
+    public void Configure(EntityTypeBuilder<OutsourceSyncState> b)
+    {
+        b.ToTable("outsource_sync_state");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).ValueGeneratedNever();
+        b.Property(x => x.SyncTime).HasColumnName("sync_time").HasMaxLength(5).IsRequired().HasDefaultValue("02:00");
+        b.Property(x => x.ScheduledFor).HasColumnName("scheduled_for").HasColumnType("date");
+        b.Property(x => x.LeaseUntil).HasColumnName("lease_until").HasColumnType("datetime(3)");
+        b.Property(x => x.LastStartedAt).HasColumnName("last_started_at").HasColumnType("datetime(3)");
+        b.Property(x => x.LastFinishedAt).HasColumnName("last_finished_at").HasColumnType("datetime(3)");
+        b.Property(x => x.LastSuccessAt).HasColumnName("last_success_at").HasColumnType("datetime(3)");
+        b.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(512);
+        b.Property(x => x.LastTrigger).HasColumnName("last_trigger").HasMaxLength(16);
+        b.Property(x => x.LastProcessed).HasColumnName("last_processed").HasDefaultValue(0);
+        b.Property(x => x.LastChanged).HasColumnName("last_changed").HasDefaultValue(0);
+        b.Property(x => x.LastClosed).HasColumnName("last_closed").HasDefaultValue(0);
+        b.Property(x => x.LastMissing).HasColumnName("last_missing").HasDefaultValue(0);
     }
 }

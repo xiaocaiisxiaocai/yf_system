@@ -25,6 +25,17 @@
   margin-bottom: 12px;
 }
 
+.outsource-sync-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 640px;
+}
+
+.outsource-sync-error {
+  color: rgb(var(--danger-6));
+}
+
 .outsource-muted {
   color: var(--color-text-3);
 }

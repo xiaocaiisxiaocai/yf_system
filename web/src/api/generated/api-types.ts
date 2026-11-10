@@ -1059,6 +1059,29 @@ export interface OutsourceItemVersion {
   expectedUpdatedAt: string
 }
 
+export interface OutsourceSyncRequest {
+  itemIds?: Array<number> | null
+}
+
+export interface OutsourceSyncStatusResponse {
+  syncTime: string
+  ipmsConfigured: boolean
+  running: boolean
+  lastStartedAt: string | null
+  lastFinishedAt: string | null
+  lastSuccessAt: string | null
+  lastError: string | null
+  lastTrigger: string | null
+  lastProcessed: number
+  lastChanged: number
+  lastClosed: number
+  lastMissing: number
+}
+
+export interface OutsourceSyncTimeRequest {
+  syncTime?: string | null
+}
+
 export interface OutsourceTypeResponse {
   id: number
   code: string
@@ -1898,12 +1921,14 @@ export interface ApiResponses {
   "POST /outsource/items/import": AdminImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse
   "GET /outsource/items/summary": OutsourceItemSummaryResponse
+  "POST /outsource/items/sync": OutsourceSyncStatusResponse
   "PUT /outsource/items/{id}": OutsourceItemResponse
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/contacts/{id}": OutsourceContactResponse
   "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse
   "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
+  "PUT /outsource/settings/sync-time": OutsourceSyncStatusResponse
   "GET /outsource/settings/types": Array<OutsourceTypeResponse>
   "POST /outsource/settings/types": OutsourceTypeResponse
   "PUT /outsource/settings/types/{id}": OutsourceTypeResponse
@@ -1914,6 +1939,7 @@ export interface ApiResponses {
   "PUT /outsource/settings/vendors/{id}": OutsourceVendorResponse
   "POST /outsource/settings/vendors/{id}/contacts": OutsourceContactResponse
   "PUT /outsource/settings/vendors/{id}/status": OutsourceVendorResponse
+  "GET /outsource/sync-status": OutsourceSyncStatusResponse
   "GET /permissions": Array<PermissionResponse>
   "GET /project-copies/{copyId}/files": PageResponseOfFileCopyHistoryItem
   "GET /project-copy-jobs": ProjectCopyJobListResponse

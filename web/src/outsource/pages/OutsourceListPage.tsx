@@ -3,9 +3,9 @@ import {
   Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconDownload, IconEdit, IconUpload } from '@arco-design/web-react/icon'
+import { IconDownload, IconEdit, IconSync, IconUpload } from '@arco-design/web-react/icon'
 import http from '../../api/client'
-import type { ApiResponses } from '../../api/types'
+import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type ImportRowOutcome } from '../../components/ExcelImportDialog'
 import LoadError from '../../components/LoadError'
@@ -19,6 +19,7 @@ type Item = ApiResponses['GET /outsource/items']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type Summary = ApiResponses['GET /outsource/items/summary']
+type SyncStatus = ApiResponses['GET /outsource/sync-status']
 type ImportRow = { rowNumber: number; outsourceDate: string; workOrderNo: string; vendorName: string }
 
 const ALL = 'all'
@@ -87,6 +88,8 @@ export default function OutsourceListPage() {
   const [batchOpen, setBatchOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
+  const [syncing, setSyncing] = useState(false)
   const sequence = useRef(0)
 
   const params = useMemo(() => ({
@@ -112,12 +115,13 @@ export default function OutsourceListPage() {
     const seq = ++sequence.current
     setLoading(true); setError(false)
     try {
-      const [listResponse, summaryResponse] = await Promise.all([
+      const [listResponse, summaryResponse, syncResponse] = await Promise.all([
         http.get<ApiResponses['GET /outsource/items']>('/outsource/items', { params: { ...params, page, pageSize } }),
         http.get<ApiResponses['GET /outsource/items/summary']>('/outsource/items/summary', { params: { includeClosed: params.includeClosed } }),
+        http.get<ApiResponses['GET /outsource/sync-status']>('/outsource/sync-status'),
       ])
       if (seq !== sequence.current) return
-      setItems(listResponse.data.list); setTotal(Number(listResponse.data.total)); setSummary(summaryResponse.data)
+      setItems(listResponse.data.list); setTotal(Number(listResponse.data.total)); setSummary(summaryResponse.data); setSyncStatus(syncResponse.data)
       setSelected((current) => current.filter((id) => listResponse.data.list.some((item) => item.id === id)))
     } catch {
       if (seq === sequence.current) setError(true)
@@ -142,6 +146,23 @@ export default function OutsourceListPage() {
   const counts = new Map(summary.vendors.map((row) => [row.vendorId, row.count]))
   const tabVendors = vendors.filter((vendor) => vendor.status === 'ACTIVE' || (counts.get(vendor.id) ?? 0) > 0)
   const selectedItems = items.filter((item) => selected.includes(item.id))
+
+  const syncNow = async () => {
+    if (syncing) return
+    setSyncing(true)
+    try {
+      const response = await http.post<ApiResponses['POST /outsource/items/sync']>('/outsource/items/sync', {
+        itemIds: selected.length > 0 ? selected : null,
+      })
+      setSyncStatus(response.data)
+      Message.success(`已同步 ${response.data.lastProcessed} 条，${response.data.lastChanged} 条有变更`)
+      await load()
+    } catch {
+      // 统一请求层提示
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const exportItems = async () => {
     if (exporting) return
@@ -273,6 +294,9 @@ export default function OutsourceListPage() {
             <Button status="danger">删除</Button>
           </Popconfirm>
         </>}
+        {syncStatus && <SyncBadge status={syncStatus} />}
+        {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running}
+          onClick={() => void syncNow()}>{selected.length > 0 ? `同步所选 (${selected.length})` : '立即同步'}</Button>}
         <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
         {canImport && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>汇入</Button>}
       </Space>
@@ -383,4 +407,16 @@ function BatchDialog({ visible, items, vendors, onClose, onSaved }: {
       </Form.Item>
     </Form>
   </Modal>
+}
+
+/** MM-DD HH:mm in the viewer's time zone, like other timestamps in the app. */
+const formatTime = (value?: string | null) => value ? fmtTime(value).slice(5, 16) : ''
+
+/** Last IPMS sync at a glance; a failure after the last success turns it red with the reason on hover. */
+function SyncBadge({ status }: { status: SyncStatus }) {
+  if (!status.ipmsConfigured) return <Tag color="gray">IPMS 未设定</Tag>
+  if (status.running) return <Tag color="arcoblue">IPMS 同步中</Tag>
+  const failed = Boolean(status.lastError) && (!status.lastSuccessAt || (status.lastFinishedAt ?? '') > status.lastSuccessAt)
+  if (failed) return <Tooltip content={status.lastError}><Tag color="red">IPMS 同步失败 {formatTime(status.lastFinishedAt)}</Tag></Tooltip>
+  return status.lastSuccessAt ? <Tag>IPMS 同步 {formatTime(status.lastSuccessAt)}</Tag> : <Tag color="gray">IPMS 尚未同步</Tag>
 }

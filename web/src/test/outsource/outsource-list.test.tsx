@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import http from '../../api/client'
+import { fmtTime } from '../../api/types'
 import { normalizeImportDate } from '../../outsource/importDate'
 import { outsourceHome } from '../../outsource/outsourceNavigation'
 import OutsourceListPage from '../../outsource/pages/OutsourceListPage'
@@ -33,12 +34,18 @@ const vendors = [
   { id: 2, name: '元控', remark: null, status: 'ACTIVE', sortNo: 2, contacts: [] },
 ]
 const types = [{ id: 5, code: 'OEMA', name: '进料+制造', status: 'ACTIVE', sortNo: 1, vendorIds: [1] }]
+const syncStatus = {
+  syncTime: '02:00', ipmsConfigured: true, running: false, lastStartedAt: '2026-11-09T18:00:00Z',
+  lastFinishedAt: '2026-11-09T18:00:05Z', lastSuccessAt: '2026-11-09T18:00:05Z', lastError: null, lastTrigger: 'SCHEDULED',
+  lastProcessed: 2, lastChanged: 0, lastClosed: 0, lastMissing: 0,
+}
 
 function mockApi() {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
     data: url === '/outsource/items' ? { list: items, total: 2, page: 1, pageSize: 20 }
       : url === '/outsource/items/summary' ? { total: 2, vendors: [{ vendorId: 1, count: 1 }, { vendorId: 2, count: 1 }] }
-        : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+        : url === '/outsource/sync-status' ? syncStatus
+          : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
   } as never))
 }
 
@@ -96,5 +103,19 @@ describe('外协清单页面', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
       outsourceDate: '2026-11-04', vendorId: 1, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
+  })
+
+  it('显示最近一次 IPMS 同步，采购可立即同步所选记录', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:view', 'outsource:manage'])
+    mockApi()
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ...syncStatus, lastProcessed: 1, lastChanged: 1 } } as never)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    expect(await screen.findByText(`IPMS 同步 ${fmtTime(syncStatus.lastSuccessAt).slice(5, 16)}`)).toBeInTheDocument()
+    const row = (await screen.findByText('21089901')).closest('tr')!
+    await user.click(within(row).getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /同步所选 \(1\)/ }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/sync', { itemIds: [1] }))
   })
 })

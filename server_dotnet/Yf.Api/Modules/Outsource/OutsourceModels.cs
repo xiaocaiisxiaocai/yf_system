@@ -51,3 +51,12 @@ public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string?
 public sealed record OutsourceBatchDelete(OutsourceItemVersion[]? Items);
 
 public sealed record OutsourceBatchResponse(OutsourceItemResponse[] Items);
+
+public sealed record OutsourceSyncTimeRequest(string? SyncTime);
+
+/// <summary>Manual sync: the given open items, or every open item when none are given.</summary>
+public sealed record OutsourceSyncRequest(ulong[]? ItemIds);
+
+public sealed record OutsourceSyncStatusResponse(
+    string SyncTime, bool IpmsConfigured, bool Running, DateTime? LastStartedAt, DateTime? LastFinishedAt,
+    DateTime? LastSuccessAt, string? LastError, string? LastTrigger, int LastProcessed, int LastChanged, int LastClosed, int LastMissing);

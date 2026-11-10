@@ -10,7 +10,9 @@ public static class OutsourceModule
     public static IServiceCollection AddOutsourceModule(this IServiceCollection services) => services
         .AddSingleton<IIpmsClient>(provider => IpmsClientFactory.Create(provider.GetRequiredService<AppOptions>()))
         .AddSingleton<OutsourceSettingsService>()
-        .AddSingleton<OutsourceItemService>();
+        .AddSingleton<OutsourceItemService>()
+        .AddSingleton<OutsourceIpmsSyncService>()
+        .AddSingleton<IHostedService>(provider => provider.GetRequiredService<OutsourceIpmsSyncService>());
 
     public static IEndpointRouteBuilder MapOutsourceModule(this IEndpointRouteBuilder endpoints)
     {
@@ -71,6 +73,12 @@ public static class OutsourceModule
             s.BatchUpdateAsync(AccessService.GetCurrent(c), r, ct));
         items.MapPost("/batch-delete", (OutsourceBatchDelete r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.BatchDeleteAsync(AccessService.GetCurrent(c), r, ct));
+        items.MapPost("/sync", (OutsourceSyncRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
+            s.SyncNowAsync(AccessService.GetCurrent(c), r, ct));
+        endpoints.MapGet("/api/v1/outsource/sync-status", (HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
+            s.StatusAsync(AccessService.GetCurrent(c), ct));
+        settings.MapPut("/sync-time", (OutsourceSyncTimeRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
+            s.SetSyncTimeAsync(AccessService.GetCurrent(c), r, ct));
         return endpoints;
     }
 }

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag,
+  Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag,
+  TimePicker,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
-import type { ApiResponses } from '../../api/types'
+import { fmtTime, type ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
 import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
@@ -15,7 +16,8 @@ type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type Contact = Vendor['contacts'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type CcUser = ApiResponses['GET /outsource/settings/default-cc'][number]
-type TabKey = 'vendors' | 'types' | 'cc'
+type SyncStatus = ApiResponses['GET /outsource/sync-status']
+type TabKey = 'vendors' | 'types' | 'cc' | 'sync'
 
 const ACTIVE = 'ACTIVE'
 const DISABLED = 'DISABLED'
@@ -70,11 +72,13 @@ export default function OutsourceSettingsPage() {
       <Tabs.TabPane key="vendors" title="外协厂商" />
       <Tabs.TabPane key="types" title="外发类型" />
       <Tabs.TabPane key="cc" title="默认抄送" />
+      <Tabs.TabPane key="sync" title="IPMS 同步" />
     </Tabs>
     {error ? <LoadError message="设定加载失败" onRetry={load} />
       : tab === 'vendors' ? <VendorsTab vendors={vendors} loading={loading} reload={load} />
         : tab === 'types' ? <TypesTab types={types} vendors={vendors} loading={loading} reload={load} />
-          : <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />}
+          : tab === 'cc' ? <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />
+            : <SyncTab />}
   </Card>
 }
 
@@ -357,4 +361,51 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
       noDataElement={loading ? <span /> : <Empty description="暂无默认抄送人员" />} scroll={{ x: 730, y: 'var(--page-table-scroll-y)' }}
       columns={columns as TableColumnProps<CcUser>[]} />
   </>
+}
+
+const syncTime = (value?: string | null) => fmtTime(value)
+
+function SyncTab() {
+  const [status, setStatus] = useState<SyncStatus | null>(null)
+  const [time, setTime] = useState<string>()
+  const [error, setError] = useState(false)
+  const { saving, run } = useSaving()
+
+  const load = useCallback(async () => {
+    setError(false)
+    try {
+      const response = await http.get<ApiResponses['GET /outsource/sync-status']>('/outsource/sync-status')
+      setStatus(response.data); setTime(response.data.syncTime)
+    } catch { setError(true) }
+  }, [])
+  useEffect(() => {
+    let active = true
+    void Promise.resolve().then(() => { if (active) void load() })
+    return () => { active = false }
+  }, [load])
+
+  const save = () => run(async () => {
+    if (!time) return
+    const response = await http.put<ApiResponses['PUT /outsource/settings/sync-time']>('/outsource/settings/sync-time', { syncTime: time })
+    setStatus(response.data); setTime(response.data.syncTime); Message.success('同步时间已保存')
+  })
+
+  if (error) return <LoadError message="同步状态加载失败" onRetry={load} />
+  if (!status) return null
+  const trigger = status.lastTrigger === 'SCHEDULED' ? '定时' : status.lastTrigger === 'MANUAL' ? '手动' : '—'
+  return <div className="outsource-sync-tab">
+    <Space wrap>
+      <span>每日同步时间</span>
+      <TimePicker aria-label="每日同步时间" format="HH:mm" value={time} allowClear={false} onChange={(value) => setTime(value)} style={{ width: 120 }} />
+      <Button type="primary" loading={saving} disabled={!time || time === status.syncTime} onClick={() => void save()}>保存</Button>
+    </Space>
+    <Descriptions column={1} border className="outsource-sync-descriptions" data={[
+      { label: 'IPMS', value: status.ipmsConfigured ? <Tag color="green">已设定</Tag> : <Tag color="gray">未设定</Tag> },
+      { label: '最近成功', value: syncTime(status.lastSuccessAt) },
+      { label: '最近一次', value: `${syncTime(status.lastFinishedAt)}（${trigger}）` },
+      { label: '结果', value: status.lastError
+        ? <span className="outsource-sync-error">{status.lastError}</span>
+        : `处理 ${status.lastProcessed}，变更 ${status.lastChanged}，结案 ${status.lastClosed}，IPMS 查无 ${status.lastMissing}` },
+    ]} />
+  </div>
 }

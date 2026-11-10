@@ -908,6 +908,81 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceSyncState", b =>
+                {
+                    b.Property<byte>("Id")
+                        .HasColumnType("tinyint unsigned")
+                        .HasColumnName("id");
+
+                    b.Property<int>("LastChanged")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("last_changed");
+
+                    b.Property<int>("LastClosed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("last_closed");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime?>("LastFinishedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_finished_at");
+
+                    b.Property<int>("LastMissing")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("last_missing");
+
+                    b.Property<int>("LastProcessed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("last_processed");
+
+                    b.Property<DateTime?>("LastStartedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_started_at");
+
+                    b.Property<DateTime?>("LastSuccessAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_success_at");
+
+                    b.Property<string>("LastTrigger")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("last_trigger");
+
+                    b.Property<DateTime?>("LeaseUntil")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("lease_until");
+
+                    b.Property<DateOnly?>("ScheduledFor")
+                        .HasColumnType("date")
+                        .HasColumnName("scheduled_for");
+
+                    b.Property<string>("SyncTime")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(5)
+                        .HasColumnType("varchar(5)")
+                        .HasDefaultValue("02:00")
+                        .HasColumnName("sync_time");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("outsource_sync_state", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceType", b =>
                 {
                     b.Property<ulong>("Id")
