@@ -980,6 +980,12 @@ export interface OutsourceDefaultCcRequest {
   userIds?: Array<number> | null
 }
 
+export interface OutsourceExtraCc {
+  key?: string | null
+  userIds?: Array<number> | null
+  emails?: Array<string> | null
+}
+
 export interface OutsourceImportPreviewResponse {
   ready: number
   skipped: number
@@ -1068,6 +1074,71 @@ export interface OutsourceItemUpdate {
 export interface OutsourceItemVersion {
   id: number
   expectedUpdatedAt: string
+}
+
+export interface OutsourceMailAddress {
+  email: string
+  name: string | null
+}
+
+export interface OutsourceMailDraft {
+  key: string
+  kind: string
+  vendorId: number
+  vendorName: string
+  subject: string
+  to: Array<OutsourceMailAddress>
+  defaultCc: Array<OutsourceMailAddress>
+  itemIds: Array<number>
+  workOrderNos: Array<string>
+  customerCount: number
+  htmlBody: string
+}
+
+export interface OutsourceMailPreviewRequest {
+  itemIds?: Array<number> | null
+}
+
+export interface OutsourceMailPreviewResponse {
+  fingerprint: string
+  mails: Array<OutsourceMailDraft>
+}
+
+export interface OutsourceMailRecipientResponse {
+  kind: string
+  email: string
+  name: string | null
+  source: string
+  rejected: boolean
+}
+
+export interface OutsourceMailResponse {
+  id: number
+  batchKey: string
+  kind: string
+  vendorId: number
+  vendorName: string
+  subject: string
+  status: string
+  recipients: Array<OutsourceMailRecipientResponse>
+  workOrderNos: Array<string>
+  attachmentName: string | null
+  attempts: number
+  lastError: string | null
+  createdByName: string | null
+  createdAt: string
+  sentAt: string | null
+}
+
+export interface OutsourceMailSendRequest {
+  itemIds?: Array<number> | null
+  fingerprint?: string | null
+  requestKey?: string | null
+  extraCc?: Array<OutsourceExtraCc> | null
+}
+
+export interface OutsourceMailSendResponse {
+  mails: Array<OutsourceMailResponse>
 }
 
 export interface OutsourceSyncRequest {
@@ -1183,6 +1254,13 @@ export interface PageResponseOfMessageResponse {
 
 export interface PageResponseOfOutsourceItemResponse {
   list: Array<OutsourceItemResponse>
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface PageResponseOfOutsourceMailResponse {
+  list: Array<OutsourceMailResponse>
   total: number
   page: number
   pageSize: number
@@ -1935,6 +2013,11 @@ export interface ApiResponses {
   "POST /outsource/items/sync": OutsourceSyncStatusResponse
   "PUT /outsource/items/{id}": OutsourceItemResponse
   "GET /outsource/items/{id}/changes": Array<OutsourceItemChangeResponse>
+  "GET /outsource/mails": PageResponseOfOutsourceMailResponse
+  "POST /outsource/mails/preview": OutsourceMailPreviewResponse
+  "POST /outsource/mails/send": OutsourceMailSendResponse
+  "GET /outsource/mails/{id}/attachment": Blob
+  "POST /outsource/mails/{id}/retry": OutsourceMailResponse
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/contacts/{id}": OutsourceContactResponse
   "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse

@@ -36,6 +36,7 @@ public sealed class OpenApiContractTests
         "GET /api/v1/oem/files/{id}/content",
         "GET /api/v1/oem/files/{id}/download",
         "GET /api/v1/outsource/items/export",
+        "GET /api/v1/outsource/mails/{id}/attachment",
     };
 
     [Fact]

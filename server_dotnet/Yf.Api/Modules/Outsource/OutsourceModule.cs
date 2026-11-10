@@ -12,7 +12,12 @@ public static class OutsourceModule
         .AddSingleton<OutsourceSettingsService>()
         .AddSingleton<OutsourceItemService>()
         .AddSingleton<OutsourceIpmsSyncService>()
-        .AddSingleton<IHostedService>(provider => provider.GetRequiredService<OutsourceIpmsSyncService>());
+        .AddSingleton<IHostedService>(provider => provider.GetRequiredService<OutsourceIpmsSyncService>())
+        .AddSingleton<OutsourceMailSignal>()
+        .AddSingleton<IOutsourceMailTransport, MailKitOutsourceTransport>()
+        .AddSingleton<OutsourceMailService>()
+        .AddSingleton<OutsourceMailWorker>()
+        .AddSingleton<IHostedService>(provider => provider.GetRequiredService<OutsourceMailWorker>());
 
     public static IEndpointRouteBuilder MapOutsourceModule(this IEndpointRouteBuilder endpoints)
     {
@@ -79,6 +84,25 @@ public static class OutsourceModule
             s.SyncNowAsync(AccessService.GetCurrent(c), r, ct));
         endpoints.MapGet("/api/v1/outsource/sync-status", (HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
             s.StatusAsync(AccessService.GetCurrent(c), ct));
+        var mails = endpoints.MapGroup("/api/v1/outsource/mails");
+        mails.MapPost("/preview", (OutsourceMailPreviewRequest r, HttpContext c, OutsourceMailService s, CancellationToken ct) =>
+            s.PreviewAsync(AccessService.GetCurrent(c), r, ct));
+        mails.MapPost("/send", (OutsourceMailSendRequest r, HttpContext c, OutsourceMailService s, CancellationToken ct) =>
+            s.SendAsync(AccessService.GetCurrent(c), r, ct));
+        mails.MapGet("", (HttpContext c, OutsourceMailService s, CancellationToken ct) =>
+        {
+            var p = QueryValues.Page(c.Request);
+            var status = c.Request.Query["status"].ToString();
+            return s.ListAsync(AccessService.GetCurrent(c), QueryValues.OptionalUInt64(c.Request, "vendorId"),
+                status.Length == 0 ? null : status, p.Page, p.Size, p.Offset, ct);
+        });
+        mails.MapPost("/{id:long}/retry", (ulong id, HttpContext c, OutsourceMailService s, CancellationToken ct) =>
+            s.RetryAsync(AccessService.GetCurrent(c), id, ct));
+        mails.MapGet("/{id:long}/attachment", async (ulong id, HttpContext c, OutsourceMailService s, CancellationToken ct) =>
+        {
+            var (content, name) = await s.AttachmentAsync(AccessService.GetCurrent(c), id, ct);
+            return Results.File(content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", name);
+        });
         settings.MapPut("/sync-time", (OutsourceSyncTimeRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
             s.SetSyncTimeAsync(AccessService.GetCurrent(c), r, ct));
         return endpoints;

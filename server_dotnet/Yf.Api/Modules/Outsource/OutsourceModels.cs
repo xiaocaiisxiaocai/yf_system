@@ -63,3 +63,28 @@ public sealed record OutsourceSyncStatusResponse(
 
 public sealed record OutsourceItemChangeResponse(
     ulong Id, string Field, string Label, string? OldValue, string? NewValue, string Source, string? ActorName, DateTime ChangedAt);
+
+public sealed record OutsourceMailPreviewRequest(ulong[]? ItemIds);
+
+public sealed record OutsourceMailAddress(string Email, string? Name);
+
+/// <summary>One mail the confirmation would send: vendor recipients and the default copy list are fixed.</summary>
+public sealed record OutsourceMailDraft(
+    string Key, string Kind, ulong VendorId, string VendorName, string Subject, OutsourceMailAddress[] To,
+    OutsourceMailAddress[] DefaultCc, ulong[] ItemIds, string[] WorkOrderNos, int CustomerCount, string HtmlBody);
+
+public sealed record OutsourceMailPreviewResponse(string Fingerprint, OutsourceMailDraft[] Mails);
+
+/// <summary>Extra copy recipients for one draft, identified by its key.</summary>
+public sealed record OutsourceExtraCc(string? Key, ulong[]? UserIds, string[]? Emails);
+
+public sealed record OutsourceMailSendRequest(ulong[]? ItemIds, string? Fingerprint, string? RequestKey, OutsourceExtraCc[]? ExtraCc);
+
+public sealed record OutsourceMailRecipientResponse(string Kind, string Email, string? Name, string Source, bool Rejected);
+
+public sealed record OutsourceMailResponse(
+    ulong Id, string BatchKey, string Kind, ulong VendorId, string VendorName, string Subject, string Status,
+    OutsourceMailRecipientResponse[] Recipients, string[] WorkOrderNos, string? AttachmentName, int Attempts, string? LastError,
+    string? CreatedByName, DateTime CreatedAt, DateTime? SentAt);
+
+public sealed record OutsourceMailSendResponse(OutsourceMailResponse[] Mails);

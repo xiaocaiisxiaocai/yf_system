@@ -812,6 +812,14 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("datetime(3)")
                         .HasColumnName("ipms_synced_at");
 
+                    b.Property<DateTime?>("LastSentAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_sent_at");
+
+                    b.Property<string>("LastSentSnapshot")
+                        .HasColumnType("text")
+                        .HasColumnName("last_sent_snapshot");
+
                     b.Property<DateOnly?>("LatestDueDate")
                         .HasColumnType("date")
                         .HasColumnName("latest_due_date");
@@ -830,6 +838,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("varchar(64)")
                         .HasColumnName("mechanical_section");
+
+                    b.Property<ulong?>("NotifiedVendorId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("notified_vendor_id");
 
                     b.Property<DateOnly?>("OriginalDueDate")
                         .HasColumnType("date")
@@ -959,6 +971,217 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_outsource_item_changes_item");
 
                     b.ToTable("outsource_item_changes", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMail", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<byte[]>("Attachment")
+                        .HasColumnType("mediumblob")
+                        .HasColumnName("attachment");
+
+                    b.Property<string>("AttachmentName")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("attachment_name");
+
+                    b.Property<int>("Attempts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("attempts");
+
+                    b.Property<string>("BatchKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("batch_key");
+
+                    b.Property<string>("BodyHtml")
+                        .IsRequired()
+                        .HasColumnType("mediumtext")
+                        .HasColumnName("body_html");
+
+                    b.Property<string>("BodyText")
+                        .IsRequired()
+                        .HasColumnType("mediumtext")
+                        .HasColumnName("body_text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<ulong>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<DateTime?>("SentAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("sent_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("subject");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
+
+                    b.Property<ulong>("VendorId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("vendor_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BatchKey")
+                        .HasDatabaseName("idx_outsource_mails_batch");
+
+                    b.HasIndex("VendorId", "Id")
+                        .HasDatabaseName("idx_outsource_mails_vendor");
+
+                    b.HasIndex("Status", "NextAttemptAt", "Id")
+                        .HasDatabaseName("idx_outsource_mails_queue");
+
+                    b.ToTable("outsource_mails", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMailBatch", b =>
+                {
+                    b.Property<string>("RequestKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("request_key");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<ulong>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.HasKey("RequestKey");
+
+                    b.ToTable("outsource_mail_batches", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMailItem", b =>
+                {
+                    b.Property<ulong>("MailId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("mail_id");
+
+                    b.Property<ulong>("ItemId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("item_id");
+
+                    b.Property<string>("WorkOrderNo")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("work_order_no");
+
+                    b.HasKey("MailId", "ItemId");
+
+                    b.HasIndex("ItemId")
+                        .HasDatabaseName("idx_outsource_mail_items_item");
+
+                    b.ToTable("outsource_mail_items", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMailRecipient", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("email");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("varchar(8)")
+                        .HasColumnName("kind");
+
+                    b.Property<ulong>("MailId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("mail_id");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("name");
+
+                    b.Property<bool>("Rejected")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("rejected");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("source");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MailId", "Id")
+                        .HasDatabaseName("idx_outsource_mail_recipients_mail");
+
+                    b.ToTable("outsource_mail_recipients", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
@@ -4397,6 +4620,43 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_outsource_item_changes_item");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMail", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceMailBatch", null)
+                        .WithMany()
+                        .HasForeignKey("BatchKey")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_mails_batch");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceVendor", null)
+                        .WithMany()
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_mails_vendor");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMailItem", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceMail", null)
+                        .WithMany()
+                        .HasForeignKey("MailId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_mail_items_mail");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMailRecipient", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceMail", null)
+                        .WithMany()
+                        .HasForeignKey("MailId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_mail_recipients_mail");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceTypeVendor", b =>

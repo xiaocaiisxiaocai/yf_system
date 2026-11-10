@@ -57,6 +57,7 @@ public sealed class SchemaShapeTests
         "20261110101732_AddOutsourceItems",
         "20261110105542_AddOutsourceSyncState",
         "20261110112602_AddOutsourceItemChanges",
+        "20261110153153_AddOutsourceMails",
     ];
 
     [Fact]

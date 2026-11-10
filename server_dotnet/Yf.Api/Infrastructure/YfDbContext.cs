@@ -80,6 +80,10 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OutsourceItem> OutsourceItems => Set<OutsourceItem>();
     public DbSet<OutsourceSyncState> OutsourceSyncState => Set<OutsourceSyncState>();
     public DbSet<OutsourceItemChange> OutsourceItemChanges => Set<OutsourceItemChange>();
+    public DbSet<OutsourceMailBatch> OutsourceMailBatches => Set<OutsourceMailBatch>();
+    public DbSet<OutsourceMail> OutsourceMails => Set<OutsourceMail>();
+    public DbSet<OutsourceMailRecipient> OutsourceMailRecipients => Set<OutsourceMailRecipient>();
+    public DbSet<OutsourceMailItem> OutsourceMailItems => Set<OutsourceMailItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

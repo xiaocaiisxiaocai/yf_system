@@ -579,32 +579,80 @@ internal sealed class OutsourceReference
         item.IpmsSyncedAt, item.UpdatedAt);
 }
 
-/// <summary>The outsourcing-list workbook: export now, vendor mail attachments later. Same columns and colors everywhere.</summary>
+/// <summary>
+/// The outsourcing-list columns, shared by the export, vendor mail bodies and attachments, and the "as last sent"
+/// snapshot, so the same field is compared and highlighted everywhere.
+/// </summary>
 internal static class OutsourceWorkbook
 {
-    internal static readonly string[] Headers =
+    internal sealed record Field(string Key, string Header, double Width, Func<OutsourceItemResponse, string?> Value);
+
+    private static string? Date(DateOnly? value) => value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    /// <summary>Every business column in template order (without the row number).</summary>
+    internal static readonly Field[] Fields =
     [
-        "序号", "外发日期", "工令", "客户", "机型", "机构课别", "机构执行人", "电控执行人", "工令下发", "BOM时间", "发图",
-        "外发类型", "原始交期", "最新交期", "数量", "外发厂商", "备注", "状态", "发送状态",
+        new("outsourceDate", "外发日期", 12, x => Date(x.OutsourceDate)),
+        new("workOrderNo", "工令", 12, x => x.WorkOrderNo),
+        new("customer", "客户", 18, x => x.Customer),
+        new("machineModel", "机型", 14, x => x.MachineModel),
+        new("mechanicalSection", "机构课别", 14, x => x.MechanicalSection),
+        new("mechanicalOwner", "机构执行人", 12, x => x.MechanicalOwner),
+        new("electricalOwner", "电控执行人", 12, x => x.ElectricalOwner),
+        new("workOrderIssuedOn", "工令下发", 12, x => Date(x.WorkOrderIssuedOn)),
+        new("bomOn", "BOM时间", 12, x => Date(x.BomOn)),
+        new("drawingReleasedOn", "发图", 12, x => Date(x.DrawingReleasedOn)),
+        new("type", "外发类型", 24, x => x.TypeLabel ?? x.TypeCode),
+        new("originalDueDate", "原始交期", 12, x => Date(x.OriginalDueDate)),
+        new("latestDueDate", "最新交期", 12, x => Date(x.LatestDueDate)),
+        new("quantity", "数量", 8, x => x.Quantity?.ToString(CultureInfo.InvariantCulture)),
+        new("vendor", "外发厂商", 14, x => x.VendorName),
+        new("remark", "备注", 24, x => x.Remark),
+        new("status", "状态", 8, x => OutsourceItemStatuses.Label(x.Status)),
     ];
 
-    private static readonly double[] Widths = [6, 12, 12, 18, 14, 14, 12, 12, 12, 12, 12, 24, 12, 12, 8, 14, 24, 8, 14];
+    private static readonly Field SendStatus = new("sendStatus", "发送状态", 14, x => OutsourceSendStatuses.Label(x.SendStatus));
 
-    /// <param name="highlighted">Per item id, the column indexes whose value changed (yellow); null for none.</param>
-    internal static byte[] Build(IReadOnlyList<OutsourceItemResponse> items, IReadOnlyDictionary<ulong, IReadOnlySet<int>>? highlighted)
+    /// <summary>Columns of the vendor mail body table.</summary>
+    internal static readonly string[] MailBodyKeys = ["workOrderNo", "customer", "machineModel", "type", "quantity", "latestDueDate", "status", "remark"];
+
+    internal static XlsxFill RowFill(string status) => status switch
     {
-        static string? Date(DateOnly? value) => value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var rows = items.Select((item, index) => new XlsxRow(
-            [
-                (index + 1).ToString(CultureInfo.InvariantCulture), Date(item.OutsourceDate), item.WorkOrderNo, item.Customer,
-                item.MachineModel, item.MechanicalSection, item.MechanicalOwner, item.ElectricalOwner, Date(item.WorkOrderIssuedOn),
-                Date(item.BomOn), Date(item.DrawingReleasedOn), item.TypeLabel, Date(item.OriginalDueDate), Date(item.LatestDueDate),
-                item.Quantity?.ToString(CultureInfo.InvariantCulture), item.VendorName, item.Remark,
-                OutsourceItemStatuses.Label(item.Status), OutsourceSendStatuses.Label(item.SendStatus),
-            ],
-            item.Status switch { OutsourceItemStatuses.Paused => XlsxFill.Red, OutsourceItemStatuses.Cancelled => XlsxFill.Gray, _ => XlsxFill.None },
-            highlighted?.GetValueOrDefault(item.Id))).ToArray();
-        return SimpleXlsx.Write("外协清单", Headers, rows, Widths);
+        OutsourceItemStatuses.Paused => XlsxFill.Red,
+        OutsourceItemStatuses.Cancelled => XlsxFill.Gray,
+        _ => XlsxFill.None,
+    };
+
+    /// <summary>Field values as mailed; stored per item and compared at the next send.</summary>
+    internal static Dictionary<string, string?> Snapshot(OutsourceItemResponse item) =>
+        Fields.ToDictionary(field => field.Key, field => field.Value(item), StringComparer.Ordinal);
+
+    /// <summary>Keys whose value differs from the snapshot; empty when there is no snapshot.</summary>
+    internal static IReadOnlySet<string> Changed(OutsourceItemResponse item, IReadOnlyDictionary<string, string?>? snapshot)
+    {
+        if (snapshot is null) return new HashSet<string>(StringComparer.Ordinal);
+        return Fields.Where(field => !snapshot.TryGetValue(field.Key, out var before) || before != field.Value(item))
+            .Select(field => field.Key).ToHashSet(StringComparer.Ordinal);
+    }
+
+    /// <param name="changed">Per item id, the changed field keys (yellow cells); null for none.</param>
+    /// <param name="forVendor">Vendor attachments leave out the internal send status.</param>
+    internal static byte[] Build(IReadOnlyList<OutsourceItemResponse> items, IReadOnlyDictionary<ulong, IReadOnlySet<string>>? changed,
+        bool forVendor = false)
+    {
+        var fields = forVendor ? Fields : [.. Fields, SendStatus];
+        var headers = new[] { "序号" }.Concat(fields.Select(field => field.Header)).ToArray();
+        var widths = new[] { 6d }.Concat(fields.Select(field => field.Width)).ToArray();
+        var rows = items.Select((item, index) =>
+        {
+            var keys = changed?.GetValueOrDefault(item.Id);
+            var highlighted = keys is null ? null : fields.Select((field, column) => (field, column))
+                .Where(x => keys.Contains(x.field.Key)).Select(x => x.column + 1).ToHashSet();
+            return new XlsxRow(
+                [(index + 1).ToString(CultureInfo.InvariantCulture), .. fields.Select(field => field.Value(item))],
+                RowFill(item.Status), highlighted);
+        }).ToArray();
+        return SimpleXlsx.Write("外协清单", headers, rows, widths);
     }
 }
 

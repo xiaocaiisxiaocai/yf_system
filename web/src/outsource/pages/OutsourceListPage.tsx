@@ -3,7 +3,7 @@ import {
   Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconDownload, IconEdit, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
+import { IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
@@ -14,6 +14,7 @@ import type { ExcelImportRow } from '../../utils/excelWorkbook'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { normalizeImportDate } from '../importDate'
 import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
+import SendMailDialog from './SendMailDialog'
 import './OutsourceListPage.css'
 
 type Item = ApiResponses['GET /outsource/items']['list'][number]
@@ -87,6 +88,7 @@ export default function OutsourceListPage() {
   const [selected, setSelected] = useState<number[]>([])
   const [editing, setEditing] = useState<Item | null>(null)
   const [history, setHistory] = useState<Item | null>(null)
+  const [mailing, setMailing] = useState<number[] | null>(null)
   const [batchOpen, setBatchOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -164,6 +166,17 @@ export default function OutsourceListPage() {
     } finally {
       setSyncing(false)
     }
+  }
+
+  /** After saving, ask whether to mail the vendors about the edited items right away. */
+  const offerMail = (ids: number[]) => {
+    if (ids.length === 0) return
+    Modal.confirm({
+      title: `是否发送邮件通知厂商？`,
+      content: `已保存 ${ids.length} 条记录。`,
+      okText: '发送邮件', cancelText: '暂不发送',
+      onOk: () => setMailing(ids),
+    })
   }
 
   const exportItems = async () => {
@@ -294,6 +307,7 @@ export default function OutsourceListPage() {
       </Space>
       <Space wrap>
         {canManage && selected.length > 0 && <>
+          <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(selected)}>发送邮件 ({selected.length})</Button>
           <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({selected.length})</Button>
           <Popconfirm title={`删除所选 ${selected.length} 条记录？已发送给厂商的记录不能删除。`} onOk={removeSelected}>
             <Button status="danger">删除</Button>
@@ -321,9 +335,11 @@ export default function OutsourceListPage() {
         }} />}
     <ItemHistoryDrawer item={history} onClose={() => setHistory(null)} />
     <EditDialog item={editing} vendors={vendors} types={types} onClose={() => setEditing(null)}
-      onSaved={async () => { setEditing(null); await load() }} />
+      onSaved={async () => { const ids = editing ? [editing.id] : []; setEditing(null); await load(); offerMail(ids) }} />
     <BatchDialog visible={batchOpen} items={selectedItems} vendors={vendors} onClose={() => setBatchOpen(false)}
-      onSaved={async () => { setBatchOpen(false); await load() }} />
+      onSaved={async () => { const ids = selectedItems.map((item) => item.id); setBatchOpen(false); await load(); offerMail(ids) }} />
+    <SendMailDialog itemIds={mailing} onClose={() => setMailing(null)}
+      onSent={() => { setMailing(null); setSelected([]); void load() }} />
     <ExcelImportDialog<ImportRow> visible={importOpen} title="汇入外协清单" templateName="外协清单汇入模板.xlsx"
       requiredHeaders={IMPORT_HEADERS} maxRows={500} keyTitle="工令"
       notice={<>填写外发日期、工令和外发厂商，其余字段由 IPMS 带出。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}

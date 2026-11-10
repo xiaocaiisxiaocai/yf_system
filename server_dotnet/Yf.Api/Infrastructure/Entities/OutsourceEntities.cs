@@ -92,6 +92,11 @@ public sealed class OutsourceItem
     /// <summary>Set when IPMS reports the work order finished; closed rows are hidden and no longer synchronized.</summary>
     public DateTime? ClosedAt { get; set; }
     public DateTime? IpmsSyncedAt { get; set; }
+    /// <summary>Vendor that last received this item; a different current vendor gets a withdrawal for the old one.</summary>
+    public ulong? NotifiedVendorId { get; set; }
+    /// <summary>JSON of the field values as last mailed, to highlight what changed since.</summary>
+    public string? LastSentSnapshot { get; set; }
+    public DateTime? LastSentAt { get; set; }
     public ulong? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -132,6 +137,61 @@ public sealed class OutsourceItemChange
     public string Source { get; set; } = null!;
     public ulong? ActorUserId { get; set; }
     public DateTime ChangedAt { get; set; }
+}
+
+/// <summary>One confirmed send: makes a repeated confirm click idempotent.</summary>
+public sealed class OutsourceMailBatch
+{
+    public string RequestKey { get; set; } = null!;
+    public ulong CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+/// <summary>
+/// One vendor mail (outsourcing notice or withdrawal) with all its recipients in one message. Content and the
+/// attachment are frozen at confirmation; retries resend exactly this.
+/// </summary>
+public sealed class OutsourceMail
+{
+    public ulong Id { get; set; }
+    public string BatchKey { get; set; } = null!;
+    /// <summary>NOTICE or WITHDRAW.</summary>
+    public string Kind { get; set; } = null!;
+    public ulong VendorId { get; set; }
+    public string Subject { get; set; } = null!;
+    public string BodyHtml { get; set; } = null!;
+    public string BodyText { get; set; } = null!;
+    public string? AttachmentName { get; set; }
+    public byte[]? Attachment { get; set; }
+    /// <summary>QUEUED, SENDING, SENT, PARTIAL or FAILED.</summary>
+    public string Status { get; set; } = null!;
+    public int Attempts { get; set; }
+    public DateTime? NextAttemptAt { get; set; }
+    public string? LastError { get; set; }
+    public ulong CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    public DateTime? SentAt { get; set; }
+}
+
+public sealed class OutsourceMailRecipient
+{
+    public ulong Id { get; set; }
+    public ulong MailId { get; set; }
+    /// <summary>TO or CC.</summary>
+    public string Kind { get; set; } = null!;
+    public string Email { get; set; } = null!;
+    public string? Name { get; set; }
+    /// <summary>VENDOR, DEFAULT_CC or EXTRA.</summary>
+    public string Source { get; set; } = null!;
+    public bool Rejected { get; set; }
+}
+
+public sealed class OutsourceMailItem
+{
+    public ulong MailId { get; set; }
+    public ulong ItemId { get; set; }
+    public string WorkOrderNo { get; set; } = null!;
 }
 
 public sealed class OutsourceVendorConfig : IEntityTypeConfiguration<OutsourceVendor>
@@ -252,6 +312,9 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.Property(x => x.SendStatus).HasColumnName("send_status").HasMaxLength(16).IsRequired().HasDefaultValue("UNSENT");
         b.Property(x => x.ClosedAt).HasColumnName("closed_at").HasColumnType("datetime(3)");
         b.Property(x => x.IpmsSyncedAt).HasColumnName("ipms_synced_at").HasColumnType("datetime(3)");
+        b.Property(x => x.NotifiedVendorId).HasColumnName("notified_vendor_id");
+        b.Property(x => x.LastSentSnapshot).HasColumnName("last_sent_snapshot").HasColumnType("text");
+        b.Property(x => x.LastSentAt).HasColumnName("last_sent_at").HasColumnType("datetime(3)");
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
@@ -304,5 +367,87 @@ public sealed class OutsourceItemChangeConfig : IEntityTypeConfiguration<Outsour
         // History belongs to the item; only unsent items can be deleted, and then their history goes too.
         b.HasOne<OutsourceItem>().WithMany().HasForeignKey(x => x.ItemId)
             .HasConstraintName("fk_outsource_item_changes_item").OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class OutsourceMailBatchConfig : IEntityTypeConfiguration<OutsourceMailBatch>
+{
+    public void Configure(EntityTypeBuilder<OutsourceMailBatch> b)
+    {
+        b.ToTable("outsource_mail_batches");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.RequestKey);
+        b.Property(x => x.RequestKey).HasColumnName("request_key").HasMaxLength(64);
+        b.Property(x => x.CreatedBy).HasColumnName("created_by");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+    }
+}
+
+public sealed class OutsourceMailConfig : IEntityTypeConfiguration<OutsourceMail>
+{
+    public void Configure(EntityTypeBuilder<OutsourceMail> b)
+    {
+        b.ToTable("outsource_mails");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.BatchKey).HasColumnName("batch_key").HasMaxLength(64).IsRequired();
+        b.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(16).IsRequired();
+        b.Property(x => x.VendorId).HasColumnName("vendor_id");
+        b.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(255).IsRequired();
+        b.Property(x => x.BodyHtml).HasColumnName("body_html").HasColumnType("mediumtext").IsRequired();
+        b.Property(x => x.BodyText).HasColumnName("body_text").HasColumnType("mediumtext").IsRequired();
+        b.Property(x => x.AttachmentName).HasColumnName("attachment_name").HasMaxLength(128);
+        b.Property(x => x.Attachment).HasColumnName("attachment").HasColumnType("mediumblob");
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired();
+        b.Property(x => x.Attempts).HasColumnName("attempts").HasDefaultValue(0);
+        b.Property(x => x.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("datetime(3)");
+        b.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(512);
+        b.Property(x => x.CreatedBy).HasColumnName("created_by");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
+        b.Property(x => x.SentAt).HasColumnName("sent_at").HasColumnType("datetime(3)");
+        b.HasIndex(x => new { x.Status, x.NextAttemptAt, x.Id }).HasDatabaseName("idx_outsource_mails_queue");
+        b.HasIndex(x => x.BatchKey).HasDatabaseName("idx_outsource_mails_batch");
+        b.HasIndex(x => new { x.VendorId, x.Id }).HasDatabaseName("idx_outsource_mails_vendor");
+        b.HasOne<OutsourceMailBatch>().WithMany().HasForeignKey(x => x.BatchKey)
+            .HasConstraintName("fk_outsource_mails_batch").OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<OutsourceVendor>().WithMany().HasForeignKey(x => x.VendorId)
+            .HasConstraintName("fk_outsource_mails_vendor").OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class OutsourceMailRecipientConfig : IEntityTypeConfiguration<OutsourceMailRecipient>
+{
+    public void Configure(EntityTypeBuilder<OutsourceMailRecipient> b)
+    {
+        b.ToTable("outsource_mail_recipients");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.MailId).HasColumnName("mail_id");
+        b.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(8).IsRequired();
+        b.Property(x => x.Email).HasColumnName("email").HasMaxLength(128).IsRequired();
+        b.Property(x => x.Name).HasColumnName("name").HasMaxLength(64);
+        b.Property(x => x.Source).HasColumnName("source").HasMaxLength(16).IsRequired();
+        b.Property(x => x.Rejected).HasColumnName("rejected").HasDefaultValue(false);
+        b.HasIndex(x => new { x.MailId, x.Id }).HasDatabaseName("idx_outsource_mail_recipients_mail");
+        b.HasOne<OutsourceMail>().WithMany().HasForeignKey(x => x.MailId)
+            .HasConstraintName("fk_outsource_mail_recipients_mail").OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class OutsourceMailItemConfig : IEntityTypeConfiguration<OutsourceMailItem>
+{
+    public void Configure(EntityTypeBuilder<OutsourceMailItem> b)
+    {
+        b.ToTable("outsource_mail_items");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.MailId, x.ItemId });
+        b.Property(x => x.MailId).HasColumnName("mail_id");
+        // No FK to items: sent rows can never be deleted, and the work-order number keeps the record readable.
+        b.Property(x => x.ItemId).HasColumnName("item_id");
+        b.Property(x => x.WorkOrderNo).HasColumnName("work_order_no").HasMaxLength(32).IsRequired();
+        b.HasIndex(x => x.ItemId).HasDatabaseName("idx_outsource_mail_items_item");
+        b.HasOne<OutsourceMail>().WithMany().HasForeignKey(x => x.MailId)
+            .HasConstraintName("fk_outsource_mail_items_mail").OnDelete(DeleteBehavior.Cascade);
     }
 }
