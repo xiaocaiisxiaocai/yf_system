@@ -35,7 +35,11 @@ public sealed class OemMailStatusTests
         var missingContacts = await admin.GetAsync("/api/v1/admin/system/mail-status?scope=oem", ct).Ok();
         Assert.Equal(1UL, missingContacts["missingOemContactCompanyCount"]!.GetValue<ulong>());
         Assert.DoesNotContain("private-title", all.ToJsonString());
-        Assert.DoesNotContain("vendor@example.invalid", all.ToJsonString());
+        // Mail logs show full addresses (ae8fcd0), but each scope still shows only its own business line.
+        Assert.Contains("vendor@example.invalid", all.ToJsonString());
+        Assert.Contains("vendor@example.invalid", oem.ToJsonString());
+        Assert.DoesNotContain("vendor@example.invalid", robot.ToJsonString());
+        Assert.DoesNotContain("robot@example.invalid", oem.ToJsonString());
         await host.CreateInternalUserAsync("smtp_only", "Mail#2026", ["config:manage"], null, ct);
         var operatorClient = await host.LoginInternalAsync("smtp_only", "Mail#2026", ct);
         await operatorClient.GetAsync("/api/v1/admin/system/mail-status", ct).Ok();
