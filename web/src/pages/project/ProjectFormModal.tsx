@@ -82,6 +82,8 @@ export default function ProjectFormModal({ visible, project, onCancel, onSaved, 
   const [contactsError, setContactsError] = useState(false)
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null)
   const [selectedRobotPartId, setSelectedRobotPartId] = useState<number | null>(null)
+  // 工令号只是自由输入的标签：只在输入时显示下拉，回车成标签后不再弹出已选列表。
+  const [workOrderInput, setWorkOrderInput] = useState('')
   const supplierOptionsSeq = useRef(0)
   const optionsSeq = useRef(0)
   const partSeq = useRef(0)
@@ -282,7 +284,7 @@ export default function ProjectFormModal({ visible, project, onCancel, onSaved, 
           <Alert className="form-grid-full" type="warning" content={`项目已被他人修改，已刷新为最新数据（当前名称：${editing.name}）。请核对后再次保存，保存将覆盖为本弹窗中的内容。`} />
         )}
         <Form.Item className="form-grid-full" label="项目名称" field="name" rules={[{ required: true, message: '请输入项目名称' }, textLengthRule('项目名称', 128)]}><Input autoFocus placeholder="项目名称" /></Form.Item>
-        <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
+        <Form.Item className="form-grid-full" label="工令号" field="workOrderNos" rules={[{ required: true, message: '请至少填写一个工令号' }, { validator: (value, callback) => listRule('工令号', WORK_ORDER_LIMIT, value, callback) }]}><Select mode="multiple" allowCreate allowClear showSearch maxTagCount={3} inputValue={workOrderInput} onInputValueChange={setWorkOrderInput} popupVisible={workOrderInput.trim() !== ''} tokenSeparators={[',', '，', ';', '；', '\n']} placeholder="输入工令号后按回车，可填写多个" /></Form.Item>
         <Form.Item label="机型" field="machineModel" rules={[{ required: true, message: '请填写机型' }, textLengthRule('机型', 128)]}><Input maxLength={128} showWordLimit placeholder="请输入机型" /></Form.Item>
         <Form.Item label="Robot 厂商" field="supplierId" rules={[{ required: true, message: '请选择 Robot 厂商' }]}><Select showSearch placeholder="选择 Robot 厂商" filterOption={optionFilter} loading={supplierOptionsLoading} disabled={!!editing || supplierOptionsLoading || supplierOptionsError} onChange={(value) => changeSupplier(value as number | undefined)}>{supplierFormOptions.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select></Form.Item>
         <Form.Item label="Robot 类型" field="robotTypeId" rules={[{ required: true, message: '请选择 Robot 类型' }]}><Select allowClear showSearch placeholder="选择 Robot 类型" loading={metadataOptionsLoading} disabled={metadataOptionsLoading || metadataOptionsError} filterOption={optionFilter}>{robotTypeOptions.map((item) => <Select.Option key={item.id} value={item.id} disabled={!item.enabled}>{item.name}{item.enabled ? '' : '（已停用）'}</Select.Option>)}</Select></Form.Item>
