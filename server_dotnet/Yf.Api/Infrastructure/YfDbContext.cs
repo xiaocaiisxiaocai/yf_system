@@ -72,6 +72,11 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OemDownloadSession> OemDownloadSessions => Set<OemDownloadSession>();
     public DbSet<OemDownloadRange> OemDownloadRanges => Set<OemDownloadRange>();
     public DbSet<OemDownloadLease> OemDownloadLeases => Set<OemDownloadLease>();
+    public DbSet<OutsourceVendor> OutsourceVendors => Set<OutsourceVendor>();
+    public DbSet<OutsourceVendorContact> OutsourceVendorContacts => Set<OutsourceVendorContact>();
+    public DbSet<OutsourceType> OutsourceTypes => Set<OutsourceType>();
+    public DbSet<OutsourceTypeVendor> OutsourceTypeVendors => Set<OutsourceTypeVendor>();
+    public DbSet<OutsourceDefaultCc> OutsourceDefaultCc => Set<OutsourceDefaultCc>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

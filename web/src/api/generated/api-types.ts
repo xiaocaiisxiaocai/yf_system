@@ -937,6 +937,67 @@ export interface OemUploadedFileResponse {
   createdAt: string
 }
 
+export interface OutsourceCcUserResponse {
+  userId: number
+  employeeNo: string
+  realName: string
+  email: string
+  status: string
+}
+
+export interface OutsourceContactResponse {
+  id: number
+  vendorId: number
+  name: string | null
+  email: string
+  status: string
+  sortNo: number
+}
+
+export interface OutsourceContactUpsert {
+  name?: string | null
+  email?: string | null
+  sortNo?: number | null
+}
+
+export interface OutsourceDefaultCcRequest {
+  userIds?: Array<number> | null
+}
+
+export interface OutsourceTypeResponse {
+  id: number
+  code: string
+  name: string
+  status: string
+  sortNo: number
+  vendorIds: Array<number>
+}
+
+export interface OutsourceTypeUpsert {
+  code?: string | null
+  name?: string | null
+  sortNo?: number | null
+}
+
+export interface OutsourceTypeVendorsRequest {
+  vendorIds?: Array<number> | null
+}
+
+export interface OutsourceVendorResponse {
+  id: number
+  name: string
+  remark: string | null
+  status: string
+  sortNo: number
+  contacts: Array<OutsourceContactResponse>
+}
+
+export interface OutsourceVendorUpsert {
+  name?: string | null
+  remark?: string | null
+  sortNo?: number | null
+}
+
 export interface PageResponseOfAuditLogResponse {
   list: Array<AuditLogResponse>
   total: number
@@ -1723,6 +1784,21 @@ export interface ApiResponses {
   "GET /oem/uploads/{sessionId}": OemUploadSessionResponse
   "PUT /oem/uploads/{sessionId}/chunks/{index}": EmptyResponse
   "POST /oem/uploads/{sessionId}/merge": OemUploadedFileResponse
+  "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
+  "PUT /outsource/settings/contacts/{id}": OutsourceContactResponse
+  "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse
+  "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
+  "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
+  "GET /outsource/settings/types": Array<OutsourceTypeResponse>
+  "POST /outsource/settings/types": OutsourceTypeResponse
+  "PUT /outsource/settings/types/{id}": OutsourceTypeResponse
+  "PUT /outsource/settings/types/{id}/status": OutsourceTypeResponse
+  "PUT /outsource/settings/types/{id}/vendors": OutsourceTypeResponse
+  "GET /outsource/settings/vendors": Array<OutsourceVendorResponse>
+  "POST /outsource/settings/vendors": OutsourceVendorResponse
+  "PUT /outsource/settings/vendors/{id}": OutsourceVendorResponse
+  "POST /outsource/settings/vendors/{id}/contacts": OutsourceContactResponse
+  "PUT /outsource/settings/vendors/{id}/status": OutsourceVendorResponse
   "GET /permissions": Array<PermissionResponse>
   "GET /project-copies/{copyId}/files": PageResponseOfFileCopyHistoryItem
   "GET /project-copy-jobs": ProjectCopyJobListResponse

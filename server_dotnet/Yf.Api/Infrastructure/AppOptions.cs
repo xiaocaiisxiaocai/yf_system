@@ -72,6 +72,8 @@ public sealed class AppOptions
     /// <summary>A batch ZIP download still running after this many minutes is aborted.</summary>
     public int BatchDownloadMaxDurationMinutes { get; set; } = 120;
     public SmtpOptions Smtp { get; set; } = new();
+    /// <summary>IPMS work-order source for the outsourcing list; empty mode means not configured.</summary>
+    public Yf.Api.Modules.Outsource.Ipms.IpmsOptions Ipms { get; set; } = new();
     /// <summary>Independent local OEM content root, excluded from collaboration backups. Empty disables file transfer.</summary>
     public string OemStorageRoot
     {
@@ -168,6 +170,7 @@ public sealed class AppOptions
         if (BatchDownloadMaxDurationMinutes is < 5 or > 1440)
             throw new InvalidOperationException("App:BatchDownloadMaxDurationMinutes must be between 5 and 1440.");
         Smtp.Validate();
+        Ipms.Validate();
         if (OemStorageRoot.Length > 0)
         {
             if (!Path.IsPathFullyQualified(OemStorageRoot) || OemStorageRoot.StartsWith(@"\", StringComparison.Ordinal))

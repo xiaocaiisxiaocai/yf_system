@@ -768,6 +768,8 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 /* 窄表格里操作列只放图标按钮，两个槽位要装进 76px 的列，否则两侧被单元格裁掉。 */
 .file-table--narrow .action-slots--file > .action-slot { --action-slot-width: 28px; }
 .action-slots--oem-file > .action-slot { --action-slot-width: 72px; }
+/* 外协设定：第二个操作是四个字（联络邮箱、可用厂商）。 */
+.action-slots--outsource > .action-slot:nth-child(2) { --action-slot-width: 60px; }
 
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
 .file-name-cell {

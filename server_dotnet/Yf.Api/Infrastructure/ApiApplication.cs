@@ -9,6 +9,7 @@ using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem;
+using Yf.Api.Modules.Outsource;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
@@ -154,7 +155,7 @@ public static class ApiApplication
             efConnectionString, EfDb.ServerVersion)
             .ReplaceService<IMigrator, PreflightMySqlMigrator>()
             .AddInterceptors(UtcDatabaseSession.Instance));
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule().AddOutsourceModule();
         builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
             .WithOrigins([.. options.AllowedWebOrigins])
             .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
@@ -202,7 +203,7 @@ public static class ApiApplication
         UsePublicStaticFilesBeforeRouting(app);
         app.UseCors();
         app.UseMiddleware<IdentityMiddleware>();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule().MapOutsourceModule();
         var healthProbe = new DatabaseHealthProbe();
         // Storage writes cost more than a ping and the disk changes state rarely: reuse a healthy result longer.
         var storageProbe = new DatabaseHealthProbe(healthyCacheDuration: DatabaseHealthProbe.StorageHealthyCacheDuration);

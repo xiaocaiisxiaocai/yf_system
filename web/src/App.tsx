@@ -36,6 +36,9 @@ const OemApprovals = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ def
 const OemCompanies = lazy(() => import('./oem/pages/admin/CompaniesPage'))
 const OemSettings = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.SettingsHub })))
 const OemAudit = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.AuditPage })))
+const OutsourceLayout = lazy(() => import('./outsource/OutsourceLayout'))
+const OutsourceLanding = lazy(() => import('./outsource/OutsourceLayout').then((m) => ({ default: m.OutsourceLanding })))
+const OutsourceSettings = lazy(() => import('./outsource/pages/OutsourceSettingsPage'))
 const PortalLogin = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalLoginPage })))
 const PortalChangePassword = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalChangePasswordPage })))
 
@@ -157,6 +160,10 @@ export default function App() {
             <Route path="transfers/:id" element={<OemTransferDetail />} />
           </Route>
         </>}
+        <Route path="/outsource" element={<Guard><OutsourceLayout /></Guard>}>
+          <Route index element={<OutsourceLanding />} />
+          <Route path="settings" element={<Guard permission="outsource:settings"><OutsourceSettings /></Guard>} />
+        </Route>
         <Route
           path="/"
           element={

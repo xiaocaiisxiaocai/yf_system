@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261109135314_RemoveProjectGroups";
+    private const string Latest = "20261110072141_AddOutsourceSettings";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -79,7 +79,8 @@ public sealed class MigrationRoundTripTests
         // + AddStorageLocations (Down drops storage_locations, keeping the storage:manage permission and grants)
         // + AddProjectMaterialRound (Down drops projects.material_file_floor)
         // + AddOemCompanyContacts (Down drops the OEM additional-contact directory)
-        // + RemoveProjectGroups (Down rebuilds one main project per project, not the retired project:view_all grant).
+        // + RemoveProjectGroups (Down rebuilds one main project per project, not the retired project:view_all grant)
+        // + AddOutsourceSettings (Down drops the outsourcing tables, keeping the outsource permission codes and grants).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -102,6 +103,8 @@ public sealed class MigrationRoundTripTests
         Assert.DoesNotContain(latestSchema, line => line.StartsWith("table|project_group", StringComparison.Ordinal));
         Assert.Contains(rolledBack, line => line.StartsWith("table|project_groups", StringComparison.Ordinal));
         Assert.DoesNotContain(latestSchema, line => line.StartsWith("column|projects|project_group_id|", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|outsource_", StringComparison.Ordinal));
+        Assert.Contains(latestSchema, line => line.StartsWith("table|outsource_vendors", StringComparison.Ordinal));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
         await migrator.MigrateAsync(cancellationToken: ct);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));
@@ -209,8 +212,18 @@ public sealed class MigrationRoundTripTests
             WHERE rp.role_id=1 GROUP BY p.code ORDER BY p.code
             """)).ToArray();
         Assert.All(adminGrants, row => Assert.Equal(1, row.Count));
-        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Order(StringComparer.Ordinal).ToArray(),
+        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Concat(OutsourceCodes).Order(StringComparer.Ordinal).ToArray(),
             adminGrants.Select(row => row.Code).Order(StringComparer.Ordinal).ToArray());
+        var outsourceCatalog = (await connection.QueryAsync<(string Code, int Count)>("""
+            SELECT code, COUNT(*) FROM permissions
+            WHERE code='outsource' OR code LIKE 'outsource:%' GROUP BY code ORDER BY code
+            """)).ToArray();
+        Assert.Equal(OutsourceCodes, outsourceCatalog.Select(row => row.Code).ToArray());
+        Assert.All(outsourceCatalog, row => Assert.Equal(1, row.Count));
+        Assert.Equal(OutsourceCodes.Length - 1, await connection.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM permissions child JOIN permissions parent ON parent.id=child.parent_id
+            WHERE child.code LIKE 'outsource:%' AND parent.code='outsource'
+            """));
         // Neither a custom role (even one holding every pre-upgrade permission) nor another built-in role is widened.
         Assert.Equal(PreOemCodes.Order(StringComparer.Ordinal).ToArray(), (await connection.QueryAsync<string>(
             "SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=2")).Order(StringComparer.Ordinal).ToArray());
@@ -227,6 +240,10 @@ public sealed class MigrationRoundTripTests
     }
 
     private static readonly string[] PreOemCodes = ["dashboard", "org:dept", "org:user", "user:manage", "dept:manage"];
+
+    /// <summary>Codes AddOutsourceSettings grants to the built-in administrator on an existing install.</summary>
+    private static readonly string[] OutsourceCodes =
+        ["outsource", "outsource:import", "outsource:manage", "outsource:settings", "outsource:view"];
 
     private static async Task<NotSupportedException> AssertRollbackRefusedAsync(
         SchemaShapeTests.SchemaDatabaseScope database,

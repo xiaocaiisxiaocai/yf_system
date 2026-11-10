@@ -12,6 +12,7 @@ export type ActionSlotsVariant =
   | 'role'
   | 'file'
   | 'oem-file'
+  | 'outsource'
   | 'single'
 
 export function actionSlots(slots: ActionSlot[], variant: ActionSlotsVariant) {

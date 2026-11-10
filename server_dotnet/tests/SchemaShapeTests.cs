@@ -53,6 +53,7 @@ public sealed class SchemaShapeTests
         "20261105091038_AllowCadExportUploads",
         "20261105102815_RenameOemLabelsToOdmOema",
         "20261109135314_RemoveProjectGroups",
+        "20261110072141_AddOutsourceSettings",
     ];
 
     [Fact]
@@ -325,8 +326,8 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(50, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(50, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(55, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(55, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='project:view_all'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code IN ('project:submit','project:confirm','project:withdraw')"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));

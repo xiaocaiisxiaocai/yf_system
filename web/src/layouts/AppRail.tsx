@@ -1,16 +1,17 @@
 import { Tooltip } from '@arco-design/web-react'
-import { IconRobot, IconSwap } from '@arco-design/web-react/icon'
+import { IconList, IconRobot, IconSwap } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import { oemHome } from '../oem/oemNavigation'
+import { outsourceHome } from '../outsource/outsourceNavigation'
 import { OEM_UI_ENABLED } from '../features'
 
-export type BusinessLine = 'collaboration' | 'oem'
+export type BusinessLine = 'collaboration' | 'oem' | 'outsource'
 
 /**
- * Top-level switch between the collaboration and OEM business lines. Each line keeps its own
- * section and second-level menu; the rail only appears for staff who can use both.
+ * Top-level switch between business lines. Each line keeps its own section and second-level menu;
+ * the rail only appears for staff who can use more than the collaboration line.
  */
 export default function AppRail({ active, variant = 'rail', onNavigate }: {
   active: BusinessLine
@@ -19,11 +20,14 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
 }) {
   const { permissions, user } = useAuth(useShallow((state) => ({ permissions: state.permissions, user: state.user })))
   const navigate = useNavigate()
-  const oemPath = OEM_UI_ENABLED && user?.userType === 'INTERNAL' ? oemHome(permissions) : null
-  if (!oemPath) return null
+  const internal = user?.userType === 'INTERNAL'
+  const oemPath = OEM_UI_ENABLED && internal ? oemHome(permissions) : null
+  const outsourcePath = internal ? outsourceHome(permissions) : null
+  if (!oemPath && !outsourcePath) return null
   const lines = [
     { key: 'collaboration' as const, label: 'Robot仿真协作', short: '仿真协作', icon: <IconRobot />, path: '/' },
-    { key: 'oem' as const, label: 'ODM/OEMA 文件传递', short: 'ODM/OEMA', icon: <IconSwap />, path: oemPath },
+    ...(oemPath ? [{ key: 'oem' as const, label: 'ODM/OEMA 文件传递', short: 'ODM/OEMA', icon: <IconSwap />, path: oemPath }] : []),
+    ...(outsourcePath ? [{ key: 'outsource' as const, label: '外协清单', short: '外协清单', icon: <IconList />, path: outsourcePath }] : []),
   ]
   const go = (line: (typeof lines)[number]) => {
     if (line.key !== active) navigate(line.path)

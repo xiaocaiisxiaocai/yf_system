@@ -10,6 +10,7 @@ using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem;
+using Yf.Api.Modules.Outsource;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
 
@@ -88,7 +89,7 @@ public sealed class OpenApiContractTests
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.Services.AddSingleton(new AppOptions { WorkerEnabled = false }).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule().AddOutsourceModule();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen(options =>
         {
@@ -100,7 +101,7 @@ public sealed class OpenApiContractTests
             options.SchemaFilter<NullableReferencePropertiesFilter>();
         });
         await using var app = builder.Build();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapOemModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapOemModule().MapOutsourceModule();
         // UseEndpoints publishes the mapped routes to the global EndpointDataSource that ApiExplorer reads;
         // the server and background workers are never started.
         app.UseRouting();

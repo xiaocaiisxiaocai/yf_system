@@ -1,0 +1,41 @@
+.outsource-settings-page {
+  --page-table-scroll-y: max(280px, calc(100dvh - 326px));
+}
+
+.outsource-settings-tabs {
+  flex: 0 0 auto;
+  margin-bottom: 16px;
+}
+
+.outsource-settings-tabs .arco-tabs-header {
+  margin: 0;
+}
+
+.outsource-settings-tabs .arco-tabs-content {
+  display: none;
+}
+
+.outsource-settings-toolbar {
+  flex: 0 0 auto;
+}
+
+.outsource-drawer-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.outsource-muted {
+  color: var(--color-text-3);
+}
+
+@media (max-width: 720px) {
+  .outsource-settings-page {
+    --page-table-scroll-y: max(280px, calc(100dvh - 384px));
+  }
+
+  .outsource-settings-toolbar .arco-space,
+  .outsource-settings-toolbar .arco-select {
+    width: 100% !important;
+  }
+}

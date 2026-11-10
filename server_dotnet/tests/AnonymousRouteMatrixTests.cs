@@ -8,6 +8,7 @@ using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem;
+using Yf.Api.Modules.Outsource;
 using Yf.Api.Modules.Oem.Identity;
 using Yf.Api.Modules.Projects;
 using Yf.Api.Modules.SystemManagement;
@@ -126,9 +127,9 @@ public sealed class AnonymousRouteMatrixTests
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.Services.AddSingleton(new AppOptions()).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule().AddOutsourceModule();
         using var app = builder.Build();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule().MapOutsourceModule();
         // The route table stays valid after the application is disposed; endpoints are plain objects.
         var endpoints = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
             .OfType<RouteEndpoint>().ToArray();
