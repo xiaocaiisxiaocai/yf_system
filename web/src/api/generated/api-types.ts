@@ -1012,6 +1012,17 @@ export interface OutsourceImportRow {
   vendorName?: string | null
 }
 
+export interface OutsourceItemChangeResponse {
+  id: number
+  field: string
+  label: string
+  oldValue: string | null
+  newValue: string | null
+  source: string
+  actorName: string | null
+  changedAt: string
+}
+
 export interface OutsourceItemResponse {
   id: number
   workOrderNo: string
@@ -1923,6 +1934,7 @@ export interface ApiResponses {
   "GET /outsource/items/summary": OutsourceItemSummaryResponse
   "POST /outsource/items/sync": OutsourceSyncStatusResponse
   "PUT /outsource/items/{id}": OutsourceItemResponse
+  "GET /outsource/items/{id}/changes": Array<OutsourceItemChangeResponse>
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/contacts/{id}": OutsourceContactResponse
   "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse

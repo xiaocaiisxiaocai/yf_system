@@ -72,6 +72,7 @@
   "GET /api/v1/outsource/items",
   "GET /api/v1/outsource/items/export",
   "GET /api/v1/outsource/items/summary",
+  "GET /api/v1/outsource/items/{}/changes",
   "GET /api/v1/outsource/settings/cc-user-options",
   "GET /api/v1/outsource/settings/default-cc",
   "GET /api/v1/outsource/settings/types",

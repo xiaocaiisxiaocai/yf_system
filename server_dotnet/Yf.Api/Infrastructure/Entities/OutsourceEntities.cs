@@ -120,7 +120,15 @@ public sealed class OutsourceSyncState
     public int LastMissing { get; set; }
 }
 
-/// <summary>EDIT, IPMS_SCHEDULED or IPMS_MANUAL.</summary>
+/// <summary>One changed field of an outsourcing item: IPMS sync or a purchasing edit. Kept with the item.</summary>
+public sealed class OutsourceItemChange
+{
+    public ulong Id { get; set; }
+    public ulong ItemId { get; set; }
+    public string Field { get; set; } = null!;
+    public string? OldValue { get; set; }
+    public string? NewValue { get; set; }
+    /// <summary>EDIT, IPMS_SCHEDULED or IPMS_MANUAL.</summary>
     public string Source { get; set; } = null!;
     public ulong? ActorUserId { get; set; }
     public DateTime ChangedAt { get; set; }
@@ -275,5 +283,26 @@ public sealed class OutsourceSyncStateConfig : IEntityTypeConfiguration<Outsourc
         b.Property(x => x.LastChanged).HasColumnName("last_changed").HasDefaultValue(0);
         b.Property(x => x.LastClosed).HasColumnName("last_closed").HasDefaultValue(0);
         b.Property(x => x.LastMissing).HasColumnName("last_missing").HasDefaultValue(0);
+    }
+}
+
+public sealed class OutsourceItemChangeConfig : IEntityTypeConfiguration<OutsourceItemChange>
+{
+    public void Configure(EntityTypeBuilder<OutsourceItemChange> b)
+    {
+        b.ToTable("outsource_item_changes");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.ItemId).HasColumnName("item_id");
+        b.Property(x => x.Field).HasColumnName("field").HasMaxLength(32).IsRequired();
+        b.Property(x => x.OldValue).HasColumnName("old_value").HasMaxLength(500);
+        b.Property(x => x.NewValue).HasColumnName("new_value").HasMaxLength(500);
+        b.Property(x => x.Source).HasColumnName("source").HasMaxLength(16).IsRequired();
+        b.Property(x => x.ActorUserId).HasColumnName("actor_user_id");
+        b.Property(x => x.ChangedAt).HasColumnName("changed_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+        b.HasIndex(x => new { x.ItemId, x.Id }).HasDatabaseName("idx_outsource_item_changes_item");
+        // History belongs to the item; only unsent items can be deleted, and then their history goes too.
+        b.HasOne<OutsourceItem>().WithMany().HasForeignKey(x => x.ItemId)
+            .HasConstraintName("fk_outsource_item_changes_item").OnDelete(DeleteBehavior.Cascade);
     }
 }

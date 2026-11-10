@@ -3,7 +3,7 @@ import {
   Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconDownload, IconEdit, IconSync, IconUpload } from '@arco-design/web-react/icon'
+import { IconDownload, IconEdit, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
@@ -13,6 +13,7 @@ import { useAuth } from '../../store/auth'
 import type { ExcelImportRow } from '../../utils/excelWorkbook'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { normalizeImportDate } from '../importDate'
+import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
 import './OutsourceListPage.css'
 
 type Item = ApiResponses['GET /outsource/items']['list'][number]
@@ -85,6 +86,7 @@ export default function OutsourceListPage() {
   const [error, setError] = useState(false)
   const [selected, setSelected] = useState<number[]>([])
   const [editing, setEditing] = useState<Item | null>(null)
+  const [history, setHistory] = useState<Item | null>(null)
   const [batchOpen, setBatchOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -242,7 +244,7 @@ export default function OutsourceListPage() {
       </Space>,
     },
     { title: '原始交期', width: 110, render: (_, item) => date(item.originalDueDate) },
-    { title: '最新交期', width: 110, render: (_, item) => date(item.latestDueDate) },
+    { title: '最新交期', width: 110, render: (_, item) => <LatestDueCell item={item} /> },
     { title: '数量', dataIndex: 'quantity', width: 70, align: 'center' },
     { title: '外发厂商', dataIndex: 'vendorName', width: 110, ellipsis: true },
     { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true },
@@ -257,11 +259,14 @@ export default function OutsourceListPage() {
         {item.closed && <Tag color="gray">已结案</Tag>}
       </Space>,
     },
-    ...(canManage ? [{
-      title: '操作', width: 70, align: 'center' as const, fixed: 'right' as const,
-      render: (_: unknown, item: Item) => <Button type="text" size="mini" disabled={item.closed} icon={<IconEdit />}
-        aria-label={`编辑工令 ${item.workOrderNo}`} onClick={() => setEditing(item)} />,
-    }] : []),
+    {
+      title: '操作', width: canManage ? 80 : 56, align: 'center', fixed: 'right',
+      render: (_, item) => <Space size={0}>
+        <Button type="text" size="mini" icon={<IconHistory />} aria-label={`工令 ${item.workOrderNo} 变更履历`} onClick={() => setHistory(item)} />
+        {canManage && <Button type="text" size="mini" disabled={item.closed} icon={<IconEdit />}
+          aria-label={`编辑工令 ${item.workOrderNo}`} onClick={() => setEditing(item)} />}
+      </Space>,
+    },
   ]
   const columns = rawColumns.map((column) => ({ ...column, onHeaderCell: columnHeaderProps }))
 
@@ -314,6 +319,7 @@ export default function OutsourceListPage() {
           current: page, pageSize, total, showTotal: true, sizeCanChange: true, sizeOptions: [20, 50, 100],
           onChange: (next, size) => { setPage(next); setPageSize(size) },
         }} />}
+    <ItemHistoryDrawer item={history} onClose={() => setHistory(null)} />
     <EditDialog item={editing} vendors={vendors} types={types} onClose={() => setEditing(null)}
       onSaved={async () => { setEditing(null); await load() }} />
     <BatchDialog visible={batchOpen} items={selectedItems} vendors={vendors} onClose={() => setBatchOpen(false)}

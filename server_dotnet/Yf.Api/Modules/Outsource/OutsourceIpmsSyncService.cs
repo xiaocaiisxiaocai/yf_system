@@ -131,7 +131,8 @@ public sealed class OutsourceIpmsSyncService(
                 {
                     processed++;
                     if (!byNo.TryGetValue(item.WorkOrderNo, out var order)) { missing++; continue; }
-                    var result = await ApplyAsync(context, item, order, now, ct);
+                    var result = await ApplyAsync(context, item, order, now,
+                        trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, ct);
                     if (result.Changed) changed++;
                     if (result.Closed) closed++;
                 }
@@ -168,15 +169,24 @@ public sealed class OutsourceIpmsSyncService(
 
     private sealed record ItemResult(bool Changed, bool Closed);
 
-    private static async Task<ItemResult> ApplyAsync(YfDbContext context, OutsourceItem item, IpmsWorkOrder order, DateTime now, CancellationToken ct)
+    private static async Task<ItemResult> ApplyAsync(YfDbContext context, OutsourceItem item, IpmsWorkOrder order, DateTime now,
+        string source, ulong? actorId, CancellationToken ct)
     {
         var next = new OutsourceItem();
         OutsourceItemService.ApplyIpms(next, order, now);
-        var changed = next.Customer != item.Customer || next.MachineModel != item.MachineModel
-            || next.MechanicalSection != item.MechanicalSection || next.MechanicalOwner != item.MechanicalOwner
-            || next.ElectricalOwner != item.ElectricalOwner || next.WorkOrderIssuedOn != item.WorkOrderIssuedOn
-            || next.BomOn != item.BomOn || next.DrawingReleasedOn != item.DrawingReleasedOn || next.TypeCode != item.TypeCode
-            || next.Quantity != item.Quantity || next.LatestDueDate != item.LatestDueDate;
+        var changes = AuditChange.OnlyChanged(
+            new AuditChange("customer", "", item.Customer, next.Customer),
+            new AuditChange("machineModel", "", item.MachineModel, next.MachineModel),
+            new AuditChange("mechanicalSection", "", item.MechanicalSection, next.MechanicalSection),
+            new AuditChange("mechanicalOwner", "", item.MechanicalOwner, next.MechanicalOwner),
+            new AuditChange("electricalOwner", "", item.ElectricalOwner, next.ElectricalOwner),
+            new AuditChange("workOrderIssuedOn", "", item.WorkOrderIssuedOn, next.WorkOrderIssuedOn),
+            new AuditChange("bomOn", "", item.BomOn, next.BomOn),
+            new AuditChange("drawingReleasedOn", "", item.DrawingReleasedOn, next.DrawingReleasedOn),
+            new AuditChange("typeCode", "", item.TypeCode, next.TypeCode),
+            new AuditChange("quantity", "", item.Quantity, next.Quantity),
+            new AuditChange("latestDueDate", "", item.LatestDueDate, next.LatestDueDate));
+        var changed = changes.Length > 0;
         var originalDue = item.OriginalDueDate ?? next.LatestDueDate;
         DateTime? closedAt = order.Closed ? now : null;
 
@@ -204,6 +214,11 @@ public sealed class OutsourceIpmsSyncService(
             updated = await row.ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.IpmsSyncedAt, now).SetProperty(x => x.OriginalDueDate, originalDue)
                 .SetProperty(x => x.ClosedAt, closedAt).SetProperty(x => x.UpdatedAt, x => x.UpdatedAt), ct);
+        }
+        if (updated > 0 && changed)
+        {
+            OutsourceHistory.Add(context, item.Id, changes, source, actorId);
+            await context.SaveChangesAsync(ct);
         }
         await transaction.CommitAsync(ct);
         return updated == 0 ? new(false, false) : new(changed, order.Closed);

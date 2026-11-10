@@ -908,6 +908,61 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItemChange", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong?>("ActorUserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("actor_user_id");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("changed_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<string>("Field")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("field");
+
+                    b.Property<ulong>("ItemId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("item_id");
+
+                    b.Property<string>("NewValue")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("new_value");
+
+                    b.Property<string>("OldValue")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("old_value");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("source");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ItemId", "Id")
+                        .HasDatabaseName("idx_outsource_item_changes_item");
+
+                    b.ToTable("outsource_item_changes", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceSyncState", b =>
                 {
                     b.Property<byte>("Id")
@@ -4332,6 +4387,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_outsource_items_vendor");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItemChange", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceItem", null)
+                        .WithMany()
+                        .HasForeignKey("ItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_item_changes_item");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceTypeVendor", b =>

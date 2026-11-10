@@ -103,6 +103,14 @@ public sealed class OutsourceSyncTests
         Assert.NotEqual(Row(before, "A1").UpdatedAt, a.UpdatedAt);
         Assert.DoesNotContain((await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List, x => x.WorkOrderNo == "C1");
 
+        // Each changed IPMS field is kept in the item's history with its source and the person who synced.
+        var dueHistory = Assert.Single(await items.ChangesAsync(viewer, a.Id, ct));
+        Assert.Equal(("latestDueDate", "最新交期", "2026-12-31", "2027-01-15", "IPMS_MANUAL", "采购"),
+            (dueHistory.Field, dueHistory.Label, dueHistory.OldValue, dueHistory.NewValue, dueHistory.Source, dueHistory.ActorName));
+        var quantityHistory = Assert.Single(await items.ChangesAsync(viewer, b.Id, ct));
+        Assert.Equal(("quantity", "1", "2"), (quantityHistory.Field, quantityHistory.OldValue, quantityHistory.NewValue));
+        Assert.Empty(await items.ChangesAsync(viewer, e.Id, ct));
+
         // Closed items are no longer synchronized; a second run changes nothing.
         var again = await sync.SyncNowAsync(buyer, new(null), ct);
         Assert.Equal((4, 0, 0, 1), (again.LastProcessed, again.LastChanged, again.LastClosed, again.LastMissing));

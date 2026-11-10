@@ -324,6 +324,23 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         return items;
     }
 
+    // ---- change history ----
+
+    /// <summary>All recorded changes of one item, newest first.</summary>
+    public async Task<OutsourceItemChangeResponse[]> ChangesAsync(CurrentUser actor, ulong id, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await AuthorizeReadAsync(context, actor, OutsourcePermissions.View, ct);
+        if (!await context.OutsourceItems.AnyAsync(x => x.Id == id, ct)) throw ApiException.NotFound("外协记录不存在或已被删除");
+        var rows = await context.OutsourceItemChanges.AsNoTracking().Where(x => x.ItemId == id)
+            .OrderByDescending(x => x.Id)
+            .GroupJoin(context.Users, change => change.ActorUserId, user => (ulong?)user.Id, (change, users) => new { change, users })
+            .SelectMany(x => x.users.DefaultIfEmpty(), (x, user) => new { x.change, Name = user == null ? null : user.RealName })
+            .ToArrayAsync(ct);
+        return rows.Select(x => new OutsourceItemChangeResponse(x.change.Id, x.change.Field, OutsourceHistory.Label(x.change.Field),
+            x.change.OldValue, x.change.NewValue, x.change.Source, x.Name, DateTime.SpecifyKind(x.change.ChangedAt, DateTimeKind.Utc))).ToArray();
+    }
+
     // ---- edits and deletion ----
 
     public async Task<OutsourceItemResponse> UpdateAsync(CurrentUser actor, ulong id, OutsourceItemUpdate request, CancellationToken ct)
@@ -438,6 +455,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor)
                 .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status)
                 .SetProperty(x => x.SendStatus, sendStatus), ct);
+            OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
+            await context.SaveChangesAsync(ct);
             await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
                 "OUTSOURCE_ITEM_UPDATE", "outsource_item", before.Id, new
                 {
@@ -586,5 +605,41 @@ internal static class OutsourceWorkbook
             item.Status switch { OutsourceItemStatuses.Paused => XlsxFill.Red, OutsourceItemStatuses.Cancelled => XlsxFill.Gray, _ => XlsxFill.None },
             highlighted?.GetValueOrDefault(item.Id))).ToArray();
         return SimpleXlsx.Write("外协清单", Headers, rows, Widths);
+    }
+}
+
+/// <summary>Field labels and writers for <c>outsource_item_changes</c>.</summary>
+internal static class OutsourceHistory
+{
+    internal const string Edit = "EDIT";
+    internal const string IpmsScheduled = "IPMS_SCHEDULED";
+    internal const string IpmsManual = "IPMS_MANUAL";
+    private const int MaximumValueLength = 500;
+
+    private static readonly Dictionary<string, string> Labels = new(StringComparer.Ordinal)
+    {
+        ["outsourceDate"] = "外发日期", ["vendor"] = "外发厂商", ["remark"] = "备注", ["status"] = "状态",
+        ["customer"] = "客户", ["machineModel"] = "机型", ["mechanicalSection"] = "机构课别",
+        ["mechanicalOwner"] = "机构执行人", ["electricalOwner"] = "电控执行人", ["workOrderIssuedOn"] = "工令下发",
+        ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
+        ["latestDueDate"] = "最新交期",
+    };
+
+    internal static string Label(string field) => Labels.GetValueOrDefault(field, field);
+
+    internal static void Add(YfDbContext context, ulong itemId, IEnumerable<AuditChange> changes, string source, ulong? actorUserId)
+    {
+        static string? Value(object? value) => value switch
+        {
+            null => null,
+            DateOnly date => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
+            _ => value.ToString() is { Length: > MaximumValueLength } text ? text[..MaximumValueLength] : value.ToString(),
+        };
+        context.OutsourceItemChanges.AddRange(changes.Select(change => new OutsourceItemChange
+        {
+            ItemId = itemId, Field = change.Field, OldValue = Value(change.Before), NewValue = Value(change.After),
+            Source = source, ActorUserId = actorUserId,
+        }));
     }
 }

@@ -137,6 +137,10 @@ public sealed class OutsourceItemTests
         Assert.Equal("工令 21089901：OEMA【进料+制造】 不可配元控", mismatch.Message);
         var paused = await service.UpdateAsync(buyer, first.Id, new("2026-11-08", dingya.Id, " 加急 ", "PAUSED", first.UpdatedAt), ct);
         Assert.Equal((new DateOnly(2026, 11, 8), "加急", "PAUSED", "UNSENT"), (paused.OutsourceDate, paused.Remark, paused.Status, paused.SendStatus));
+        var edits = await service.ChangesAsync(viewer, first.Id, ct);
+        Assert.Equal(["outsourceDate", "remark", "status"], edits.Select(x => x.Field).Order(StringComparer.Ordinal));
+        Assert.All(edits, x => Assert.Equal(("EDIT", "采购乙"), (x.Source, x.ActorName)));
+        Assert.Equal(("正常", "暂停"), edits.Where(x => x.Field == "status").Select(x => (x.OldValue, x.NewValue)).Single());
         await database.ExecuteAsync($"UPDATE outsource_items SET send_status='SENT' WHERE id={first.Id}", ct);
         var sent = (await service.ListAsync(buyer, Query(vendorId: dingya.Id), 1, 20, 0, ct)).List.Single();
         var noticed = await service.UpdateAsync(buyer, sent.Id, new("2026-11-08", dingya.Id, "", "PAUSED", sent.UpdatedAt), ct);

@@ -60,3 +60,6 @@ public sealed record OutsourceSyncRequest(ulong[]? ItemIds);
 public sealed record OutsourceSyncStatusResponse(
     string SyncTime, bool IpmsConfigured, bool Running, DateTime? LastStartedAt, DateTime? LastFinishedAt,
     DateTime? LastSuccessAt, string? LastError, string? LastTrigger, int LastProcessed, int LastChanged, int LastClosed, int LastMissing);
+
+public sealed record OutsourceItemChangeResponse(
+    ulong Id, string Field, string Label, string? OldValue, string? NewValue, string Source, string? ActorName, DateTime ChangedAt);

@@ -79,6 +79,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OutsourceDefaultCc> OutsourceDefaultCc => Set<OutsourceDefaultCc>();
     public DbSet<OutsourceItem> OutsourceItems => Set<OutsourceItem>();
     public DbSet<OutsourceSyncState> OutsourceSyncState => Set<OutsourceSyncState>();
+    public DbSet<OutsourceItemChange> OutsourceItemChanges => Set<OutsourceItemChange>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
