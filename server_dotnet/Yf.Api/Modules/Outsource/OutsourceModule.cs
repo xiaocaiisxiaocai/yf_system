@@ -9,7 +9,8 @@ public static class OutsourceModule
 {
     public static IServiceCollection AddOutsourceModule(this IServiceCollection services) => services
         .AddSingleton<IIpmsClient>(provider => IpmsClientFactory.Create(provider.GetRequiredService<AppOptions>()))
-        .AddSingleton<OutsourceSettingsService>();
+        .AddSingleton<OutsourceSettingsService>()
+        .AddSingleton<OutsourceItemService>();
 
     public static IEndpointRouteBuilder MapOutsourceModule(this IEndpointRouteBuilder endpoints)
     {
@@ -46,6 +47,30 @@ public static class OutsourceModule
             s.SetDefaultCcAsync(AccessService.GetCurrent(c), r, ct));
         settings.MapGet("/cc-user-options", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.CcUserOptionsAsync(AccessService.GetCurrent(c), c.Request.Query["keyword"], ct));
+
+        var items = endpoints.MapGroup("/api/v1/outsource/items");
+        items.MapGet("", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+        {
+            var p = QueryValues.Page(c.Request);
+            return s.ListAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request), p.Page, p.Size, p.Offset, ct);
+        });
+        items.MapGet("/summary", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.SummaryAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request).IncludeClosed, ct));
+        items.MapGet("/export", async (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+        {
+            var export = await s.ExportAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request), ct);
+            return Results.File(export.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.FileName);
+        });
+        items.MapPost("/import/preview", (OutsourceImportRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.PreviewImportAsync(AccessService.GetCurrent(c), r, ct));
+        items.MapPost("/import", (OutsourceImportRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.ImportAsync(AccessService.GetCurrent(c), r, ct)).Produces<AdminImportResponse>();
+        items.MapPut("/{id:long}", (ulong id, OutsourceItemUpdate r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
+        items.MapPut("/batch", (OutsourceBatchUpdate r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.BatchUpdateAsync(AccessService.GetCurrent(c), r, ct));
+        items.MapPost("/batch-delete", (OutsourceBatchDelete r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.BatchDeleteAsync(AccessService.GetCurrent(c), r, ct));
         return endpoints;
     }
 }

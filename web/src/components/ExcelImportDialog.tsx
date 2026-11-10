@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Alert, Button, Message, Modal, Space, Table, Typography } from '@arco-design/web-react'
 import { downloadExcelWorkbook, readExcelTable, type ExcelImportRow, type ExcelWorkbookSheet } from '../utils/excelWorkbook'
 
@@ -44,6 +44,10 @@ interface ExcelImportDialogProps<T> {
   commit: (rows: T[]) => Promise<ImportBatchOutcome>
   onImported?: (result: ImportBatchOutcome) => void
   onClose: () => void
+  /** Replaces the default account/vendor import notice. */
+  notice?: ReactNode
+  /** Title of the row key column. */
+  keyTitle?: string
 }
 
 const STATUS_LABEL: Record<ImportPreviewStatus, string> = {
@@ -56,7 +60,7 @@ const STATUS_LABEL: Record<ImportPreviewStatus, string> = {
 
 export default function ExcelImportDialog<T>({
   visible, title, templateName, requiredHeaders, optionalHeaders = [], headerAliases, templateSheets = [], maxRows,
-  prepare, commit, onImported, onClose,
+  prepare, commit, onImported, onClose, notice, keyTitle = '账号 / 厂商',
 }: ExcelImportDialogProps<T>) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState('')
@@ -169,7 +173,7 @@ export default function ExcelImportDialog<T>({
         onChange={(event) => { void selectFile(event.target.files?.[0]) }}
       />
       <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-        仅新增记录；已存在或文件内重复的账号/厂商会跳过。账号初始密码仅用于本次导入，导出文件不含密码；新账号首次登录须修改密码。最多 {maxRows} 行。
+        {notice ?? <>仅新增记录；已存在或文件内重复的账号/厂商会跳过。账号初始密码仅用于本次导入，导出文件不含密码；新账号首次登录须修改密码。最多 {maxRows} 行。</>}
       </Typography.Text>
       {previewError && <Alert type="error" content={previewError} style={{ marginBottom: 12 }} />}
       {prepared && (
@@ -188,7 +192,7 @@ export default function ExcelImportDialog<T>({
             scroll={{ y: 360, x: 640 }}
             columns={[
               { title: 'Excel 行', dataIndex: 'rowNumber', width: 72 },
-              { title: '账号 / 厂商', dataIndex: 'key', width: 180, ellipsis: true },
+              { title: keyTitle, dataIndex: 'key', width: 180, ellipsis: true },
               { title: '内容', dataIndex: 'detail', width: 200, ellipsis: true },
               { title: '结果', dataIndex: 'status', width: 90, render: (value: ImportPreviewStatus) => STATUS_LABEL[value] ?? value },
               { title: '说明', dataIndex: 'message', ellipsis: true },

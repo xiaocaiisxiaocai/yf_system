@@ -8,6 +8,7 @@ export const OUTSOURCE_PERMISSIONS = {
 
 /** First page the account can use in the outsourcing section, or null when it has none. */
 export function outsourceHome(permissions: readonly string[]): string | null {
+  if (permissions.includes(OUTSOURCE_PERMISSIONS.view)) return '/outsource/items'
   if (permissions.includes(OUTSOURCE_PERMISSIONS.settings)) return '/outsource/settings'
   return null
 }

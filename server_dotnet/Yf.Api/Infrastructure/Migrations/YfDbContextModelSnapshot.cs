@@ -767,6 +767,147 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItem", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateOnly?>("BomOn")
+                        .HasColumnType("date")
+                        .HasColumnName("bom_on");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("closed_at");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Customer")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("customer");
+
+                    b.Property<DateOnly?>("DrawingReleasedOn")
+                        .HasColumnType("date")
+                        .HasColumnName("drawing_released_on");
+
+                    b.Property<string>("ElectricalOwner")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("electrical_owner");
+
+                    b.Property<DateTime?>("IpmsSyncedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("ipms_synced_at");
+
+                    b.Property<DateOnly?>("LatestDueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("latest_due_date");
+
+                    b.Property<string>("MachineModel")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("machine_model");
+
+                    b.Property<string>("MechanicalOwner")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("mechanical_owner");
+
+                    b.Property<string>("MechanicalSection")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("mechanical_section");
+
+                    b.Property<DateOnly?>("OriginalDueDate")
+                        .HasColumnType("date")
+                        .HasColumnName("original_due_date");
+
+                    b.Property<DateOnly>("OutsourceDate")
+                        .HasColumnType("date")
+                        .HasColumnName("outsource_date");
+
+                    b.Property<int?>("Quantity")
+                        .HasColumnType("int")
+                        .HasColumnName("quantity");
+
+                    b.Property<string>("Remark")
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("remark");
+
+                    b.Property<string>("SendStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("UNSENT")
+                        .HasColumnName("send_status");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("NORMAL")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TypeCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("type_code");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
+
+                    b.Property<ulong>("VendorId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("vendor_id");
+
+                    b.Property<DateOnly?>("WorkOrderIssuedOn")
+                        .HasColumnType("date")
+                        .HasColumnName("work_order_issued_on");
+
+                    b.Property<string>("WorkOrderNo")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("work_order_no");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkOrderNo")
+                        .IsUnique()
+                        .HasDatabaseName("uk_outsource_items_work_order");
+
+                    b.HasIndex("ClosedAt", "OutsourceDate", "Id")
+                        .HasDatabaseName("idx_outsource_items_open_date");
+
+                    b.HasIndex("VendorId", "ClosedAt", "OutsourceDate")
+                        .HasDatabaseName("idx_outsource_items_vendor_open");
+
+                    b.ToTable("outsource_items", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceType", b =>
                 {
                     b.Property<ulong>("Id")
@@ -4106,6 +4247,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_outsource_default_cc_user");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItem", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceVendor", null)
+                        .WithMany()
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_items_vendor");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceTypeVendor", b =>

@@ -18,3 +18,36 @@ public sealed record OutsourceVendorResponse(
 public sealed record OutsourceTypeResponse(ulong Id, string Code, string Name, string Status, int SortNo, ulong[] VendorIds);
 
 public sealed record OutsourceCcUserResponse(ulong UserId, string EmployeeNo, string RealName, string Email, string Status);
+
+public sealed record OutsourceImportRow(int RowNumber, string? OutsourceDate, string? WorkOrderNo, string? VendorName);
+
+public sealed record OutsourceImportRequest(OutsourceImportRow[]? Rows);
+
+/// <summary>Preview of one import row: READY rows carry the IPMS snapshot that will be stored.</summary>
+public sealed record OutsourceImportPreviewRow(
+    int RowNumber, string WorkOrderNo, string Status, string? Message, string? VendorName, string? OutsourceDate,
+    string? Customer, string? MachineModel, string? TypeLabel, int? Quantity, DateOnly? LatestDueDate);
+
+public sealed record OutsourceImportPreviewResponse(int Ready, int Skipped, int Invalid, OutsourceImportPreviewRow[] Rows);
+
+public sealed record OutsourceItemResponse(
+    ulong Id, string WorkOrderNo, DateOnly OutsourceDate, ulong VendorId, string VendorName,
+    string? Customer, string? MachineModel, string? MechanicalSection, string? MechanicalOwner, string? ElectricalOwner,
+    DateOnly? WorkOrderIssuedOn, DateOnly? BomOn, DateOnly? DrawingReleasedOn,
+    string? TypeCode, ulong? TypeId, string? TypeLabel, int? Quantity, DateOnly? OriginalDueDate, DateOnly? LatestDueDate,
+    string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt);
+
+public sealed record OutsourceVendorCount(ulong VendorId, int Count);
+
+public sealed record OutsourceItemSummaryResponse(int Total, OutsourceVendorCount[] Vendors);
+
+public sealed record OutsourceItemUpdate(string? OutsourceDate, ulong? VendorId, string? Remark, string? Status, DateTime? ExpectedUpdatedAt);
+
+public sealed record OutsourceItemVersion(ulong Id, DateTime ExpectedUpdatedAt);
+
+/// <summary>Batch edit: only the fields that are present change; an empty remark clears it.</summary>
+public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string? OutsourceDate, ulong? VendorId, string? Remark, string? Status);
+
+public sealed record OutsourceBatchDelete(OutsourceItemVersion[]? Items);
+
+public sealed record OutsourceBatchResponse(OutsourceItemResponse[] Items);

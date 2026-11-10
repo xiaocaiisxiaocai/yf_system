@@ -937,6 +937,22 @@ export interface OemUploadedFileResponse {
   createdAt: string
 }
 
+export interface OutsourceBatchDelete {
+  items?: Array<OutsourceItemVersion> | null
+}
+
+export interface OutsourceBatchResponse {
+  items: Array<OutsourceItemResponse>
+}
+
+export interface OutsourceBatchUpdate {
+  items?: Array<OutsourceItemVersion> | null
+  outsourceDate?: string | null
+  vendorId?: number | null
+  remark?: string | null
+  status?: string | null
+}
+
 export interface OutsourceCcUserResponse {
   userId: number
   employeeNo: string
@@ -964,6 +980,85 @@ export interface OutsourceDefaultCcRequest {
   userIds?: Array<number> | null
 }
 
+export interface OutsourceImportPreviewResponse {
+  ready: number
+  skipped: number
+  invalid: number
+  rows: Array<OutsourceImportPreviewRow>
+}
+
+export interface OutsourceImportPreviewRow {
+  rowNumber: number
+  workOrderNo: string
+  status: string
+  message: string | null
+  vendorName: string | null
+  outsourceDate: string | null
+  customer: string | null
+  machineModel: string | null
+  typeLabel: string | null
+  quantity: number | null
+  latestDueDate: string | null
+}
+
+export interface OutsourceImportRequest {
+  rows?: Array<OutsourceImportRow> | null
+}
+
+export interface OutsourceImportRow {
+  rowNumber: number
+  outsourceDate?: string | null
+  workOrderNo?: string | null
+  vendorName?: string | null
+}
+
+export interface OutsourceItemResponse {
+  id: number
+  workOrderNo: string
+  outsourceDate: string
+  vendorId: number
+  vendorName: string
+  customer: string | null
+  machineModel: string | null
+  mechanicalSection: string | null
+  mechanicalOwner: string | null
+  electricalOwner: string | null
+  workOrderIssuedOn: string | null
+  bomOn: string | null
+  drawingReleasedOn: string | null
+  typeCode: string | null
+  typeId: number | null
+  typeLabel: string | null
+  quantity: number | null
+  originalDueDate: string | null
+  latestDueDate: string | null
+  remark: string | null
+  status: string
+  sendStatus: string
+  matchState: string
+  closed: boolean
+  ipmsSyncedAt: string | null
+  updatedAt: string
+}
+
+export interface OutsourceItemSummaryResponse {
+  total: number
+  vendors: Array<OutsourceVendorCount>
+}
+
+export interface OutsourceItemUpdate {
+  outsourceDate?: string | null
+  vendorId?: number | null
+  remark?: string | null
+  status?: string | null
+  expectedUpdatedAt?: string | null
+}
+
+export interface OutsourceItemVersion {
+  id: number
+  expectedUpdatedAt: string
+}
+
 export interface OutsourceTypeResponse {
   id: number
   code: string
@@ -981,6 +1076,11 @@ export interface OutsourceTypeUpsert {
 
 export interface OutsourceTypeVendorsRequest {
   vendorIds?: Array<number> | null
+}
+
+export interface OutsourceVendorCount {
+  vendorId: number
+  count: number
 }
 
 export interface OutsourceVendorResponse {
@@ -1042,6 +1142,13 @@ export interface PageResponseOfMailAuditEntry {
 
 export interface PageResponseOfMessageResponse {
   list: Array<MessageResponse>
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface PageResponseOfOutsourceItemResponse {
+  list: Array<OutsourceItemResponse>
   total: number
   page: number
   pageSize: number
@@ -1784,6 +1891,14 @@ export interface ApiResponses {
   "GET /oem/uploads/{sessionId}": OemUploadSessionResponse
   "PUT /oem/uploads/{sessionId}/chunks/{index}": EmptyResponse
   "POST /oem/uploads/{sessionId}/merge": OemUploadedFileResponse
+  "GET /outsource/items": PageResponseOfOutsourceItemResponse
+  "PUT /outsource/items/batch": OutsourceBatchResponse
+  "POST /outsource/items/batch-delete": EmptyResponse
+  "GET /outsource/items/export": Blob
+  "POST /outsource/items/import": AdminImportResponse
+  "POST /outsource/items/import/preview": OutsourceImportPreviewResponse
+  "GET /outsource/items/summary": OutsourceItemSummaryResponse
+  "PUT /outsource/items/{id}": OutsourceItemResponse
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/contacts/{id}": OutsourceContactResponse
   "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse

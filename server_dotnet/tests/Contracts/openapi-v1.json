@@ -8239,6 +8239,292 @@
           }
         }
       }
+    },
+    "/api/v1/outsource/items": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResponseOfOutsourceItemResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/summary": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceItemSummaryResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/export": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/import/preview": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceImportPreviewResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/{id}": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceItemUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceItemResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/batch": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceBatchUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceBatchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/batch-delete": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceBatchDelete"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12029,6 +12315,74 @@
         },
         "additionalProperties": false
       },
+      "OutsourceBatchDelete": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceItemVersion"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceBatchResponse": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceItemResponse"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceBatchUpdate": {
+        "required": [
+          "items",
+          "outsourceDate",
+          "remark",
+          "status",
+          "vendorId"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceItemVersion"
+            },
+            "nullable": true
+          },
+          "outsourceDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "vendorId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "remark": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "OutsourceCcUserResponse": {
         "required": [
           "email",
@@ -12135,6 +12489,356 @@
         },
         "additionalProperties": false
       },
+      "OutsourceImportPreviewResponse": {
+        "required": [
+          "invalid",
+          "ready",
+          "rows",
+          "skipped"
+        ],
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "invalid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceImportPreviewRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceImportPreviewRow": {
+        "required": [
+          "customer",
+          "latestDueDate",
+          "machineModel",
+          "message",
+          "outsourceDate",
+          "quantity",
+          "rowNumber",
+          "status",
+          "typeLabel",
+          "vendorName",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workOrderNo": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "vendorName": {
+            "type": "string",
+            "nullable": true
+          },
+          "outsourceDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "customer": {
+            "type": "string",
+            "nullable": true
+          },
+          "machineModel": {
+            "type": "string",
+            "nullable": true
+          },
+          "typeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "latestDueDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceImportRow"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceImportRow": {
+        "required": [
+          "outsourceDate",
+          "rowNumber",
+          "vendorName",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "outsourceDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "workOrderNo": {
+            "type": "string",
+            "nullable": true
+          },
+          "vendorName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceItemResponse": {
+        "required": [
+          "bomOn",
+          "closed",
+          "customer",
+          "drawingReleasedOn",
+          "electricalOwner",
+          "id",
+          "ipmsSyncedAt",
+          "latestDueDate",
+          "machineModel",
+          "matchState",
+          "mechanicalOwner",
+          "mechanicalSection",
+          "originalDueDate",
+          "outsourceDate",
+          "quantity",
+          "remark",
+          "sendStatus",
+          "status",
+          "typeCode",
+          "typeId",
+          "typeLabel",
+          "updatedAt",
+          "vendorId",
+          "vendorName",
+          "workOrderIssuedOn",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "workOrderNo": {
+            "type": "string"
+          },
+          "outsourceDate": {
+            "type": "string",
+            "format": "date"
+          },
+          "vendorId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "vendorName": {
+            "type": "string"
+          },
+          "customer": {
+            "type": "string",
+            "nullable": true
+          },
+          "machineModel": {
+            "type": "string",
+            "nullable": true
+          },
+          "mechanicalSection": {
+            "type": "string",
+            "nullable": true
+          },
+          "mechanicalOwner": {
+            "type": "string",
+            "nullable": true
+          },
+          "electricalOwner": {
+            "type": "string",
+            "nullable": true
+          },
+          "workOrderIssuedOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "bomOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "drawingReleasedOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "typeCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "typeId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "typeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "originalDueDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "latestDueDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "remark": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "sendStatus": {
+            "type": "string"
+          },
+          "matchState": {
+            "type": "string"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "ipmsSyncedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceItemSummaryResponse": {
+        "required": [
+          "total",
+          "vendors"
+        ],
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "vendors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceVendorCount"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceItemUpdate": {
+        "required": [
+          "expectedUpdatedAt",
+          "outsourceDate",
+          "remark",
+          "status",
+          "vendorId"
+        ],
+        "type": "object",
+        "properties": {
+          "outsourceDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "vendorId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "remark": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceItemVersion": {
+        "required": [
+          "expectedUpdatedAt",
+          "id"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
       "OutsourceTypeResponse": {
         "required": [
           "code",
@@ -12210,6 +12914,24 @@
               "format": "int64"
             },
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceVendorCount": {
+        "required": [
+          "count",
+          "vendorId"
+        ],
+        "type": "object",
+        "properties": {
+          "vendorId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
@@ -12469,6 +13191,36 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MessageResponse"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageResponseOfOutsourceItemResponse": {
+        "required": [
+          "list",
+          "page",
+          "pageSize",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceItemResponse"
             }
           },
           "total": {

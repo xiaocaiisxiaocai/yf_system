@@ -1,0 +1,44 @@
+.outsource-list-page {
+  --page-table-scroll-y: max(280px, calc(100dvh - 372px));
+}
+
+.outsource-list-tabs {
+  flex: 0 0 auto;
+  margin-bottom: 12px;
+}
+
+.outsource-list-tabs .arco-tabs-header {
+  margin: 0;
+}
+
+.outsource-list-tabs .arco-tabs-content {
+  display: none;
+}
+
+.outsource-list-toolbar {
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+
+/* 状态底色与邮件、Excel 一致：暂停红、取消灰。 */
+.outsource-table .outsource-row--paused > .arco-table-td,
+.outsource-table .outsource-row--paused > .arco-table-td.arco-table-col-fixed-left,
+.outsource-table .outsource-row--paused > .arco-table-td.arco-table-col-fixed-right {
+  background-color: #ffc7ce;
+}
+
+.outsource-table .outsource-row--cancelled > .arco-table-td,
+.outsource-table .outsource-row--cancelled > .arco-table-td.arco-table-col-fixed-left,
+.outsource-table .outsource-row--cancelled > .arco-table-td.arco-table-col-fixed-right {
+  background-color: #d9d9d9;
+}
+
+@media (max-width: 720px) {
+  .outsource-list-page {
+    --page-table-scroll-y: max(280px, calc(100dvh - 460px));
+  }
+
+  .outsource-list-toolbar > .arco-space {
+    width: 100%;
+  }
+}

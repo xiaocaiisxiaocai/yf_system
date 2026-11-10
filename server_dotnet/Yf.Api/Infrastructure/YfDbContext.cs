@@ -77,6 +77,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OutsourceType> OutsourceTypes => Set<OutsourceType>();
     public DbSet<OutsourceTypeVendor> OutsourceTypeVendors => Set<OutsourceTypeVendor>();
     public DbSet<OutsourceDefaultCc> OutsourceDefaultCc => Set<OutsourceDefaultCc>();
+    public DbSet<OutsourceItem> OutsourceItems => Set<OutsourceItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

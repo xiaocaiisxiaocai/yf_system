@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261110072141_AddOutsourceSettings";
+    private const string Latest = "20261110101732_AddOutsourceItems";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -80,7 +80,8 @@ public sealed class MigrationRoundTripTests
         // + AddProjectMaterialRound (Down drops projects.material_file_floor)
         // + AddOemCompanyContacts (Down drops the OEM additional-contact directory)
         // + RemoveProjectGroups (Down rebuilds one main project per project, not the retired project:view_all grant)
-        // + AddOutsourceSettings (Down drops the outsourcing tables, keeping the outsource permission codes and grants).
+        // + AddOutsourceSettings (Down drops the outsourcing tables, keeping the outsource permission codes and grants)
+        // + AddOutsourceItems (Down drops outsource_items).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);

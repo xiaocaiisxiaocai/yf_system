@@ -1,5 +1,5 @@
 import { Button, Result } from '@arco-design/web-react'
-import { IconSettings } from '@arco-design/web-react/icon'
+import { IconList, IconSettings } from '@arco-design/web-react/icon'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
@@ -19,6 +19,7 @@ export default function OutsourceLayout() {
   const navigate = useNavigate()
   if (user?.userType !== 'INTERNAL') return <Result status="403" title="外协清单仅供公司员工使用" />
   const menu: MenuEntry[] = [
+    { path: '/outsource/items', label: '外协清单', icon: <IconList />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view) },
     { path: '/outsource/settings', label: '设定', icon: <IconSettings />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.settings), admin: true },
   ]
   if (!menu.some((item) => item.visible)) {

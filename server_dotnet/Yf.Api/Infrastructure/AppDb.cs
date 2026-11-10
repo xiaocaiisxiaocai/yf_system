@@ -66,6 +66,7 @@ public sealed class ApiException(int status, int code, string message) : Excepti
     public static ApiException Forbidden(string message = "无操作权限") => new(403, 40301, message);
     public static ApiException OutOfScope(string message = "无权访问该数据") => new(403, 40302, message);
     public static ApiException NotFound(string message = "资源不存在") => new(404, 40401, message);
+    public static ApiException Unavailable(string message) => new(503, 50301, message);
     public static ApiException Conflict(string message) => new(409, 40901, message);
     /// <summary>A database lock wait timed out or a deadlock victim was rolled back; the request may simply be retried.</summary>
     public static ApiException Busy(string message = "系统繁忙，数据正被其他操作占用，请稍后重试") => new(409, 40902, message);
