@@ -167,7 +167,7 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
       {canEdit && <Button size="small" onClick={() => setEditOpen(true)}>编辑</Button>}
       {canTransfer && <Button size="small" onClick={openTransfer}>变更负责人</Button>}
       {canCopy && <Button size="small" disabled={!copyJobs.ready && !copyOutcomeUnknown} onClick={openCopy}>复制</Button>}
-      {showCopyJobs && <Button size="small" type="text" onClick={() => setCopyJobsOpen(true)}>复制任务</Button>}
+      {showCopyJobs && <Button size="small" onClick={() => setCopyJobsOpen(true)}>复制任务</Button>}
       {project.canDelete && (
         <Popconfirm title={`确认删除项目“${project.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={remove}>
           <Button size="small" status="danger">删除</Button>

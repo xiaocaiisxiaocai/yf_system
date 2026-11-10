@@ -184,7 +184,7 @@ async function preview(page, name, kind, label) {
           await choose(creatorPage, modal, '选择 Robot 类型', robotTypes[0].name);
           await choose(creatorPage, modal, '选择 Robot 料号', f.robotParts[key].partNumber);
           await waitForFieldValue(
-            modal.locator('.arco-form-item').filter({ hasText: 'Robot 型号（自动带出）' }).locator('textarea'),
+            modal.locator('.arco-form-item').filter({ hasText: 'Robot 型号' }).locator('textarea'),
             f.robotParts[key].model);
           await choose(creatorPage, modal, '选择优先级', priorities[0].name);
           const date = modal.getByPlaceholder('选择需求完成时间', { exact: true });

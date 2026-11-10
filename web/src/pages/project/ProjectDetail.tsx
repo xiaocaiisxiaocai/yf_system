@@ -9,6 +9,7 @@ import {
   type ProjectCopyFileMapping,
   type ProjectCopyHistory,
   type ProjectCopySummary,
+  MATERIAL_REVIEW,
   PROJECT_STATUS,
   fmtSize,
   fmtTime,
@@ -426,6 +427,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
       </div>
     )
 
+  const materialReview = project.status === 'IN_PROGRESS' ? project.materialReviewStatus ?? null : null
+  const materialTag = materialReview ? MATERIAL_REVIEW[materialReview] : undefined
+  const materialReturnReason = materialReview === 'RETURNED' ? project.materialReviewReason || null : null
   const responsibleLabel = project.responsibleUserName
     ? `${project.responsibleUserName}${project.responsibleUserEmployeeNo ? `（${project.responsibleUserEmployeeNo}）` : ''}`
     : '-'
@@ -452,6 +456,12 @@ function ProjectDetailContent({ id }: { id?: string }) {
                   {PROJECT_STATUS[project.status]?.text || project.status}
                 </Tag>
                 <OverdueTag date={project.expectedCompletionDate} status={project.status} />
+                {materialTag && <Tag color={materialTag.color}>{materialTag.text}</Tag>}
+                {materialReturnReason && (
+                  <Typography.Text className="project-detail-return-reason" type="secondary" title={materialReturnReason}>
+                    退回原因：{materialReturnReason}
+                  </Typography.Text>
+                )}
               </div>
             </div>
           </div>
@@ -471,33 +481,50 @@ function ProjectDetailContent({ id }: { id?: string }) {
             />
           </div>
         </div>
-        <div className="project-detail-facts-row">
-          <dl className="project-group-summary-facts project-detail-facts">
-            <div><dt>Robot 厂商</dt><dd title={project.supplierName || undefined}>{detailText(project.supplierName)}</dd></div>
-            <div><dt>Robot 型号</dt><dd title={project.robotModelName || undefined}>{detailText(project.robotModelName)}</dd></div>
-            <div><dt>负责人</dt><dd title={typeof responsibleLabel === 'string' ? responsibleLabel : undefined}>{responsibleLabel}</dd></div>
-            <div><dt>工令号</dt><dd title={project.workOrderNos?.join('、') || undefined}>{detailText(project.workOrderNos?.join('、'))}</dd></div>
-            <div><dt>优先级</dt><dd>{detailText(project.priorityName)}</dd></div>
-            <div><dt>需求完成时间</dt><dd>{detailText(project.expectedCompletionDate)}</dd></div>
+        <div className="project-facts-row">
+          <dl className={`project-facts${metadataOpen ? ' is-expanded' : ''}`}>
+            {[
+              ['Robot 厂商', detailText(project.supplierName)],
+              ['Robot 型号', detailText(project.robotModelName)],
+              ['负责人', responsibleLabel],
+              ['工令号', detailText(project.workOrderNos?.join('、'))],
+              ['优先级', detailText(project.priorityName)],
+              ['需求完成时间', detailText(project.expectedCompletionDate)],
+              ...(metadataOpen ? [
+                ['机型', detailText(project.machineModel)],
+                ['Robot 类型', detailText(project.robotTypeName)],
+                ['Robot 料号', detailText(project.robotPartNumber)],
+                ['Robot 负责人', detailText(project.robotOwnerName)],
+                ['课别', detailText(project.sectionName)],
+                ['创建人', project.createdByName || '-'],
+              ] : []),
+            ].map(([label, value]) => (
+              <div key={String(label)}><dt>{label}</dt><dd title={typeof value === 'string' ? value : undefined}>{value}</dd></div>
+            ))}
+            {(metadataOpen || project.description) && (
+              <div className="project-facts-description">
+                <dt>项目说明</dt>
+                <dd>
+                  {project.description ? (
+                    <Typography.Ellipsis className="project-description" rows={2} expandable={{ single: true }}
+                      expandRender={(expanded) => (
+                        <Button type="text" size="mini" aria-expanded={expanded}
+                          aria-label={expanded ? '收起项目说明' : '展开项目说明'}>
+                          {expanded ? '收起' : '展开'}
+                        </Button>
+                      )}>
+                      {project.description}
+                    </Typography.Ellipsis>
+                  ) : '-'}
+                </dd>
+              </div>
+            )}
+            {metadataOpen && <div><dt>更新时间</dt><dd>{fmtTime(project.updatedAt)}</dd></div>}
           </dl>
-          <Button type="text" size="small" aria-expanded={metadataOpen} onClick={() => setMetadataOpen((open) => !open)}>
+          <Button className="project-facts-toggle" type="text" size="small" aria-expanded={metadataOpen} onClick={() => setMetadataOpen((open) => !open)}>
             {metadataOpen ? '收起资料' : '全部资料'}{metadataOpen ? <IconUp /> : <IconDown />}
           </Button>
         </div>
-        {metadataOpen && <dl className="project-group-extra-facts project-detail-extra-facts">
-          {/* 上方摘要已显示厂商、型号、负责人、工令号、优先级和需求完成时间，这里只列其余资料。 */}
-          {[
-            ['机型', detailText(project.machineModel)],
-            ['Robot 类型', detailText(project.robotTypeName)],
-            ['Robot 料号', detailText(project.robotPartNumber)],
-            ['Robot 负责人', detailText(project.robotOwnerName)],
-            ['课别', detailText(project.sectionName)],
-            ['创建人', project.createdByName || '-'],
-            ['更新时间', fmtTime(project.updatedAt)],
-          ].map(([label, value]) => (
-            <div key={label}><dt>{label}</dt><dd title={value}>{value}</dd></div>
-          ))}
-        </dl>}
         {project.hasCopyHistory && (
           <div className="project-copy-reference-bar">
             <div>
@@ -507,20 +534,6 @@ function ProjectDetailContent({ id }: { id?: string }) {
               </Typography.Text>
             </div>
             <Button size="small" onClick={() => setHistoryOpen(true)}>查看复制履历</Button>
-          </div>
-        )}
-        {project.description && (
-          <div className="project-summary-description">
-            <span className="project-summary-description-label">项目说明</span>
-            <Typography.Ellipsis className="project-description" rows={1} expandable={{ single: true }}
-              expandRender={(expanded) => (
-                <Button type="text" size="mini" aria-expanded={expanded}
-                  aria-label={expanded ? '收起项目说明' : '展开项目说明'}>
-                  {expanded ? '收起' : '展开'}
-                </Button>
-              )}>
-              {project.description}
-            </Typography.Ellipsis>
           </div>
         )}
       </Card>

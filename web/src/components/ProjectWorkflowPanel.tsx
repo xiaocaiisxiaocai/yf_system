@@ -250,7 +250,8 @@ export default function ProjectWorkflowPanel({
       refreshToken={uploadRefresh + localUploadRefresh}
     />
   )
-  if (compact && !showActions && !materialTag) return uploadHint
+  // 紧凑模式（项目详情标题栏）的资料状态和退回原因由标题显示，这里只放上传提示和操作按钮。
+  if (compact && !showActions) return uploadHint
 
   return (
     <div className={`project-workflow${compact ? ' project-workflow--compact' : ''}`} aria-label="项目流程操作">
@@ -259,8 +260,8 @@ export default function ProjectWorkflowPanel({
           {!compact && <Typography.Text type="secondary">项目流程</Typography.Text>}
           <div className="project-workflow-status">
             {!compact && <Tag color={status?.color}>{status?.text || project.status}</Tag>}
-            {materialTag && <Tag color={materialTag.color}>{materialTag.text}</Tag>}
-            {materialReview === 'RETURNED' && project.materialReviewReason && (
+            {!compact && materialTag && <Tag color={materialTag.color}>{materialTag.text}</Tag>}
+            {!compact && materialReview === 'RETURNED' && project.materialReviewReason && (
               <Typography.Text type="secondary" title={project.materialReviewReason}>退回原因：{project.materialReviewReason}</Typography.Text>
             )}
             {uploadHint}

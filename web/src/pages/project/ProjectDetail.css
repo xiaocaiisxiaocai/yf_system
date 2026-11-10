@@ -9,7 +9,7 @@
 .project-detail-page > .page-card { padding: 0; }
 .project-detail-summary-card { flex: 0 1 auto; max-height: min(46%, 380px); overflow: auto; }
 .project-detail-summary-card > .arco-card-body { padding: 14px 20px; }
-.project-detail-summary-card .detail-heading { margin-bottom: 8px; }
+.project-detail-summary-card .detail-heading { margin-bottom: 12px; }
 .project-detail-summary-card .detail-heading h1 { font-size: 18px; line-height: 28px; }
 .project-detail-heading { align-items: flex-start; gap: 16px; }
 .project-detail-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -19,12 +19,9 @@
 .project-detail-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .project-detail-name h1 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-detail-name .arco-tag { flex: 0 0 auto; }
-.project-detail-heading .detail-actions { flex: 0 1 auto; justify-content: flex-end; min-width: 0; }
+.project-detail-return-reason { min-width: 0; max-width: 360px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.project-detail-heading .detail-actions { flex: 0 1 auto; align-items: center; justify-content: flex-end; min-width: 0; }
 .project-detail-heading .project-workflow--compact { margin: 0; padding: 0; border: 0; background: transparent; }
-.project-detail-facts-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-/* 按内容长度分配：型号和负责人较长，工令号和优先级较短。 */
-.project-group-summary-facts.project-detail-facts { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.7fr) minmax(0, 1.3fr) minmax(0, 0.8fr) minmax(0, 0.6fr) minmax(0, 0.9fr); }
-.project-group-summary-facts.project-detail-facts > div:first-child { padding-left: 0; border-left: 0; }
 .project-detail-summary-card .project-metadata { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--app-border); }
 .project-detail-summary-card .arco-descriptions-item-label,
 .project-detail-summary-card .arco-descriptions-item-value { padding-bottom: 2px; }
@@ -82,10 +79,17 @@
 }
 .project-copy-reference-bar > div > * { min-width: 0; overflow-wrap: anywhere; }
 .project-copy-reference-bar > .arco-btn { flex: 0 0 auto; }
-.project-summary-description { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin-top: 2px; }
-.project-summary-description-label { flex: 0 0 auto; color: var(--color-text-3); }
-.project-summary-description .project-description { flex: 1; min-width: 0; }
 .project-workflow--compact .project-workflow-status { margin-top: 0; }
+/* 摘要资料：所有字段共用一套 6 列网格，展开后的资料与首行逐列对齐；项目说明占一整行（展开时让出最后一列给更新时间）。 */
+.project-facts-row { display: flex; align-items: flex-start; gap: 16px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--app-border); }
+.project-facts { display: grid; flex: 1 1 auto; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px 24px; min-width: 0; margin: 0; }
+.project-facts > div { min-width: 0; }
+.project-facts dt { color: var(--color-text-3); font-size: 12px; line-height: 18px; white-space: nowrap; }
+.project-facts dd { margin: 2px 0 0; overflow: hidden; color: var(--color-text-1); font-size: 14px; line-height: 22px; text-overflow: ellipsis; white-space: nowrap; }
+.project-facts > .project-facts-description { grid-column: 1 / -1; }
+.project-facts.is-expanded > .project-facts-description { grid-column: 1 / span 5; }
+.project-facts .project-facts-description dd { white-space: normal; }
+.project-facts-toggle { flex: 0 0 auto; }
 .project-detail-tabs-card { flex: 1 1 0; min-height: 0; }
 .project-detail-tabs-card > .arco-card-body,
 .project-detail-tabs-card .arco-tabs {
@@ -213,12 +217,16 @@
 }
 .file-reference-button:hover { background: rgb(var(--primary-2)); }
 .file-reference-tag { flex: 0 0 auto; margin: 0; }
+
 @media (max-width: 1100px) {
-  .project-group-summary-facts.project-detail-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 8px; }
-  .project-group-summary-facts.project-detail-facts > div:nth-child(3n + 1) { padding-left: 0; border-left: 0; }
+  .project-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .project-facts.is-expanded > .project-facts-description { grid-column: 1 / span 2; }
 }
 
 @media (max-width: 720px) {
+  .project-facts-row { flex-direction: column; gap: 8px; }
+  .project-facts { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .project-facts.is-expanded > .project-facts-description { grid-column: 1 / -1; }
   .project-detail-page { height: calc(100dvh - 76px); gap: 10px; }
   .project-detail-summary-card { max-height: 46%; }
   .project-detail-summary-card > .arco-card-body { padding: 12px; }
@@ -229,10 +237,6 @@
   .project-detail-summary-card .project-workflow--compact { gap: 8px; }
   /* 纵向排列时必须不换列并拉伸子项，标题才有确定宽度可省略；否则（wrap + flex-start）长标题按内容宽度撑出卡片被裁切。 */
   .project-detail-heading { flex-direction: column; flex-wrap: nowrap; align-items: stretch; }
-  .project-detail-facts-row { align-items: flex-start; flex-direction: column; }
-  .project-group-summary-facts.project-detail-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 8px; }
-  .project-group-summary-facts.project-detail-facts > div { padding-left: 12px; border-left: 1px solid var(--color-neutral-3); }
-  .project-group-summary-facts.project-detail-facts > div:nth-child(odd) { padding-left: 0; border-left: 0; }
   .message-panel > .message-composer { margin-bottom: 8px !important; }
   .message-panel .arco-textarea { max-height: 100px; }
   .project-copy-reference-bar,
@@ -428,12 +432,6 @@
   line-height: 22px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.project-detail-extra-facts {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--app-border);
 }
 
 .project-group-extra-info .project-summary-description {
