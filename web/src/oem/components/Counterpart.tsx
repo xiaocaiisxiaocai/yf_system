@@ -3,11 +3,11 @@ import type { Direction } from '../api/types'
 
 /**
  * Who a transfer is exchanged with, from the viewer's side: internal staff see the vendor, a vendor portal account
- * sees the company. Outgoing reads "→ 发给 X", incoming "← 来自 X".
+ * sees the company as "SAA". Outgoing reads "→ 发给 X", incoming "← 来自 X".
  */
 function counterpartOf(direction: Direction, companyName: string | null | undefined, realm: 'internal' | 'oem') {
   const outgoing = realm === 'internal' ? direction === 'INTERNAL_TO_OEM' : direction === 'OEM_TO_INTERNAL'
-  const name = realm === 'internal' ? companyName || '未知厂商' : '公司'
+  const name = realm === 'internal' ? companyName || '未知厂商' : 'SAA'
   return { outgoing, name, text: `${outgoing ? '发给' : '来自'} ${name}` }
 }
 

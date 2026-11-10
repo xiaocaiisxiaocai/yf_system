@@ -372,7 +372,7 @@ describe('FileTable DOM contracts', () => {
       expect(headers).not.toContain('上传时间')
       expect(view.container.querySelector('.file-table')).toHaveClass('file-table--narrow')
       expect(view.container.querySelector('.file-table')).not.toHaveClass('file-table--compact')
-      expect(tableRow('图纸.pdf').getByText('供→公')).toBeInTheDocument()
+      expect(tableRow('图纸.pdf').getByText('供→SAA')).toBeInTheDocument()
       expect(tableRow('图纸.pdf').getByRole('button', { name: '下载文件' })).toBeInTheDocument()
     } finally {
       vi.stubGlobal('ResizeObserver', original)

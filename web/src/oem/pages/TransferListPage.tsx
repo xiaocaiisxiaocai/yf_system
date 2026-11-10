@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table } from '@arco-design/web-react'
-import { IconUpload } from '@arco-design/web-react/icon'
+import { IconDownload, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import { oemRequestError } from '../api/requestError'
-import type { CompanyOption, TransferSummary } from '../api/types'
+import type { CompanyOption, TransferFile, TransferSummary } from '../api/types'
+import { downloadOemFile } from '../components/downloadOemFile'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
 import { LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
@@ -20,14 +21,15 @@ import EnterSubmit from '../../components/EnterSubmit'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
-  // 往来对象：内部看到厂商名称，厂商门户看到“公司”；箭头和动词表示发出或收到。
+  // 往来对象：内部看到厂商名称，厂商门户看到“SAA”；箭头和动词表示发出或收到。
   { key: 'counterpart', title: '往来厂商', defaultWidth: 240, minWidth: 140 },
   { key: 'sender', title: '发送人', defaultWidth: 104, minWidth: 88 },
   { key: 'status', title: '状态', defaultWidth: 180, minWidth: 140 },
   { key: 'files', title: '附件', defaultWidth: 120, minWidth: 96 },
   { key: 'sentAt', title: '提交时间', defaultWidth: 170, minWidth: 140 },
+  { key: 'actions', title: '操作', defaultWidth: 96, minWidth: 88, locked: true },
 ]
-// 厂商门户里往来对象总是“公司”，列名不写“厂商”。
+// 厂商门户里往来对象总是“SAA”，列名不写“厂商”。
 const PORTAL_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = OEM_TRANSFER_COLUMNS
   .map((spec) => spec.key === 'counterpart' ? { ...spec, title: '往来' } : spec)
 
@@ -333,6 +335,43 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   )
 }
 
+/** Lists a transfer's downloadable files when there is more than one, so each starts its own browser download. */
+function DownloadPicker({ title, files, onClose }: { title: string; files: TransferFile[]; onClose: () => void }) {
+  const { api } = useOem()
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const download = async (file: TransferFile) => {
+    setBusyId(file.id)
+    try {
+      await downloadOemFile(api, file.id)
+    } catch {
+      // The HTTP client already shows the reason.
+    } finally {
+      setBusyId(null)
+    }
+  }
+  return (
+    <Modal title={`下载：${title}`} visible footer={null} onCancel={onClose} unmountOnExit>
+      <Table
+        rowKey="id"
+        size="small"
+        pagination={false}
+        data={files}
+        columns={[
+          { key: 'name', title: '文件名', dataIndex: 'originalName', ellipsis: true },
+          { key: 'size', title: '大小', width: 96, render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
+          {
+            key: 'actions', title: '操作', width: 96,
+            render: (_: unknown, file: TransferFile) => (
+              <Button size="small" icon={<IconDownload />} loading={busyId === file.id} disabled={busyId !== null && busyId !== file.id}
+                onClick={() => void download(file)}>下载</Button>
+            ),
+          },
+        ]}
+      />
+    </Modal>
+  )
+}
+
 export default function TransferListPage() {
   const { api, realm, base, queryScope, userId } = useOem()
   const can = useCan()
@@ -356,6 +395,8 @@ export default function TransferListPage() {
   const [keyword, setKeyword] = useState('')
   const [mine, setMine] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [downloadingId, setDownloadingId] = useState<number | null>(null)
+  const [picking, setPicking] = useState<{ title: string; files: TransferFile[] } | null>(null)
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
@@ -377,6 +418,26 @@ export default function TransferListPage() {
     return [...options, { id: companyId, name, canReceive: false }]
   }, [companyId, companyOptions.data, transfers.data])
   const total = transfers.data?.total ?? 0
+  // The row count can be stale; the detail's per-file flags decide what is offered.
+  const downloadRow = useCallback(async (row: TransferSummary) => {
+    setDownloadingId(row.id)
+    try {
+      const detail = await api.transfer(row.id)
+      const files = detail.files.filter((file) => file.downloadable)
+      if (files.length === 0) {
+        Message.warning('文件已不可下载')
+        void transfers.refetch()
+      } else if (files.length === 1) {
+        await downloadOemFile(api, files[0].id)
+      } else {
+        setPicking({ title: detail.summary.title, files })
+      }
+    } catch {
+      // The HTTP client already shows the reason.
+    } finally {
+      setDownloadingId(null)
+    }
+  }, [api, transfers])
   const transferColumns = useMemo(() => [
     {
       key: 'title', title: '文件', dataIndex: 'title', ellipsis: true,
@@ -401,7 +462,15 @@ export default function TransferListPage() {
     },
     { key: 'files', title: '附件', render: (_: unknown, row: TransferSummary) => `${row.fileCount} 个 / ${fmtSize(row.totalBytes)}` },
     { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
-  ], [base, realm])
+    {
+      key: 'actions', title: '操作',
+      render: (_: unknown, row: TransferSummary) => row.downloadableCount > 0 && (
+        <Button size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
+          loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
+          onClick={(event) => { event.stopPropagation(); void downloadRow(row) }}>下载</Button>
+      ),
+    },
+  ], [base, realm, downloadingId, downloadRow])
   const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
   const columnSpecs = realm === 'internal' ? OEM_TRANSFER_COLUMNS : PORTAL_TRANSFER_COLUMNS
   const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef)
@@ -464,6 +533,7 @@ export default function TransferListPage() {
         </div>
       </ColumnResizeProvider>
       {creating && <CreateTransferModal visible onClose={() => setCreating(false)} />}
+      {picking && <DownloadPicker title={picking.title} files={picking.files} onClose={() => setPicking(null)} />}
     </Card>
   )
 }

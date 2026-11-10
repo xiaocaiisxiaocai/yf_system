@@ -56,7 +56,7 @@ export function MessageReceiptDrawer({ receipt, receiptRequest, fmtTime, onCance
               <List.Item key={reader.userId} extra={fmtTime(reader.readAt)}>
                 {reader.realName}
                 <Tag size="small" color={reader.userType === 'SUPPLIER' ? 'purple' : 'arcoblue'} style={{ marginLeft: 6 }}>
-                  {reader.userType === 'SUPPLIER' ? '供应商' : '公司'}
+                  {reader.userType === 'SUPPLIER' ? '供应商' : 'SAA'}
                 </Tag>
               </List.Item>
             )}
@@ -71,7 +71,7 @@ export function MessageReceiptDrawer({ receipt, receiptRequest, fmtTime, onCance
               <List.Item key={reader.userId}>
                 {reader.realName}
                 <Tag size="small" color={reader.userType === 'SUPPLIER' ? 'purple' : 'arcoblue'} style={{ marginLeft: 6 }}>
-                  {reader.userType === 'SUPPLIER' ? '供应商' : '公司'}
+                  {reader.userType === 'SUPPLIER' ? '供应商' : 'SAA'}
                 </Tag>
               </List.Item>
             )}

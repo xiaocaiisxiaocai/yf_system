@@ -132,7 +132,7 @@ describe('ODM/OEMA 传递单详情加载失败', () => {
         id: 41, direction: 'INTERNAL_TO_OEM', companyId: 9, companyName: '甲厂', title: '重试后的传递单',
         sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' },
         lifecycleStatus: 'RELEASED', approvalStatus: 'APPROVED', approvalBlockedReason: null, validationSummary: 'VALID',
-        fileCount: 0, totalBytes: 0, availableCount: 0, purgePendingCount: 0, purgedCount: 0, missingCount: 0,
+        fileCount: 0, totalBytes: 0, availableCount: 0, purgePendingCount: 0, purgedCount: 0, missingCount: 0, downloadableCount: 0,
         createdAt: '2026-10-05T00:00:00Z', sentAt: '2026-10-05T00:01:00Z', releasedAt: '2026-10-05T00:02:00Z', version: 3,
       },
       description: null,

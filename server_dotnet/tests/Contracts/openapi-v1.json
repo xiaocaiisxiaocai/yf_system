@@ -11133,6 +11133,7 @@
           "companyName",
           "createdAt",
           "direction",
+          "downloadableCount",
           "fileCount",
           "id",
           "lifecycleStatus",
@@ -11206,6 +11207,10 @@
             "format": "int32"
           },
           "missingCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "downloadableCount": {
             "type": "integer",
             "format": "int32"
           },

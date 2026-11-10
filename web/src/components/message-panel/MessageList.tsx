@@ -116,7 +116,7 @@ const MessageRow = memo(function MessageRow({
           <Typography.Text bold>{m.senderName}</Typography.Text>
           {m.senderId === userId && <span className="msg-mine-badge">我</span>}
           <Tag size="small" color={m.senderType === 'SUPPLIER' ? 'purple' : 'arcoblue'}>
-            {m.senderType === 'SUPPLIER' ? '供应商' : '公司'}
+            {m.senderType === 'SUPPLIER' ? '供应商' : 'SAA'}
           </Tag>
           <Typography.Text type="secondary" className="message-row-time">{fmtTime(m.createdAt)}</Typography.Text>
           {withdrawn && <Tag size="small" color="orange">厂商已撤回</Tag>}

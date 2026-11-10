@@ -35,6 +35,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
       purgePendingCount: 0,
       purgedCount: 0,
       missingCount: 0,
+      downloadableCount: 0,
       createdAt: '2026-10-05T00:00:00Z',
       sentAt: lifecycleStatus === 'DRAFT' ? null : '2026-10-05T00:01:00Z',
       releasedAt: null,
@@ -395,13 +396,14 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(screen.getByPlaceholderText('搜索文件或厂商')).toBeInTheDocument()
   })
 
-  it('厂商门户看到的往来对象是公司', async () => {
+  it('厂商门户看到的往来对象是 SAA', async () => {
     const outgoing = { ...detail(43, 'RELEASED').summary, id: 43, direction: 'OEM_TO_INTERNAL' as const, title: '厂商回传.zip' }
     renderList(createApi({
       listTransfers: vi.fn().mockResolvedValue({ list: [outgoing], total: 1, page: 1, pageSize: 20 }),
     } as Partial<OemApi>), 'oem')
     const row = (await screen.findByRole('link', { name: '厂商回传.zip' })).closest('tr')!
-    expect(within(row).getByTitle('发给 公司')).toBeInTheDocument()
+    expect(within(row).getByTitle('发给 SAA')).toBeInTheDocument()
+    expect(within(row).queryByText('公司')).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: '往来厂商' })).not.toBeInTheDocument()
   })
 

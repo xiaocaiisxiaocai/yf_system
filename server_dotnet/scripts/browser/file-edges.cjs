@@ -160,7 +160,7 @@ async function assertExcelGrid(dialog, expectedRows) {
 
       const supplierFiles = await listAction({ page: 1, pageSize: 10, direction: 'S2C' }, async () => {
         await direction.click();
-        await page.getByRole('option', { name: '供应商 → 公司', exact: true }).click();
+        await page.getByRole('option', { name: '供应商 → SAA', exact: true }).click();
       });
       assert.equal(supplierFiles.total, 7);
       assert(supplierFiles.list.every(item => item.direction === 'S2C'));

@@ -893,6 +893,7 @@ export interface OemTransferSummaryResponse {
   purgePendingCount: number
   purgedCount: number
   missingCount: number
+  downloadableCount: number
   createdAt: string
   sentAt: string | null
   releasedAt: string | null

@@ -27,6 +27,7 @@ function detail(): TransferDetail {
       purgePendingCount: 0,
       purgedCount: 0,
       missingCount: 0,
+      downloadableCount: 0,
       createdAt: '2026-10-05T00:00:00Z',
       sentAt: '2026-10-05T00:05:00Z',
       releasedAt: '2026-10-05T00:06:00Z',

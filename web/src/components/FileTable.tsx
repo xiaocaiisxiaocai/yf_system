@@ -263,8 +263,8 @@ export default function FileTable({
     {
       title: '方向', dataIndex: 'direction', width: compactNarrow ? 84 : COLUMN_WIDTHS.direction[w], align: 'center' as const,
       render: (v: string) => {
-        const full = v === 'C2S' ? '公司 → 供应商' : '供应商 → 公司'
-        const text = compactNarrow ? (v === 'C2S' ? '公→供' : '供→公') : full
+        const full = v === 'C2S' ? 'SAA → 供应商' : '供应商 → SAA'
+        const text = compactNarrow ? (v === 'C2S' ? 'SAA→供' : '供→SAA') : full
         return <Tag color={v === 'C2S' ? 'arcoblue' : 'purple'} title={full}>{text}</Tag>
       },
     },
@@ -328,8 +328,8 @@ export default function FileTable({
               setDirection(v as string | undefined)
             }}
           >
-            <Select.Option value="C2S">公司 → 供应商</Select.Option>
-            <Select.Option value="S2C">供应商 → 公司</Select.Option>
+            <Select.Option value="C2S">SAA → 供应商</Select.Option>
+            <Select.Option value="S2C">供应商 → SAA</Select.Option>
           </Select>
           <Input.Search
             allowClear
