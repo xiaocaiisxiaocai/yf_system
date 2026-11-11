@@ -34,3 +34,7 @@
   .oem-transfer-detail > .oem-transfer-approval-card { max-height: none; }
   .oem-transfer-approval-card > .arco-card-body { overflow: visible; }
 }
+
+/* 设置类页面（文件与下载、审批模板）：页签和工具栏固定在卡片上方，内容区在卡片内滚动，“保存更改”贴在滚动区底部。 */
+.oem-settings-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.oem-settings-actions { position: sticky; bottom: 0; z-index: 1; padding: 12px 0 4px; background: var(--color-bg-2, #fff); border-top: 1px solid var(--app-border); }

@@ -228,7 +228,9 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
           </Space>
         ))}
       </Spin>
-      <Button type="primary" disabled={!changed || loading} loading={saving} onClick={() => void save()}>保存更改</Button>
+      <div className="oem-settings-actions">
+        <Button type="primary" disabled={!changed || loading} loading={saving} onClick={() => void save()}>保存更改</Button>
+      </div>
     </Space>
   )
 }

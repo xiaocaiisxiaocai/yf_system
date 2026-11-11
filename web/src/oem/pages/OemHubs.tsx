@@ -42,7 +42,7 @@ export function SettingsHub() {
   return <TabHub tabs={[
     { key: 'flow', title: '审批模板', visible: can.manageFlows, render: () => <FlowTemplatesPage /> },
     { key: 'retention', title: '删除策略', visible: can.manageRetention, render: () => <RetentionPage /> },
-    { key: 'file', title: '文件与下载', visible: can.manageFilePolicy, render: () => <Card key="file" title={<h1 className="visually-hidden">文件与下载策略</h1>}><HubToolbar /><SettingsForm group="file" /></Card> },
+    { key: 'file', title: '文件与下载', visible: can.manageFilePolicy, render: () => <Card key="file" className="page-card page-card--table" title={<h1 className="visually-hidden">文件与下载策略</h1>}><HubToolbar /><div className="oem-settings-scroll"><SettingsForm group="file" /></div></Card> },
     { key: 'notify', title: '邮件提醒', visible: can.manageNotify, render: () => <Card key="notify" className="page-card page-card--table oem-mail-rules-card" title={<h1 className="visually-hidden">邮件提醒</h1>}><HubToolbar /><SettingsForm group="notify" /></Card> },
   ]} />
 }

@@ -250,11 +250,12 @@ export default function FlowTemplatesPage() {
 
   return (
     <div>
-      <Card title={<h1 className="visually-hidden">审批模板</h1>}>
+      <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审批模板</h1>}>
         <div className="page-toolbar responsive-toolbar">
           <Space wrap>{switcher}</Space>
           <Button type="primary" icon={<IconPlus />} onClick={() => setEditing('new')}>新建模板</Button>
         </div>
+        <div className="oem-settings-scroll">
         {error && (
           <Alert type="error" style={{ marginBottom: 12 }} content={error}
             action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />
@@ -286,8 +287,9 @@ export default function FlowTemplatesPage() {
           ))}
         </Space>
         </Spin>
+        <RoutingPreviewCard />
+        </div>
       </Card>
-      <RoutingPreviewCard />
       {editing && <TemplateEditor template={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void load() }} />}
     </div>
   )
