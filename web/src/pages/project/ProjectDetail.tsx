@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Drawer, Empty, Space, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Drawer, Empty, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconDown, IconLeft, IconUp } from '@arco-design/web-react/icon'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -467,9 +467,9 @@ function ProjectDetailContent({ id }: { id?: string }) {
             </div>
           </div>
           <div className="detail-actions">
-            <Space wrap size={8}>
+            <div className="project-detail-actions-group">
               <ProjectManageActions project={project} onChanged={() => { loadProject(); loadSummary() }} />
-            </Space>
+            </div>
             <ProjectWorkflowPanel
               compact
               project={project}
@@ -485,22 +485,21 @@ function ProjectDetailContent({ id }: { id?: string }) {
         <div className="project-facts-row">
           <dl className={`project-facts${metadataOpen ? ' is-expanded' : ''}`}>
             {[
-              ['Robot 厂商', detailText(project.supplierName)],
-              ['Robot 型号', detailText(project.robotModelName)],
-              ['负责人', responsibleLabel],
-              ['工令号', detailText(project.workOrderNos?.join('、'))],
-              ['优先级', detailText(project.priorityName)],
-              ['需求完成时间', detailText(project.expectedCompletionDate)],
-              ...(metadataOpen ? [
-                ['机型', detailText(project.machineModel)],
-                ['Robot 类型', detailText(project.robotTypeName)],
-                ['Robot 料号', detailText(project.robotPartNumber)],
-                ['Robot 负责人', detailText(project.robotOwnerName)],
-                ['课别', detailText(project.sectionName)],
-                ['创建人', project.createdByName || '-'],
-              ] : []),
-            ].map(([label, value]) => (
-              <div key={String(label)}><dt>{label}</dt><dd title={typeof value === 'string' ? value : undefined}>{value}</dd></div>
+              // 先 Robot 信息、再项目信息；折叠时只留标 essential 的六项（顺序不变）。
+              { label: 'Robot 厂商', value: detailText(project.supplierName), essential: true },
+              { label: 'Robot 型号', value: detailText(project.robotModelName), essential: true },
+              { label: 'Robot 类型', value: detailText(project.robotTypeName) },
+              { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
+              { label: 'Robot 负责人', value: detailText(project.robotOwnerName) },
+              { label: '机型', value: detailText(project.machineModel) },
+              { label: '负责人', value: responsibleLabel, essential: true },
+              { label: '工令号', value: detailText(project.workOrderNos?.join('、')), essential: true },
+              { label: '课别', value: detailText(project.sectionName) },
+              { label: '优先级', value: detailText(project.priorityName), essential: true },
+              { label: '需求完成时间', value: detailText(project.expectedCompletionDate), essential: true },
+              { label: '创建人', value: project.createdByName || '-' },
+            ].filter((item) => metadataOpen || item.essential).map(({ label, value }) => (
+              <div key={label}><dt>{label}</dt><dd title={typeof value === 'string' ? value : undefined}>{value}</dd></div>
             ))}
             {(metadataOpen || project.description) && (
               <div className="project-facts-description">

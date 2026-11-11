@@ -20,6 +20,8 @@
 .project-detail-name h1 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-detail-name .arco-tag { flex: 0 0 auto; }
 .project-detail-return-reason { min-width: 0; max-width: 360px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+/* 操作按钮是同一个组件返回的多个按钮，用 Space 会没有间距，这里直接用 flex 间距。 */
+.project-detail-actions-group { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .project-detail-heading .detail-actions { flex: 0 1 auto; align-items: center; justify-content: flex-end; min-width: 0; }
 .project-detail-heading .project-workflow--compact { margin: 0; padding: 0; border: 0; background: transparent; }
 .project-detail-summary-card .project-metadata { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--app-border); }
