@@ -625,6 +625,9 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
   min-width: 0;
   min-height: 0;
 }
+/* ODM/OEMA 传递单：页签只切换厂商筛选，表格在页签外。 */
+.oem-vendor-tabs { margin: -4px 0 12px; }
+.oem-vendor-tabs > .arco-tabs-content { display: none; }
 .system-config-tabs > .arco-tabs-header { flex: 0 0 auto; }
 .system-config-tabs > .arco-tabs-content {
   flex: 1;

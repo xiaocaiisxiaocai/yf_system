@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table } from '@arco-design/web-react'
+import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
@@ -502,20 +502,20 @@ export default function TransferListPage() {
       className="page-card page-card--table"
       title={<h1 className="visually-hidden">文件传递单</h1>}
     >
+      {realm === 'internal' && (
+        // 一个厂商一个页签；“全部”包含所有厂商（含已停用厂商的历史记录）。
+        <Tabs className="oem-vendor-tabs" aria-label="往来厂商" activeTab={companyId ? String(companyId) : 'all'}
+          onChange={(key) => changeCompany(key === 'all' ? undefined : Number(key))}>
+          <Tabs.TabPane key="all" title="全部" />
+          {companyFilterOptions.map((company) => <Tabs.TabPane key={String(company.id)} title={company.name} />)}
+        </Tabs>
+      )}
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
-          {realm === 'internal' && !companyOptions.isError && (
-            <Select allowClear showSearch aria-label="往来厂商" placeholder="全部厂商" style={{ width: 200 }}
-              loading={companyOptions.isFetching} value={companyId}
-              filterOption={(input, option) => String((option as { props?: { children?: unknown } })?.props?.children ?? '').toLowerCase().includes(input.toLowerCase())}
-              onChange={(value) => changeCompany(value as number | undefined)}>
-              {companyFilterOptions.map((company) => <Select.Option key={company.id} value={company.id}>{company.name}</Select.Option>)}
-            </Select>
-          )}
           {realm === 'internal' && (
             <Radio.Group type="button" value={direction} onChange={(value) => { setDirection(value); setPage(1) }}>
               <Radio value="">全部</Radio>
-              <Radio value="INTERNAL_TO_OEM">公司发出</Radio>
+              <Radio value="INTERNAL_TO_OEM">SAA发出</Radio>
               <Radio value="OEM_TO_INTERNAL">ODM/OEMA 发来</Radio>
             </Radio.Group>
           )}

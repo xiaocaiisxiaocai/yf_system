@@ -384,7 +384,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByText('公司发出')).toBeInTheDocument()
+    expect(await screen.findByText('SAA发出')).toBeInTheDocument()
     expect(screen.getByText('ODM/OEMA 发来')).toBeInTheDocument()
     await waitFor(() => expect(get).toHaveBeenCalledWith('/oem/transfers', expect.objectContaining({ params: expect.any(Object) })))
   })
@@ -471,7 +471,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
         <MemoryRouter initialEntries={['/oem/transfers']}><App /></MemoryRouter>
       </QueryClientProvider>,
     )
-    expect(await screen.findByText('公司发出')).toBeInTheDocument()
+    expect(await screen.findByText('SAA发出')).toBeInTheDocument()
 
     window.history.replaceState({}, '', '/login')
     act(() => {
@@ -496,7 +496,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
         <MemoryRouter initialEntries={['/oem/transfers']}><App /></MemoryRouter>
       </QueryClientProvider>,
     )
-    expect(await screen.findByText('公司发出')).toBeInTheDocument()
+    expect(await screen.findByText('SAA发出')).toBeInTheDocument()
 
     window.history.replaceState({}, '', '/oem-portal/transfers/2')
     act(() => {
