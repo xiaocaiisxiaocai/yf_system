@@ -16,6 +16,8 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
   hostRef: RefObject<HTMLDivElement | null>,
   active = true,
   growFixed = false,
+  /** Width of columns the table adds itself (row selection, expand), left out when filling the container. */
+  reservedWidth = 0,
 ) {
   const layout = useColumnLayout(columnLayoutStorageKey(tableId, userId ?? undefined), specs)
   const [tableWidth, setTableWidth] = useState(0)
@@ -25,7 +27,7 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
     if (!host) return
     let frame = 0
     const measure = () => {
-      const next = measureTableWidth(host)
+      const next = Math.max(0, measureTableWidth(host) - reservedWidth)
       setTableWidth((current) => (current === next ? current : next))
     }
     measure()
@@ -40,7 +42,7 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
       cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [active, hostRef])
+  }, [active, hostRef, reservedWidth])
   const components = useMemo(() => ({ header: { cell: ResizableHeaderCell } }), [])
   const sized = withFlexibleColumn(layout.apply([...columns]), tableWidth, fixedKey, growFixed)
   const scrollX = sized.reduce((sum, column) => sum + column.width, 0)

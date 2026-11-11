@@ -18,6 +18,10 @@ export type ResizableTableProps<T> = Omit<TableProps<T>, 'columns' | 'components
 
 type KeyedColumn<T> = TableColumnProps<T> & { key: string; originalTitle: ReactNode }
 
+function classNames(value: string | string[] | undefined) {
+  return (Array.isArray(value) ? value : [value ?? '']).flatMap((item) => item.split(/\s+/)).filter(Boolean)
+}
+
 function keyOf<T>(column: TableColumnProps<T>, index: number) {
   if (column.key !== undefined && column.key !== null && column.key !== '') return String(column.key)
   if (typeof column.dataIndex === 'string' && column.dataIndex) return column.dataIndex
@@ -50,18 +54,22 @@ export default function ResizableTable<T extends object>({ tableId, columns, gro
       maxWidth: Math.max(480, defaultWidth * 2),
       locked: true,
     })), [signature])
-  const table = useAdjustableColumns(tableId, userId, specs, keyed, growKey ?? '', hostRef, true, Boolean(growKey))
+  // Arco adds its own 40px checkbox / expand columns; leave room for them so the table never overflows its card.
+  const selection = rest.rowSelection ? (typeof rest.rowSelection.columnWidth === 'number' ? rest.rowSelection.columnWidth : 40) : 0
+  const reservedWidth = selection + (rest.expandedRowRender ? 40 : 0)
+  const table = useAdjustableColumns(tableId, userId, specs, keyed, growKey ?? '', hostRef, true, Boolean(growKey), reservedWidth)
   const sized = table.columns.map(({ originalTitle, ...column }) => ({ ...column, title: originalTitle }))
   return (
     <ColumnResizeProvider actions={table.actions}>
-      <div ref={hostRef} className={table.hostClassName}>
+      {/* A list-page table (`page-table`) must stay in the card's flex column, or its pagination stops sticking to the bottom. */}
+      <div ref={hostRef} className={[table.hostClassName, classNames(className).includes('page-table') && 'page-table-host'].filter(Boolean).join(' ')}>
         <Table<T>
           {...rest}
-          className={[className, table.tableClassName].filter(Boolean).join(' ')}
+          className={[...classNames(className), table.tableClassName].join(' ')}
           columns={sized as TableColumnProps<T>[]}
           components={table.components}
           // A page's own minimum table width stays the floor, so narrow screens still scroll instead of squeezing.
-          scroll={{ ...scroll, x: Math.max(table.scrollX, typeof scroll?.x === 'number' ? scroll.x : 0) }}
+          scroll={{ ...scroll, x: Math.max(table.scrollX + reservedWidth, typeof scroll?.x === 'number' ? scroll.x : 0) }}
         />
       </div>
     </ColumnResizeProvider>
