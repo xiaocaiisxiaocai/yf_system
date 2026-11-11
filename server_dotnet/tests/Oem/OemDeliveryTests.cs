@@ -134,6 +134,65 @@ public sealed class OemDeliveryTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task SavingTheRetentionPolicyRecomputesEveryReleasedTransferAndFile()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        // Released while the policy is "keep": no purge time yet.
+        var (transferId, fileId, _) = await ReleasedInboundAsync(world, ct);
+        var id = new { fileId, transferId };
+        await using var db = await host.OpenAsync(ct);
+        const string Sql = "SELECT f.purge_due_at AS Due, f.purge_reason AS Reason, t.released_at AS Released, t.expires_at AS Expires, t.retention_mode AS Mode " +
+            "FROM oem_transfer_files f JOIN oem_transfers t ON t.id=f.transfer_id WHERE f.id=@fileId";
+        var before = await db.QuerySingleAsync<(DateTime? Due, string? Reason, DateTime? Released, DateTime? Expires, string? Mode)>(Sql, id);
+        Assert.Null(before.Due);
+        Assert.Equal("KEEP", before.Mode);
+
+        // 5 days after release, applied to the transfer that is already released.
+        var five = await world.Admin.PostAsync("/api/v1/oem/retention-templates",
+            new { name = "发布后 5 天", mode = "AFTER_RELEASE", releaseTtlMinutes = 5 * 24 * 60 }, ct).Ok();
+        var row = await db.QuerySingleAsync<(DateTime? Due, string? Reason, DateTime? Released, DateTime? Expires, string? Mode)>(Sql, id);
+        Assert.Equal("AFTER_RELEASE", row.Mode);
+        Assert.Equal("RETENTION", row.Reason);
+        Assert.Equal(row.Released!.Value.AddDays(5), row.Due!.Value, TimeSpan.FromSeconds(1));
+        Assert.Equal(row.Due, row.Expires);
+        var detail = await world.Viewer.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
+        Assert.Equal(five.Id(), detail["retention"]!["templateId"]!.GetValue<ulong>());
+        Assert.Equal(5 * 24 * 60U, detail["retention"]!["releaseTtlMinutes"]!.GetValue<uint>());
+
+        // Editing the same policy to 10 days moves the deadline out again.
+        five = await world.Admin.PutAsync($"/api/v1/oem/retention-templates/{five.Id()}", new
+        {
+            name = "发布后 5 天", mode = "AFTER_RELEASE", releaseTtlMinutes = 10 * 24 * 60, status = "ACTIVE", version = five["version"]!.GetValue<ulong>(),
+        }, ct).Ok();
+        row = await db.QuerySingleAsync<(DateTime? Due, string? Reason, DateTime? Released, DateTime? Expires, string? Mode)>(Sql, id);
+        Assert.Equal(row.Released!.Value.AddDays(10), row.Due!.Value, TimeSpan.FromSeconds(1));
+
+        // A shorter period makes the file overdue at once: it is refused immediately and the purge worker removes it.
+        await db.ExecuteAsync("UPDATE oem_transfers SET released_at=UTC_TIMESTAMP(3) - INTERVAL 2 DAY WHERE id=@transferId", id);
+        five = await world.Admin.PutAsync($"/api/v1/oem/retention-templates/{five.Id()}", new
+        {
+            name = "发布后 5 天", mode = "AFTER_RELEASE", releaseTtlMinutes = 60, status = "ACTIVE", version = five["version"]!.GetValue<ulong>(),
+        }, ct).Ok();
+        await world.Viewer.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Status(HttpStatusCode.Gone);
+        Assert.Equal(1, await host.Service<OemPurgeService>().RunOnceAsync(ct));
+
+        // Files that already carry another purge reason are never touched by a policy change.
+        await db.ExecuteAsync("UPDATE oem_transfer_files SET payload_status='AVAILABLE', purged_at=NULL, purge_reason='BLOCKED', purge_due_at=@due WHERE id=@fileId",
+            new { fileId, due = DateTime.UtcNow.AddDays(3) });
+        await world.Admin.PutAsync($"/api/v1/oem/retention-templates/{five.Id()}", new
+        {
+            name = "发布后 5 天", mode = "KEEP", status = "ACTIVE", version = five["version"]!.GetValue<ulong>(),
+        }, ct).Ok();
+        row = await db.QuerySingleAsync<(DateTime? Due, string? Reason, DateTime? Released, DateTime? Expires, string? Mode)>(Sql, id);
+        Assert.Equal("BLOCKED", row.Reason);
+        Assert.NotNull(row.Due);
+        Assert.Equal("KEEP", row.Mode);
+        Assert.Null(row.Expires);
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task ExpiredFilesArePurgedFromDiskAndStayRecordedForAudit()
     {
         var ct = TestContext.Current.CancellationToken;

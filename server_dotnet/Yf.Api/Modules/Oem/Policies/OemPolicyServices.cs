@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
+using Yf.Api.Modules.Oem.Transfers;
 
 namespace Yf.Api.Modules.Oem.Policies;
 
@@ -11,9 +12,10 @@ public sealed record OemSettingItem(string Key, string? Value);
 public sealed record OemSettingsUpdate(OemSettingItem[] Items);
 
 /// <summary>
-/// Administrator-defined deletion policies. Exactly one template is effective for new
-/// and draft transfers; its mode and durations are snapshotted at send time, so edits
-/// apply only to later transfers. Templates are never physically deleted, only disabled.
+/// Administrator-defined deletion policies. Exactly one template is effective for every
+/// transfer: saving it replaces the snapshot of all pending and released transfers and
+/// recomputes their expiry (<see cref="ApplyToExistingTransfersAsync"/>). Templates are
+/// never physically deleted, only disabled.
 /// </summary>
 public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
@@ -53,8 +55,9 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
         };
         uow.Db.OemRetentionTemplates.Add(template);
         await uow.Db.SaveChangesAsync(ct);
+        var applied = await ApplyToExistingTransfersAsync(uow, ct);
         await audit.WriteAsync(uow, current, "OEM_RETENTION_TEMPLATE_CREATE", "oem_retention_template", template.Id,
-            new { targetName = name, template.Mode, template.ReleaseTtlMinutes, template.ReceiptGraceMinutes, deactivatedTemplateIds = deactivated }, ct);
+            new { targetName = name, template.Mode, template.ReleaseTtlMinutes, template.ReceiptGraceMinutes, deactivatedTemplateIds = deactivated, applied.Transfers, applied.Files }, ct);
         await uow.CommitAsync(ct);
         return Json(template);
     }
@@ -98,8 +101,9 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
             deactivated = DisableAll(all.Where(item => item.Id != effective.Id && item.Status == OemStatus.Active), uow.Now);
         }
         await uow.Db.SaveChangesAsync(ct);
+        var applied = await ApplyToExistingTransfersAsync(uow, ct);
         await audit.WriteAsync(uow, current, "OEM_RETENTION_TEMPLATE_UPDATE", "oem_retention_template", id,
-            new { targetName = name, changes, deactivatedTemplateIds = deactivated }, ct);
+            new { targetName = name, changes, deactivatedTemplateIds = deactivated, applied.Transfers, applied.Files }, ct);
         await uow.CommitAsync(ct);
         return Json(template);
     }
@@ -107,6 +111,67 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
     internal static async Task<OemRetentionTemplate> EffectiveActiveAsync(YfDbContext db, CancellationToken ct) =>
         await db.OemRetentionTemplates.Where(item => item.Status == OemStatus.Active).OrderBy(item => item.Id).FirstOrDefaultAsync(ct)
         ?? throw ApiException.BadRequest("未配置启用的删除策略，请联系管理员");
+
+    /// <summary>
+    /// Makes the effective policy apply to every transfer that has not ended, not only to later ones: the snapshot on
+    /// SEALED and RELEASED transfers is replaced, and for RELEASED transfers the expiry and each stored file's purge time
+    /// are recomputed from the release time and the first receipt. Files with another purge reason (blocked, rejected,
+    /// removed...) and files already being purged are left alone. A shorter period can therefore make existing files
+    /// overdue at once, and the purge worker then deletes them. Runs inside the management transaction, which already
+    /// serialises with every OEM business transaction and the purge worker.
+    /// </summary>
+    private static async Task<(int Transfers, int Files)> ApplyToExistingTransfersAsync(OemUnitOfWork uow, CancellationToken ct)
+    {
+        var effective = await EffectiveActiveAsync(uow.Db, ct);
+        var transfers = await uow.Db.OemTransfers
+            .Where(item => item.RetentionMode != null
+                && (item.LifecycleStatus == TransferLifecycle.Sealed || item.LifecycleStatus == TransferLifecycle.Released))
+            .ToArrayAsync(ct);
+        var snapshot = new RetentionSnapshot(effective.Mode, effective.ReleaseTtlMinutes, effective.ReceiptGraceMinutes);
+        var strategy = snapshot.Strategy;
+        var released = transfers.Where(item => item.LifecycleStatus == TransferLifecycle.Released && item.ReleasedAt is not null)
+            .ToDictionary(item => item.Id);
+        string?[] reasons = [null, PurgeReasons.Retention];
+        string[] stored = [PayloadStatuses.Quarantined, PayloadStatuses.Available];
+        var files = released.Count == 0 ? [] : await uow.Db.OemTransferFiles
+            .Where(file => stored.Contains(file.PayloadStatus) && reasons.Contains(file.PurgeReason)
+                && uow.Db.OemTransfers.Any(item => item.Id == file.TransferId && item.LifecycleStatus == TransferLifecycle.Released))
+            .ToArrayAsync(ct);
+        var changedTransfers = 0;
+        foreach (var transfer in transfers)
+        {
+            var expiresAt = transfer.LifecycleStatus == TransferLifecycle.Released && transfer.ReleasedAt is DateTime releasedAt
+                ? strategy.ExpiresAt(snapshot, releasedAt) : transfer.ExpiresAt;
+            if (transfer.RetentionTemplateId == effective.Id && transfer.RetentionMode == snapshot.Mode
+                && transfer.ReleaseTtlMinutes == snapshot.ReleaseTtlMinutes && transfer.ReceiptGraceMinutes == snapshot.ReceiptGraceMinutes
+                && transfer.ExpiresAt == expiresAt) continue;
+            transfer.RetentionTemplateId = effective.Id;
+            transfer.RetentionMode = snapshot.Mode;
+            transfer.ReleaseTtlMinutes = snapshot.ReleaseTtlMinutes;
+            transfer.ReceiptGraceMinutes = snapshot.ReceiptGraceMinutes;
+            transfer.ExpiresAt = expiresAt;
+            transfer.ConcurrencyVersion++;
+            transfer.UpdatedAt = uow.Now;
+            changedTransfers++;
+        }
+        var changedFiles = 0;
+        foreach (var file in files)
+        {
+            if (!released.TryGetValue(file.TransferId, out var transfer)) continue;
+            var due = strategy.InitialPurgeDue(snapshot, transfer.ReleasedAt!.Value);
+            if (file.FirstRecipientDownloadAt is DateTime firstReceipt)
+                due = strategy.PurgeDueAfterFirstReceipt(snapshot, due, transfer.ExpiresAt, firstReceipt);
+            var reason = due is null ? null : PurgeReasons.Retention;
+            if (file.PurgeDueAt == due && file.PurgeReason == reason) continue;
+            file.PurgeDueAt = due;
+            file.PurgeReason = reason;
+            file.ConcurrencyVersion++;
+            file.UpdatedAt = uow.Now;
+            changedFiles++;
+        }
+        await uow.Db.SaveChangesAsync(ct);
+        return (changedTransfers, changedFiles);
+    }
 
     private static Task<OemRetentionTemplate[]> LockAllAsync(OemUnitOfWork uow, CancellationToken ct) =>
         uow.Db.OemRetentionTemplates.FromSqlRaw("SELECT * FROM oem_retention_templates FOR UPDATE").ToArrayAsync(ct);

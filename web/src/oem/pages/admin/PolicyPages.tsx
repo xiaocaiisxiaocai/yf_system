@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
-import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Message, Select, Space, Spin, Switch, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Typography } from '@arco-design/web-react'
 import { IconSearch } from '@arco-design/web-react/icon'
 import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
@@ -18,6 +18,20 @@ const MODES = [
   { value: 'AFTER_FIRST_RECEIPT', label: '首次接收后宽限删除' },
   { value: 'FIRST_RECEIPT_OR_DEADLINE', label: '首次接收宽限或最晚期限（先到为准）' },
 ]
+
+/** 策略对全部传递单生效：缩短期限会让已有附件立即到期被删，保存前必须确认。 */
+function confirmApplyToAll(): Promise<boolean> {
+  return new Promise((resolve) => {
+    Modal.confirm({
+      title: '保存并应用到全部传递单',
+      content: '新策略立即对所有已提交的传递单生效，按发布时间重新计算到期时间；已超过期限的附件会被删除且无法恢复。',
+      okText: '保存并应用',
+      okButtonProps: { status: 'danger' },
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    })
+  })
+}
 
 export function RetentionPage() {
   const { api } = useOem()
@@ -55,6 +69,7 @@ export function RetentionPage() {
     setSaving(true)
     try {
       const values = await form.validate()
+      if (values.mode !== 'KEEP' && !(await confirmApplyToAll())) return
       const body = {
         name: current?.name ?? '统一删除策略', mode: values.mode,
         releaseTtlMinutes: ['AFTER_RELEASE', 'FIRST_RECEIPT_OR_DEADLINE'].includes(values.mode) ? values.releaseTtlMinutes : null,
@@ -66,7 +81,7 @@ export function RetentionPage() {
       setCurrent(saved)
       form.setFieldsValue(saved)
       setError('')
-      Message.success('统一策略已保存，仅影响之后提交的文件')
+      Message.success('统一策略已保存，已对全部传递单生效')
     } catch (cause) {
       // Form validation already marks the invalid field; API failures must keep the user's edits.
       // 40903 只更新版本号。load() 会重置表单，不能用来刷新这次冲突。
@@ -87,7 +102,7 @@ export function RetentionPage() {
     <Card title={<h1 className="visually-hidden">统一删除策略</h1>}>
       <HubToolbar />
       <Typography.Paragraph type="secondary">
-        所有新提交的文件自动使用此策略，发送人无需选择。修改不影响已提交的文件。
+        此策略对所有传递单生效（含已提交、已发布的），发送人无需选择。保存后立即按发布时间重新计算到期时间。
       </Typography.Paragraph>
       {error && <Alert type="error" content={error} action={<Button size="small" onClick={() => void load()} disabled={saving}>重新加载</Button>} style={{ marginBottom: 16 }} />}
       <Spin loading={loading} style={{ display: 'block' }}>

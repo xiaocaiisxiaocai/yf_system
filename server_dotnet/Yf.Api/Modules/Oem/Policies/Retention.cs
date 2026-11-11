@@ -12,7 +12,10 @@ public static class RetentionModes
     public static readonly IReadOnlyList<string> All = [Keep, AfterRelease, AfterFirstReceipt, FirstReceiptOrDeadline];
 }
 
-/// <summary>Durations snapshotted onto a transfer when it is sent (template changes never apply retroactively).</summary>
+/// <summary>
+/// Durations stored on a transfer. Taken from the effective policy when it is sent and replaced for every pending or
+/// released transfer whenever the policy is saved (see <c>OemRetentionTemplateService</c>).
+/// </summary>
 public sealed record RetentionSnapshot(string Mode, uint? ReleaseTtlMinutes, uint? ReceiptGraceMinutes)
 {
     public IRetentionStrategy Strategy => RetentionStrategies.For(Mode);

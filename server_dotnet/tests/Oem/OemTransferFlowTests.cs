@@ -210,10 +210,11 @@ public sealed class OemTransferFlowTests
             status = "ACTIVE",
             version = keep["version"]!.GetValue<ulong>(),
         }, ct).Ok();
-        var unchanged = await world.Sender.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
-        Assert.Equal(sendPolicy.Id(), unchanged["retention"]!["templateId"]!.GetValue<ulong>());
-        Assert.Equal("AFTER_RELEASE", unchanged["retention"]!["mode"]!.GetValue<string>());
-        Assert.Equal(120U, unchanged["retention"]!["releaseTtlMinutes"]!.GetValue<uint>());
+        // Saving a policy applies to transfers that were already sent, not only to later ones.
+        var applied = await world.Sender.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+        Assert.Equal(world.KeepTemplateId, applied["retention"]!["templateId"]!.GetValue<ulong>());
+        Assert.Equal("KEEP", applied["retention"]!["mode"]!.GetValue<string>());
+        Assert.Null(applied["retention"]!["releaseTtlMinutes"]);
     }
 
     [Fact(Timeout = 240_000)]
