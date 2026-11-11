@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { actionSlots } from '../../components/ActionSlots'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Select, Space, Spin, Steps, Table, Tag, Typography,
+  Alert, Button, Card, Empty, Input, Message, Modal, Popconfirm, Result, Select, Space, Spin, Steps, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -220,9 +221,11 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
   )
 }
 
-function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }: {
+function TransferFilesTable({ files, canEdit, toolbarHost, onDownload, onPreview, onRemove }: {
   files: TransferFile[]
   canEdit: boolean
+  /** 附件卡标题右侧的挂载点：“显示列”放在那里，不再单占一行。 */
+  toolbarHost: HTMLElement | null
   onDownload: (file: TransferFile) => void
   onPreview: (file: TransferFile) => void
   onRemove: (file: TransferFile) => Promise<void>
@@ -274,7 +277,7 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
   const table = useAdjustableColumns(fileTableId, userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef, true, true)
   return (
     <>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+      {toolbarHost && createPortal(
         <ColumnVisibilityPicker
           specs={OEM_TRANSFER_FILE_COLUMNS}
           hidden={table.hidden}
@@ -282,8 +285,9 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
           onShowAll={table.showAll}
           onHideOptional={table.hideOptional}
           onReset={table.reset}
-        />
-      </div>
+        />,
+        toolbarHost,
+      )}
       <ColumnResizeProvider actions={table.actions}>
         <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
@@ -314,6 +318,7 @@ export default function TransferDetailPage() {
   const [sending, setSending] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [previewing, setPreviewing] = useState<TransferFile | null>(null)
+  const [filesToolbar, setFilesToolbar] = useState<HTMLElement | null>(null)
   const recoveryScoped = realm === 'internal' && can.recover && !permissions.has('oem:transfer_view')
   const detailKey = ['oem', ...queryScope, 'transfer', id] as const
   const detailQuery = useQuery({
@@ -480,17 +485,19 @@ export default function TransferDetailPage() {
           <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${summary.approvalBlockedReason}`} />
         )}
         {detail.closedReason && <Alert type="warning" style={{ marginBottom: 12 }} content={`结束原因：${detail.closedReason}`} />}
-        <Descriptions column={2} data={[
-          { label: '发送人', value: summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName },
-          { label: '删除策略', value: detail.retention.summary ?? '-' },
-          { label: '提交时间', value: summary.sentAt ? fmtTime(summary.sentAt) : '-' },
-          { label: '发送时间', value: summary.releasedAt ? fmtTime(summary.releasedAt) : '-' },
-          { label: '最晚保留至', value: detail.expiresAt ? fmtTime(detail.expiresAt) : '-' },
-          { label: '说明', value: detail.description ?? '-' },
-        ]} />
+        <dl className="oem-transfer-meta">
+          {[
+            { label: '发送人', value: summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName },
+            { label: '提交时间', value: summary.sentAt ? fmtTime(summary.sentAt) : '-' },
+            { label: '发送时间', value: summary.releasedAt ? fmtTime(summary.releasedAt) : '-' },
+            { label: '删除策略', value: detail.retention.summary ?? '-' },
+            { label: '最晚保留至', value: detail.expiresAt ? fmtTime(detail.expiresAt) : '-' },
+          ].map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}
+          {detail.description && <div className="oem-transfer-meta-wide"><dt>说明</dt><dd>{detail.description}</dd></div>}
+        </dl>
       </Card>
 
-      <Card className="oem-transfer-files-card" title="附件">
+      <Card className="oem-transfer-files-card" title="附件" extra={<span ref={setFilesToolbar} />}>
         {caps.canEdit && <div style={{ marginBottom: 16 }}><OemUploader ref={uploader} transferId={id} disabled={sending}
           onBusyChange={setUploadBusy} onUploaded={() => void load()} /></div>}
         {can.recover && !caps.canReadContent && detail.files.length === 0 ? (
@@ -499,6 +506,7 @@ export default function TransferDetailPage() {
           <TransferFilesTable
             files={detail.files}
             canEdit={caps.canEdit}
+            toolbarHost={filesToolbar}
             onDownload={(file) => void download(file).catch(() => undefined)}
             onPreview={(file) => void preview(file)}
             onRemove={removeFile}
