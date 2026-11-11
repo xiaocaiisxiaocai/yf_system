@@ -19,7 +19,7 @@ function summary(id: number, title: string, downloadableCount: number): Transfer
     sender: { realm: 'internal', id: 7, employeeNo: '', realName: '发送人' },
     lifecycleStatus: 'RELEASED', approvalStatus: 'APPROVED', approvalBlockedReason: null, validationSummary: 'VALID',
     fileCount: 2, totalBytes: 2048, availableCount: 2, purgePendingCount: 0, purgedCount: 0, missingCount: 0,
-    downloadableCount, createdAt: '2026-11-10T00:00:00Z', sentAt: '2026-11-10T00:01:00Z', releasedAt: '2026-11-10T00:02:00Z', version: 2,
+    downloadableCount, createdAt: '2026-11-10T00:00:00Z', sentAt: '2026-11-10T00:01:00Z', releasedAt: '2026-11-10T00:02:00Z', purgeDueAt: null, version: 2,
   }
 }
 

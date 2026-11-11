@@ -897,6 +897,7 @@ export interface OemTransferSummaryResponse {
   createdAt: string
   sentAt: string | null
   releasedAt: string | null
+  purgeDueAt: string | null
   version: number
 }
 

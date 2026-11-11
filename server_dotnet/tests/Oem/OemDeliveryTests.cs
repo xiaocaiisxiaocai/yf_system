@@ -193,6 +193,46 @@ public sealed class OemDeliveryTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task TransferListSplitsLatestFromPurgedHistoryAndFiltersBySenderAndTime()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        await world.Admin.PostAsync("/api/v1/oem/retention-templates",
+            new { name = "发布后一天", mode = "AFTER_RELEASE", releaseTtlMinutes = 1440 }, ct).Ok();
+        var (olderId, olderFile, _) = await ReleasedInboundAsync(world, ct);
+        var (newerId, _, _) = await ReleasedInboundAsync(world, ct);
+        static ulong[] Ids(System.Text.Json.Nodes.JsonNode page) => page["list"]!.AsArray().Select(item => item!.Id()).ToArray();
+
+        // Newest submission first; the summary carries when the files expire.
+        var latest = await world.Admin.GetAsync("/api/v1/oem/transfers", ct).Ok();
+        Assert.Equal([newerId, olderId], Ids(latest));
+        Assert.NotNull(latest["list"]![0]!["purgeDueAt"]);
+        Assert.Empty(Ids(await world.Admin.GetAsync("/api/v1/oem/transfers?scope=purged", ct).Ok()));
+        await world.Admin.GetAsync("/api/v1/oem/transfers?scope=other", ct).Status(HttpStatusCode.BadRequest);
+
+        // Sender filter: vendor account name; an unknown name matches nothing.
+        Assert.Equal(2, Ids(await world.Admin.GetAsync("/api/v1/oem/transfers?sender=vendor_out", ct).Ok()).Length);
+        Assert.Empty(Ids(await world.Admin.GetAsync("/api/v1/oem/transfers?sender=nobody-here", ct).Ok()));
+        // Submit time range: sentFrom inclusive, sentTo exclusive.
+        var tomorrow = Uri.EscapeDataString(DateTime.UtcNow.AddDays(1).ToString("O"));
+        Assert.Empty(Ids(await world.Admin.GetAsync($"/api/v1/oem/transfers?sentFrom={tomorrow}", ct).Ok()));
+        Assert.Equal(2, Ids(await world.Admin.GetAsync($"/api/v1/oem/transfers?sentTo={tomorrow}", ct).Ok()).Length);
+        await world.Admin.GetAsync("/api/v1/oem/transfers?sentFrom=not-a-date", ct).Status(HttpStatusCode.BadRequest);
+
+        // Once every file is really deleted the transfer moves to the history tab; the other one stays.
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET purge_due_at=UTC_TIMESTAMP(3) - INTERVAL 1 MINUTE WHERE id=@olderFile", new { olderFile });
+        Assert.Equal(1, await host.Service<OemPurgeService>().RunOnceAsync(ct));
+        Assert.Equal([olderId], Ids(await world.Admin.GetAsync("/api/v1/oem/transfers?scope=purged", ct).Ok()));
+        Assert.Equal([newerId], Ids(await world.Admin.GetAsync("/api/v1/oem/transfers?scope=latest", ct).Ok()));
+        Assert.Equal([newerId], Ids(await world.Admin.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        var history = await world.Admin.GetAsync("/api/v1/oem/transfers?scope=purged", ct).Ok();
+        Assert.NotNull(history["list"]![0]!["purgeDueAt"]);
+        Assert.Equal(1, history["list"]![0]!["purgedCount"]!.GetValue<int>());
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task ExpiredFilesArePurgedFromDiskAndStayRecordedForAudit()
     {
         var ct = TestContext.Current.CancellationToken;

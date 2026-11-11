@@ -19,6 +19,12 @@ export interface TransferQuery {
   keyword?: string
   companyId?: number
   mine?: boolean
+  /** latest（默认）：仍有文件在服务器上；purged：全部文件已从服务器删除的历史记录。 */
+  scope?: 'latest' | 'purged'
+  sender?: string
+  /** 提交时间范围：起（含）止（不含），ISO 时刻。 */
+  sentFrom?: string
+  sentTo?: string
 }
 
 type RouteOf<M extends string> = Extract<ApiRoute, `${M} ${string}`>

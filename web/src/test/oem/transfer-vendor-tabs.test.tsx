@@ -43,7 +43,8 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
 
     await screen.findByRole('tab', { name: '乙厂' })
     const tabs = screen.getAllByRole('tab')
-    expect(tabs.map((tab) => tab.textContent)).toEqual(['全部', '甲厂', '乙厂'])
+    // 厂商页签在前，其下是「最新 / 历史（已删除）」范围页签。
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['全部', '甲厂', '乙厂', '最新', '历史（已删除）'])
     expect(lastQuery(api).companyId).toBeUndefined()
     expect(screen.queryByRole('combobox', { name: '往来厂商' })).not.toBeInTheDocument()
 
@@ -66,6 +67,6 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
   it('厂商门户不显示厂商页签', async () => {
     const api = renderList('oem')
     await vi.waitFor(() => expect(api.listTransfers).toHaveBeenCalled())
-    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['最新', '历史（已删除）'])
   })
 })

@@ -99,6 +99,7 @@ describe('ODM/OEMA 文件校验界面', () => {
         createdAt: '2026-10-05T00:00:00Z',
         sentAt: null,
         releasedAt: null,
+        purgeDueAt: null,
         version: 1,
       },
       description: null,

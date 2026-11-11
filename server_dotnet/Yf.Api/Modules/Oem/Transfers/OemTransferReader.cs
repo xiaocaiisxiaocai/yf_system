@@ -71,8 +71,38 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 || db.OemCompanies.Any(company => company.Id == transfer.OemCompanyId
                     && EF.Functions.Like(company.Name, pattern, QueryValues.LikeEscape)));
         }
+        var sender = request.Query["sender"].ToString().Trim();
+        if (sender.Length > 0)
+        {
+            var pattern = QueryValues.ContainsPattern(sender);
+            // A vendor account must not learn internal employee numbers, so it matches internal senders by name only.
+            var byEmployeeNo = current is not OemAccountActor;
+            query = query.Where(transfer =>
+                (transfer.InternalSenderUserId != null && db.Users.Any(user => user.Id == transfer.InternalSenderUserId
+                    && (EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape)
+                        || byEmployeeNo && EF.Functions.Like(user.EmployeeNo, pattern, QueryValues.LikeEscape))))
+                || (transfer.OemSenderAccountId != null && db.OemAccounts.Any(account => account.Id == transfer.OemSenderAccountId
+                    && EF.Functions.Like(account.EmployeeNo, pattern, QueryValues.LikeEscape))));
+        }
+        // Submit time range: sentFrom inclusive, sentTo exclusive (the UI sends local day boundaries as instants).
+        if (QueryValues.OptionalInstant(request, "sentFrom") is DateTime sentFrom) query = query.Where(transfer => transfer.SentAt >= sentFrom);
+        if (QueryValues.OptionalInstant(request, "sentTo") is DateTime sentTo) query = query.Where(transfer => transfer.SentAt < sentTo);
+        // "latest" is everything that still has stored content; "purged" is history whose files were all really deleted
+        // from the server. Files removed from a draft by the sender never count.
+        var scope = request.Query["scope"].ToString();
+        if (scope is not ("" or "latest" or "purged")) throw ApiException.BadRequest("请求参数错误: scope");
+        var live = db.OemTransferFiles.Where(file => file.PurgeReason == null || file.PurgeReason != PurgeReasons.FileRemoved);
+        var fullyPurged = db.OemTransfers.Where(transfer =>
+            live.Any(file => file.TransferId == transfer.Id && file.PayloadStatus == PayloadStatuses.Purged)
+            && !live.Any(file => file.TransferId == transfer.Id && file.PayloadStatus != PayloadStatuses.Purged))
+            .Select(transfer => transfer.Id);
+        query = scope == "purged"
+            ? query.Where(transfer => fullyPurged.Contains(transfer.Id))
+            : query.Where(transfer => !fullyPurged.Contains(transfer.Id));
         var total = (ulong)await query.LongCountAsync(ct);
-        var rows = await query.OrderByDescending(transfer => transfer.Id).Page(offset, size).AsNoTracking().ToArrayAsync(ct);
+        // Newest first by submit time (drafts by creation time).
+        var rows = await query.OrderByDescending(transfer => transfer.SentAt ?? transfer.CreatedAt).ThenByDescending(transfer => transfer.Id)
+            .Page(offset, size).AsNoTracking().ToArrayAsync(ct);
         var summaries = await SummariesAsync(uow, rows, current, ct);
         return new OemPageResponse<OemTransferSummaryResponse>(rows.Select(transfer => summaries[transfer.Id]).ToArray(), total, page, size);
     }
@@ -302,7 +332,10 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 MissingCount: own.Count(file => file.PayloadStatus is PayloadStatuses.StorageLost or PayloadStatuses.MissingUnverified),
                 DownloadableCount: capabilities.CanReadContent
                     ? own.Count(file => ReadyForDownload(file.ScanStatus, file.PayloadStatus, file.PurgeDueAt, now)) : 0,
-                transfer.CreatedAt, transfer.SentAt, transfer.ReleasedAt, transfer.ConcurrencyVersion);
+                transfer.CreatedAt, transfer.SentAt, transfer.ReleasedAt,
+                // When the last file is (or was) deleted; unknown while any file has no scheduled deletion.
+                own.Length > 0 && own.All(file => file.PurgeDueAt != null) ? own.Max(file => file.PurgeDueAt) : null,
+                transfer.ConcurrencyVersion);
         }
         return result;
     }

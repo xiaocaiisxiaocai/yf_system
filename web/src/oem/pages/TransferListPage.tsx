@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs } from '@arco-design/web-react'
+import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
@@ -28,6 +28,7 @@ const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'sender', title: '发送人', defaultWidth: 104, minWidth: 88 },
   { key: 'status', title: '状态', defaultWidth: 180, minWidth: 140 },
   { key: 'files', title: '附件', defaultWidth: 120, minWidth: 96 },
+  { key: 'purgeDueAt', title: '到期时间', defaultWidth: 170, minWidth: 140 },
   { key: 'sentAt', title: '提交时间', defaultWidth: 170, minWidth: 140 },
   { key: 'actions', title: '操作', defaultWidth: 176, minWidth: 160, locked: true },
 ]
@@ -384,6 +385,13 @@ function DownloadPicker({ title, files, onPreview, onClose }: {
   )
 }
 
+/** 日期选择器给出本地日期（YYYY-MM-DD）；转成本地当天 0 点的时刻，止日取次日 0 点（不含）。 */
+function dayStart(day: string, offsetDays = 0) {
+  const date = new Date(`${day}T00:00:00`)
+  date.setDate(date.getDate() + offsetDays)
+  return date.toISOString()
+}
+
 export default function TransferListPage() {
   const { api, realm, base, queryScope, userId } = useOem()
   const can = useCan()
@@ -406,6 +414,9 @@ export default function TransferListPage() {
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [mine, setMine] = useState(false)
+  const [scope, setScope] = useState<'latest' | 'purged'>('latest')
+  const [sender, setSender] = useState('')
+  const [sentRange, setSentRange] = useState<[string, string] | undefined>()
   const [creating, setCreating] = useState(false)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
   const [picking, setPicking] = useState<{ title: string; files: TransferFile[] } | null>(null)
@@ -413,8 +424,13 @@ export default function TransferListPage() {
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
-    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId }],
-    queryFn: () => api.listTransfers({ page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, companyId }),
+    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId, scope, sender, sentRange }],
+    queryFn: () => api.listTransfers({
+      page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, companyId, scope,
+      sender: sender || undefined,
+      sentFrom: sentRange ? dayStart(sentRange[0]) : undefined,
+      sentTo: sentRange ? dayStart(sentRange[1], 1) : undefined,
+    }),
   })
   const companyOptions = useQuery({
     queryKey: ['oem', ...queryScope, 'company-options'],
@@ -479,6 +495,7 @@ export default function TransferListPage() {
       ),
     },
     { key: 'files', title: '附件', render: (_: unknown, row: TransferSummary) => `${row.fileCount} 个 / ${fmtSize(row.totalBytes)}` },
+    { key: 'purgeDueAt', title: '到期时间', render: (_: unknown, row: TransferSummary) => (row.purgeDueAt ? fmtTime(row.purgeDueAt) : '-') },
     { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
     {
       key: 'actions', title: '操作',
@@ -510,6 +527,14 @@ export default function TransferListPage() {
           {companyFilterOptions.map((company) => <Tabs.TabPane key={String(company.id)} title={company.name} />)}
         </Tabs>
       )}
+      <div className="oem-scope-bar">
+        <Tabs className="oem-scope-tabs" type="capsule" aria-label="传递单范围" activeTab={scope}
+          onChange={(key) => { setScope(key as 'latest' | 'purged'); setPage(1) }}>
+          <Tabs.TabPane key="latest" title="最新" />
+          <Tabs.TabPane key="purged" title="历史（已删除）" />
+        </Tabs>
+        {can.createTransfer && <Button type="primary" icon={<IconUpload />} onClick={() => setCreating(true)}>发送文件</Button>}
+      </div>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
           {realm === 'internal' && (
@@ -522,6 +547,9 @@ export default function TransferListPage() {
           <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
             onChange={(value) => { setStatus(value); setPage(1) }} />
           <Input.Search allowClear placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'} style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+          <Input.Search allowClear aria-label="发送人" placeholder="发送人" style={{ width: 150 }} onSearch={(value) => { setSender(value.trim()); setPage(1) }} />
+          <DatePicker.RangePicker aria-label="提交时间" style={{ width: 240 }} placeholder={['提交时间起', '提交时间止']}
+            onChange={(value) => { setSentRange(value?.length === 2 ? [value[0], value[1]] : undefined); setPage(1) }} />
           <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
           <ColumnVisibilityPicker
             specs={columnSpecs}
@@ -532,7 +560,6 @@ export default function TransferListPage() {
             onReset={table.reset}
           />
         </Space>
-        {can.createTransfer && <Button type="primary" icon={<IconUpload />} onClick={() => setCreating(true)}>发送文件</Button>}
       </div>
       {transfers.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}

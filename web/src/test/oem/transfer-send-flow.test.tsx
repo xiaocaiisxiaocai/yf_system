@@ -11,6 +11,7 @@ vi.mock('../../api/file-hash', () => ({
 }))
 
 import { createAppQueryClient } from '../../api/queryClient'
+import { fmtTime } from '../../api/types'
 import type { OemApi } from '../../oem/api/OemApi'
 import type { Realm, TransferDetail } from '../../oem/api/types'
 import { OemProvider } from '../../oem/OemContext'
@@ -39,6 +40,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
       createdAt: '2026-10-05T00:00:00Z',
       sentAt: lifecycleStatus === 'DRAFT' ? null : '2026-10-05T00:01:00Z',
       releasedAt: null,
+      purgeDueAt: null,
       version,
     },
     description: null,
@@ -405,6 +407,32 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(within(row).getByTitle('发给 SAA')).toBeInTheDocument()
     expect(within(row).queryByText('公司')).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: '往来厂商' })).not.toBeInTheDocument()
+  })
+
+  it('列表分「最新」和「历史（已删除）」两个页签，并有发送人、提交时间筛选和到期时间列', async () => {
+    const expiring = { ...detail(41, 'RELEASED').summary, purgeDueAt: '2026-11-20T02:00:00Z' }
+    const listTransfers = vi.fn().mockResolvedValue({ list: [expiring], total: 1, page: 1, pageSize: 20 })
+    const user = userEvent.setup()
+    renderList(createApi({ listTransfers } as Partial<OemApi>))
+
+    // 默认是最新；到期时间列在提交时间之前。
+    await screen.findByRole('link', { name: '图纸.zip' })
+    expect(listTransfers).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'latest', sender: undefined, sentFrom: undefined, sentTo: undefined }))
+    const headers = screen.getAllByRole('columnheader').map((header) => header.textContent)
+    expect(headers.indexOf('到期时间')).toBeGreaterThan(-1)
+    expect(headers.indexOf('到期时间')).toBe(headers.indexOf('提交时间') - 1)
+    const row = screen.getByRole('link', { name: '图纸.zip' }).closest('tr')!
+    expect(within(row).getByText(fmtTime('2026-11-20T02:00:00Z'))).toBeInTheDocument()
+
+    const senderInput = screen.getByPlaceholderText('发送人')
+    await user.type(senderInput, '张三')
+    fireEvent.keyDown(senderInput, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 })
+    await waitFor(() => expect(listTransfers).toHaveBeenLastCalledWith(expect.objectContaining({ sender: '张三', scope: 'latest', page: 1 })))
+
+    await user.click(screen.getByRole('tab', { name: '历史（已删除）' }))
+    await waitFor(() => expect(listTransfers).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'purged', sender: '张三', page: 1 })))
+    await user.click(screen.getByRole('tab', { name: '最新' }))
+    await waitFor(() => expect(listTransfers).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'latest' })))
   })
 
   it('标题单元格是指向详情的链接，键盘也能进入', async () => {

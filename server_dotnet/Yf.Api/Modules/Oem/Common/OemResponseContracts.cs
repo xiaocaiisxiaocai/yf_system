@@ -153,6 +153,7 @@ public sealed record OemTransferSummaryResponse(
     DateTime CreatedAt,
     DateTime? SentAt,
     DateTime? ReleasedAt,
+    DateTime? PurgeDueAt,
     ulong Version);
 
 public sealed record OemTransferRetentionResponse(

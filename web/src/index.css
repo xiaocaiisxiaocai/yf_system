@@ -628,6 +628,10 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 /* ODM/OEMA 传递单：页签只切换厂商筛选，表格在页签外。 */
 .oem-vendor-tabs { margin: -4px 0 12px; }
 .oem-vendor-tabs > .arco-tabs-content { display: none; }
+/* 传递单列表的范围切换（最新 / 历史已删除）：左侧胶囊页签只当切换条用，右侧是“发送文件”按钮。 */
+.oem-scope-bar { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 12px; }
+.oem-scope-bar > .oem-scope-tabs { flex: 0 1 auto; width: auto; min-width: 0; }
+.oem-scope-tabs > .arco-tabs-content { display: none; }
 .system-config-tabs > .arco-tabs-header { flex: 0 0 auto; }
 .system-config-tabs > .arco-tabs-content {
   flex: 1;
