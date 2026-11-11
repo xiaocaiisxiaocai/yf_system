@@ -1,8 +1,9 @@
 import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Table, Tag, Tooltip, Tree, Typography,
+  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Tag, Tooltip, Tree, Typography,
 } from '@arco-design/web-react'
+import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { isVersionConflict } from '../../api/versionConflict'
@@ -247,7 +248,7 @@ export default function RoleList() {
       {loadError ? (
         <LoadError onRetry={load} />
       ) : (
-        <Table
+        <ResizableTable tableId="roles"
           className="page-table"
           rowKey="id"
           loading={loading}

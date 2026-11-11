@@ -2,8 +2,9 @@ import { optionalTextLengthRule, textLengthRule } from '../../utils/textRules'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
-  Button, Card, Form, Input, Message, Modal, Popconfirm, Result, Select, Space, Table, Tag, TreeSelect, Typography,
+  Button, Card, Form, Input, Message, Modal, Popconfirm, Result, Select, Space, Tag, TreeSelect, Typography,
 } from '@arco-design/web-react'
+import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { createSessionQueryScope, queryClient } from '../../api/queryClient'
@@ -510,7 +511,7 @@ export default function UserList() {
       {loadError ? (
         <LoadError onRetry={() => { void usersQuery.refetch() }} />
       ) : (
-        <Table
+        <ResizableTable tableId="users"
           className="page-table"
           rowKey="id"
           loading={loading}

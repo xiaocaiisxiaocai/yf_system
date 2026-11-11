@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Tooltip,
+  Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip,
 } from '@arco-design/web-react'
+import ResizableTable from './ResizableTable'
 import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconUndo, IconRedo } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
@@ -371,7 +372,7 @@ export default function FileTable({
       {loadError ? (
         <LoadError onRetry={load} />
       ) : (
-        <Table
+        <ResizableTable tableId="project-files" growKey="originalName"
           rowKey="id"
           loading={loading}
           data={data.list}
