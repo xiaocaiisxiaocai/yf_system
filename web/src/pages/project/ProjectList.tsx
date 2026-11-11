@@ -248,16 +248,16 @@ export default function ProjectList() {
       <h1 className="visually-hidden">Robot仿真协作</h1>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
-          <Input.Search allowClear placeholder="项目名称 / 工令号 / 机型 / 料号" style={{ width: 240 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />
+          <Input.Search allowClear placeholder="项目名称 / 工令号 / 机型 / 料号" style={{ width: 280 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />
+          {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => applyQuery({ supplier: value as number | undefined, page: 1 })}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
           <Select allowClear placeholder="状态" style={{ width: 130 }} value={status} onChange={(value) => applyQuery({ status: value as string | undefined, page: 1 })}>
             {['IN_PROGRESS', 'COMPLETED', 'TERMINATED'].map((key) => <Select.Option key={key} value={key}>{PROJECT_STATUS[key]?.text ?? key}</Select.Option>)}
           </Select>
           <Select allowClear placeholder="资料状态" style={{ width: 130 }} value={materialState} onChange={(value) => applyQuery({ material: value as string | undefined, page: 1 })}>
             {(['NO_MATERIAL', 'PENDING', 'RETURNED'] as const).map((key) => <Select.Option key={key} value={key}>{MATERIAL_REVIEW[key].text}</Select.Option>)}
           </Select>
-          <Checkbox checked={overdue} onChange={(checked) => applyQuery({ overdue: checked ? 1 : undefined, page: 1 })}>仅看逾期</Checkbox>
           {isInternal && <Checkbox checked={mine} onChange={(checked) => applyQuery({ mine: checked ? 1 : undefined, page: 1 })}>只看我负责的</Checkbox>}
-          {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => applyQuery({ supplier: value as number | undefined, page: 1 })}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
+          <Checkbox checked={overdue} onChange={(checked) => applyQuery({ overdue: checked ? 1 : undefined, page: 1 })}>仅看逾期</Checkbox>
         </Space>
         <Space>
           <ColumnVisibilityPicker
