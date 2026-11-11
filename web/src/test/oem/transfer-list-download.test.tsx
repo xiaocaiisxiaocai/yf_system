@@ -9,6 +9,10 @@ import type { TransferDetail, TransferFile, TransferSummary } from '../../oem/ap
 import { OemProvider } from '../../oem/OemContext'
 import TransferListPage from '../../oem/pages/TransferListPage'
 
+vi.mock('../../oem/components/OemFilePreview', () => ({
+  default: ({ file }: { file: TransferFile | null }) => file ? <div role="region" aria-label="文件预览">{file.originalName}</div> : null,
+}))
+
 function summary(id: number, title: string, downloadableCount: number): TransferSummary {
   return {
     id, direction: 'INTERNAL_TO_OEM', companyId: 9, companyName: '公司', title,
@@ -84,6 +88,41 @@ describe('ODM/OEMA 传递单列表直接下载', () => {
     expect(new URL(frames()[0].src).pathname).toBe('/api/v1/oem/files/301/download')
     expect(screen.getByTestId('location')).toHaveTextContent('/oem-portal/transfers')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('最后一列有预览：单个可预览文件直接打开预览，不进入详情', async () => {
+    const user = userEvent.setup()
+    const row = summary(45, '图纸.pdf', 1)
+    const { startDownload } = renderList([row], { 45: detail(row, [file(331, '图纸.pdf')]) })
+
+    await user.click(await screen.findByRole('button', { name: '预览 图纸.pdf' }))
+
+    expect(await screen.findByRole('region', { name: '文件预览' })).toHaveTextContent('图纸.pdf')
+    expect(startDownload).not.toHaveBeenCalled()
+    expect(screen.getByTestId('location')).toHaveTextContent('/oem-portal/transfers')
+  })
+
+  it('不支持在线预览的格式提示下载查看', async () => {
+    const user = userEvent.setup()
+    const row = summary(46, '底座.step', 1)
+    renderList([row], { 46: detail(row, [file(341, '底座.step')]) })
+
+    await user.click(await screen.findByRole('button', { name: '预览 底座.step' }))
+
+    expect(await screen.findByText('该文件类型不支持在线预览，请下载后查看')).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '文件预览' })).not.toBeInTheDocument()
+  })
+
+  it('多个文件时弹窗逐个预览或下载', async () => {
+    const user = userEvent.setup()
+    const multi = summary(47, '图纸 等2个文件', 2)
+    renderList([multi], { 47: detail(multi, [file(351, '底座.step'), file(352, '控制柜.pdf')]) })
+
+    await user.click(await screen.findByRole('button', { name: '预览 图纸 等2个文件' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByRole('button', { name: '预览 底座.step' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: '预览 控制柜.pdf' }))
+    expect(await screen.findByRole('region', { name: '文件预览' })).toHaveTextContent('控制柜.pdf')
   })
 
   it('多个文件时列出可下载文件，逐个发起下载', async () => {

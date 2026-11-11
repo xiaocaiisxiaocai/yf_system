@@ -75,17 +75,21 @@ public static class TransferAccess
         ContentPurpose content;
         if (transfer.Lifecycle == TransferLifecycle.Sealed)
         {
-            // Before release only the actual sender and an activated reviewer may read files.
+            // Before release only the actual sender and the approvers (the current one and those of earlier
+            // nodes) may read files; nothing spreads further until the transfer is released.
             content = isActualSender ? ContentPurpose.Sender
-                : outbound && !isOem && actor.HasActiveReviewTask ? ContentPurpose.Review
+                : outbound && !isOem && (actor.HasActiveReviewTask || actor.HasAnyTask) ? ContentPurpose.Review
                 : ContentPurpose.None;
         }
         else
         {
-            // Released.
+            // Released. On the company side what went out stays reviewable: the sender, every approver who
+            // decided on it, and staff holding view + download may read it. None of these is a vendor receipt.
             content = outbound
                 ? isOem ? ContentPurpose.Recipient
-                    : isActualSender && actor.CanView && actor.CanDownload ? ContentPurpose.Sender : ContentPurpose.None
+                    : isActualSender ? ContentPurpose.Sender
+                    : actor.HasAnyTask ? ContentPurpose.Review
+                    : actor.CanView && actor.CanDownload ? ContentPurpose.Sender : ContentPurpose.None
                 : isOem ? ContentPurpose.Sender
                     : actor.CanView && actor.CanDownload ? ContentPurpose.Recipient : ContentPurpose.None;
         }

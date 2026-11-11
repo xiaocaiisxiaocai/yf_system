@@ -40,15 +40,24 @@ public sealed class OemInspectionTests
         var sealedTransfer = Outbound(TransferLifecycle.Sealed);
         Assert.False(TransferAccess.Evaluate(sealedTransfer, Vendor()).View);
         Assert.Equal(ContentPurpose.Review, TransferAccess.Evaluate(sealedTransfer, Staff(3, activeTask: true, anyTask: true)).ContentAccess);
-        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(sealedTransfer, Staff(3, anyTask: true)).ContentAccess);
+        // An approver of an earlier node keeps reading while later nodes decide.
+        Assert.Equal(ContentPurpose.Review, TransferAccess.Evaluate(sealedTransfer, Staff(3, anyTask: true)).ContentAccess);
         Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(sealedTransfer, Staff(4, view: true, download: true)).ContentAccess);
         Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(sealedTransfer, Staff(1)).ContentAccess);
 
         var released = Outbound(TransferLifecycle.Released);
         Assert.Equal(ContentPurpose.Recipient, TransferAccess.Evaluate(released, Vendor()).ContentAccess);
         Assert.False(TransferAccess.Evaluate(released, Vendor(9, company: 6)).View);
-        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(released, Staff(1)).ContentAccess);
-        Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(released, Staff(1, view: true, download: true)).ContentAccess);
+        // After release the company side can still check what went out; none of it is a vendor receipt.
+        Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(released, Staff(1)).ContentAccess);
+        Assert.Equal(ContentPurpose.Review, TransferAccess.Evaluate(released, Staff(3, anyTask: true)).ContentAccess);
+        Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(released, Staff(4, view: true, download: true)).ContentAccess);
+        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(released, Staff(5, view: true)).ContentAccess);
+        Assert.False(TransferAccess.Evaluate(released, Staff(1)).IsRecipient);
+
+        // Transfers closed without release stay unreadable.
+        foreach (var closed in new[] { TransferLifecycle.Rejected, TransferLifecycle.Blocked, TransferLifecycle.Cancelled })
+            Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(Outbound(closed), Staff(3, view: true, download: true, anyTask: true)).ContentAccess);
     }
 
     [Fact]

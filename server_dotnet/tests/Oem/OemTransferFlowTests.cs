@@ -138,13 +138,15 @@ public sealed class OemTransferFlowTests
         Assert.True(vendorView["files"]![0]!["downloadable"]!.GetValue<bool>());
         Assert.Equal(1, await ListedDownloadableAsync(world.Vendor, id, ct));
         Assert.Equal(content, await DownloadAsync(world.Vendor, file.Id(), ct));
-        // The sender holds only transfer_create: it sees the result but reads content only with view + download.
+        // The company side can still check what went out: the sender (even with only transfer_create)
+        // and the approver who released it. The list row offers a download exactly where the detail does.
         var senderView = await world.Sender.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
-        Assert.Equal("NONE", senderView["capabilities"]!["contentPurpose"]!.GetValue<string>());
-        // The list row offers a download only where the detail would.
-        Assert.Equal(0, await ListedDownloadableAsync(world.Sender, id, ct));
-        // Approved and released: the former reviewer no longer reads content.
-        Assert.Equal(0, await ListedDownloadableAsync(world.Leader, id, ct));
+        Assert.Equal("SENDER", senderView["capabilities"]!["contentPurpose"]!.GetValue<string>());
+        Assert.Equal(1, await ListedDownloadableAsync(world.Sender, id, ct));
+        var approverView = await world.Leader.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+        Assert.Equal("REVIEW", approverView["capabilities"]!["contentPurpose"]!.GetValue<string>());
+        Assert.Equal(1, await ListedDownloadableAsync(world.Leader, id, ct));
+        Assert.Equal(content, await DownloadAsync(world.Leader, file.Id(), ct));
 
         await using var conn = await host.OpenAsync(ct);
         Assert.Equal("AVAILABLE", await conn.ExecuteScalarAsync<string>("SELECT payload_status FROM oem_transfer_files WHERE id=@id", new { id = file.Id() }));

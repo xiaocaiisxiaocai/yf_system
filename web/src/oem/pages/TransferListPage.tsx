@@ -1,13 +1,15 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table } from '@arco-design/web-react'
-import { IconDownload, IconUpload } from '@arco-design/web-react/icon'
+import { IconDownload, IconEye, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import { oemRequestError } from '../api/requestError'
 import type { CompanyOption, TransferFile, TransferSummary } from '../api/types'
 import { downloadOemFile } from '../components/downloadOemFile'
+import OemFilePreview from '../components/OemFilePreview'
+import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
 import { LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
@@ -27,7 +29,7 @@ const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'status', title: '状态', defaultWidth: 180, minWidth: 140 },
   { key: 'files', title: '附件', defaultWidth: 120, minWidth: 96 },
   { key: 'sentAt', title: '提交时间', defaultWidth: 170, minWidth: 140 },
-  { key: 'actions', title: '操作', defaultWidth: 96, minWidth: 88, locked: true },
+  { key: 'actions', title: '操作', defaultWidth: 176, minWidth: 160, locked: true },
 ]
 // 厂商门户里往来对象总是“SAA”，列名不写“厂商”。
 const PORTAL_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = OEM_TRANSFER_COLUMNS
@@ -335,8 +337,12 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   )
 }
 
-/** Lists a transfer's downloadable files when there is more than one, so each starts its own browser download. */
-function DownloadPicker({ title, files, onClose }: { title: string; files: TransferFile[]; onClose: () => void }) {
+const canPreview = (file: TransferFile) => Boolean(oemPreviewKind(file.ext)) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES
+
+/** Lists a transfer's readable files when there is more than one: each previews or starts its own browser download. */
+function DownloadPicker({ title, files, onPreview, onClose }: {
+  title: string; files: TransferFile[]; onPreview: (file: TransferFile) => void; onClose: () => void
+}) {
   const { api } = useOem()
   const [busyId, setBusyId] = useState<number | null>(null)
   const download = async (file: TransferFile) => {
@@ -350,7 +356,7 @@ function DownloadPicker({ title, files, onClose }: { title: string; files: Trans
     }
   }
   return (
-    <Modal title={`下载：${title}`} visible footer={null} onCancel={onClose} unmountOnExit>
+    <Modal title={title} visible footer={null} onCancel={onClose} unmountOnExit style={{ width: 640 }}>
       <Table
         rowKey="id"
         size="small"
@@ -360,10 +366,16 @@ function DownloadPicker({ title, files, onClose }: { title: string; files: Trans
           { key: 'name', title: '文件名', dataIndex: 'originalName', ellipsis: true },
           { key: 'size', title: '大小', width: 96, render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
           {
-            key: 'actions', title: '操作', width: 96,
+            key: 'actions', title: '操作', width: 176,
             render: (_: unknown, file: TransferFile) => (
-              <Button size="small" icon={<IconDownload />} loading={busyId === file.id} disabled={busyId !== null && busyId !== file.id}
-                onClick={() => void download(file)}>下载</Button>
+              <Space size={8}>
+                {canPreview(file) && (
+                  <Button size="small" icon={<IconEye />} aria-label={`预览 ${file.originalName}`} onClick={() => onPreview(file)}>预览</Button>
+                )}
+                <Button size="small" icon={<IconDownload />} aria-label={`下载 ${file.originalName}`}
+                  loading={busyId === file.id} disabled={busyId !== null && busyId !== file.id}
+                  onClick={() => void download(file)}>下载</Button>
+              </Space>
             ),
           },
         ]}
@@ -397,6 +409,7 @@ export default function TransferListPage() {
   const [creating, setCreating] = useState(false)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
   const [picking, setPicking] = useState<{ title: string; files: TransferFile[] } | null>(null)
+  const [previewing, setPreviewing] = useState<TransferFile | null>(null)
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
@@ -418,8 +431,9 @@ export default function TransferListPage() {
     return [...options, { id: companyId, name, canReceive: false }]
   }, [companyId, companyOptions.data, transfers.data])
   const total = transfers.data?.total ?? 0
-  // The row count can be stale; the detail's per-file flags decide what is offered.
-  const downloadRow = useCallback(async (row: TransferSummary) => {
+  // The row count can be stale; the detail's per-file flags decide what is offered. One file acts at once;
+  // several open a picker with preview and download per file.
+  const openRow = useCallback(async (row: TransferSummary, action: 'download' | 'preview') => {
     setDownloadingId(row.id)
     try {
       const detail = await api.transfer(row.id)
@@ -427,10 +441,14 @@ export default function TransferListPage() {
       if (files.length === 0) {
         Message.warning('文件已不可下载')
         void transfers.refetch()
-      } else if (files.length === 1) {
-        await downloadOemFile(api, files[0].id)
-      } else {
+      } else if (files.length > 1) {
         setPicking({ title: detail.summary.title, files })
+      } else if (action === 'download') {
+        await downloadOemFile(api, files[0].id)
+      } else if (canPreview(files[0])) {
+        setPreviewing(files[0])
+      } else {
+        Message.info('该文件类型不支持在线预览，请下载后查看')
       }
     } catch {
       // The HTTP client already shows the reason.
@@ -465,12 +483,16 @@ export default function TransferListPage() {
     {
       key: 'actions', title: '操作',
       render: (_: unknown, row: TransferSummary) => row.downloadableCount > 0 && (
-        <Button size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
-          loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
-          onClick={(event) => { event.stopPropagation(); void downloadRow(row) }}>下载</Button>
+        <span className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}><Space size={8}>
+          <Button size="small" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+            disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
+          <Button size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
+            loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
+            onClick={() => void openRow(row, 'download')}>下载</Button>
+        </Space></span>
       ),
     },
-  ], [base, realm, downloadingId, downloadRow])
+  ], [base, realm, downloadingId, openRow])
   const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
   const columnSpecs = realm === 'internal' ? OEM_TRANSFER_COLUMNS : PORTAL_TRANSFER_COLUMNS
   const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef)
@@ -533,7 +555,8 @@ export default function TransferListPage() {
         </div>
       </ColumnResizeProvider>
       {creating && <CreateTransferModal visible onClose={() => setCreating(false)} />}
-      {picking && <DownloadPicker title={picking.title} files={picking.files} onClose={() => setPicking(null)} />}
+      {picking && <DownloadPicker title={picking.title} files={picking.files} onPreview={setPreviewing} onClose={() => setPicking(null)} />}
+      <OemFilePreview file={previewing} onClose={() => setPreviewing(null)} />
     </Card>
   )
 }

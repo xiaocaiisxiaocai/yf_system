@@ -501,7 +501,7 @@ export default function TransferDetailPage() {
           />
         )}
         {summary.direction === 'OEM_TO_INTERNAL' || realm === 'oem' ? null : summary.lifecycleStatus === 'SEALED' && !caps.canReadContent && (
-          <Typography.Text type="secondary">附件在文件校验与审批完成、正式发布前仅发送人和当前审批人可查看。</Typography.Text>
+          <Typography.Text type="secondary">附件在文件校验与审批完成、正式发布前仅发送人和审批人可查看。</Typography.Text>
         )}
       </Card>
 
