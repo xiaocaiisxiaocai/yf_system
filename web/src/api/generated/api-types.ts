@@ -894,6 +894,7 @@ export interface OemTransferSummaryResponse {
   purgedCount: number
   missingCount: number
   downloadableCount: number
+  previewableCount: number
   createdAt: string
   sentAt: string | null
   releasedAt: string | null

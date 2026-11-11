@@ -501,8 +501,10 @@ export default function TransferListPage() {
       key: 'actions', title: '操作',
       render: (_: unknown, row: TransferSummary) => row.downloadableCount > 0 && (
         <span className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}><Space size={8}>
-          <Button size="small" icon={<IconEye />} aria-label={`预览 ${row.title}`}
-            disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
+          {row.previewableCount > 0 && (
+            <Button size="small" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+              disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
+          )}
           <Button size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
             loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
             onClick={() => void openRow(row, 'download')}>下载</Button>

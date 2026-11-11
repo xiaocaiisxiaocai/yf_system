@@ -12396,6 +12396,7 @@
           "id",
           "lifecycleStatus",
           "missingCount",
+          "previewableCount",
           "purgeDueAt",
           "purgePendingCount",
           "purgedCount",
@@ -12470,6 +12471,10 @@
             "format": "int32"
           },
           "downloadableCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "previewableCount": {
             "type": "integer",
             "format": "int32"
           },

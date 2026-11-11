@@ -3,6 +3,7 @@ using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
+using Yf.Api.Modules.Oem.Delivery;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Validation;
 
@@ -276,7 +277,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             .ToDictionaryAsync(account => account.Id, account => account.EmployeeNo, ct);
         var files = await db.OemTransferFiles.AsNoTracking()
             .Where(file => Enumerable.Contains(ids, file.TransferId) && (file.PurgeReason == null || file.PurgeReason != PurgeReasons.FileRemoved))
-            .Select(file => new { file.TransferId, file.SizeBytes, file.ScanStatus, file.PayloadStatus, file.PurgeDueAt }).ToArrayAsync(ct);
+            .Select(file => new { file.TransferId, file.SizeBytes, file.Ext, file.ScanStatus, file.PayloadStatus, file.PurgeDueAt }).ToArrayAsync(ct);
         var instances = await db.OemFlowInstances.AsNoTracking().Where(instance => Enumerable.Contains(ids, instance.TransferId))
             .ToDictionaryAsync(instance => instance.TransferId, instance => new { instance.Status, instance.BlockedReason }, ct);
         // Content access per row, evaluated in batch with the same rule as CapabilitiesAsync.
@@ -332,6 +333,10 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 MissingCount: own.Count(file => file.PayloadStatus is PayloadStatuses.StorageLost or PayloadStatuses.MissingUnverified),
                 DownloadableCount: capabilities.CanReadContent
                     ? own.Count(file => ReadyForDownload(file.ScanStatus, file.PayloadStatus, file.PurgeDueAt, now)) : 0,
+                // Downloadable files the browser can also preview; the list hides its preview button when this is 0.
+                PreviewableCount: capabilities.CanReadContent
+                    ? own.Count(file => ReadyForDownload(file.ScanStatus, file.PayloadStatus, file.PurgeDueAt, now)
+                        && OemPreviewFormats.IsPreviewable(file.Ext, file.SizeBytes)) : 0,
                 transfer.CreatedAt, transfer.SentAt, transfer.ReleasedAt,
                 // When the last file is (or was) deleted; unknown while any file has no scheduled deletion.
                 own.Length > 0 && own.All(file => file.PurgeDueAt != null) ? own.Max(file => file.PurgeDueAt) : null,

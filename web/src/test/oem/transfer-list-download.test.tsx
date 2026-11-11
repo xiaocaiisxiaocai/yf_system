@@ -13,13 +13,14 @@ vi.mock('../../oem/components/OemFilePreview', () => ({
   default: ({ file }: { file: TransferFile | null }) => file ? <div role="region" aria-label="文件预览">{file.originalName}</div> : null,
 }))
 
-function summary(id: number, title: string, downloadableCount: number): TransferSummary {
+// previewableCount 默认等于可下载数（夹具里的文件默认都是可预览格式）；不可预览的行显式传 0。
+function summary(id: number, title: string, downloadableCount: number, previewableCount = downloadableCount): TransferSummary {
   return {
     id, direction: 'INTERNAL_TO_OEM', companyId: 9, companyName: '公司', title,
     sender: { realm: 'internal', id: 7, employeeNo: '', realName: '发送人' },
     lifecycleStatus: 'RELEASED', approvalStatus: 'APPROVED', approvalBlockedReason: null, validationSummary: 'VALID',
     fileCount: 2, totalBytes: 2048, availableCount: 2, purgePendingCount: 0, purgedCount: 0, missingCount: 0,
-    downloadableCount, createdAt: '2026-11-10T00:00:00Z', sentAt: '2026-11-10T00:01:00Z', releasedAt: '2026-11-10T00:02:00Z', purgeDueAt: null, version: 2,
+    downloadableCount, previewableCount, createdAt: '2026-11-10T00:00:00Z', sentAt: '2026-11-10T00:01:00Z', releasedAt: '2026-11-10T00:02:00Z', purgeDueAt: null, version: 2,
   }
 }
 
@@ -102,15 +103,12 @@ describe('ODM/OEMA 传递单列表直接下载', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/oem-portal/transfers')
   })
 
-  it('不支持在线预览的格式提示下载查看', async () => {
-    const user = userEvent.setup()
-    const row = summary(46, '底座.step', 1)
+  it('不支持在线预览的格式不显示预览按钮，只保留下载', async () => {
+    const row = summary(46, '底座.step', 1, 0)
     renderList([row], { 46: detail(row, [file(341, '底座.step')]) })
 
-    await user.click(await screen.findByRole('button', { name: '预览 底座.step' }))
-
-    expect(await screen.findByText('该文件类型不支持在线预览，请下载后查看')).toBeInTheDocument()
-    expect(screen.queryByRole('region', { name: '文件预览' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '下载 底座.step' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '预览 底座.step' })).not.toBeInTheDocument()
   })
 
   it('多个文件时弹窗逐个预览或下载', async () => {

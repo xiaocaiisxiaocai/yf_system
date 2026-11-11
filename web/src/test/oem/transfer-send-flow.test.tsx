@@ -37,6 +37,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
       purgedCount: 0,
       missingCount: 0,
       downloadableCount: 0,
+      previewableCount: 0,
       createdAt: '2026-10-05T00:00:00Z',
       sentAt: lifecycleStatus === 'DRAFT' ? null : '2026-10-05T00:01:00Z',
       releasedAt: null,

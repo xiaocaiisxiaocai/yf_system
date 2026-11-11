@@ -150,6 +150,7 @@ public sealed record OemTransferSummaryResponse(
     int MissingCount,
     /// <summary>Files the caller may download right now (same rule as the detail view's <c>downloadable</c>).</summary>
     int DownloadableCount,
+    int PreviewableCount,
     DateTime CreatedAt,
     DateTime? SentAt,
     DateTime? ReleasedAt,

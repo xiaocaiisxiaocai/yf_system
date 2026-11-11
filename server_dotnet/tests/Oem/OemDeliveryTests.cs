@@ -43,6 +43,22 @@ public sealed class OemDeliveryTests
         }
     }
 
+    [Theory]
+    [InlineData("pdf", 1024UL, true)]
+    [InlineData("PDF", 1024UL, true)]
+    [InlineData("xlsx", 1024UL, true)]
+    [InlineData("docx", 1024UL, true)]
+    [InlineData("pptx", 1024UL, true)]
+    [InlineData("png", 1024UL, true)]
+    [InlineData("doc", 1024UL, false)]
+    [InlineData("ppt", 1024UL, false)]
+    [InlineData("step", 1024UL, false)]
+    [InlineData("zip", 1024UL, false)]
+    [InlineData("", 1024UL, false)]
+    [InlineData("pdf", 50UL * 1024 * 1024 + 1, false)]
+    public void OnlyFormatsTheBrowserCanShowAreOfferedForPreview(string extension, ulong size, bool expected) =>
+        Assert.Equal(expected, OemPreviewFormats.IsPreviewable(extension, size));
+
     [Fact]
     public void RangesMergeWithoutDoubleCountingAndParseStrictly()
     {

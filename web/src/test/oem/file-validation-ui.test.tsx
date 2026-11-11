@@ -96,6 +96,7 @@ describe('ODM/OEMA 文件校验界面', () => {
         purgedCount: 0,
         missingCount: 0,
         downloadableCount: 0,
+        previewableCount: 0,
         createdAt: '2026-10-05T00:00:00Z',
         sentAt: null,
         releasedAt: null,
