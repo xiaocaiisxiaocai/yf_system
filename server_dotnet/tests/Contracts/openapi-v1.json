@@ -12391,10 +12391,12 @@
           "companyName",
           "createdAt",
           "direction",
+          "downloadableCount",
           "fileCount",
           "id",
           "lifecycleStatus",
           "missingCount",
+          "purgeDueAt",
           "purgePendingCount",
           "purgedCount",
           "releasedAt",
@@ -12467,6 +12469,10 @@
             "type": "integer",
             "format": "int32"
           },
+          "downloadableCount": {
+            "type": "integer",
+            "format": "int32"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -12477,6 +12483,11 @@
             "nullable": true
           },
           "releasedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "purgeDueAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true

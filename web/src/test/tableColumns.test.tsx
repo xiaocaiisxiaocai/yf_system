@@ -77,6 +77,26 @@ describe('column layout storage', () => {
     expect(withFlexibleColumn([{ key: 'name', width: 120 }], 200, 'name')).toEqual([{ key: 'name', width: 120 }])
   })
 
+  it('can give all leftover width to the named column instead', () => {
+    const columns = [
+      { key: 'name', width: 360 },
+      { key: 'size', width: 110 },
+      { key: 'actions', width: 200 },
+    ]
+    expect(withFlexibleColumn(columns, 1000, 'name', true)).toEqual([
+      { key: 'name', width: 690 },
+      { key: 'size', width: 110 },
+      { key: 'actions', width: 200 },
+    ])
+    // Narrower than the columns: nothing shrinks, the table scrolls.
+    expect(withFlexibleColumn(columns, 500, 'name', true)).toEqual(columns)
+    // Without that column the old even split applies.
+    expect(withFlexibleColumn(columns.slice(1), 410, 'name', true)).toEqual([
+      { key: 'size', width: 160 },
+      { key: 'actions', width: 250 },
+    ])
+  })
+
   it('measures the table frame, not the body that shrinks to the columns', () => {
     const host = document.createElement('div')
     const container = document.createElement('div')

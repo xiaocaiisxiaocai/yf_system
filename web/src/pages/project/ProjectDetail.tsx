@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Drawer, Empty, Space, Spin, Table, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Drawer, Empty, Space, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import ResizableTable from '../../components/ResizableTable'
 import { IconDown, IconLeft, IconUp } from '@arco-design/web-react/icon'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
@@ -125,7 +126,7 @@ function ProjectCopyRecord({
               <Button size="small" onClick={() => setReloadKey((value) => value + 1)}>重试</Button>
             </div>
           ) : (
-            <Table
+            <ResizableTable tableId="project-copy-files"
               size="small"
               rowKey="targetFileId"
               loading={loading}

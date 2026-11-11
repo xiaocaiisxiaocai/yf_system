@@ -1,4 +1,5 @@
-import { Button, Card, Input, InputNumber, Space, Table } from '@arco-design/web-react'
+import { Button, Card, Input, InputNumber, Space } from '@arco-design/web-react'
+import ResizableTable from '../../../components/ResizableTable'
 import type { Cfg } from './systemConfigModel'
 import { CONFIG_META } from './systemConfigModel'
 
@@ -73,7 +74,7 @@ export function renderSystemConfigTable({
         </Space>
       }
     >
-      <Table
+      <ResizableTable tableId="system-configs"
         className="page-table"
         rowKey="key"
         data={configs}

@@ -148,9 +148,12 @@ public sealed record OemTransferSummaryResponse(
     int PurgePendingCount,
     int PurgedCount,
     int MissingCount,
+    /// <summary>Files the caller may download right now (same rule as the detail view's <c>downloadable</c>).</summary>
+    int DownloadableCount,
     DateTime CreatedAt,
     DateTime? SentAt,
     DateTime? ReleasedAt,
+    DateTime? PurgeDueAt,
     ulong Version);
 
 public sealed record OemTransferRetentionResponse(

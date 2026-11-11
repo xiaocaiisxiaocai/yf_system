@@ -49,9 +49,18 @@ internal sealed partial class ProjectService(
             : await ProjectAccessService.VisibleQueryAsync(db, current, ct);
         if (!string.IsNullOrWhiteSpace(keyword))
         {
-            var value = keyword.Trim();
-            query = query.Where(project => EF.Functions.Like(
-                project.Name, QueryValues.ContainsPattern(value), QueryValues.LikeEscape));
+            // One box finds a project by any identifying text shown in the list: name, work order number,
+            // machine model, Robot part number / model (or the legacy model name) and Robot owner.
+            var pattern = QueryValues.ContainsPattern(keyword.Trim());
+            query = query.Where(project => EF.Functions.Like(project.Name, pattern, QueryValues.LikeEscape)
+                || (project.MachineModel != null && EF.Functions.Like(project.MachineModel, pattern, QueryValues.LikeEscape))
+                || (project.RobotOwnerName != null && EF.Functions.Like(project.RobotOwnerName, pattern, QueryValues.LikeEscape))
+                || (project.LegacyRobotModelName != null && EF.Functions.Like(project.LegacyRobotModelName, pattern, QueryValues.LikeEscape))
+                || db.ProjectWorkOrders.Any(order => order.ProjectId == project.Id
+                    && EF.Functions.Like(order.WorkOrderNo, pattern, QueryValues.LikeEscape))
+                || db.RobotParts.Any(part => part.Id == project.RobotPartId
+                    && (EF.Functions.Like(part.PartNumber, pattern, QueryValues.LikeEscape)
+                        || EF.Functions.Like(part.Model, pattern, QueryValues.LikeEscape))));
         }
         if (status is not null) query = query.Where(project => project.Status == status);
         if (supplierId is not null) query = query.Where(project => project.SupplierId == supplierId.Value);

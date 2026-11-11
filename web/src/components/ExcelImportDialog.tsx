@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
-import { Alert, Button, Message, Modal, Space, Table, Typography } from '@arco-design/web-react'
+import { Alert, Button, Message, Modal, Space, Typography } from '@arco-design/web-react'
+import ResizableTable from './ResizableTable'
 import { downloadExcelWorkbook, readExcelTable, type ExcelImportRow, type ExcelWorkbookSheet } from '../utils/excelWorkbook'
 
 export type ImportPreviewStatus = 'READY' | 'SKIPPED' | 'INVALID' | 'CREATED' | 'FAILED'
@@ -184,7 +185,7 @@ export default function ExcelImportDialog<T>({
             <Typography.Text type={counts.invalid ? 'error' : 'secondary'}>错误 {counts.invalid}</Typography.Text>
             {counts.created > 0 && <Typography.Text type="success">已新增 {counts.created}</Typography.Text>}
           </Space>
-          <Table
+          <ResizableTable tableId="excel-import-preview"
             size="small"
             rowKey="rowNumber"
             data={rows}

@@ -6,7 +6,7 @@ import {
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
-import { startOemDownload } from '../../api/download'
+import { downloadOemFile } from '../components/downloadOemFile'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
@@ -22,7 +22,7 @@ import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 
 const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
-  { key: 'name', title: '文件名', defaultWidth: 240, minWidth: 140, locked: true },
+  { key: 'name', title: '文件名', defaultWidth: 360, minWidth: 160, locked: true },
   { key: 'size', title: '大小', defaultWidth: 110, minWidth: 80 },
   { key: 'validation', title: '文件校验', defaultWidth: 200, minWidth: 120 },
   { key: 'payload', title: '存储', defaultWidth: 110, minWidth: 80 },
@@ -230,7 +230,10 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
   const { userId, realm } = useOem()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const columns = [
-    { key: 'name', title: '文件名', dataIndex: 'originalName' },
+    {
+      key: 'name', title: '文件名', dataIndex: 'originalName', ellipsis: true,
+      render: (value: string) => <span title={value}>{value}</span>,
+    },
     { key: 'size', title: '大小', render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
     {
       key: 'validation', title: '文件校验',
@@ -267,7 +270,8 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
     },
   ]
   const fileTableId = realm === 'oem' ? 'oem-portal-transfer-files' : 'oem-transfer-files'
-  const table = useAdjustableColumns(fileTableId, userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef)
+  // 文件名常很长：屏幕有余量时多出的宽度都给文件名，其余列保持设定宽度。
+  const table = useAdjustableColumns(fileTableId, userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef, true, true)
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
@@ -434,17 +438,7 @@ export default function TransferDetailPage() {
       setCancelling(false)
     }
   }
-  const download = async (file: TransferFile) => {
-    const session = await api.startDownload(file.id)
-    // 授权 cookie 限定路径且 HttpOnly，由隐藏 iframe 导航下载：成功交给浏览器下载管理器，
-    // 失败（授权过期、文件已清理、4xx/5xx）只提示原因，不会把整个标签页带到服务端 JSON 错误页。
-    // 只接受本站、本文件自己的下载路径。
-    try {
-      startOemDownload(session.url, file.id)
-    } catch {
-      Message.error('下载地址无效，请刷新后重试')
-    }
-  }
+  const download = (file: TransferFile) => downloadOemFile(api, file.id)
   const preview = (file: TransferFile) => {
     // PDF, images, Excel, PPTX and Word (.docx) open in-page with the viewer watermark; other formats are download-only.
     if (oemPreviewKind(file.ext)) setPreviewing(file)
@@ -511,7 +505,7 @@ export default function TransferDetailPage() {
           />
         )}
         {summary.direction === 'OEM_TO_INTERNAL' || realm === 'oem' ? null : summary.lifecycleStatus === 'SEALED' && !caps.canReadContent && (
-          <Typography.Text type="secondary">附件在文件校验与审批完成、正式发布前仅发送人和当前审批人可查看。</Typography.Text>
+          <Typography.Text type="secondary">附件在文件校验与审批完成、正式发布前仅发送人和审批人可查看。</Typography.Text>
         )}
       </Card>
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Input, Message, Modal, Popconfirm, Progress, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
+import { Alert, Button, Input, Message, Modal, Popconfirm, Progress, Space, Spin, Tag, Typography } from '@arco-design/web-react'
+import ResizableTable from '../../../components/ResizableTable'
 import http, { type QuietRequestConfig } from '../../../api/client'
 import type { ApiResponses } from '../../../api/types'
 import { fmtSize } from '../../../api/types'
@@ -173,7 +174,7 @@ export default function StorageLocationsPanel() {
         <Alert key={item.kind} type={item.status === 'FAILED' ? 'error' : 'warning'} style={{ marginBottom: 12 }}
           content={`${item.label}：${item.lastError}`} />
       ))}
-      <Table rowKey="kind" data={items} columns={columns} pagination={false} border={false} />
+      <ResizableTable tableId="storage-locations" rowKey="kind" data={items} columns={columns} pagination={false} border={false} />
       <Modal
         title={editing ? `${editing.path ? '更换' : '设置'}${editing.label}路径` : ''}
         visible={Boolean(editing)}

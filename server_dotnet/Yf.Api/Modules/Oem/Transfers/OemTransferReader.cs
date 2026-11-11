@@ -71,8 +71,38 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 || db.OemCompanies.Any(company => company.Id == transfer.OemCompanyId
                     && EF.Functions.Like(company.Name, pattern, QueryValues.LikeEscape)));
         }
+        var sender = request.Query["sender"].ToString().Trim();
+        if (sender.Length > 0)
+        {
+            var pattern = QueryValues.ContainsPattern(sender);
+            // A vendor account must not learn internal employee numbers, so it matches internal senders by name only.
+            var byEmployeeNo = current is not OemAccountActor;
+            query = query.Where(transfer =>
+                (transfer.InternalSenderUserId != null && db.Users.Any(user => user.Id == transfer.InternalSenderUserId
+                    && (EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape)
+                        || byEmployeeNo && EF.Functions.Like(user.EmployeeNo, pattern, QueryValues.LikeEscape))))
+                || (transfer.OemSenderAccountId != null && db.OemAccounts.Any(account => account.Id == transfer.OemSenderAccountId
+                    && EF.Functions.Like(account.EmployeeNo, pattern, QueryValues.LikeEscape))));
+        }
+        // Submit time range: sentFrom inclusive, sentTo exclusive (the UI sends local day boundaries as instants).
+        if (QueryValues.OptionalInstant(request, "sentFrom") is DateTime sentFrom) query = query.Where(transfer => transfer.SentAt >= sentFrom);
+        if (QueryValues.OptionalInstant(request, "sentTo") is DateTime sentTo) query = query.Where(transfer => transfer.SentAt < sentTo);
+        // "latest" is everything that still has stored content; "purged" is history whose files were all really deleted
+        // from the server. Files removed from a draft by the sender never count.
+        var scope = request.Query["scope"].ToString();
+        if (scope is not ("" or "latest" or "purged")) throw ApiException.BadRequest("请求参数错误: scope");
+        var live = db.OemTransferFiles.Where(file => file.PurgeReason == null || file.PurgeReason != PurgeReasons.FileRemoved);
+        var fullyPurged = db.OemTransfers.Where(transfer =>
+            live.Any(file => file.TransferId == transfer.Id && file.PayloadStatus == PayloadStatuses.Purged)
+            && !live.Any(file => file.TransferId == transfer.Id && file.PayloadStatus != PayloadStatuses.Purged))
+            .Select(transfer => transfer.Id);
+        query = scope == "purged"
+            ? query.Where(transfer => fullyPurged.Contains(transfer.Id))
+            : query.Where(transfer => !fullyPurged.Contains(transfer.Id));
         var total = (ulong)await query.LongCountAsync(ct);
-        var rows = await query.OrderByDescending(transfer => transfer.Id).Page(offset, size).AsNoTracking().ToArrayAsync(ct);
+        // Newest first by submit time (drafts by creation time).
+        var rows = await query.OrderByDescending(transfer => transfer.SentAt ?? transfer.CreatedAt).ThenByDescending(transfer => transfer.Id)
+            .Page(offset, size).AsNoTracking().ToArrayAsync(ct);
         var summaries = await SummariesAsync(uow, rows, current, ct);
         return new OemPageResponse<OemTransferSummaryResponse>(rows.Select(transfer => summaries[transfer.Id]).ToArray(), total, page, size);
     }
@@ -136,8 +166,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             files.Select(file =>
             {
                 latestJobs.TryGetValue(file.Id, out var job);
-                var ready = file.ScanStatus == ValidationStatuses.Valid && file.PayloadStatus == PayloadStatuses.Available
-                    && (file.PurgeDueAt is null || file.PurgeDueAt > now);
+                var ready = ReadyForDownload(file.ScanStatus, file.PayloadStatus, file.PurgeDueAt, now);
                 return new OemTransferFileResponse(
                     file.Id, file.OriginalName, file.Ext, file.SizeBytes, file.Sha256,
                     ValidationStatus: file.ScanStatus, file.PayloadStatus,
@@ -164,7 +193,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
     internal static async Task<TransferCapabilities> CapabilitiesAsync(OemUnitOfWork uow, OemActor actor, OemTransfer transfer, CancellationToken ct)
     {
         IReadOnlySet<string> permissions = new HashSet<string>();
-        bool activeTask = false, anyTask = false, approvalBlocked = false;
+        var approvalBlocked = false;
+        string[] tasks = [];
         if (actor is InternalOemActor)
         {
             permissions = await OemAuthorizer.InternalPermissionsAsync(uow, actor.Id, ct);
@@ -173,21 +203,33 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 approvalBlocked = await uow.Db.OemFlowInstances.AsNoTracking()
                     .AnyAsync(instance => instance.TransferId == transfer.Id
                         && instance.Status == FlowInstanceStatuses.ApprovalBlocked, ct);
-                var tasks = await uow.Db.OemFlowTasks.AsNoTracking()
+                tasks = await uow.Db.OemFlowTasks.AsNoTracking()
                     .Join(uow.Db.OemFlowInstances.Where(instance => instance.TransferId == transfer.Id), task => task.InstanceId, instance => instance.Id,
                         (task, instance) => task)
                     .Where(task => task.ApproverUserId == actor.Id).Select(task => task.Status).ToArrayAsync(ct);
-                // Only a task the user has to decide or did decide shows the transfer: one not reached yet, reassigned
-                // away or cancelled does not, and neither does any task once the approval permission is gone.
-                var canApprove = permissions.Contains(OemPermissions.FlowApprove);
-                anyTask = canApprove && tasks.Any(status => status is FlowTaskStatuses.Pending or FlowTaskStatuses.Approved or FlowTaskStatuses.Rejected);
-                activeTask = canApprove && tasks.Contains(FlowTaskStatuses.Pending);
             }
         }
+        return Evaluate(actor, permissions, transfer, approvalBlocked, tasks);
+    }
+
+    /// <param name="approverTaskStatuses">The caller's own approval task statuses on the transfer (internal, outbound only).</param>
+    private static TransferCapabilities Evaluate(OemActor actor, IReadOnlySet<string> permissions, OemTransfer transfer,
+        bool approvalBlocked, IReadOnlyCollection<string> approverTaskStatuses)
+    {
+        // Only a task the user has to decide or did decide shows the transfer: one not reached yet, reassigned
+        // away or cancelled does not, and neither does any task once the approval permission is gone.
+        var canApprove = permissions.Contains(OemPermissions.FlowApprove);
+        var anyTask = canApprove && approverTaskStatuses.Any(status => status is FlowTaskStatuses.Pending or FlowTaskStatuses.Approved or FlowTaskStatuses.Rejected);
+        var activeTask = canApprove && approverTaskStatuses.Contains(FlowTaskStatuses.Pending);
         var facts = new TransferFacts(transfer.Direction, transfer.OemCompanyId, transfer.LifecycleStatus,
             transfer.InternalSenderUserId, transfer.OemSenderAccountId, approvalBlocked);
         return TransferAccess.Evaluate(facts, ActorFacts.For(actor, permissions, activeTask, anyTask));
     }
+
+    /// <summary>A file the detail view marks downloadable: validated, available and not past its purge time.</summary>
+    private static bool ReadyForDownload(string validationStatus, string payloadStatus, DateTime? purgeDueAt, DateTime now) =>
+        validationStatus == ValidationStatuses.Valid && payloadStatus == PayloadStatuses.Available
+        && (purgeDueAt is null || purgeDueAt > now);
 
     private static string NormalizeApprovalStatus(string value) => value.Trim().ToUpperInvariant() switch
     {
@@ -234,14 +276,36 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             .ToDictionaryAsync(account => account.Id, account => account.EmployeeNo, ct);
         var files = await db.OemTransferFiles.AsNoTracking()
             .Where(file => Enumerable.Contains(ids, file.TransferId) && (file.PurgeReason == null || file.PurgeReason != PurgeReasons.FileRemoved))
-            .Select(file => new { file.TransferId, file.SizeBytes, file.ScanStatus, file.PayloadStatus }).ToArrayAsync(ct);
+            .Select(file => new { file.TransferId, file.SizeBytes, file.ScanStatus, file.PayloadStatus, file.PurgeDueAt }).ToArrayAsync(ct);
         var instances = await db.OemFlowInstances.AsNoTracking().Where(instance => Enumerable.Contains(ids, instance.TransferId))
             .ToDictionaryAsync(instance => instance.TransferId, instance => new { instance.Status, instance.BlockedReason }, ct);
+        // Content access per row, evaluated in batch with the same rule as CapabilitiesAsync.
+        IReadOnlySet<string> permissions = new HashSet<string>();
+        var taskStatuses = new Dictionary<ulong, string[]>();
+        if (actor is InternalOemActor)
+        {
+            permissions = await OemAuthorizer.InternalPermissionsAsync(uow, actor.Id, ct);
+            var outboundIds = transfers.Where(transfer => transfer.Direction == TransferDirections.InternalToOem).Select(transfer => transfer.Id).ToArray();
+            if (outboundIds.Length > 0)
+            {
+                var actorId = actor.Id;
+                taskStatuses = (await db.OemFlowTasks.AsNoTracking().Where(task => task.ApproverUserId == actorId)
+                        .Join(db.OemFlowInstances.Where(instance => Enumerable.Contains(outboundIds, instance.TransferId)),
+                            task => task.InstanceId, instance => instance.Id, (task, instance) => new { instance.TransferId, task.Status })
+                        .ToArrayAsync(ct))
+                    .GroupBy(item => item.TransferId).ToDictionary(group => group.Key, group => group.Select(item => item.Status).ToArray());
+            }
+        }
+        var now = uow.Now;
         var result = new Dictionary<ulong, OemTransferSummaryResponse>();
         foreach (var transfer in transfers)
         {
             var own = files.Where(file => file.TransferId == transfer.Id).ToArray();
             instances.TryGetValue(transfer.Id, out var instance);
+            var outbound = transfer.Direction == TransferDirections.InternalToOem;
+            var capabilities = Evaluate(actor, permissions, transfer,
+                approvalBlocked: actor is InternalOemActor && outbound && instance?.Status == FlowInstanceStatuses.ApprovalBlocked,
+                taskStatuses.GetValueOrDefault(transfer.Id) ?? []);
             var approvalStatus = transfer.Direction == TransferDirections.OemToInternal ? "NOT_REQUIRED" : instance?.Status switch
             {
                 null => null,
@@ -266,7 +330,12 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                 PurgePendingCount: own.Count(file => file.PayloadStatus == PayloadStatuses.PurgePending),
                 PurgedCount: own.Count(file => file.PayloadStatus == PayloadStatuses.Purged),
                 MissingCount: own.Count(file => file.PayloadStatus is PayloadStatuses.StorageLost or PayloadStatuses.MissingUnverified),
-                transfer.CreatedAt, transfer.SentAt, transfer.ReleasedAt, transfer.ConcurrencyVersion);
+                DownloadableCount: capabilities.CanReadContent
+                    ? own.Count(file => ReadyForDownload(file.ScanStatus, file.PayloadStatus, file.PurgeDueAt, now)) : 0,
+                transfer.CreatedAt, transfer.SentAt, transfer.ReleasedAt,
+                // When the last file is (or was) deleted; unknown while any file has no scheduled deletion.
+                own.Length > 0 && own.All(file => file.PurgeDueAt != null) ? own.Max(file => file.PurgeDueAt) : null,
+                transfer.ConcurrencyVersion);
         }
         return result;
     }

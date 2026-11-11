@@ -248,7 +248,7 @@ export default function ProjectList() {
       <h1 className="visually-hidden">Robot仿真协作</h1>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
-          <Input.Search allowClear placeholder="项目名称" style={{ width: 240 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />
+          <Input.Search allowClear placeholder="项目名称 / 工令号 / 机型 / 料号" style={{ width: 240 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />
           <Select allowClear placeholder="状态" style={{ width: 130 }} value={status} onChange={(value) => applyQuery({ status: value as string | undefined, page: 1 })}>
             {['IN_PROGRESS', 'COMPLETED', 'TERMINATED'].map((key) => <Select.Option key={key} value={key}>{PROJECT_STATUS[key]?.text ?? key}</Select.Option>)}
           </Select>

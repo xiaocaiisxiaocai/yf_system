@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Form, Input, Message, Popconfirm, Select, Space, Table, Tag,
+  Button, Card, Form, Input, Message, Popconfirm, Select, Space, Tag,
 } from '@arco-design/web-react'
+import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { isVersionConflict } from '../../api/versionConflict'
@@ -393,7 +394,7 @@ export default function SupplierList() {
       {loadError ? (
         <LoadError onRetry={load} />
       ) : (
-        <Table
+        <ResizableTable tableId="suppliers"
           className="page-table"
           rowKey="id"
           loading={loading}

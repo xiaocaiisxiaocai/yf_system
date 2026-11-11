@@ -84,6 +84,17 @@ public static class QueryValues
         return value;
     }
 
+    /// <summary>An optional ISO-8601 instant (UTC when it carries no offset); an empty value means "not supplied".</summary>
+    public static DateTime? OptionalInstant(HttpRequest request, string name)
+    {
+        if (!request.Query.TryGetValue(name, out var values)) return null;
+        if (values.Count != 1) throw ApiException.BadRequest("请求参数错误: " + name);
+        if (values[0]!.Length == 0) return null;
+        if (!DateTime.TryParse(values[0], CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var value))
+            throw ApiException.BadRequest("请求参数错误: " + name);
+        return DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    }
+
     public static (ulong Page, uint Size, ulong Offset) Page(HttpRequest request)
     {
         var p = OptionalUInt64(request, "page") ?? 1;

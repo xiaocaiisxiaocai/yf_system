@@ -294,6 +294,42 @@ public sealed class ProjectLifecycleTests
     }
 
     [Fact(Timeout = 90_000)]
+    public async Task KeywordFindsProjectsByWorkOrderMachineModelPartAndRobotOwner()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("project_keyword", ct);
+        var fixture = await SeedAsync(database, "搜索", 8900, ct);
+        await using var conn = fixture.Conn;
+        var projects = fixture.Projects;
+        var first = await projects.CreateAsync(conn, fixture.Owner, fixture.Request("甲项目"), null, ct);
+        var second = await projects.CreateAsync(conn, fixture.Owner, new ProjectUpsertRequest
+        {
+            Name = "乙项目", Description = "公共资料", SupplierId = fixture.BaseId + 1, WorkOrderNos = ["WO-OTHER-7", "WO-EXTRA-8"],
+            MachineModel = "另一机型", RobotPartId = fixture.PartId, PriorityId = fixture.PriorityId, RobotTypeId = fixture.RobotTypeId,
+            RobotOwnerContactIds = [fixture.ContactId], ExpectedCompletionDate = "2099-12-31",
+        }, null, ct);
+
+        async Task<ulong[]> Search(CurrentUser actor, string keyword) =>
+            (await projects.ListAsync(conn, actor, 1, 20, keyword, null, null, null, false, false, ct)).List
+                .Select(project => project.Id).Order().ToArray();
+        ulong[] both = [first.Id, second.Id];
+
+        Assert.Equal([first.Id], await Search(fixture.Colleague, "甲项目"));
+        // Any of several work order numbers, matched as a substring.
+        Assert.Equal([second.Id], await Search(fixture.Colleague, "EXTRA-8"));
+        Assert.Equal([first.Id], await Search(fixture.Colleague, $"WO-{fixture.BaseId}"));
+        Assert.Equal([second.Id], await Search(fixture.Colleague, "另一机型"));
+        Assert.Equal(both, await Search(fixture.Colleague, $"PART-{fixture.BaseId}"));
+        Assert.Equal(both, await Search(fixture.Colleague, "搜索型号"));
+        Assert.Equal(both, await Search(fixture.Colleague, "Robot 负责人"));
+        Assert.Empty(await Search(fixture.Colleague, "不存在的工令"));
+        // LIKE wildcards in the input are literal.
+        Assert.Empty(await Search(fixture.Colleague, "WO-%"));
+        // The supplier searches only inside its own scope, with the same fields.
+        Assert.Equal([second.Id], await Search(fixture.Supplier, "OTHER-7"));
+    }
+
+    [Fact(Timeout = 90_000)]
     public async Task ProjectChangesNotifyViewersOnce()
     {
         var ct = TestContext.Current.CancellationToken;

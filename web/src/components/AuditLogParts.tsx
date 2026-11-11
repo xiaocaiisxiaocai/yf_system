@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { Button, Collapse, Drawer, Message, Table, Tag, Typography } from '@arco-design/web-react'
+import { Button, Collapse, Drawer, Message, Tag, Typography } from '@arco-design/web-react'
+import ResizableTable from './ResizableTable'
 import { IconCheck, IconCopy, IconEye, IconRefresh } from '@arco-design/web-react/icon'
 import { actionSlots } from './ActionSlots'
 import { fmtTime } from '../api/types'
@@ -292,7 +293,7 @@ export function AuditTable({
   onView: (row: AuditLogRow) => void
 }) {
   return (
-    <Table
+    <ResizableTable tableId="audit-log"
       className="page-table audit-table"
       rowKey="id"
       loading={loading}

@@ -1,12 +1,15 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, Form, Input, Message, Modal, Radio, Select, Space, Table } from '@arco-design/web-react'
-import { IconUpload } from '@arco-design/web-react/icon'
+import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs } from '@arco-design/web-react'
+import { IconDownload, IconEye, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import { oemRequestError } from '../api/requestError'
-import type { CompanyOption, TransferSummary } from '../api/types'
+import type { CompanyOption, TransferFile, TransferSummary } from '../api/types'
+import { downloadOemFile } from '../components/downloadOemFile'
+import OemFilePreview from '../components/OemFilePreview'
+import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
 import { LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
@@ -20,14 +23,16 @@ import EnterSubmit from '../../components/EnterSubmit'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
-  // 往来对象：内部看到厂商名称，厂商门户看到“公司”；箭头和动词表示发出或收到。
+  // 往来对象：内部看到厂商名称，厂商门户看到“SAA”；箭头和动词表示发出或收到。
   { key: 'counterpart', title: '往来厂商', defaultWidth: 240, minWidth: 140 },
   { key: 'sender', title: '发送人', defaultWidth: 104, minWidth: 88 },
   { key: 'status', title: '状态', defaultWidth: 180, minWidth: 140 },
   { key: 'files', title: '附件', defaultWidth: 120, minWidth: 96 },
+  { key: 'purgeDueAt', title: '到期时间', defaultWidth: 170, minWidth: 140 },
   { key: 'sentAt', title: '提交时间', defaultWidth: 170, minWidth: 140 },
+  { key: 'actions', title: '操作', defaultWidth: 176, minWidth: 160, locked: true },
 ]
-// 厂商门户里往来对象总是“公司”，列名不写“厂商”。
+// 厂商门户里往来对象总是“SAA”，列名不写“厂商”。
 const PORTAL_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = OEM_TRANSFER_COLUMNS
   .map((spec) => spec.key === 'counterpart' ? { ...spec, title: '往来' } : spec)
 
@@ -333,6 +338,60 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   )
 }
 
+const canPreview = (file: TransferFile) => Boolean(oemPreviewKind(file.ext)) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES
+
+/** Lists a transfer's readable files when there is more than one: each previews or starts its own browser download. */
+function DownloadPicker({ title, files, onPreview, onClose }: {
+  title: string; files: TransferFile[]; onPreview: (file: TransferFile) => void; onClose: () => void
+}) {
+  const { api } = useOem()
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const download = async (file: TransferFile) => {
+    setBusyId(file.id)
+    try {
+      await downloadOemFile(api, file.id)
+    } catch {
+      // The HTTP client already shows the reason.
+    } finally {
+      setBusyId(null)
+    }
+  }
+  return (
+    <Modal title={title} visible footer={null} onCancel={onClose} unmountOnExit style={{ width: 640 }}>
+      <Table
+        rowKey="id"
+        size="small"
+        pagination={false}
+        data={files}
+        columns={[
+          { key: 'name', title: '文件名', dataIndex: 'originalName', ellipsis: true },
+          { key: 'size', title: '大小', width: 96, render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
+          {
+            key: 'actions', title: '操作', width: 176,
+            render: (_: unknown, file: TransferFile) => (
+              <Space size={8}>
+                {canPreview(file) && (
+                  <Button size="small" icon={<IconEye />} aria-label={`预览 ${file.originalName}`} onClick={() => onPreview(file)}>预览</Button>
+                )}
+                <Button size="small" icon={<IconDownload />} aria-label={`下载 ${file.originalName}`}
+                  loading={busyId === file.id} disabled={busyId !== null && busyId !== file.id}
+                  onClick={() => void download(file)}>下载</Button>
+              </Space>
+            ),
+          },
+        ]}
+      />
+    </Modal>
+  )
+}
+
+/** 日期选择器给出本地日期（YYYY-MM-DD）；转成本地当天 0 点的时刻，止日取次日 0 点（不含）。 */
+function dayStart(day: string, offsetDays = 0) {
+  const date = new Date(`${day}T00:00:00`)
+  date.setDate(date.getDate() + offsetDays)
+  return date.toISOString()
+}
+
 export default function TransferListPage() {
   const { api, realm, base, queryScope, userId } = useOem()
   const can = useCan()
@@ -355,12 +414,23 @@ export default function TransferListPage() {
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [mine, setMine] = useState(false)
+  const [scope, setScope] = useState<'latest' | 'purged'>('latest')
+  const [sender, setSender] = useState('')
+  const [sentRange, setSentRange] = useState<[string, string] | undefined>()
   const [creating, setCreating] = useState(false)
+  const [downloadingId, setDownloadingId] = useState<number | null>(null)
+  const [picking, setPicking] = useState<{ title: string; files: TransferFile[] } | null>(null)
+  const [previewing, setPreviewing] = useState<TransferFile | null>(null)
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
-    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId }],
-    queryFn: () => api.listTransfers({ page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, companyId }),
+    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId, scope, sender, sentRange }],
+    queryFn: () => api.listTransfers({
+      page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, companyId, scope,
+      sender: sender || undefined,
+      sentFrom: sentRange ? dayStart(sentRange[0]) : undefined,
+      sentTo: sentRange ? dayStart(sentRange[1], 1) : undefined,
+    }),
   })
   const companyOptions = useQuery({
     queryKey: ['oem', ...queryScope, 'company-options'],
@@ -377,6 +447,31 @@ export default function TransferListPage() {
     return [...options, { id: companyId, name, canReceive: false }]
   }, [companyId, companyOptions.data, transfers.data])
   const total = transfers.data?.total ?? 0
+  // The row count can be stale; the detail's per-file flags decide what is offered. One file acts at once;
+  // several open a picker with preview and download per file.
+  const openRow = useCallback(async (row: TransferSummary, action: 'download' | 'preview') => {
+    setDownloadingId(row.id)
+    try {
+      const detail = await api.transfer(row.id)
+      const files = detail.files.filter((file) => file.downloadable)
+      if (files.length === 0) {
+        Message.warning('文件已不可下载')
+        void transfers.refetch()
+      } else if (files.length > 1) {
+        setPicking({ title: detail.summary.title, files })
+      } else if (action === 'download') {
+        await downloadOemFile(api, files[0].id)
+      } else if (canPreview(files[0])) {
+        setPreviewing(files[0])
+      } else {
+        Message.info('该文件类型不支持在线预览，请下载后查看')
+      }
+    } catch {
+      // The HTTP client already shows the reason.
+    } finally {
+      setDownloadingId(null)
+    }
+  }, [api, transfers])
   const transferColumns = useMemo(() => [
     {
       key: 'title', title: '文件', dataIndex: 'title', ellipsis: true,
@@ -400,8 +495,21 @@ export default function TransferListPage() {
       ),
     },
     { key: 'files', title: '附件', render: (_: unknown, row: TransferSummary) => `${row.fileCount} 个 / ${fmtSize(row.totalBytes)}` },
+    { key: 'purgeDueAt', title: '到期时间', render: (_: unknown, row: TransferSummary) => (row.purgeDueAt ? fmtTime(row.purgeDueAt) : '-') },
     { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
-  ], [base, realm])
+    {
+      key: 'actions', title: '操作',
+      render: (_: unknown, row: TransferSummary) => row.downloadableCount > 0 && (
+        <span className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}><Space size={8}>
+          <Button size="small" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+            disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
+          <Button size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
+            loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
+            onClick={() => void openRow(row, 'download')}>下载</Button>
+        </Space></span>
+      ),
+    },
+  ], [base, realm, downloadingId, openRow])
   const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
   const columnSpecs = realm === 'internal' ? OEM_TRANSFER_COLUMNS : PORTAL_TRANSFER_COLUMNS
   const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef)
@@ -411,26 +519,37 @@ export default function TransferListPage() {
       className="page-card page-card--table"
       title={<h1 className="visually-hidden">文件传递单</h1>}
     >
+      {realm === 'internal' && (
+        // 一个厂商一个页签；“全部”包含所有厂商（含已停用厂商的历史记录）。
+        <Tabs className="oem-vendor-tabs" aria-label="往来厂商" activeTab={companyId ? String(companyId) : 'all'}
+          onChange={(key) => changeCompany(key === 'all' ? undefined : Number(key))}>
+          <Tabs.TabPane key="all" title="全部" />
+          {companyFilterOptions.map((company) => <Tabs.TabPane key={String(company.id)} title={company.name} />)}
+        </Tabs>
+      )}
+      <div className="oem-scope-bar">
+        <Tabs className="oem-scope-tabs" type="capsule" aria-label="传递单范围" activeTab={scope}
+          onChange={(key) => { setScope(key as 'latest' | 'purged'); setPage(1) }}>
+          <Tabs.TabPane key="latest" title="最新" />
+          <Tabs.TabPane key="purged" title="历史（已删除）" />
+        </Tabs>
+        {can.createTransfer && <Button type="primary" icon={<IconUpload />} onClick={() => setCreating(true)}>发送文件</Button>}
+      </div>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
-          {realm === 'internal' && !companyOptions.isError && (
-            <Select allowClear showSearch aria-label="往来厂商" placeholder="全部厂商" style={{ width: 200 }}
-              loading={companyOptions.isFetching} value={companyId}
-              filterOption={(input, option) => String((option as { props?: { children?: unknown } })?.props?.children ?? '').toLowerCase().includes(input.toLowerCase())}
-              onChange={(value) => changeCompany(value as number | undefined)}>
-              {companyFilterOptions.map((company) => <Select.Option key={company.id} value={company.id}>{company.name}</Select.Option>)}
-            </Select>
-          )}
           {realm === 'internal' && (
             <Radio.Group type="button" value={direction} onChange={(value) => { setDirection(value); setPage(1) }}>
               <Radio value="">全部</Radio>
-              <Radio value="INTERNAL_TO_OEM">公司发出</Radio>
+              <Radio value="INTERNAL_TO_OEM">SAA发出</Radio>
               <Radio value="OEM_TO_INTERNAL">ODM/OEMA 发来</Radio>
             </Radio.Group>
           )}
           <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
             onChange={(value) => { setStatus(value); setPage(1) }} />
           <Input.Search allowClear placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'} style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+          <Input.Search allowClear aria-label="发送人" placeholder="发送人" style={{ width: 150 }} onSearch={(value) => { setSender(value.trim()); setPage(1) }} />
+          <DatePicker.RangePicker aria-label="提交时间" style={{ width: 240 }} placeholder={['提交时间起', '提交时间止']}
+            onChange={(value) => { setSentRange(value?.length === 2 ? [value[0], value[1]] : undefined); setPage(1) }} />
           <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
           <ColumnVisibilityPicker
             specs={columnSpecs}
@@ -441,7 +560,6 @@ export default function TransferListPage() {
             onReset={table.reset}
           />
         </Space>
-        {can.createTransfer && <Button type="primary" icon={<IconUpload />} onClick={() => setCreating(true)}>发送文件</Button>}
       </div>
       {transfers.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}
@@ -464,6 +582,8 @@ export default function TransferListPage() {
         </div>
       </ColumnResizeProvider>
       {creating && <CreateTransferModal visible onClose={() => setCreating(false)} />}
+      {picking && <DownloadPicker title={picking.title} files={picking.files} onPreview={setPreviewing} onClose={() => setPicking(null)} />}
+      <OemFilePreview file={previewing} onClose={() => setPreviewing(null)} />
     </Card>
   )
 }

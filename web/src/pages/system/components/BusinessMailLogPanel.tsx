@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
-import { Alert, Button, Card, Message, Pagination, Select, Space, Spin, Table, Tag, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, Message, Pagination, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react'
+import ResizableTable from '../../../components/ResizableTable'
 import { useNavigate } from 'react-router-dom'
 import http from '../../../api/client'
 import type { ApiResponses } from '../../../api/generated/api-types'
@@ -138,7 +139,7 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
         {pageLogs && pageLogs.total > PAGE_SIZE && <Pagination size="small" simple current={page} pageSize={PAGE_SIZE} total={pageLogs.total} onChange={setPage} />}
       </div>
       {logsError ? <Alert type="error" content={logsError} action={<Button size="small" onClick={() => void loadLogs()}>重试</Button>} /> : <div className="system-mail-log-table">
-        <Table className="page-table" rowKey="id" size="small" pagination={false} loading={!pageLogs} noDataElement="暂无邮件记录" data={pageLogs?.list ?? []} scroll={{ x: 620, y: 'var(--page-table-scroll-y)' }}
+        <ResizableTable tableId="mail-logs" className="page-table" rowKey="id" size="small" pagination={false} loading={!pageLogs} noDataElement="暂无邮件记录" data={pageLogs?.list ?? []} scroll={{ x: 620, y: 'var(--page-table-scroll-y)' }}
           expandedRowRender={(row: MailRecent) => <MailLogDetail row={row} formatTime={formatTime} />}
           columns={[
             { title: '时间', dataIndex: 'createdAt', width: 160, render: formatTime },

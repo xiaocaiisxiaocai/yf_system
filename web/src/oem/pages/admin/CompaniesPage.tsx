@@ -1,8 +1,9 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip, Typography,
+  Alert, Button, Card, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
+import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import { oemRequestError } from '../../api/requestError'
@@ -145,7 +146,7 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
             <Button type="primary" size="small" icon={<IconPlus />} disabled={company?.status !== 'ACTIVE'} onClick={() => { setEditingContact(null); form.resetFields(); setAdding(true) }}>新增联络人</Button>
           </Space>
         </div>
-        <Table rowKey="id" size="small" loading={loading} data={rows} pagination={false} scroll={{ x: 640 }} columns={[
+        <ResizableTable tableId="oem-company-contacts" rowKey="id" size="small" loading={loading} data={rows} pagination={false} scroll={{ x: 640 }} columns={[
           { title: '姓名', dataIndex: 'name', width: 150 },
           { title: '邮箱', dataIndex: 'email', width: 220, render: (value: string | null) => value || '-' },
           { title: '排序', dataIndex: 'sortNo', width: 64, align: 'center' as const },
@@ -356,7 +357,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
             </Space>
           </div>
           {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
-              <Table
+              <ResizableTable tableId="oem-company-accounts"
                 className="account-table oem-account-table" size="small" loading={accountsLoading}
                 rowKey="id"
                 data={rows}
@@ -836,7 +837,7 @@ export default function CompaniesPage() {
         <Alert type="error" style={{ marginBottom: 12 }} content={`厂商列表加载失败：${listError}`}
           action={<Button size="small" loading={listLoading} onClick={() => void load().catch(() => undefined)}>重试</Button>} />
       )}
-          <Table
+          <ResizableTable tableId="oem-companies"
             className="page-table oem-directory-table"
             rowKey="id"
             loading={listLoading}

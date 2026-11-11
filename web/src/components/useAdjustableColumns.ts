@@ -5,7 +5,7 @@ import { useColumnLayout } from './useColumnLayout'
 
 /**
  * 列宽、显示列和铺满剩余宽度。`specs` 必须是稳定常量。
- * 指定列保持设定宽度，其余列平分容器多出来的宽度。
+ * 指定列保持设定宽度，其余列平分容器多出来的宽度；`growFixed` 时多出的宽度全部给指定列。
  */
 export function useAdjustableColumns<T extends { key: string; title?: ReactNode }>(
   tableId: string,
@@ -15,6 +15,9 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
   fixedKey: string,
   hostRef: RefObject<HTMLDivElement | null>,
   active = true,
+  growFixed = false,
+  /** Width of columns the table adds itself (row selection, expand), left out when filling the container. */
+  reservedWidth = 0,
 ) {
   const layout = useColumnLayout(columnLayoutStorageKey(tableId, userId ?? undefined), specs)
   const [tableWidth, setTableWidth] = useState(0)
@@ -24,7 +27,7 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
     if (!host) return
     let frame = 0
     const measure = () => {
-      const next = measureTableWidth(host)
+      const next = Math.max(0, measureTableWidth(host) - reservedWidth)
       setTableWidth((current) => (current === next ? current : next))
     }
     measure()
@@ -39,9 +42,9 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
       cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [active, hostRef])
+  }, [active, hostRef, reservedWidth])
   const components = useMemo(() => ({ header: { cell: ResizableHeaderCell } }), [])
-  const sized = withFlexibleColumn(layout.apply([...columns]), tableWidth, fixedKey)
+  const sized = withFlexibleColumn(layout.apply([...columns]), tableWidth, fixedKey, growFixed)
   const scrollX = sized.reduce((sum, column) => sum + column.width, 0)
   return {
     hostClassName: 'adjustable-table-host',

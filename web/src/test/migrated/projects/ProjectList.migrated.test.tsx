@@ -505,7 +505,7 @@ describe('ProjectList migrated behavior', () => {
     await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
       params: { page: 2, pageSize: 20, keyword: '旧关键字', status: 'IN_PROGRESS', supplierId: 8 },
     })))
-    const search = screen.getByPlaceholderText('项目名称')
+    const search = screen.getByPlaceholderText('项目名称 / 工令号 / 机型 / 料号')
     expect(search).toHaveValue('旧关键字')
     fireEvent.change(search, { target: { value: '新关键字' } })
     fireEvent.keyDown(search, { key: 'Enter', code: 'Enter', keyCode: 13 })

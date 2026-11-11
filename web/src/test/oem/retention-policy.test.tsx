@@ -35,11 +35,26 @@ describe('统一删除策略', () => {
     await user.clear(duration)
     await user.type(duration, '120')
     await user.click(screen.getByRole('button', { name: '保存统一策略' }))
+    // 策略对全部传递单生效，保存前要确认；确认前不发请求。
+    await user.click(await screen.findByRole('button', { name: '保存并应用' }))
     await waitFor(() => expect(updateRetention).toHaveBeenCalledWith(1, {
       name: policy.name, mode: 'AFTER_RELEASE', releaseTtlMinutes: 120, receiptGraceMinutes: null, status: 'ACTIVE', version: 3,
     }))
     expect(createRetention).not.toHaveBeenCalled()
     await screen.findByText('当前规则：发布 2 小时后删除')
+  })
+
+  it('does not save when the apply-to-all confirmation is cancelled', async () => {
+    const updateRetention = vi.fn()
+    const user = setup({ retentionTemplates: vi.fn().mockResolvedValue([policy]), updateRetention })
+    await screen.findByText('当前规则：发布 1 小时后删除')
+    await user.clear(screen.getByRole('spinbutton'))
+    await user.type(screen.getByRole('spinbutton'), '5')
+    await user.click(screen.getByRole('button', { name: '保存统一策略' }))
+    await user.click(await screen.findByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '保存并应用' })).not.toBeInTheDocument())
+    expect(updateRetention).not.toHaveBeenCalled()
+    expect(screen.getByText('当前规则：发布 1 小时后删除')).toBeInTheDocument()
   })
 
   it('keeps the edited rule and displays a rejected save without claiming success', async () => {
@@ -49,6 +64,7 @@ describe('统一删除策略', () => {
     await user.clear(screen.getByRole('spinbutton'))
     await user.type(screen.getByRole('spinbutton'), '90')
     await user.click(screen.getByRole('button', { name: '保存统一策略' }))
+    await user.click(await screen.findByRole('button', { name: '保存并应用' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('策略已被其他管理员修改')
     expect(screen.getByRole('spinbutton')).toHaveValue('90')
     expect(screen.getByText('当前规则：发布 1 小时后删除')).toBeInTheDocument()

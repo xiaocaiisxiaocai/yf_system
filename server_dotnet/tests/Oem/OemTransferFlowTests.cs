@@ -45,6 +45,14 @@ public sealed class OemTransferFlowTests
     internal static ulong Version(JsonNode detail) => detail["summary"]!["version"]!.GetValue<ulong>();
     private static string Lifecycle(JsonNode detail) => detail["summary"]!["lifecycleStatus"]!.GetValue<string>();
 
+    /// <summary>The list row's <c>downloadableCount</c> for one transfer; fails if the caller's list does not show it.</summary>
+    private static async Task<int> ListedDownloadableAsync(ApiClient client, ulong transferId, CancellationToken ct)
+    {
+        var list = (await client.GetAsync("/api/v1/oem/transfers?pageSize=100", ct).Ok())["list"]!.AsArray();
+        var row = Assert.Single(list, item => item!.Id() == transferId)!;
+        return row["downloadableCount"]!.GetValue<int>();
+    }
+
     private static async Task<byte[]> DownloadAsync(ApiClient client, ulong fileId, CancellationToken ct)
     {
         await client.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Ok();
@@ -112,6 +120,7 @@ public sealed class OemTransferFlowTests
         Assert.Equal(ValidationStatuses.Valid, validationStatus["validationStatus"]!.GetValue<string>());
         Assert.Equal("REVIEW", detail["capabilities"]!["contentPurpose"]!.GetValue<string>());
         Assert.True(detail["files"]![0]!["downloadable"]!.GetValue<bool>());
+        Assert.Equal(1, await ListedDownloadableAsync(world.Leader, id, ct));
 
         // Only the assignee decides; a stale version is refused.
         await world.Viewer.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct)
@@ -127,10 +136,17 @@ public sealed class OemTransferFlowTests
         Assert.Equal("RECIPIENT", vendorView["capabilities"]!["contentPurpose"]!.GetValue<string>());
         Assert.Null(vendorView["approval"]);
         Assert.True(vendorView["files"]![0]!["downloadable"]!.GetValue<bool>());
+        Assert.Equal(1, await ListedDownloadableAsync(world.Vendor, id, ct));
         Assert.Equal(content, await DownloadAsync(world.Vendor, file.Id(), ct));
-        // The sender holds only transfer_create: it sees the result but reads content only with view + download.
+        // The company side can still check what went out: the sender (even with only transfer_create)
+        // and the approver who released it. The list row offers a download exactly where the detail does.
         var senderView = await world.Sender.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
-        Assert.Equal("NONE", senderView["capabilities"]!["contentPurpose"]!.GetValue<string>());
+        Assert.Equal("SENDER", senderView["capabilities"]!["contentPurpose"]!.GetValue<string>());
+        Assert.Equal(1, await ListedDownloadableAsync(world.Sender, id, ct));
+        var approverView = await world.Leader.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+        Assert.Equal("REVIEW", approverView["capabilities"]!["contentPurpose"]!.GetValue<string>());
+        Assert.Equal(1, await ListedDownloadableAsync(world.Leader, id, ct));
+        Assert.Equal(content, await DownloadAsync(world.Leader, file.Id(), ct));
 
         await using var conn = await host.OpenAsync(ct);
         Assert.Equal("AVAILABLE", await conn.ExecuteScalarAsync<string>("SELECT payload_status FROM oem_transfer_files WHERE id=@id", new { id = file.Id() }));
@@ -194,10 +210,11 @@ public sealed class OemTransferFlowTests
             status = "ACTIVE",
             version = keep["version"]!.GetValue<ulong>(),
         }, ct).Ok();
-        var unchanged = await world.Sender.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
-        Assert.Equal(sendPolicy.Id(), unchanged["retention"]!["templateId"]!.GetValue<ulong>());
-        Assert.Equal("AFTER_RELEASE", unchanged["retention"]!["mode"]!.GetValue<string>());
-        Assert.Equal(120U, unchanged["retention"]!["releaseTtlMinutes"]!.GetValue<uint>());
+        // Saving a policy applies to transfers that were already sent, not only to later ones.
+        var applied = await world.Sender.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+        Assert.Equal(world.KeepTemplateId, applied["retention"]!["templateId"]!.GetValue<ulong>());
+        Assert.Equal("KEEP", applied["retention"]!["mode"]!.GetValue<string>());
+        Assert.Null(applied["retention"]!["releaseTtlMinutes"]);
     }
 
     [Fact(Timeout = 240_000)]
@@ -295,6 +312,9 @@ public sealed class OemTransferFlowTests
         // Sealed: internal viewers see metadata only; content is locked until validation finishes.
         var early = await world.Viewer.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
         Assert.Equal("NONE", early["capabilities"]!["contentPurpose"]!.GetValue<string>());
+        Assert.Equal(0, await ListedDownloadableAsync(world.Viewer, id, ct));
+        // The sending vendor's own file is not downloadable before validation passes.
+        Assert.Equal(0, await ListedDownloadableAsync(world.Vendor, id, ct));
         await host.RunOemJobsAsync(ct);
         var released = await world.Viewer.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
         Assert.Equal("RELEASED", Lifecycle(released));
@@ -303,6 +323,9 @@ public sealed class OemTransferFlowTests
         // View without download: metadata only.
         var metadataOnly = await viewOnly.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
         Assert.False(metadataOnly["files"]![0]!["downloadable"]!.GetValue<bool>());
+        Assert.Equal(1, await ListedDownloadableAsync(world.Viewer, id, ct));
+        Assert.Equal(1, await ListedDownloadableAsync(world.Vendor, id, ct));
+        Assert.Equal(0, await ListedDownloadableAsync(viewOnly, id, ct));
 
         // Another vendor and the supplier line never see it.
         Assert.Empty((await otherVendor.GetAsync("/api/v1/oem/transfers", ct).Ok())["list"]!.AsArray());

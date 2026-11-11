@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Typography,
+  Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag, Typography,
 } from '@arco-design/web-react'
+import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../../api/client'
 import { actionSlots } from '../../../components/ActionSlots'
@@ -227,7 +228,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
           </Button>
         </Space>
       </div>
-      {!accountsFailed && <Table
+      {!accountsFailed && <ResizableTable tableId="supplier-accounts"
         className="account-table"
         rowKey="id"
         size="small"
