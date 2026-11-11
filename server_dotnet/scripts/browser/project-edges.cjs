@@ -84,7 +84,7 @@ function updatePayload(current, overrides) {
       return data;
     };
     const search = text => listAction({ keyword: text, page: 1 }, async () => {
-      const input = page.locator('.page-toolbar').getByPlaceholder('项目名称', { exact: true });
+      const input = page.locator('.page-toolbar').getByPlaceholder('项目名称 / 工令号 / 机型 / 料号', { exact: true });
       await input.fill(text);
       await input.press('Enter');
     });
@@ -117,7 +117,7 @@ function updatePayload(current, overrides) {
       await page.goto(s.base + '/projects'); await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
       const empty = await search(prefix + '-不存在'); assert.equal(empty.total, 0);
       const cleared = await listAction({ keyword: '', page: 1 }, async () => {
-        const input = page.locator('.page-toolbar').getByPlaceholder('项目名称', { exact: true });
+        const input = page.locator('.page-toolbar').getByPlaceholder('项目名称 / 工令号 / 机型 / 料号', { exact: true });
         await input.hover();
         await page.locator('.page-toolbar .arco-input-search .arco-input-clear-icon').click();
         assert.equal(await input.inputValue(), '');

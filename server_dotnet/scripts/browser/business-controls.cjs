@@ -136,7 +136,7 @@ async function choose(page, placeholder, optionName) {
             && response.status() === 200;
         });
         await managerPage.goto(s.base + '/projects');
-        const search = managerPage.getByPlaceholder('项目名称', { exact: true });
+        const search = managerPage.getByPlaceholder('项目名称 / 工令号 / 机型 / 料号', { exact: true });
         await search.fill(pendingProjects[0].name);
         await search.press('Enter');
         const body = await (await listed).json();

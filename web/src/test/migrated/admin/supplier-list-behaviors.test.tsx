@@ -414,7 +414,7 @@ describe('重复搜索运行时注册用例', () => {
   })
 
   const cases = [
-    { title: 'pages/project/ProjectList.tsx: repeated identical searches finish and reload', api: '/projects', placeholder: '项目名称', render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>) },
+    { title: 'pages/project/ProjectList.tsx: repeated identical searches finish and reload', api: '/projects', placeholder: '项目名称 / 工令号 / 机型 / 料号', render: () => render(<MemoryRouter><ProjectList /></MemoryRouter>) },
     { title: 'pages/supplier/SupplierList.tsx: repeated identical searches finish and reload', api: '/admin/suppliers', placeholder: '供应商名称', render: () => render(<SupplierList />) },
     { title: 'pages/org/UserList.tsx: repeated identical searches finish and reload', api: '/admin/users', placeholder: '账号 / 姓名 / 邮箱', render: () => render(<UserList />) },
     { title: 'components/FileTable.tsx: repeated identical searches finish and reload', api: '/projects/1/files', placeholder: '文件名', render: () => render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />) },
