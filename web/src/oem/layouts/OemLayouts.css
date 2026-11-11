@@ -25,3 +25,22 @@
 .oem-counterpart-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--color-text-1); }
 .oem-counterpart--out > .arco-icon { color: rgb(var(--primary-6)); }
 .oem-counterpart--in > .arco-icon { color: rgb(var(--green-6)); }
+
+/* 传递单详情固定在视口内：摘要与审批流程按内容高度，附件卡占满剩余空间，表头固定、只滚表体。
+   窗口矮到放不下三张卡片的最小高度时，改为在本容器内整体滚动，避免各卡片被压成一条缝。
+   scroll.y 只用来让 Arco 拆出独立表头，表体高度由卡片剩余空间决定。 */
+.oem-transfer-detail { display: flex; flex-direction: column; gap: 16px; height: calc(100dvh - 88px); min-height: 0; overflow: auto; }
+.oem-transfer-detail > .arco-card { flex: 0 0 auto; }
+.oem-transfer-detail > .oem-transfer-files-card { display: flex; flex: 1 1 0; flex-direction: column; box-sizing: border-box; min-height: 260px; }
+.oem-transfer-files-card > .arco-card-body { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; }
+.oem-transfer-files-card .page-table-host { flex: 1 0 auto; min-height: 88px; }
+.oem-transfer-detail .page-table .arco-table-body { max-height: none !important; }
+.oem-transfer-detail > .oem-transfer-approval-card { display: flex; flex: 0 1 auto; flex-direction: column; box-sizing: border-box; max-height: 40%; min-height: 140px; }
+.oem-transfer-approval-card > .arco-card-body { flex: 1; min-height: 0; overflow: auto; }
+@media (max-width: 720px), (max-height: 480px) {
+  .oem-transfer-detail { height: auto; overflow: visible; }
+  .oem-transfer-detail > .oem-transfer-files-card { flex: 0 0 auto; min-height: 0; }
+  .oem-transfer-files-card > .arco-card-body { overflow: visible; }
+  .oem-transfer-detail > .oem-transfer-approval-card { max-height: none; }
+  .oem-transfer-approval-card > .arco-card-body { overflow: visible; }
+}

@@ -162,7 +162,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
 
   const current = approval.nodes.findIndex((node) => node.status === 'PENDING' || node.status === 'WAITING')
   return (
-    <Card title={`审批流程（${approval.templateName ?? '-'}）`} style={{ marginTop: 16 }}>
+    <Card className="oem-transfer-approval-card" title={`审批流程（${approval.templateName ?? '-'}）`}>
       {approval.status === 'APPROVAL_BLOCKED' && (
         <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${approval.blockedReason ?? ''}。需要具有异常处置权限的管理员改派审批人或终止传递。`} />
       )}
@@ -285,15 +285,15 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
         />
       </div>
       <ColumnResizeProvider actions={table.actions}>
-        <div ref={tableHostRef} className={table.hostClassName}>
+        <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
-            className={table.tableClassName}
+            className={`page-table ${table.tableClassName}`}
             rowKey="id"
             data={files}
             pagination={false}
             columns={table.columns}
             components={table.components}
-            scroll={{ x: table.scrollX }}
+            scroll={{ x: table.scrollX, y: 240 }}
           />
         </div>
       </ColumnResizeProvider>
@@ -449,7 +449,7 @@ export default function TransferDetailPage() {
   }
 
   return (
-    <div>
+    <div className="oem-transfer-detail">
       <Card
         title={<Space><Button type="text" icon={<IconLeft />} onClick={() => navigate(`${base}/transfers`)} />{summary.title}
           <Counterpart direction={summary.direction} companyName={summary.companyName} realm={realm} />
@@ -490,7 +490,7 @@ export default function TransferDetailPage() {
         ]} />
       </Card>
 
-      <Card title="附件" style={{ marginTop: 16 }}>
+      <Card className="oem-transfer-files-card" title="附件">
         {caps.canEdit && <div style={{ marginBottom: 16 }}><OemUploader ref={uploader} transferId={id} disabled={sending}
           onBusyChange={setUploadBusy} onUploaded={() => void load()} /></div>}
         {can.recover && !caps.canReadContent && detail.files.length === 0 ? (
