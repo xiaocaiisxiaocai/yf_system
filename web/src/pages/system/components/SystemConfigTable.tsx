@@ -74,9 +74,10 @@ export function renderSystemConfigTable({
       }
     >
       <Table
+        className="page-table"
         rowKey="key"
         data={configs}
-        scroll={{ x: 860 }}
+        scroll={{ x: 860, y: 'var(--page-table-scroll-y)' }}
         pagination={false}
         rowClassName={(record) => dirtyKeys.has(record.key) ? 'system-config-row--dirty' : ''}
         columns={[

@@ -108,9 +108,9 @@
 .dashboard-overview { margin-bottom: 18px; }
 
 /* 桌面宽度下工作台正好占满一屏：卡片铺到视口底部、空状态居中；内容多时只在卡片内部滚动，
-   分页条留在卡片底部，页面本身不出现滚动条。窗口过矮时保留 560px 下限，改由页面滚动。 */
+   分页条留在卡片底部，页面本身不出现滚动条。窗口过矮时保留 392px 下限（对应 480px 高的窗口），改由页面滚动。 */
 @media (min-width: 992px) {
-  .dashboard-collaboration { display: flex; flex-direction: column; height: calc(100dvh - 88px); min-height: 560px; }
+  .dashboard-collaboration { display: flex; flex-direction: column; height: calc(100dvh - 88px); min-height: 392px; }
   /* nowrap: in a wrapping flex row a line is as tall as its content, so the cards could not be bounded. */
   .dashboard-workbench { flex: 1 1 0; flex-wrap: nowrap; min-height: 0; align-content: stretch; }
   .dashboard-workbench > .arco-col { min-height: 0; }

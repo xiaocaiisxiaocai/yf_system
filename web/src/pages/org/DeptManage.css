@@ -1,11 +1,15 @@
 /* 页面独立命名，避免旧版 dept-* 热更新样式影响当前布局。 */
 .org-view-page {
-  min-height: calc(100dvh - 88px);
+  /* 卡片固定在视口内：页头不动，组织目录与右侧详情各自在面板内滚动。 */
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 88px);
   box-sizing: border-box;
+  overflow: hidden;
   font-size: 14px;
   line-height: 22px;
 }
-.org-view-page > .arco-card-body { padding: 0; }
+.org-view-page > .arco-card-body { display: flex; flex: 1; flex-direction: column; min-height: 0; padding: 0; }
 .org-view-page-header.page-heading {
   display: flex;
   align-items: center;
@@ -22,14 +26,15 @@
 .org-view-summary { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
 .org-view-summary > span { display: inline-flex; gap: 4px; align-items: baseline; white-space: nowrap; }
 .org-view-summary b { display: inline; font: inherit; color: var(--app-text); }
-.org-view-workspace { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 20px; align-items: start; }
-.org-view-tree-panel { min-width: 0; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; overflow: hidden; }
+.org-view-workspace { display: grid; flex: 1; grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 20px; align-items: start; min-height: 0; }
+.org-view-tree-panel { display: flex; flex-direction: column; min-width: 0; max-height: 100%; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; overflow: hidden; }
 .org-view-panel-head { padding: 16px; border-bottom: 1px solid var(--app-border); }
 .org-view-tree-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .org-view-tree-heading > .arco-typography { font-size: 14px; line-height: 22px; margin: 0; text-align: left; }
 .org-view-tree-tools { display: flex; gap: 4px; }
 .org-view-tree-tools .arco-btn { font-size: 12px; padding: 0 4px; }
-.org-view-tree-scroll { max-height: calc(100dvh - 340px); overflow: auto; padding: 12px; }
+.org-view-panel-head { flex: 0 0 auto; }
+.org-view-tree-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px; }
 .org-view-tree-node { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; width: 100%; font-size: 14px; line-height: 22px; }
 .org-view-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-view-tree-kind { flex-shrink: 0; color: var(--app-text-muted); font-size: 12px; font-weight: 400; line-height: 20px; }
@@ -39,7 +44,7 @@
 .org-view-page .arco-tree-node-title:hover { background: var(--color-fill-1); }
 .org-view-page .arco-tree-node-selected .arco-tree-node-title { background: rgb(var(--primary-1)); color: rgb(var(--primary-6)); font-weight: 500; }
 .org-view-tree-empty { padding: 24px 16px; text-align: center; color: var(--app-text-muted); font-size: 14px; line-height: 22px; }
-.org-view-detail-panel { min-width: 0; box-sizing: border-box; padding: 20px; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; }
+.org-view-detail-panel { min-width: 0; max-height: 100%; overflow: auto; box-sizing: border-box; padding: 20px; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; }
 .org-view-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
 .org-view-breadcrumb > span { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
 .org-view-breadcrumb button { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -103,8 +108,10 @@
   .org-view-workspace { grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
 }
 @media (max-width: 720px) {
-  .org-view-page { min-height: calc(100dvh - 76px); }
-  .org-view-workspace { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .org-view-page { display: block; height: auto; min-height: calc(100dvh - 76px); overflow: visible; }
+  .org-view-page > .arco-card-body { display: block; }
+  .org-view-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; gap: 16px; }
+  .org-view-tree-panel, .org-view-detail-panel { max-height: none; }
   .org-view-page-header.page-heading { margin-bottom: 16px; align-items: flex-start; }
   .org-view-summary { gap: 12px; }
   .org-view-tree-scroll { max-height: 36vh; }
@@ -112,7 +119,4 @@
   .org-view-leader { align-items: flex-start; flex-direction: column; }
   .org-view-breadcrumb button { max-width: 160px; }
   .org-view-leaf-info dl > div { grid-template-columns: 64px minmax(0, 1fr); gap: 12px; }
-}
-@media (max-height: 700px) {
-  .org-view-tree-scroll { max-height: 50vh; }
 }
