@@ -39,11 +39,12 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
     writeColumnLayout(storageKeyRef.current, layoutRef.current)
   }, [])
 
-  const beginResize = useCallback((key: string, clientX: number) => {
+  /** `startWidth`：表格实际显示的宽度（含自动铺满分到的部分），不传则用已存或默认宽度。 */
+  const beginResize = useCallback((key: string, clientX: number, startWidth?: number) => {
     const spec = specsRef.current.find((item) => item.key === key)
     if (!spec) return
     endDrag()
-    dragRef.current = { key, startX: clientX, startWidth: layoutRef.current.widths[key] ?? spec.defaultWidth }
+    dragRef.current = { key, startX: clientX, startWidth: startWidth ?? layoutRef.current.widths[key] ?? spec.defaultWidth }
     document.body.classList.add('table-col-resizing')
     const move = (event: PointerEvent) => {
       const drag = dragRef.current
@@ -110,5 +111,5 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
   ): Array<T & { width: number }> =>
     applyColumnLayout(columns, specs, layout, import.meta.env.DEV)
 
-  return { apply, actions, hidden: layout.hidden, toggle, showAll, hideOptional, reset }
+  return { apply, actions, widths: layout.widths, hidden: layout.hidden, toggle, showAll, hideOptional, reset }
 }

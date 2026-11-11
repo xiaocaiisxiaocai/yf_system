@@ -51,9 +51,10 @@ export default function ResizableTable<T extends object>({ tableId, columns, gro
       title,
       defaultWidth,
       minWidth: Math.min(72, defaultWidth),
-      maxWidth: Math.max(480, defaultWidth * 2),
+      // 吸收多余宽度的列在开始拖动时会按当前宽度固定下来，上限要放得下它铺满后的宽度。
+      maxWidth: key === growKey ? 2400 : Math.max(480, defaultWidth * 2),
       locked: true,
-    })), [signature])
+    })), [signature, growKey])
   // Arco adds its own 40px checkbox / expand columns; leave room for them so the table never overflows its card.
   const selection = rest.rowSelection ? (typeof rest.rowSelection.columnWidth === 'number' ? rest.rowSelection.columnWidth : 40) : 0
   const reservedWidth = selection + (rest.expandedRowRender ? 40 : 0)

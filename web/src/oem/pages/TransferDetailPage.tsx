@@ -23,7 +23,7 @@ import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 
 const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
-  { key: 'name', title: '文件名', defaultWidth: 360, minWidth: 160, locked: true },
+  { key: 'name', title: '文件名', defaultWidth: 360, minWidth: 160, maxWidth: 2400, locked: true },
   { key: 'size', title: '大小', defaultWidth: 110, minWidth: 80 },
   { key: 'validation', title: '文件校验', defaultWidth: 200, minWidth: 120 },
   { key: 'payload', title: '存储', defaultWidth: 110, minWidth: 80 },
