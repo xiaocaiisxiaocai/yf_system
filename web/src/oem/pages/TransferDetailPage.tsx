@@ -22,7 +22,7 @@ import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 
 const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
-  { key: 'name', title: '文件名', defaultWidth: 240, minWidth: 140, locked: true },
+  { key: 'name', title: '文件名', defaultWidth: 360, minWidth: 160, locked: true },
   { key: 'size', title: '大小', defaultWidth: 110, minWidth: 80 },
   { key: 'validation', title: '文件校验', defaultWidth: 200, minWidth: 120 },
   { key: 'payload', title: '存储', defaultWidth: 110, minWidth: 80 },
@@ -230,7 +230,10 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
   const { userId, realm } = useOem()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const columns = [
-    { key: 'name', title: '文件名', dataIndex: 'originalName' },
+    {
+      key: 'name', title: '文件名', dataIndex: 'originalName', ellipsis: true,
+      render: (value: string) => <span title={value}>{value}</span>,
+    },
     { key: 'size', title: '大小', render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
     {
       key: 'validation', title: '文件校验',
@@ -267,7 +270,8 @@ function TransferFilesTable({ files, canEdit, onDownload, onPreview, onRemove }:
     },
   ]
   const fileTableId = realm === 'oem' ? 'oem-portal-transfer-files' : 'oem-transfer-files'
-  const table = useAdjustableColumns(fileTableId, userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef)
+  // 文件名常很长：屏幕有余量时多出的宽度都给文件名，其余列保持设定宽度。
+  const table = useAdjustableColumns(fileTableId, userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef, true, true)
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>

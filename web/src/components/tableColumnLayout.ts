@@ -96,16 +96,23 @@ export function measureTableWidth(host: HTMLElement | null) {
   return Math.max(0, available - scrollbar)
 }
 
-/** 容器比各列宽度合计更宽时，指定列保持原宽，其余列平分多出的宽度。 */
+/**
+ * 容器比各列宽度合计更宽时，指定列保持原宽，其余列平分多出的宽度。
+ * `growFixed` 时反过来：多出的宽度全部给指定列（如文件名），其余列保持设定宽度。
+ */
 export function withFlexibleColumn<T extends { key: string; width: number }>(
   columns: readonly T[],
   containerWidth: number,
   fixedKey: string,
+  growFixed = false,
 ): T[] {
   if (!Number.isFinite(containerWidth) || columns.length === 0) return [...columns]
   const sum = columns.reduce((total, column) => total + column.width, 0)
   const slack = Math.floor(containerWidth) - sum
   if (!(slack > 0)) return [...columns]
+  if (growFixed && columns.some((column) => column.key === fixedKey)) {
+    return columns.map((column) => column.key === fixedKey ? { ...column, width: column.width + slack } : column)
+  }
   const flexible = columns.some((column) => column.key === fixedKey)
     ? columns.filter((column) => column.key !== fixedKey)
     : [...columns]
