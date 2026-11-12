@@ -203,7 +203,7 @@ public sealed class OemNotificationTests
         ulong viewer;
         await using (var conn = await host.OpenAsync(ct))
             viewer = await conn.ExecuteScalarAsync<ulong>("SELECT id FROM users WHERE employee_no='zp_viewer'");
-        var url = $"/api/v1/oem/companies/{world.CompanyId}/internal-recipients";
+        const string url = "/api/v1/oem/internal-recipients";
 
         async Task<(ulong Id, ulong Version)> DraftAsync(string title)
         {
@@ -219,7 +219,7 @@ public sealed class OemNotificationTests
         static ulong[] Listed(JsonNode list, bool removed) => list.AsArray()
             .Where(item => item!["removed"]!.GetValue<bool>() == removed).Select(item => item!["userId"]!.GetValue<ulong>()).ToArray();
 
-        // By default everyone who can view and download is on the vendor's list (the leader, view only, is not); the vendor sees names only.
+        // By default everyone who can view and download is on the one list for every vendor (the leader, view only, is not); the vendor sees names only.
         var list = await world.Admin.GetAsync(url, ct).Ok();
         Assert.Contains(receiver, Listed(list, false));
         Assert.Contains(viewer, Listed(list, false));
@@ -227,16 +227,23 @@ public sealed class OemNotificationTests
         var choices = (await world.Vendor.GetAsync("/api/v1/oem/transfer-recipient-choices", ct).Ok()).AsArray();
         Assert.Contains(receiver, choices.Select(item => item!["userId"]!.GetValue<ulong>()));
         Assert.All(choices, item => Assert.Null(item!["employeeNo"]));
-        var listed = (await world.Admin.GetAsync("/api/v1/oem/companies", ct).Ok())["list"]!.AsArray().Single(item => item!.Id() == world.CompanyId)!;
-        Assert.Equal(choices.Count, listed["internalRecipientCount"]!.GetValue<long>());
         await world.Admin.GetAsync("/api/v1/oem/transfer-recipient-choices", ct).Status(HttpStatusCode.Forbidden);
         await world.Vendor.GetAsync(url, ct).Status(HttpStatusCode.Forbidden);
-        await world.Viewer.PutAsync($"/api/v1/oem/internal-recipients/{viewer}", new { removed = true }, ct).Status(HttpStatusCode.Forbidden);
+        await world.Viewer.PutAsync($"{url}/{viewer}", new { removed = true }, ct).Status(HttpStatusCode.Forbidden);
 
-        // Removing someone from all vendors takes them off every vendor's list at once.
-        var all = await world.Admin.PutAsync($"/api/v1/oem/internal-recipients/{viewer}", new { removed = true }, ct).Ok();
+        // Removing someone takes them off the list, and so off every vendor's choices at once.
+        var all = await world.Admin.PutAsync($"{url}/{viewer}", new { removed = true }, ct).Ok();
         Assert.Contains(viewer, Listed(all, true));
-        Assert.DoesNotContain(viewer, (await world.Admin.GetAsync(url, ct).Ok()).AsArray().Select(item => item!["userId"]!.GetValue<ulong>()));
+        Assert.DoesNotContain(viewer, Listed(await world.Admin.GetAsync(url, ct).Ok(), false));
+        Assert.DoesNotContain(viewer, await ChoicesAsync());
+
+        // Re-import: the chosen removed people go back on the list in one step; an empty choice is refused and others cannot do it.
+        await world.Admin.PostAsync($"{url}/restore", new { userIds = Array.Empty<ulong>() }, ct).Status(HttpStatusCode.BadRequest);
+        await world.Viewer.PostAsync($"{url}/restore", new { userIds = new[] { viewer } }, ct).Status(HttpStatusCode.Forbidden);
+        var restored = await world.Admin.PostAsync($"{url}/restore", new { userIds = new[] { viewer } }, ct).Ok();
+        Assert.Contains(viewer, Listed(restored, false));
+        Assert.Contains(viewer, await ChoicesAsync());
+        await world.Admin.PutAsync($"{url}/{viewer}", new { removed = true }, ct).Ok();
         Assert.DoesNotContain(viewer, await ChoicesAsync());
 
         // The vendor must choose at least one person, and only from its list.
@@ -256,7 +263,7 @@ public sealed class OemNotificationTests
         await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(outbound)}/send",
             new { version = Version(outbound) + 1, recipientUserIds = new[] { receiver } }, ct).Status(HttpStatusCode.BadRequest);
 
-        // Before delivery the choice is rechecked: a person since removed from this vendor's list is not mailed; restoring them allows it again.
+        // Before delivery the choice is rechecked: a person since removed from the list is not mailed; restoring them allows it again.
         var policy = new OemOutboxPolicy();
         PolicyMail queued;
         await using (var connection = await host.OpenAsync(ct))
@@ -353,6 +360,16 @@ public sealed class OemNotificationTests
         var upperLeader = await host.LoginInternalAsync("zp_leader3", "Leader3#2026x", ct);
         Assert.Contains(id, Ids(await upperLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
         Assert.Contains(TransferId(outbound), Ids(await upperLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+
+        // A vendor with no registered contact cannot sign at all, so it cannot send.
+        var noContact = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "无联络人" }, ct).Ok();
+        await host.UploadAsync(world.Vendor, TransferId(noContact), "n.pdf", OemTestHost.Pdf("n"), ct);
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE oem_company_contacts SET status='DISABLED' WHERE oem_company_id=@CompanyId", new { world.CompanyId });
+        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(noContact)}/send",
+            new { version = Version(noContact) + 1, recipientUserIds = new[] { receiver }, signerName = world.Vendor.Signer }, ct).Status(HttpStatusCode.BadRequest);
+        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(noContact)}/send",
+            new { version = Version(noContact) + 1, recipientUserIds = new[] { receiver } }, ct).Status(HttpStatusCode.BadRequest);
 
         // Company-sent transfers take no signature.
         var second = await CreateOutboundAsync(world, "不签名", ct);

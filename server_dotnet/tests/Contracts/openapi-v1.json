@@ -5745,116 +5745,53 @@
         }
       }
     },
-    "/api/v1/oem/companies/{id}/internal-recipients": {
-      "get": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/OemInternalRecipientResponse"
-                  }
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/oem/companies/{id}/internal-recipients/{userId}": {
-      "put": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "userId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OemRecipientRemovalRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/OemInternalRecipientResponse"
-                  }
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/oem/internal-recipients": {
       "get": {
         "tags": [
           "Yf.Api.Tests"
         ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OemInternalRecipientResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oem/internal-recipients/restore": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OemRecipientRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -11331,7 +11268,6 @@
           "contactCount",
           "createdAt",
           "id",
-          "internalRecipientCount",
           "name",
           "remark",
           "status",
@@ -11370,10 +11306,6 @@
             "format": "int64"
           },
           "contactCount": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "internalRecipientCount": {
             "type": "integer",
             "format": "int64"
           }
@@ -12164,6 +12096,23 @@
         "properties": {
           "removed": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OemRecipientRestoreRequest": {
+        "required": [
+          "userIds"
+        ],
+        "type": "object",
+        "properties": {
+          "userIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
           }
         },
         "additionalProperties": false

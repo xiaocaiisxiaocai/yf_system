@@ -60,6 +60,7 @@ public sealed class SchemaShapeTests
         "20261110153153_AddOutsourceMails",
         "20261112031508_AddOemInboundRecipients",
         "20261112040247_AddOemTransferSigner",
+        "20261112080731_DropOemCompanyRecipientExclusions",
     ];
 
     [Fact]
@@ -342,8 +343,8 @@ public sealed class SchemaShapeTests
             Assert.Equal(48, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
             Assert.Equal(28, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.scan.%'"));
-            // 20 + notification-list removals (all vendors / one vendor) and per-transfer chosen recipients (AddOemInboundRecipients).
-            Assert.Equal(23, await conn.ExecuteScalarAsync<int>(
+            // 20 + the notification-list removals and per-transfer chosen recipients (AddOemInboundRecipients).
+            Assert.Equal(22, await conn.ExecuteScalarAsync<int>(
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE 'oem\\_%'"));
             Assert.Equal(6, await conn.ExecuteScalarAsync<int>(
                 """

@@ -87,10 +87,9 @@ function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
     setAccountStatus: vi.fn(),
     deleteAccount: vi.fn(),
     resetAccountPassword: vi.fn(),
-    internalRecipients: vi.fn().mockResolvedValue([]),
-    setCompanyRecipientRemoved: vi.fn(),
     allInternalRecipients: vi.fn().mockResolvedValue([]),
     setRecipientRemovedFromAll: vi.fn(),
+    restoreRecipients: vi.fn(),
     ...overrides,
   }
 }
@@ -117,36 +116,71 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     expect(within(dialog).queryByLabelText('联系电话')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('联系邮箱')).not.toBeInTheDocument()
   })
-  it('可通知人员默认全员：可在单个厂商中移除或恢复，也可一次从全部厂商移除', async () => {
+  it('可通知人员是统一的一份名单：只在工具栏打开，可移除和恢复', async () => {
     const user = userEvent.setup()
     const person = { userId: 51, employeeNo: 'E051', realName: '王五', departmentName: '采购课', email: 'w@example.invalid', canReceive: true, unavailableReason: null, removed: false }
     const leader = { userId: 52, employeeNo: 'E052', realName: '赵六', departmentName: '采购部', email: 'z@example.invalid', canReceive: true, unavailableReason: null, removed: false }
-    const setCompanyRecipientRemoved = vi.fn().mockResolvedValue([person, { ...leader, removed: true }])
-    const setRecipientRemovedFromAll = vi.fn().mockResolvedValue([person, { ...leader, removed: true }])
+    const setRecipientRemovedFromAll = vi.fn()
+      .mockResolvedValueOnce([person, { ...leader, removed: true }])
+      .mockResolvedValueOnce([person, leader])
     renderDirectory(baseApi({
-      internalRecipients: vi.fn().mockResolvedValue([person, leader]),
-      setCompanyRecipientRemoved,
       allInternalRecipients: vi.fn().mockResolvedValue([person, leader]),
       setRecipientRemovedFromAll,
     }), ['oem:company_manage'])
 
     const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    const open = within(row).getByRole('button', { name: '可通知人员' })
-    expect(open).toHaveAttribute('title', '无人可通知')
-    await user.click(open)
-    let drawer = document.querySelector<HTMLElement>('.arco-drawer')!
+    expect(within(row).queryByRole('button', { name: '可通知人员' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '可通知人员' }))
+    await screen.findByText('赵六（E052）')
+    const drawer = document.querySelector<HTMLElement>('.arco-drawer')!
     const leaderRow = (await within(drawer).findByText('赵六（E052）')).closest('tr')!
     await user.click(within(leaderRow).getByRole('button', { name: '移除' }))
-    await waitFor(() => expect(setCompanyRecipientRemoved).toHaveBeenCalledWith(7, 52, true))
-    expect(await within(drawer).findByText('已移除')).toBeInTheDocument()
-    expect(within(drawer).getByRole('button', { name: '恢复' })).toBeInTheDocument()
-    await user.click(within(drawer).getByRole('button', { name: '关闭' }))
-
-    await user.click(screen.getAllByRole('button', { name: '可通知人员' }).find(button => !button.closest('tr'))!)
-    drawer = (await screen.findByText('可通知人员 · 全部厂商')).closest<HTMLElement>('.arco-drawer')!
-    const allRow = (await within(drawer).findByText('赵六（E052）')).closest('tr')!
-    await user.click(within(allRow).getByRole('button', { name: '移除' }))
     await waitFor(() => expect(setRecipientRemovedFromAll).toHaveBeenCalledWith(52, true))
+    expect(await within(drawer).findByText('已移除')).toBeInTheDocument()
+    await user.click(within(drawer).getByRole('button', { name: '恢复' }))
+    await waitFor(() => expect(setRecipientRemovedFromAll).toHaveBeenLastCalledWith(52, false))
+  })
+
+  it('重新导入：弹窗勾选已移除的人，确认后恢复；没有已移除的人时按钮不可用', async () => {
+    const user = userEvent.setup()
+    const base = { departmentName: '采购课', email: 'w@example.invalid', canReceive: true, unavailableReason: null }
+    const kept = { userId: 51, employeeNo: 'E051', realName: '王五', ...base, removed: false }
+    const gone = { userId: 52, employeeNo: 'E052', realName: '赵六', ...base, removed: true }
+    const other = { userId: 53, employeeNo: 'E053', realName: '钱七', ...base, removed: true }
+    const restoreRecipients = vi.fn().mockResolvedValue([kept, { ...gone, removed: false }, other])
+    renderDirectory(baseApi({
+      allInternalRecipients: vi.fn().mockResolvedValue([kept, gone, other]),
+      restoreRecipients,
+    }), ['oem:company_manage'])
+
+    await user.click(await screen.findByRole('button', { name: '可通知人员' }))
+    await screen.findByText('王五（E051）')
+    await user.click(screen.getByRole('button', { name: '重新导入' }))
+    const dialog = await screen.findByRole('dialog', { name: '重新导入' })
+    expect(within(dialog).queryByText('王五（E051）')).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '导入' })).toBeDisabled()
+    const rowOf = (name: string) => within(dialog).getByText(name).closest('tr')!
+    await user.click(within(rowOf('赵六（E052）')).getByRole('checkbox'))
+    await user.click(within(dialog).getByRole('button', { name: '导入' }))
+    await waitFor(() => expect(restoreRecipients).toHaveBeenCalledWith([52]))
+  })
+
+  it('可通知人员按页显示：每页 20 人，可翻页，搜索后回到第一页', async () => {
+    const user = userEvent.setup()
+    const people = Array.from({ length: 25 }, (_, index) => ({
+      userId: 100 + index, employeeNo: `E${100 + index}`, realName: `人员${String(index + 1).padStart(2, '0')}`, departmentName: '采购课',
+      email: `p${index}@example.invalid`, canReceive: true, unavailableReason: null, removed: false,
+    }))
+    renderDirectory(baseApi({ allInternalRecipients: vi.fn().mockResolvedValue(people) }), ['oem:company_manage'])
+
+    await user.click(await screen.findByRole('button', { name: '可通知人员' }))
+    const drawer = (await screen.findByText('人员01（E100）')).closest<HTMLElement>('.arco-drawer')!
+    expect(within(drawer).queryByText('人员21（E120）')).not.toBeInTheDocument()
+    expect(drawer.querySelector('.arco-pagination')).not.toBeNull()
+    await user.click(within(drawer).getByText('2', { selector: '.arco-pagination-item' }))
+    expect(await within(drawer).findByText('人员21（E120）')).toBeInTheDocument()
+    await user.type(within(drawer).getByPlaceholderText('姓名、工号或组织'), '人员01')
+    expect(await within(drawer).findByText('人员01（E100）')).toBeInTheDocument()
   })
 
   it('账号和联络人 Excel 批量入口位于 ODM/OEMA 厂商总表页', async () => {

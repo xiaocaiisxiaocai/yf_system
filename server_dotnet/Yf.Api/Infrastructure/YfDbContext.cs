@@ -56,7 +56,6 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OemAccount> OemAccounts => Set<OemAccount>();
     public DbSet<OemCompanyContact> OemCompanyContacts => Set<OemCompanyContact>();
     public DbSet<OemInternalRecipientExclusion> OemInternalRecipientExclusions => Set<OemInternalRecipientExclusion>();
-    public DbSet<OemCompanyRecipientExclusion> OemCompanyRecipientExclusions => Set<OemCompanyRecipientExclusion>();
     public DbSet<OemTransferInternalRecipient> OemTransferInternalRecipients => Set<OemTransferInternalRecipient>();
     public DbSet<OemRefreshToken> OemRefreshTokens => Set<OemRefreshToken>();
     public DbSet<OemRetentionTemplate> OemRetentionTemplates => Set<OemRetentionTemplate>();

@@ -116,23 +116,6 @@ public sealed class OemInternalRecipientExclusionConfig : IEntityTypeConfigurati
     }
 }
 
-public sealed class OemCompanyRecipientExclusionConfig : IEntityTypeConfiguration<OemCompanyRecipientExclusion>
-{
-    public void Configure(EntityTypeBuilder<OemCompanyRecipientExclusion> b)
-    {
-        b.Table("oem_company_recipient_exclusions").HasKey(x => new { x.OemCompanyId, x.UserId });
-        b.Property(x => x.OemCompanyId).HasColumnName("oem_company_id");
-        b.Property(x => x.UserId).HasColumnName("user_id");
-        b.Property(x => x.CreatedBy).HasColumnName("created_by");
-        b.Property(x => x.CreatedAt).Clock("created_at");
-        b.HasIndex(x => x.UserId).HasDatabaseName("idx_oem_company_recipient_exclusions_user");
-        b.HasOne<OemCompany>().WithMany().HasForeignKey(x => x.OemCompanyId)
-            .HasConstraintName("fk_oem_company_recipient_exclusions_company").OnDelete(DeleteBehavior.Cascade);
-        b.HasOne<Yf.Api.Infrastructure.Entities.User>().WithMany().HasForeignKey(x => x.UserId)
-            .HasConstraintName("fk_oem_company_recipient_exclusions_user").OnDelete(DeleteBehavior.Cascade);
-    }
-}
-
 public sealed class OemTransferInternalRecipientConfig : IEntityTypeConfiguration<OemTransferInternalRecipient>
 {
     public void Configure(EntityTypeBuilder<OemTransferInternalRecipient> b)

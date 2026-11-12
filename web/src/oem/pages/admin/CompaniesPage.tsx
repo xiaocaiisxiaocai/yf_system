@@ -80,31 +80,34 @@ interface OemContactImportPayload {
 }
 
 interface InternalRecipientsDrawerProps {
-  /** A vendor's own list, 'all' for removals that apply to every vendor, or null when closed. */
-  target: Company | 'all' | null
+  open: boolean
   onClose: () => void
-  onChanged: () => void
 }
 
 /**
- * A notification list. Everyone with ODM/OEMA view + download is on every vendor's list by default; people removed here
- * (from all vendors, or from one) are no longer offered to the vendor when it sends files.
+ * The notification list, the same for every vendor. Everyone with ODM/OEMA view + download is on it by default;
+ * people removed here are no longer offered to a vendor when it sends files.
  */
-function InternalRecipientsDrawer({ target, onClose, onChanged }: InternalRecipientsDrawerProps) {
+function InternalRecipientsDrawer({ open, onClose }: InternalRecipientsDrawerProps) {
   const { api } = useOem()
   const [rows, setRows] = useState<InternalRecipient[]>([])
   const [keyword, setKeyword] = useState('')
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [picked, setPicked] = useState<number[]>([])
   const loadId = useRef(0)
 
   const load = useCallback(async () => {
     const current = ++loadId.current
-    if (!target) { setRows([]); setFailed(false); setLoading(false); return }
+    if (!open) { setRows([]); setFailed(false); setLoading(false); return }
     setLoading(true)
     try {
-      const result = target === 'all' ? await api.allInternalRecipients() : await api.internalRecipients(target.id)
+      const result = await api.allInternalRecipients()
       if (loadId.current !== current) return
       setRows(result)
       setFailed(false)
@@ -113,23 +116,39 @@ function InternalRecipientsDrawer({ target, onClose, onChanged }: InternalRecipi
     } finally {
       if (loadId.current === current) setLoading(false)
     }
-  }, [api, target])
+  }, [api, open])
   useLoadEffect(load)
 
   const toggle = async (person: InternalRecipient) => {
-    if (!target || busyId !== null) return
+    if (busyId !== null) return
     setBusyId(person.userId)
     try {
-      const result = target === 'all'
-        ? await api.setRecipientRemovedFromAll(person.userId, !person.removed)
-        : await api.setCompanyRecipientRemoved(target.id, person.userId, !person.removed)
+      const result = await api.setRecipientRemovedFromAll(person.userId, !person.removed)
       loadId.current += 1
       setRows(result)
-      onChanged()
     } catch {
       // The request layer displays the reason.
     } finally {
       setBusyId(null)
+    }
+  }
+
+  const removedRows = rows.filter(person => person.removed)
+  const openImport = () => { setPicked([]); setImportOpen(true) }
+  /** Re-import: the removed people the administrator ticks go back on the list. */
+  const reimport = async () => {
+    if (importing || picked.length === 0) return
+    setImporting(true)
+    try {
+      const result = await api.restoreRecipients(picked)
+      loadId.current += 1
+      setRows(result)
+      setImportOpen(false)
+      Message.success(`已重新导入 ${picked.length} 人`)
+    } catch {
+      // The request layer displays the reason.
+    } finally {
+      setImporting(false)
     }
   }
 
@@ -138,11 +157,28 @@ function InternalRecipientsDrawer({ target, onClose, onChanged }: InternalRecipi
     .filter(person => !term || [person.realName, person.employeeNo, person.departmentName ?? ''].some(value => value.toLowerCase().includes(term)))
     .sort((a, b) => Number(a.removed) - Number(b.removed))
   return (
-    <Drawer width="min(760px, 100vw)" title={`可通知人员 · ${target === 'all' ? '全部厂商' : target?.name ?? ''}`} visible={!!target}
+    <Drawer width="min(760px, 100vw)" title="可通知人员" visible={open}
       onCancel={onClose} unmountOnExit footer={<Button onClick={onClose}>关闭</Button>}>
       {failed && <Alert type="error" style={{ marginBottom: 12 }} content="可通知人员加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
-      <Input.Search allowClear placeholder="姓名、工号或组织" style={{ width: 260, marginBottom: 12 }} value={keyword} onChange={setKeyword} />
-      <ResizableTable tableId="oem-internal-recipients" rowKey="userId" size="small" pagination={false} loading={loading} data={shown}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+        <Input.Search allowClear placeholder="姓名、工号或组织" style={{ width: 260 }} value={keyword} onChange={(value) => { setKeyword(value); setPage(1) }} />
+        <Button disabled={loading || removedRows.length === 0} onClick={openImport}>重新导入</Button>
+      </div>
+      <Modal title="重新导入" visible={importOpen} onCancel={() => !importing && setImportOpen(false)} onOk={() => void reimport()}
+        okText="导入" confirmLoading={importing} okButtonProps={{ disabled: picked.length === 0 }} unmountOnExit>
+        <ResizableTable tableId="oem-internal-recipients-reimport" rowKey="userId" size="small" pagination={false} data={removedRows}
+          scroll={{ y: 320 }}
+          rowSelection={{ type: 'checkbox', selectedRowKeys: picked, onChange: (keys) => setPicked(keys as number[]) }}
+          columns={[
+            { title: '姓名', render: (_: unknown, person: InternalRecipient) => `${person.realName}（${person.employeeNo}）` },
+            { title: '组织', render: (_: unknown, person: InternalRecipient) => person.departmentName ?? '-' },
+          ]}
+        />
+      </Modal>
+      <ResizableTable tableId="oem-internal-recipients" rowKey="userId" size="small" loading={loading} data={shown}
+        scroll={{ y: 'calc(100vh - 330px)' }}
+        pagination={{ total: shown.length, current: page, pageSize, showTotal: true, sizeCanChange: true, sizeOptions: [20, 50, 100],
+          onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
         noDataElement={<Empty description="没有具备 ODM/OEMA 查看和下载权限的人员" />}
         columns={[
           { title: '姓名', width: 160, render: (_: unknown, person: InternalRecipient) => `${person.realName}（${person.employeeNo}）` },
@@ -497,7 +533,7 @@ export default function CompaniesPage() {
   const [saving, setSaving] = useState(false)
   const [accountsOf, setAccountsOf] = useState<Company | null>(null)
   const [contactsOf, setContactsOf] = useState<Company | null>(null)
-  const [recipientsOf, setRecipientsOf] = useState<Company | 'all' | null>(null)
+  const [recipientsOpen, setRecipientsOpen] = useState(false)
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [contactImportOpen, setContactImportOpen] = useState(false)
   const [accountExporting, setAccountExporting] = useState(false)
@@ -873,8 +909,6 @@ export default function CompaniesPage() {
           {can.viewTransfers && <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers?companyId=${row.id}`)}>传递记录</Button>}
           {can.manageAccounts && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号管理</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => setContactsOf(row)}>联络人</Button>}
-          {can.manageCompanies && <Button size="mini" type="text" status={row.internalRecipientCount ? undefined : 'warning'}
-            title={row.internalRecipientCount ? undefined : '无人可通知'} onClick={() => setRecipientsOf(row)}>可通知人员</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
           {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
             onOk={() => toggleCompanyStatus(row)}>
@@ -918,7 +952,7 @@ export default function CompaniesPage() {
             can.manageAccounts && { key: 'accounts', label: '导出账号', loading: accountExporting, onClick: () => void exportAllAccounts() },
             can.manageCompanies && { key: 'contacts', label: '导出联络人', loading: contactExporting, onClick: () => void exportAllContacts() },
           ]} />
-          {can.manageCompanies && <Button onClick={() => setRecipientsOf('all')}>可通知人员</Button>}
+          {can.manageCompanies && <Button onClick={() => setRecipientsOpen(true)}>可通知人员</Button>}
           {can.manageCompanies && (
             <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
           )}
@@ -1007,12 +1041,7 @@ export default function CompaniesPage() {
         onClose={() => setContactsOf(null)}
         onChanged={() => void load().catch(() => undefined)}
       />
-      <InternalRecipientsDrawer
-        key={recipientsOf === 'all' ? 'recipients-all' : recipientsOf?.id ?? 'recipients-closed'}
-        target={recipientsOf}
-        onClose={() => setRecipientsOf(null)}
-        onChanged={() => void load().catch(() => undefined)}
-      />
+      <InternalRecipientsDrawer open={recipientsOpen} onClose={() => setRecipientsOpen(false)} />
     </Card>
   )
 }

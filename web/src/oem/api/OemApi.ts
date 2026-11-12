@@ -152,16 +152,13 @@ export class OemApi {
   contacts = (companyId: number) => this.get<'GET /oem/companies/{id}/contacts', CompanyContact[]>(`/oem/companies/${companyId}/contacts`)
   importContacts = (companyId: number, rows: Api.OemCompanyContactImportRow[]) =>
     this.post<'POST /oem/companies/{id}/contacts/import', Api.OemImportResponse>(`/oem/companies/${companyId}/contacts/import`, { rows })
-  internalRecipients = (companyId: number) =>
-    this.get<'GET /oem/companies/{id}/internal-recipients', InternalRecipient[]>(`/oem/companies/${companyId}/internal-recipients`)
-  /** Removes a person from (or restores them to) one vendor's notification list. */
-  setCompanyRecipientRemoved = (companyId: number, userId: number, removed: boolean) =>
-    this.put<'PUT /oem/companies/{id}/internal-recipients/{userId}', InternalRecipient[]>(
-      `/oem/companies/${companyId}/internal-recipients/${userId}`, { removed } satisfies Api.OemRecipientRemovalRequest)
-  /** Everyone on the vendors' notification lists by default, with those removed from all vendors marked. */
+  /** The one notification list (the same for every vendor): everyone with view + download by default, removed ones marked. */
   allInternalRecipients = () =>
     this.get<'GET /oem/internal-recipients', InternalRecipient[]>('/oem/internal-recipients')
-  /** Removes a person from (or restores them to) every vendor's notification list. */
+  /** Puts the chosen people back on the notification list (re-import). */
+  restoreRecipients = (userIds: number[]) =>
+    this.post<'POST /oem/internal-recipients/restore', InternalRecipient[]>('/oem/internal-recipients/restore', { userIds } satisfies Api.OemRecipientRestoreRequest)
+  /** Removes a person from (or restores them to) the notification list. */
   setRecipientRemovedFromAll = (userId: number, removed: boolean) =>
     this.put<'PUT /oem/internal-recipients/{userId}', InternalRecipient[]>(
       `/oem/internal-recipients/${userId}`, { removed } satisfies Api.OemRecipientRemovalRequest)

@@ -218,7 +218,7 @@ public sealed class OemTransferService(
             if (chosen.Length > 0) throw ApiException.BadRequest("公司发出的传递单不需要选择通知人员");
             return 0;
         }
-        var candidates = (await OemRecipients.CompanyInternalRecipientsAsync(uow.Db, transfer.OemCompanyId, ct))
+        var candidates = (await OemRecipients.InboundRecipientsAsync(uow.Db, ct))
             .Select(candidate => candidate.Id).ToHashSet();
         if (candidates.Count > 0 && chosen.Length == 0) throw ApiException.BadRequest("请选择要通知的公司人员");
         if (chosen.Any(userId => !candidates.Contains(userId))) throw ApiException.BadRequest("所选通知人员已不可选，请刷新后重新选择");
@@ -231,8 +231,8 @@ public sealed class OemTransferService(
     }
 
     /// <summary>
-    /// A vendor sending files signs with the name of one of its active contacts (the shared login is not a person), the same
-    /// rule as Robot supplier uploads: required while the vendor has any active contact, and it must match one of them.
+    /// A vendor sending files must sign with the name of one of its active contacts (the shared login is not a person):
+    /// the signature is always required and must match a registered, active contact of that vendor.
     /// </summary>
     private static async Task SignAsync(OemUnitOfWork uow, OemActor current, OemTransfer transfer, string? signerName, CancellationToken ct)
     {
@@ -244,16 +244,14 @@ public sealed class OemTransferService(
         }
         var active = uow.Db.OemCompanyContacts.AsNoTracking()
             .Where(contact => contact.OemCompanyId == transfer.OemCompanyId && contact.Status == OemStatus.Active);
-        if (name is null)
-        {
-            if (await active.AnyAsync(ct)) throw ApiException.BadRequest("请填写签名（提供人姓名）");
-            return;
-        }
+        if (name is null) throw ApiException.BadRequest("请填写签名（提供人姓名）");
         if (name.EnumerateRunes().Count() > 32) throw ApiException.BadRequest("签名不能超过 32 个字符");
         // The column collation compares case- and width-insensitively; store the registered spelling.
         var contact = await active.Where(item => item.Name == name).OrderBy(item => item.Id)
             .Select(item => new { item.Id, item.Name }).FirstOrDefaultAsync(ct)
-            ?? throw ApiException.BadRequest($"签名「{name}」不是该厂商登记的联络人，请核对姓名");
+            ?? throw ApiException.BadRequest(await active.AnyAsync(ct)
+                ? $"签名「{name}」不是该厂商登记的联络人，请核对姓名"
+                : "该厂商还没有登记联络人，无法签名，请联系公司管理员");
         transfer.SignerContactId = contact.Id;
         transfer.SignerName = contact.Name;
     }

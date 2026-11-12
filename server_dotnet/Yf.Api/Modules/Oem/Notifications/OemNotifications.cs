@@ -66,29 +66,26 @@ internal static class OemRecipients
         InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
 
     /// <summary>
-    /// The vendor's notification list as it can be chosen and mailed now: every internal staff member with ODM/OEMA view + download
-    /// and an email, minus those removed from all vendors and those removed from this vendor.
+    /// The notification list as it can be chosen and mailed now (one list for every vendor): every internal staff member with
+    /// ODM/OEMA view + download and an email, minus those an administrator removed.
     /// </summary>
-    public static async Task<MailRecipient[]> CompanyInternalRecipientsAsync(YfDbContext db, ulong companyId, CancellationToken ct)
+    public static async Task<MailRecipient[]> InboundRecipientsAsync(YfDbContext db, CancellationToken ct)
     {
-        var excluded = (await db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct))
-            .Concat(await db.OemCompanyRecipientExclusions.AsNoTracking().Where(item => item.OemCompanyId == companyId)
-                .Select(item => item.UserId).ToArrayAsync(ct))
-            .ToHashSet();
+        var removed = (await db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct)).ToHashSet();
         return (await InboundCandidatesAsync(db, ct))
-            .Where(holder => !excluded.Contains(holder.Id) && !string.IsNullOrWhiteSpace(holder.Email)).ToArray();
+            .Where(holder => !removed.Contains(holder.Id) && !string.IsNullOrWhiteSpace(holder.Email)).ToArray();
     }
 
     /// <summary>
-    /// The people the vendor chose to notify for this inbound transfer who are still on its notification list (not removed since,
+    /// The people the vendor chose to notify for this inbound transfer who are still on the list (not removed since,
     /// still active with ODM/OEMA view + download). Nobody else is mailed about the transfer.
     /// </summary>
-    public static async Task<MailRecipient[]> TransferInternalRecipientsAsync(YfDbContext db, ulong transferId, ulong companyId, CancellationToken ct)
+    public static async Task<MailRecipient[]> TransferInternalRecipientsAsync(YfDbContext db, ulong transferId, CancellationToken ct)
     {
         var chosen = await db.OemTransferInternalRecipients.AsNoTracking().Where(item => item.TransferId == transferId)
             .Select(item => item.UserId).ToArrayAsync(ct);
         if (chosen.Length == 0) return [];
-        return (await CompanyInternalRecipientsAsync(db, companyId, ct)).Where(holder => chosen.Contains(holder.Id)).ToArray();
+        return (await InboundRecipientsAsync(db, ct)).Where(holder => chosen.Contains(holder.Id)).ToArray();
     }
 
     public static async Task<MailRecipient[]> VendorContactsAsync(
@@ -179,7 +176,7 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
             case TransferReleasedEvent:
                 var recipients = transfer.Direction == TransferDirections.InternalToOem
                     ? await OemRecipients.VendorContactsAsync(uow.Db, transfer.OemCompanyId, ct)
-                    : await OemRecipients.TransferInternalRecipientsAsync(uow.Db, transfer.Id, transfer.OemCompanyId, ct);
+                    : await OemRecipients.TransferInternalRecipientsAsync(uow.Db, transfer.Id, ct);
                 if (recipients.Length == 0 && OemMailEvents.Allowed(settings, OemMailEvents.TransferReleased))
                     await audit.WriteAsync(uow, null, transfer.Direction == TransferDirections.InternalToOem
                             ? "OEM_EMAIL_SKIPPED_MISSING_EMAIL" : "OEM_EMAIL_SKIPPED_NO_INTERNAL_RECIPIENT", "oem_transfer", transfer.Id,
@@ -358,7 +355,7 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
             case OemMailEvents.TransferReleased:
                 if (transfer.Direction != TransferDirections.OemToInternal || transfer.LifecycleStatus != TransferLifecycle.Released) return Stale();
                 // Recheck before delivery: still chosen for this transfer and still on the vendor's notification list.
-                var holders = await OemRecipients.TransferInternalRecipientsAsync(db, transfer.Id, transfer.OemCompanyId, ct);
+                var holders = await OemRecipients.TransferInternalRecipientsAsync(db, transfer.Id, ct);
                 return holders.Any(holder => holder.Id == recipientId) ? OutboxDecision.Allow : Stale();
             case OemMailEvents.ApprovalBlocked:
                 var stillBlocked = await db.OemFlowInstances.AnyAsync(instance => instance.TransferId == transferId

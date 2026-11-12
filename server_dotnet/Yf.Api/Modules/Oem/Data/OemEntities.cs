@@ -16,20 +16,11 @@ public sealed class OemCompany
 }
 
 /// <summary>
-/// Internal staff removed from every vendor's notification list. By default every internal staff member who can view and
-/// download ODM/OEMA files is on every vendor's list; this removes a person (e.g. a leader) from all of them at once.
+/// Internal staff an administrator removed from the notification list. By default every internal staff member who can view and
+/// download ODM/OEMA files is on it (one list for every vendor); this removes a person, e.g. a leader.
 /// </summary>
 public sealed class OemInternalRecipientExclusion
 {
-    public ulong UserId { get; set; }
-    public ulong? CreatedBy { get; set; }
-    public DateTime CreatedAt { get; set; }
-}
-
-/// <summary>Internal staff removed from one vendor's notification list only.</summary>
-public sealed class OemCompanyRecipientExclusion
-{
-    public ulong OemCompanyId { get; set; }
     public ulong UserId { get; set; }
     public ulong? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }

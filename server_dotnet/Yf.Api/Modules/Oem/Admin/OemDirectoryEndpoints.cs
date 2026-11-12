@@ -42,12 +42,10 @@ internal static class OemDirectoryEndpoints
             s.CreateCompanyContactAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemCompanyContactResponse>();
         oem.MapPost("/companies/{id:long}/contacts/import", (ulong id, OemCompanyContactImportRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.ImportCompanyContactsAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemImportResponse>();
-        oem.MapGet("/companies/{id:long}/internal-recipients", (ulong id, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
-            s.ListInternalRecipientsAsync(OemActorAccessor.Get(c), id, ct)).Produces<IReadOnlyList<OemInternalRecipientResponse>>();
-        oem.MapPut("/companies/{id:long}/internal-recipients/{userId:long}", (ulong id, ulong userId, OemRecipientRemovalRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
-            s.SetRemovedFromCompanyAsync(OemActorAccessor.Get(c), id, userId, r, ct)).Produces<IReadOnlyList<OemInternalRecipientResponse>>();
         oem.MapGet("/internal-recipients", (HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.ListAllInternalRecipientsAsync(OemActorAccessor.Get(c), ct)).Produces<IReadOnlyList<OemInternalRecipientResponse>>();
+        oem.MapPost("/internal-recipients/restore", (OemRecipientRestoreRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
+            s.RestoreAsync(OemActorAccessor.Get(c), r, ct)).Produces<IReadOnlyList<OemInternalRecipientResponse>>();
         oem.MapPut("/internal-recipients/{userId:long}", (ulong userId, OemRecipientRemovalRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.SetRemovedFromAllAsync(OemActorAccessor.Get(c), userId, r, ct)).Produces<IReadOnlyList<OemInternalRecipientResponse>>();
         oem.MapGet("/transfer-recipient-choices", (HttpContext c, OemDirectoryService s, CancellationToken ct) =>

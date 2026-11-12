@@ -54,6 +54,9 @@ public sealed record OemImportResponse(int Created, int Skipped, int Failed, IRe
 /// <summary>Removes a person from (or restores them to) a notification list.</summary>
 public sealed record OemRecipientRemovalRequest(bool Removed);
 
+/// <summary>People to put back on the notification list (re-import).</summary>
+public sealed record OemRecipientRestoreRequest(ulong[]? UserIds);
+
 public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit)
 {
     internal const int MaximumCompanyImportRows = 500;
@@ -86,10 +89,9 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
                 company.Status, company.CreatedAt, company.UpdatedAt,
                 uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id),
                 uow.Db.OemAccounts.LongCount(account => account.OemCompanyId == company.Id && account.Status == OemStatus.Active),
-                uow.Db.OemCompanyContacts.LongCount(contact => contact.OemCompanyId == company.Id),
-                0L))
+                uow.Db.OemCompanyContacts.LongCount(contact => contact.OemCompanyId == company.Id)))
             .ToArrayAsync(ct);
-        return new OemPageResponse<OemCompanyListItemResponse>(await WithRecipientCountsAsync(uow.Db, rows, ct), total, page, size);
+        return new OemPageResponse<OemCompanyListItemResponse>(rows, total, page, size);
     }
 
     /// <summary>Active vendors for choosing a transfer target; available to anyone who may create or view internal transfers.</summary>
@@ -740,8 +742,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     }
 
     /// <summary>
-    /// Everyone who is by default on every vendor's notification list (internal staff with ODM/OEMA view + download),
-    /// with <c>Removed</c> set for those removed from all vendors.
+    /// Everyone who is by default on the notification list (the same for every vendor) (internal staff with ODM/OEMA view + download),
+    /// with <c>Removed</c> set for those an administrator removed.
     /// </summary>
     public async Task<OemInternalRecipientResponse[]> ListAllInternalRecipientsAsync(OemActor actor, CancellationToken ct)
     {
@@ -752,16 +754,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         return await InternalRecipientRowsAsync(uow.Db, candidates, removed, ct);
     }
 
-    /// <summary>One vendor's notification list: everyone not removed from all vendors, with <c>Removed</c> set for those removed from this vendor.</summary>
-    public async Task<OemInternalRecipientResponse[]> ListInternalRecipientsAsync(OemActor actor, ulong companyId, CancellationToken ct)
-    {
-        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
-        await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
-        if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId, ct)) throw ApiException.NotFound();
-        return await CompanyRecipientRowsAsync(uow.Db, companyId, ct);
-    }
-
-    /// <summary>Removes a person from every vendor's notification list, or restores them.</summary>
+    /// <summary>Removes a person from the notification list (for every vendor), or restores them.</summary>
     public async Task<OemInternalRecipientResponse[]> SetRemovedFromAllAsync(OemActor actor, ulong userId, OemRecipientRemovalRequest request, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
@@ -785,30 +778,27 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         return rows;
     }
 
-    /// <summary>Removes a person from one vendor's notification list, or restores them.</summary>
-    public async Task<OemInternalRecipientResponse[]> SetRemovedFromCompanyAsync(
-        OemActor actor, ulong companyId, ulong userId, OemRecipientRemovalRequest request, CancellationToken ct)
+    /// <summary>Puts the chosen people back on the notification list in one step (re-import after removals).</summary>
+    public async Task<OemInternalRecipientResponse[]> RestoreAsync(OemActor actor, OemRecipientRestoreRequest request, CancellationToken ct)
     {
+        var ids = (request.UserIds ?? []).Distinct().ToArray();
+        if (ids.Length == 0) throw ApiException.BadRequest("请选择要重新导入的人员");
+        if (ids.Length > 500) throw ApiException.BadRequest("一次最多重新导入 500 人");
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
-        var company = await LockCompanyAsync(uow, companyId, ct);
-        var name = await RecipientNameAsync(uow.Db, userId, ct);
-        var existing = await uow.Db.OemCompanyRecipientExclusions
-            .SingleOrDefaultAsync(item => item.OemCompanyId == companyId && item.UserId == userId, ct);
-        if (request.Removed && existing is null)
-            uow.Db.OemCompanyRecipientExclusions.Add(new OemCompanyRecipientExclusion
-            {
-                OemCompanyId = companyId, UserId = userId, CreatedBy = current.User.Id, CreatedAt = uow.Now,
-            });
-        else if (!request.Removed && existing is not null)
-            uow.Db.OemCompanyRecipientExclusions.Remove(existing);
-        if (request.Removed == (existing is null))
+        var removed = await uow.Db.OemInternalRecipientExclusions.Where(item => Enumerable.Contains(ids, item.UserId)).ToArrayAsync(ct);
+        if (removed.Length > 0)
         {
+            uow.Db.OemInternalRecipientExclusions.RemoveRange(removed);
             await uow.Db.SaveChangesAsync(ct);
-            await audit.WriteAsync(uow, current, request.Removed ? "OEM_COMPANY_INTERNAL_RECIPIENT_REMOVE" : "OEM_COMPANY_INTERNAL_RECIPIENT_RESTORE",
-                "oem_company", companyId, new { targetName = company.Name, user = name }, ct);
+            var restoredIds = removed.Select(item => item.UserId).ToArray();
+            var names = await uow.Db.Users.AsNoTracking().Where(user => Enumerable.Contains(restoredIds, user.Id))
+                .Select(user => user.RealName + "（" + user.EmployeeNo + "）").ToArrayAsync(ct);
+            await audit.WriteAsync(uow, current, "OEM_INTERNAL_RECIPIENT_RESTORE_ALL", "user", null, new { restored = names }, ct);
         }
-        var rows = await CompanyRecipientRowsAsync(uow.Db, companyId, ct);
+        var candidates = (await OemRecipients.InboundCandidatesAsync(uow.Db, ct)).Select(item => item.Id).ToArray();
+        var stillRemoved = (await uow.Db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct)).ToHashSet();
+        var rows = await InternalRecipientRowsAsync(uow.Db, candidates, stillRemoved, ct);
         await uow.CommitAsync(ct);
         return rows;
     }
@@ -819,7 +809,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         if (current is not OemAccountActor account) throw ApiException.Forbidden();
-        var candidates = await OemRecipients.CompanyInternalRecipientsAsync(uow.Db, account.CompanyId, ct);
+        var candidates = await OemRecipients.InboundRecipientsAsync(uow.Db, ct);
         return candidates.OrderBy(candidate => candidate.Name, StringComparer.Ordinal)
             .Select(candidate => new OemRecipientChoiceResponse(candidate.Id, candidate.Name ?? string.Empty)).ToArray();
     }
@@ -828,32 +818,6 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await db.Users.AsNoTracking().Where(user => user.Id == userId && user.UserType == "INTERNAL")
             .Select(user => user.RealName + "（" + user.EmployeeNo + "）").SingleOrDefaultAsync(ct)
         ?? throw ApiException.NotFound("人员不存在");
-
-    private static async Task<OemInternalRecipientResponse[]> CompanyRecipientRowsAsync(YfDbContext db, ulong companyId, CancellationToken ct)
-    {
-        var removedFromAll = (await db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct)).ToHashSet();
-        var candidates = (await OemRecipients.InboundCandidatesAsync(db, ct)).Select(item => item.Id).Where(id => !removedFromAll.Contains(id)).ToArray();
-        var removed = (await db.OemCompanyRecipientExclusions.AsNoTracking().Where(item => item.OemCompanyId == companyId)
-            .Select(item => item.UserId).ToArrayAsync(ct)).ToHashSet();
-        return await InternalRecipientRowsAsync(db, candidates, removed, ct);
-    }
-
-    /// <summary>Fills each vendor row with how many people it can currently choose to notify.</summary>
-    private static async Task<OemCompanyListItemResponse[]> WithRecipientCountsAsync(YfDbContext db, OemCompanyListItemResponse[] rows, CancellationToken ct)
-    {
-        if (rows.Length == 0) return rows;
-        var removedFromAll = (await db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct)).ToHashSet();
-        var candidates = (await OemRecipients.InboundCandidatesAsync(db, ct))
-            .Where(item => !string.IsNullOrWhiteSpace(item.Email) && !removedFromAll.Contains(item.Id)).Select(item => item.Id).ToHashSet();
-        var companyIds = rows.Select(row => row.Id).ToArray();
-        var removed = (await db.OemCompanyRecipientExclusions.AsNoTracking().Where(item => Enumerable.Contains(companyIds, item.OemCompanyId))
-                .Select(item => new { item.OemCompanyId, item.UserId }).ToArrayAsync(ct))
-            .ToLookup(item => item.OemCompanyId, item => item.UserId);
-        return rows.Select(row => row with
-        {
-            InternalRecipientCount = candidates.Count - removed[row.Id].Count(candidates.Contains),
-        }).ToArray();
-    }
 
     private static async Task<OemInternalRecipientResponse[]> InternalRecipientRowsAsync(
         YfDbContext db, IReadOnlyCollection<ulong> userIds, IReadOnlySet<ulong> removed, CancellationToken ct)

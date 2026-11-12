@@ -70,7 +70,7 @@ export type RetentionTemplate = Narrow<Api.OemRetentionTemplateResponse, { mode:
 
 /** Single-company responses (create/update/status) carry no account counts; list rows do. */
 export type Company = Narrow<Api.OemCompanyResponse, { status: ActiveStatus }>
-  & Partial<Pick<Api.OemCompanyListItemResponse, 'accountCount' | 'activeAccountCount' | 'contactCount' | 'internalRecipientCount'>>
+  & Partial<Pick<Api.OemCompanyListItemResponse, 'accountCount' | 'activeAccountCount' | 'contactCount'>>
 
 export type CompanyListItem = Narrow<Api.OemCompanyListItemResponse, { status: ActiveStatus }>
 

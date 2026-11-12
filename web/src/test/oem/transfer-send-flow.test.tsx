@@ -251,6 +251,7 @@ describe('ODM/OEMA 一键发送文件', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).queryByText('目标 ODM/OEMA 厂商')).not.toBeInTheDocument()
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
+    await user.type(within(dialog).getByLabelText('签名'), '张三')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
 
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent('/oem-portal/transfers/52'))
@@ -276,6 +277,10 @@ describe('ODM/OEMA 一键发送文件', () => {
 
     await user.click(within(dialog).getByRole('combobox'))
     fireEvent.click((await screen.findAllByText('王五')).at(-1)!)
+    // The signature is required: without it nothing is created or sent.
+    await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
+    expect(await within(dialog).findByText('请填写签名')).toBeInTheDocument()
+    expect(api.createTransfer).not.toHaveBeenCalled()
     await user.type(within(dialog).getByLabelText('签名'), '张三')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
     await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, [51], '张三'))

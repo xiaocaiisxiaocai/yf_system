@@ -331,7 +331,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
           </Form.Item>
         )}
         {realm === 'oem' && (
-          <Form.Item field="signerName" label="签名">
+          <Form.Item field="signerName" label="签名" rules={[{ required: true, message: '请填写签名' }]}>
             <Input aria-label="签名" placeholder="签名（提供人姓名）" maxLength={32} disabled={busy} />
           </Form.Item>
         )}

@@ -1,0 +1,55 @@
+﻿using System;
+using Microsoft.EntityFrameworkCore.Migrations;
+
+#nullable disable
+
+namespace Yf.Api.Infrastructure.Migrations
+{
+    /// <inheritdoc />
+    public partial class DropOemCompanyRecipientExclusions : Migration
+    {
+        /// <inheritdoc />
+        protected override void Up(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.DropTable(
+                name: "oem_company_recipient_exclusions");
+        }
+
+        /// <inheritdoc />
+        protected override void Down(MigrationBuilder migrationBuilder)
+        {
+            migrationBuilder.CreateTable(
+                name: "oem_company_recipient_exclusions",
+                columns: table => new
+                {
+                    oem_company_id = table.Column<ulong>(type: "bigint unsigned", nullable: false),
+                    user_id = table.Column<ulong>(type: "bigint unsigned", nullable: false),
+                    created_at = table.Column<DateTime>(type: "datetime(3)", nullable: false),
+                    created_by = table.Column<ulong>(type: "bigint unsigned", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_oem_company_recipient_exclusions", x => new { x.oem_company_id, x.user_id });
+                    table.ForeignKey(
+                        name: "fk_oem_company_recipient_exclusions_company",
+                        column: x => x.oem_company_id,
+                        principalTable: "oem_companies",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                    table.ForeignKey(
+                        name: "fk_oem_company_recipient_exclusions_user",
+                        column: x => x.user_id,
+                        principalTable: "users",
+                        principalColumn: "id",
+                        onDelete: ReferentialAction.Cascade);
+                })
+                .Annotation("MySql:CharSet", "utf8mb4")
+                .Annotation("Relational:Collation", "utf8mb4_unicode_ci");
+
+            migrationBuilder.CreateIndex(
+                name: "idx_oem_company_recipient_exclusions_user",
+                table: "oem_company_recipient_exclusions",
+                column: "user_id");
+        }
+    }
+}

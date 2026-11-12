@@ -388,6 +388,10 @@ export default function TransferDetailPage() {
         Message.warning('请选择要通知的公司人员')
         return
       }
+      if (choosing && !signerName.trim()) {
+        Message.warning('请填写签名')
+        return
+      }
       try {
         const submitted = choosing
           ? await api.send(id, latest.summary.version, notifyUserIds, signerName)
