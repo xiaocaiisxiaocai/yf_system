@@ -6,7 +6,7 @@ import App from '../App'
 import http from '../api/client'
 import AdminLayout from '../layouts/AdminLayout'
 import AppRail from '../layouts/AppRail'
-import { businessHomes, collaborationPages } from '../layouts/navigation'
+import { businessHomes, canManageLeaders, collaborationPages, COLLABORATION_PAGES, pageGuard } from '../layouts/navigation'
 import Home from '../pages/Home'
 import { useAuth, type UserBrief } from '../store/auth'
 
@@ -168,5 +168,34 @@ describe('按可用功能决定模块导航与首页', () => {
     expect(await screen.findByText(expected)).toBeInTheDocument()
     expect(screen.getByRole('status', { name: '当前地址' }).textContent).toBe(path)
     expect(get).not.toHaveBeenCalled()
+  })
+})
+
+describe('菜单与路由守卫共用同一份规则', () => {
+  // 与 App.tsx 的 Guard 判定一致：缺菜单则不放行；声明了操作权限时须持有其一。
+  const guardAllows = (guard: { menu: string; anyPermission?: string[] }, menus: string[], permissions: string[]) =>
+    menus.includes(guard.menu) && (!guard.anyPermission || guard.anyPermission.some(code => permissions.includes(code)))
+
+  it('每个页面：菜单可见当且仅当直接访问不会被拒（只有菜单、只有权限、都有、都没有）', () => {
+    for (const page of COLLABORATION_PAGES) {
+      if (page.code === 'dashboard') continue
+      const guard = pageGuard(page.code)
+      const required = [...page.anyPermission]
+      for (const [menus, permissions] of [[[], []], [[page.code], []], [[], required], [[page.code], required]] as [string[], string[]][]) {
+        const grants = { menus, permissions, user: internalUser }
+        const visible = collaborationPages(grants).some(item => item.code === page.code)
+        const allowed = (page.code === 'org:dept' && canManageLeaders(grants)) || guardAllows(guard, menus, permissions)
+        expect({ page: page.code, menus, permissions, visible }).toEqual({ page: page.code, menus, permissions, visible: allowed })
+      }
+    }
+  })
+
+  it('组织架构：主管维护权限不需要菜单，供应商即使带同名权限也不行', () => {
+    const leader = { menus: [], permissions: ['dept:leader_manage'], user: internalUser }
+    expect(canManageLeaders(leader)).toBe(true)
+    expect(collaborationPages(leader).map(page => page.code)).toEqual(['org:dept'])
+    const supplier = { ...leader, user: { ...internalUser, userType: 'SUPPLIER' } }
+    expect(canManageLeaders(supplier)).toBe(false)
+    expect(collaborationPages(supplier)).toEqual([])
   })
 })

@@ -7,6 +7,7 @@ import { OEM_SETTINGS_PERMISSIONS } from './oem/oemNavigation'
 import { OEM_UI_ENABLED } from './features'
 import { decideAuthStorageSync } from './store/authStorageSync'
 import RouteErrorBoundary from './components/RouteErrorBoundary'
+import { canManageLeaders, pageGuard } from './layouts/navigation'
 import UploadLeaveGuard from './components/UploadLeaveGuard'
 import UploadNavigationGuard from './components/UploadNavigationGuard'
 
@@ -86,9 +87,9 @@ export function Guard({ children, menu, permission, anyPermission }: { children:
 }
 
 function OrganizationRoute() {
-  const canManageLeaders = useAuth((state) => state.user?.userType === 'INTERNAL'
-    && state.permissions.includes('dept:leader_manage'))
-  return <Guard menu={canManageLeaders ? undefined : 'org:dept'}><DeptManage /></Guard>
+  // 主管维护权限不需要组织架构菜单；其余情况与菜单同一规则。
+  const leaderManager = useAuth((state) => canManageLeaders(state))
+  return <Guard {...(leaderManager ? {} : pageGuard('org:dept'))}><DeptManage /></Guard>
 }
 
 export default function App() {
@@ -178,15 +179,15 @@ export default function App() {
         >
           <Route index element={<Home />} />
           <Route path="profile" element={<Profile />} />
-          <Route path="projects" element={<Guard menu="project:list" permission="project:list"><ProjectList /></Guard>} />
-          <Route path="projects/:id" element={<Guard menu="project:list" permission="project:list"><ProjectDetail /></Guard>} />
-          <Route path="suppliers" element={<Guard menu="supplier:list" anyPermission={['supplier:manage', 'supplier:account']}><SupplierList /></Guard>} />
-          <Route path="org/users" element={<Guard menu="org:user" permission="user:manage"><UserList /></Guard>} />
+          <Route path="projects" element={<Guard {...pageGuard('project:list')}><ProjectList /></Guard>} />
+          <Route path="projects/:id" element={<Guard {...pageGuard('project:list')}><ProjectDetail /></Guard>} />
+          <Route path="suppliers" element={<Guard {...pageGuard('supplier:list')}><SupplierList /></Guard>} />
+          <Route path="org/users" element={<Guard {...pageGuard('org:user')}><UserList /></Guard>} />
           <Route path="org/depts" element={<OrganizationRoute />} />
-          <Route path="rbac/roles" element={<Guard menu="rbac:role" permission="role:manage"><RoleList /></Guard>} />
-          <Route path="logs" element={<Guard menu="log:audit" permission="log:view"><AuditLog /></Guard>} />
-          <Route path="system/config" element={<Guard menu="system:config" permission="config:manage"><SysConfig /></Guard>} />
-          <Route path="system/dictionaries" element={<Guard menu="system:dict" permission="dict:manage"><Dictionaries /></Guard>} />
+          <Route path="rbac/roles" element={<Guard {...pageGuard('rbac:role')}><RoleList /></Guard>} />
+          <Route path="logs" element={<Guard {...pageGuard('log:audit')}><AuditLog /></Guard>} />
+          <Route path="system/config" element={<Guard {...pageGuard('system:config')}><SysConfig /></Guard>} />
+          <Route path="system/dictionaries" element={<Guard {...pageGuard('system:dict')}><Dictionaries /></Guard>} />
           {token ? <Route path="*" element={<NotFound />} /> : null}
         </Route>
         <Route path="*" element={<NotFound />} />
