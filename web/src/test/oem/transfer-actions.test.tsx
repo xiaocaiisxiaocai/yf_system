@@ -18,7 +18,7 @@ function detail(): TransferDetail {
       companyId: 9,
       companyName: '甲厂',
       title: '等待处置的传递单',
-      sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' },
+      sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' }, signerName: null,
       lifecycleStatus: 'SEALED',
       approvalStatus: 'APPROVAL_BLOCKED',
       approvalBlockedReason: '原审批人已停用',

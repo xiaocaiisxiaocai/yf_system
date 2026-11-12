@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Button, Card, Empty, Grid, List, Pagination, Result, Spin, Statistic, Tag, Typography } from '@arco-design/web-react'
+import { Button, Card, Empty, Grid, List, Pagination, Result, Skeleton, Statistic, Tag, Typography } from '@arco-design/web-react'
 import { IconRight, IconRefresh } from '@arco-design/web-react/icon'
 import { Link, useNavigate } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -263,7 +263,15 @@ export default function Dashboard() {
           </div>
         </div>
         {loading && !data ? (
-          <Spin loading className="dashboard-overview-loading" />
+          <Grid.Row className="dashboard-stats dashboard-stats-skeleton" gutter={[12, 12]} aria-label="正在加载业务概览">
+            {[1, 2, 3, 4].map((i) => (
+              <Grid.Col xs={12} xl={6} key={i}>
+                <Card className="dashboard-stat-card dashboard-stat-card--skeleton">
+                  <Skeleton animation text={{ rows: 2, width: ['40%', '70%'] }} style={{ width: '100%' }} />
+                </Card>
+              </Grid.Col>
+            ))}
+          </Grid.Row>
         ) : loadError && !data ? (
           <div className="dashboard-feedback dashboard-overview-error">
             <Typography.Text type="error">加载失败</Typography.Text>
@@ -313,7 +321,9 @@ export default function Dashboard() {
               </div>
             )}
             {pendingLoading ? (
-              <Spin loading className="dashboard-card-loading" />
+              <div className="dashboard-card-loading" aria-label="正在加载待处理项目">
+                <Skeleton animation text={{ rows: 3, width: ['100%', '85%', '90%'] }} style={{ padding: '16px 8px', width: '100%' }} />
+              </div>
             ) : pendingError ? (
               <div className="dashboard-feedback">
                 <Typography.Text type="error">{taskCopy.error}</Typography.Text>
@@ -356,7 +366,12 @@ export default function Dashboard() {
                 )}
               </>
             ) : (
-              <Empty description={taskCopy.empty} />
+              <div className="dashboard-empty-container" style={{ textAlign: 'center', padding: '24px 0' }}>
+                <Empty description={taskCopy.empty} />
+                <Button size="small" type="outline" style={{ marginTop: 12 }} onClick={() => nav(isSupplier ? '/projects' : '/projects?mine=1')}>
+                  {isSupplier ? '查看全部项目' : '查看我的项目'}
+                </Button>
+              </div>
             )}
           </Card>
         </Grid.Col>
@@ -387,7 +402,9 @@ export default function Dashboard() {
               </div>
             )}
             {messageLoading ? (
-              <Spin loading className="dashboard-card-loading" />
+              <div className="dashboard-card-loading" aria-label="正在加载留言">
+                <Skeleton animation text={{ rows: 3, width: ['100%', '88%', '75%'] }} style={{ padding: '16px 8px', width: '100%' }} />
+              </div>
             ) : messageError ? (
               <div className="dashboard-feedback">
                 <Typography.Text type="error">留言加载失败</Typography.Text>
@@ -452,7 +469,14 @@ export default function Dashboard() {
                 )}
               </>
             ) : (
-              <Empty description={unreadOnly ? '暂无未读留言' : '暂无留言'} />
+              <div className="dashboard-empty-container" style={{ textAlign: 'center', padding: '24px 0' }}>
+                <Empty description={unreadOnly ? '暂无未读留言' : '暂无留言'} />
+                {unreadOnly && (
+                  <Button size="small" type="outline" style={{ marginTop: 12 }} onClick={() => changeMessageFilter(false)}>
+                    查看全部留言
+                  </Button>
+                )}
+              </div>
             )}
           </Card>
         </Grid.Col>

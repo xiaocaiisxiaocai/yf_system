@@ -90,7 +90,8 @@ public sealed class OemApprovalService(
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.ApprovalRecover, ct);
         var (transfer, instance, task) = await LockAsync(uow, taskId, ct);
         OemValidation.MatchVersion(task.ConcurrencyVersion, version);
-        var canAdministerTransfers = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct);
+        var canAdministerTransfers = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct)
+            && await OemAuthorizer.IsSystemAdminAsync(uow, current, ct);
         if (canAdministerTransfers)
         {
             if (transfer.LifecycleStatus != TransferLifecycle.Sealed || !FlowInstanceStatuses.IsOpen(instance.Status))
@@ -125,7 +126,8 @@ public sealed class OemApprovalService(
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.ApprovalRecover, ct);
         var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
         OemValidation.MatchVersion(transfer.ConcurrencyVersion, version);
-        var canAdministerTransfers = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct);
+        var canAdministerTransfers = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct)
+            && await OemAuthorizer.IsSystemAdminAsync(uow, current, ct);
         if (canAdministerTransfers)
         {
             if (transfer.LifecycleStatus != TransferLifecycle.Sealed)

@@ -320,12 +320,11 @@ public sealed class OemTransferFlowTests
         Assert.Equal("RELEASED", Lifecycle(released));
         Assert.Equal("RECIPIENT", released["capabilities"]!["contentPurpose"]!.GetValue<string>());
         Assert.Equal(OemTestHost.Pdf("process"), await DownloadAsync(world.Viewer, released["files"]![0]!.Id(), ct));
-        // View without download: metadata only.
-        var metadataOnly = await viewOnly.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
-        Assert.False(metadataOnly["files"]![0]!["downloadable"]!.GetValue<bool>());
+        // Staff who were not notified (and are not administrators) do not see it at all, whatever their permissions.
+        await viewOnly.GetAsync($"/api/v1/oem/transfers/{id}", ct).Status(HttpStatusCode.NotFound);
         Assert.Equal(1, await ListedDownloadableAsync(world.Viewer, id, ct));
         Assert.Equal(1, await ListedDownloadableAsync(world.Vendor, id, ct));
-        Assert.Equal(0, await ListedDownloadableAsync(viewOnly, id, ct));
+        Assert.DoesNotContain((await viewOnly.GetAsync("/api/v1/oem/transfers?pageSize=100", ct).Ok())["list"]!.AsArray(), item => item!.Id() == id);
 
         // Another vendor and the supplier line never see it.
         Assert.Empty((await otherVendor.GetAsync("/api/v1/oem/transfers", ct).Ok())["list"]!.AsArray());

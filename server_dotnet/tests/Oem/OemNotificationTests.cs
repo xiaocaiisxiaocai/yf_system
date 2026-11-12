@@ -245,7 +245,7 @@ public sealed class OemNotificationTests
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{second}/send",
             new { version = secondVersion, recipientUserIds = new[] { viewer } }, ct).Status(HttpStatusCode.BadRequest);
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{second}/send",
-            new { version = secondVersion, recipientUserIds = new[] { receiver } }, ct).Ok();
+            new { version = secondVersion, recipientUserIds = new[] { receiver }, signerName = world.Vendor.Signer }, ct).Ok();
         await host.RunOemJobsAsync(ct);
         var mail = Assert.Single(await ReleasedMailsAsync(second));
         Assert.Equal(("internal", receiver), (mail.RecipientRealm, mail.RecipientAccountId));
@@ -283,7 +283,7 @@ public sealed class OemNotificationTests
             await world.Admin.PutAsync($"{url}/{userId}", new { removed = true }, ct).Ok();
         Assert.Empty(await ChoicesAsync());
         var (third, thirdVersion) = await DraftAsync("无人可通知");
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{third}/send", new { version = thirdVersion }, ct).Ok();
+        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{third}/send", new { version = thirdVersion, signerName = world.Vendor.Signer }, ct).Ok();
         await host.RunOemJobsAsync(ct);
         Assert.Empty(await ReleasedMailsAsync(third));
         await using (var conn = await host.OpenAsync(ct))
@@ -294,6 +294,71 @@ public sealed class OemNotificationTests
         // Newly created staff with view + download join every list automatically.
         var newcomer = await host.CreateInternalUserAsync("zp_newcomer", "Newcomer#2026x", ["oem:transfer_view", "oem:file_download"], world.Org.Section, ct);
         Assert.Equal([newcomer], await ChoicesAsync());
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task OnlyAdministratorsSeeOtherPeoplesTransfersAndVendorsSignInboundOnes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var receiver = await host.CreateInternalUserAsync("zp_receiver", "Receiver#2026x", ["oem:transfer_view", "oem:file_download"], world.Org.Section, ct);
+        var receiverClient = await host.LoginInternalAsync("zp_receiver", "Receiver#2026x", ct);
+        static ulong[] Ids(JsonNode page) => page["list"]!.AsArray().Select(item => item!.Id()).ToArray();
+
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "签名回传" }, ct).Ok();
+        var id = TransferId(draft);
+        await host.UploadAsync(world.Vendor, id, "in.pdf", OemTestHost.Pdf("in"), ct);
+        var version = Version(draft) + 1;
+        var send = $"/api/v1/oem/transfers/{id}/send";
+
+        // The shared vendor login must sign with the name of one of the vendor's active contacts.
+        await world.Vendor.PostAsync(send, new { version, recipientUserIds = new[] { receiver } }, ct).Status(HttpStatusCode.BadRequest);
+        await world.Vendor.PostAsync(send, new { version, recipientUserIds = new[] { receiver }, signerName = "冒名者" }, ct).Status(HttpStatusCode.BadRequest);
+        var sent = await world.Vendor.PostAsync(send, new { version, recipientUserIds = new[] { receiver }, signerName = $"  {world.Vendor.Signer}  " }, ct).Ok();
+        Assert.Equal(world.Vendor.Signer, sent["summary"]!["signerName"]!.GetValue<string>());
+        await host.RunOemJobsAsync(ct);
+
+        // Inbound: the chosen person and administrators see it; other staff with view permission do not.
+        Assert.Contains(id, Ids(await receiverClient.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        Assert.Equal(world.Vendor.Signer, (await receiverClient.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok())["summary"]!["signerName"]!.GetValue<string>());
+        Assert.DoesNotContain(id, Ids(await world.Viewer.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        await world.Viewer.GetAsync($"/api/v1/oem/transfers/{id}", ct).Status(HttpStatusCode.NotFound);
+        Assert.Contains(id, Ids(await world.Admin.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        Assert.Contains(id, Ids(await world.Admin.GetAsync($"/api/v1/oem/transfers?sender={Uri.EscapeDataString(world.Vendor.Signer!)}", ct).Ok()));
+
+        // Outbound: another person's transfer is hidden from staff with view permission, visible to administrators.
+        var outbound = await CreateOutboundAsync(world, "公司发出", ct);
+        await host.UploadAsync(world.Sender, TransferId(outbound), "o.pdf", OemTestHost.Pdf("o"), ct);
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(outbound)}/send", new { version = Version(outbound) + 1 }, ct).Ok();
+        Assert.DoesNotContain(TransferId(outbound), Ids(await world.Viewer.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        Assert.DoesNotContain(TransferId(outbound), Ids(await receiverClient.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        Assert.Contains(TransferId(outbound), Ids(await world.Admin.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        Assert.Contains(TransferId(outbound), Ids(await world.Sender.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+
+        // A supervisor sees everything their organisation (and below) sent or was notified about; a leader elsewhere sees none of it.
+        var leader = world.Leader;
+        Assert.Contains(id, Ids(await leader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        Assert.Contains(TransferId(outbound), Ids(await leader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        await leader.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+        var otherOrg = await host.CreateOrgPathAsync("别的组织", ct);
+        var otherLeaderId = await host.CreateInternalUserAsync("zp_leader2", "Leader2#2026x", ["oem:transfer_view", "oem:file_download"], otherOrg.Section, ct);
+        await world.Admin.PutAsync($"/api/v1/admin/departments/{otherOrg.Section}/leader", new { leaderUserId = otherLeaderId }, ct).Ok();
+        var otherLeader = await host.LoginInternalAsync("zp_leader2", "Leader2#2026x", ct);
+        Assert.Empty(Ids(await otherLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        await otherLeader.GetAsync($"/api/v1/oem/transfers/{id}", ct).Status(HttpStatusCode.NotFound);
+        // A leader higher up sees the same through the organisation tree.
+        var upperLeaderId = await host.CreateInternalUserAsync("zp_leader3", "Leader3#2026x", ["oem:transfer_view"], world.Org.Division, ct);
+        await world.Admin.PutAsync($"/api/v1/admin/departments/{world.Org.Division}/leader", new { leaderUserId = upperLeaderId }, ct).Ok();
+        var upperLeader = await host.LoginInternalAsync("zp_leader3", "Leader3#2026x", ct);
+        Assert.Contains(id, Ids(await upperLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        Assert.Contains(TransferId(outbound), Ids(await upperLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+
+        // Company-sent transfers take no signature.
+        var second = await CreateOutboundAsync(world, "不签名", ct);
+        await host.UploadAsync(world.Sender, TransferId(second), "s.pdf", OemTestHost.Pdf("s"), ct);
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(second)}/send",
+            new { version = Version(second) + 1, signerName = "张三" }, ct).Status(HttpStatusCode.BadRequest);
     }
 
     private static OutboxMailInfo Info(PolicyMail row) =>

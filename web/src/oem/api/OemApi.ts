@@ -82,9 +82,9 @@ export class OemApi {
   updateTransfer = (id: number, body: TransferUpdate) => this.put<'PUT /oem/transfers/{id}', TransferDetail>(`/oem/transfers/${id}`, body)
   deleteDraft = (id: number, version: number) => this.delete<'DELETE /oem/transfers/{id}'>(`/oem/transfers/${id}`, { version })
   /** A vendor sending files also passes the company staff to notify (chosen from its notification list). */
-  send = (id: number, version: number, recipientUserIds?: number[]) =>
+  send = (id: number, version: number, recipientUserIds?: number[], signerName?: string) =>
     this.post<'POST /oem/transfers/{id}/send', TransferDetail>(`/oem/transfers/${id}/send`,
-      (recipientUserIds ? { version, recipientUserIds } : { version }) satisfies Api.TransferSendRequest)
+      (recipientUserIds ? { version, recipientUserIds, signerName: signerName?.trim() || null } : { version }) satisfies Api.TransferSendRequest)
   transferRecipientChoices = () =>
     this.get<'GET /oem/transfer-recipient-choices', RecipientChoice[]>('/oem/transfer-recipient-choices')
   cancel = (id: number, reason: string, version: number) =>

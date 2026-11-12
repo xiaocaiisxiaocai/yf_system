@@ -24,8 +24,11 @@ public sealed record TransferUpdate(
     string? Description = null,
     ulong? Version = null);
 public sealed record TransferVersionRequest(ulong? Version);
-/// <summary>Send a draft. A vendor sending files also names the company staff to notify (from its notification list).</summary>
-public sealed record TransferSendRequest(ulong? Version, ulong[]? RecipientUserIds);
+/// <summary>
+/// Send a draft. A vendor sending files also names the company staff to notify (from its notification list) and signs with
+/// the name of one of its registered contacts.
+/// </summary>
+public sealed record TransferSendRequest(ulong? Version, ulong[]? RecipientUserIds, string? SignerName = null);
 
 /// <summary>
 /// Transfer drafts, sending, listing and detail. The direction is always derived from
@@ -146,7 +149,7 @@ public sealed class OemTransferService(
     /// routed now: any routing problem fails the send and the transfer stays a draft.
     /// </summary>
     public async Task<OemTransferDetailResponse> SendAsync(OemActor actor, ulong id, ulong? expectedVersion, CancellationToken ct,
-        IReadOnlyCollection<ulong>? recipientUserIds = null)
+        IReadOnlyCollection<ulong>? recipientUserIds = null, string? signerName = null)
     {
         var version = OemValidation.ExpectedVersion(expectedVersion);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
@@ -185,6 +188,7 @@ public sealed class OemTransferService(
         transfer.ManifestSha256 = Manifest(files);
         if (transfer.Title == DraftTitlePlaceholder) transfer.Title = GeneratedTitle(files);
         var notified = await ChooseInboundRecipientsAsync(uow, current, transfer, recipientUserIds, ct);
+        await SignAsync(uow, current, transfer, signerName, ct);
         OemTransferProgression.Touch(uow, transfer);
         await uow.Db.SaveChangesAsync(ct);
         if (plan is not null) await engine.CreateAsync(uow, transfer, current.Id, plan, ct);
@@ -193,6 +197,7 @@ public sealed class OemTransferService(
             targetName = transfer.Title, files = files.Length, manifest = transfer.ManifestSha256, retentionMode = retention.Mode,
             approval = plan is null ? "NOT_REQUIRED" : plan.Plan.RequiresNoApproval ? "SKIPPED" : "REQUIRED",
             notifyRecipients = notified,
+            signerName = transfer.SignerName,
             skippedNodes = plan?.Plan.Nodes.Where(node => node.Skipped).Select(node => new { node.Name, node.SkipReason }),
         }, ct);
         await progression.AdvanceAsync(uow, id, current, ct);
@@ -223,6 +228,34 @@ public sealed class OemTransferService(
             TransferId = transfer.Id, UserId = userId,
         }));
         return chosen.Length;
+    }
+
+    /// <summary>
+    /// A vendor sending files signs with the name of one of its active contacts (the shared login is not a person), the same
+    /// rule as Robot supplier uploads: required while the vendor has any active contact, and it must match one of them.
+    /// </summary>
+    private static async Task SignAsync(OemUnitOfWork uow, OemActor current, OemTransfer transfer, string? signerName, CancellationToken ct)
+    {
+        var name = string.IsNullOrWhiteSpace(signerName) ? null : signerName.Trim();
+        if (current is not OemAccountActor || transfer.Direction != TransferDirections.OemToInternal)
+        {
+            if (name is not null) throw ApiException.BadRequest("公司发出的传递单不需要签名");
+            return;
+        }
+        var active = uow.Db.OemCompanyContacts.AsNoTracking()
+            .Where(contact => contact.OemCompanyId == transfer.OemCompanyId && contact.Status == OemStatus.Active);
+        if (name is null)
+        {
+            if (await active.AnyAsync(ct)) throw ApiException.BadRequest("请填写签名（提供人姓名）");
+            return;
+        }
+        if (name.EnumerateRunes().Count() > 32) throw ApiException.BadRequest("签名不能超过 32 个字符");
+        // The column collation compares case- and width-insensitively; store the registered spelling.
+        var contact = await active.Where(item => item.Name == name).OrderBy(item => item.Id)
+            .Select(item => new { item.Id, item.Name }).FirstOrDefaultAsync(ct)
+            ?? throw ApiException.BadRequest($"签名「{name}」不是该厂商登记的联络人，请核对姓名");
+        transfer.SignerContactId = contact.Id;
+        transfer.SignerName = contact.Name;
     }
 
     /// <summary>Removes an attachment from an unsent draft (content is purged; metadata kept for audit).</summary>

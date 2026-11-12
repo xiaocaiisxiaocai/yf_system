@@ -4212,6 +4212,15 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("datetime(3)")
                         .HasColumnName("sent_at");
 
+                    b.Property<ulong?>("SignerContactId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("signer_contact_id");
+
+                    b.Property<string>("SignerName")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("signer_name");
+
                     b.Property<string>("Title")
                         .IsRequired()
                         .HasMaxLength(128)

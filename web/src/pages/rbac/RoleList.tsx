@@ -394,6 +394,16 @@ export default function RoleList() {
         }
       >
         <div className="section-heading">权限范围</div>
+        {permTarget && (
+          <div style={{ marginBottom: 12 }}>
+            <Typography.Text type="secondary">
+              当前绑定：<Tag color={permTarget.assignedUserCount > 0 ? 'orange' : 'gray'}>{permTarget.assignedUserCount} 位用户</Tag>
+              {permTarget.assignedUserCount > 0 && (
+                <span style={{ marginLeft: 6, fontSize: 12, color: 'var(--color-text-3)' }}>修改后将即时影响已绑定的用户权限</span>
+              )}
+            </Typography.Text>
+          </div>
+        )}
         {permsError && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <Typography.Text type="error">权限点加载失败</Typography.Text>

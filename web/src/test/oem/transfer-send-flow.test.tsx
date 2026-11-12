@@ -25,7 +25,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
       companyId: 9,
       companyName: '甲厂',
       title: '图纸.zip',
-      sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' },
+      sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' }, signerName: null,
       lifecycleStatus,
       approvalStatus: lifecycleStatus === 'DRAFT' ? null : 'PENDING',
       approvalBlockedReason: null,
@@ -276,8 +276,9 @@ describe('ODM/OEMA 一键发送文件', () => {
 
     await user.click(within(dialog).getByRole('combobox'))
     fireEvent.click((await screen.findAllByText('王五')).at(-1)!)
+    await user.type(within(dialog).getByLabelText('签名'), '张三')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
-    await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, [51]))
+    await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, [51], '张三'))
   })
 
   it('没有可通知的公司人员时厂商仍可发送，并提示不会邮件提醒', async () => {
@@ -290,8 +291,9 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(await within(dialog).findByText('没有可通知的公司人员，发送后不会邮件提醒。')).toBeInTheDocument()
     expect(within(dialog).queryByText('通知公司人员')).not.toBeInTheDocument()
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
+    await user.type(within(dialog).getByLabelText('签名'), '李四')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
-    await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, []))
+    await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, [], '李四'))
   })
 
   it('草稿创建结果未知时阻止盲目重试，并提示回列表确认', async () => {

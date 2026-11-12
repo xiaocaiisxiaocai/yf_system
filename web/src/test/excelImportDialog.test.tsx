@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import ExcelImportDialog, { type ImportBatchOutcome } from '../components/ExcelImportDialog'
 import { createExcelWorkbook, type ExcelImportRow } from '../utils/excelWorkbook'
+import * as workbook from '../utils/excelWorkbook'
 
 interface Row { rowNumber: number; employeeNo: string; initialPassword: string }
 
@@ -60,5 +61,38 @@ describe('ExcelImportDialog', () => {
     await user.click(screen.getByRole('button', { name: '关闭' }))
     expect(commit).not.toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('shows the export button only when rows fail, and exports them without passwords plus the reason', async () => {
+    const user = userEvent.setup()
+    const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
+    const buffer = await createExcelWorkbook([{ name: '数据', headers: ['账号', '初始密码'], rows: [['U001', 'Temporary#2026'], ['', 'Temporary#2027']] }])
+    render(
+      <ExcelImportDialog<Row>
+        visible
+        title="账号导入"
+        templateName="账号模板.xlsx"
+        requiredHeaders={['账号', '初始密码']}
+        maxRows={10}
+        prepare={(rows: ExcelImportRow[]) => ({
+          payload: [],
+          preview: rows.map(row => row.values['账号']
+            ? { rowNumber: row.rowNumber, key: row.values['账号'], detail: '', status: 'READY' as const }
+            : { rowNumber: row.rowNumber, key: '', detail: '', status: 'INVALID' as const, message: '账号不能为空' }),
+        })}
+        commit={async () => importResult}
+        onClose={() => undefined}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: '导出错误数据' })).not.toBeInTheDocument()
+    await user.upload(screen.getByLabelText('选择 Excel 文件'), new File([buffer], 'accounts.xlsx'))
+    expect(await screen.findByText('错误 1')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '导出错误数据' }))
+    expect(download).toHaveBeenCalledWith('账号模板_错误数据.xlsx', [{
+      name: '错误数据',
+      headers: ['账号', '初始密码', '错误原因'],
+      rows: [['', '', '账号不能为空']],
+    }])
+    download.mockRestore()
   })
 })

@@ -176,7 +176,9 @@ internal sealed class OemTestHost : IAsyncDisposable
             new { employeeNo, password = "Vendor#2026" }, ct).Ok();
         await using (var conn = await OpenAsync(ct))
             await conn.ExecuteAsync("UPDATE oem_accounts SET must_change_password=0 WHERE employee_no=@employeeNo", new { employeeNo });
-        return await LoginOemAsync(employeeNo, "Vendor#2026", ct);
+        var vendor = await LoginOemAsync(employeeNo, "Vendor#2026", ct);
+        vendor.Signer = $"{employeeNo}联系人";
+        return vendor;
     }
 
     public async Task<ulong> CompanyIdOfAsync(string employeeNo, CancellationToken ct)
@@ -257,6 +259,8 @@ internal sealed class ApiClient(HttpClient http, CookieContainer cookies)
 {
     public HttpClient Http { get; } = http;
     public CookieContainer Cookies { get; } = cookies;
+    /// <summary>For a vendor login: the registered contact name it signs inbound transfers with.</summary>
+    public string? Signer { get; set; }
 
     public void Bearer(string token) => Http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
@@ -279,7 +283,7 @@ internal sealed class ApiClient(HttpClient http, CookieContainer cookies)
     {
         var choices = (await GetAsync("/api/v1/oem/transfer-recipient-choices", ct)).Expect(HttpStatusCode.OK).AsArray()
             .Select(item => item!["userId"]!.GetValue<ulong>()).ToArray();
-        return await PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version, recipientUserIds = choices }, ct);
+        return await PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version, recipientUserIds = choices, signerName = Signer }, ct);
     }
 }
 

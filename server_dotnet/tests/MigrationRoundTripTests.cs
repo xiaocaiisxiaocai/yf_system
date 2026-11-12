@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261112031508_AddOemInboundRecipients";
+    private const string Latest = "20261112040247_AddOemTransferSigner";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -86,6 +86,7 @@ public sealed class MigrationRoundTripTests
         // + AddOutsourceItemChanges (Down drops outsource_item_changes)
         // + AddOutsourceMails (Down drops the mail tables and the sent-snapshot columns)
         // + AddOemInboundRecipients (Down drops the notification-list removals and per-transfer chosen recipients).
+        // + AddOemTransferSigner (Down drops the vendor signer columns on oem_transfers).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -116,6 +117,8 @@ public sealed class MigrationRoundTripTests
         }
         Assert.Contains(latestSchema, line => line.StartsWith("table|oem_transfer_internal_recipients", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|oem_transfer_internal_recipients", StringComparison.Ordinal));
+        Assert.Contains(latestSchema, line => line.StartsWith("column|oem_transfers|signer_name|", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|oem_transfers|signer_name|", StringComparison.Ordinal));
         Assert.Contains(latestSchema, line => line.StartsWith("table|outsource_vendors", StringComparison.Ordinal));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
         await migrator.MigrateAsync(cancellationToken: ct);

@@ -30,12 +30,9 @@ public sealed class OemValidationMigrationTests
             new SystemConfig { CfgKey = "oem.scan.max_signature_age_hours", CfgValue = "48", Description = "legacy age" },
             new SystemConfig { CfgKey = "notify.enabled", CfgValue = "false", Description = "collaboration setting" });
         await db.SaveChangesAsync(ct);
-        db.OemTransfers.Add(new OemTransfer
-        {
-            Id = 1, Direction = "INTERNAL_TO_OEM", OemCompanyId = 1, Title = "Historical files",
-            LifecycleStatus = "BLOCKED", RetentionTemplateId = 1, CreatedAt = now, UpdatedAt = now,
-        });
-        await db.SaveChangesAsync(ct);
+        // Raw SQL: this schema predates later oem_transfers columns (such as the signer), which the current model would insert.
+        await db.Database.ExecuteSqlInterpolatedAsync($@"INSERT INTO oem_transfers (id, direction, oem_company_id, title, lifecycle_status, retention_template_id, created_at, updated_at)
+            VALUES (1, 'INTERNAL_TO_OEM', 1, 'Historical files', 'BLOCKED', 1, {now}, {now})", ct);
         db.OemFlowInstances.Add(new OemFlowInstance
         {
             Id = 1, TransferId = 1, TemplateId = 1, Status = "WAITING_SCAN", TemplateSnapshot = "{}",

@@ -125,10 +125,12 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       let oemCompanyId: number | undefined
       // A vendor names the company staff to notify; when nobody can be notified it may still send (no mail).
       let recipientUserIds: number[] | undefined
+      let signerName: string | undefined
       if (realm === 'oem') {
-        const values = await form.validate().catch(() => null) as { recipientUserIds?: number[] } | null
+        const values = await form.validate().catch(() => null) as { recipientUserIds?: number[]; signerName?: string } | null
         if (!values) return
         recipientUserIds = values.recipientUserIds ?? []
+        signerName = values.signerName
       }
       if (realm === 'internal') {
         oemCompanyId = (await form.validate() as { oemCompanyId: number }).oemCompanyId
@@ -172,7 +174,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       if (leaveFinishedDraft(latest)) return
       try {
         const submitted = recipientUserIds
-          ? await api.send(activeDraftId, latest.summary.version, recipientUserIds)
+          ? await api.send(activeDraftId, latest.summary.version, recipientUserIds, signerName)
           : await api.send(activeDraftId, latest.summary.version)
         const lifecycle = submitted.summary.lifecycleStatus
         if (lifecycle !== 'SEALED' && lifecycle !== 'RELEASED') {
@@ -326,6 +328,11 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
           <Form.Item field="recipientUserIds" label="通知公司人员"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请选择要通知的公司人员' }]}>
             <RecipientChoiceSelect choices={choices} disabled={busy} />
+          </Form.Item>
+        )}
+        {realm === 'oem' && (
+          <Form.Item field="signerName" label="签名">
+            <Input aria-label="签名" placeholder="签名（提供人姓名）" maxLength={32} disabled={busy} />
           </Form.Item>
         )}
         {realm === 'oem' && recipientChoices.isSuccess && choices.length === 0 && (
@@ -546,7 +553,8 @@ export default function TransferListPage() {
       key: 'counterpart', title: realm === 'internal' ? '往来厂商' : '往来',
       render: (_: unknown, row: TransferSummary) => <Counterpart direction={row.direction} companyName={row.companyName} realm={realm} />,
     },
-    { key: 'sender', title: '发送人', render: (_: unknown, row: TransferSummary) => row.sender.realName },
+    // A vendor-sent transfer shows the contact who signed it, with the shared login in brackets (as in Robot).
+    { key: 'sender', title: '发送人', render: (_: unknown, row: TransferSummary) => row.signerName ? `${row.signerName}（${row.sender.realName}）` : row.sender.realName },
     {
       key: 'status', title: '状态',
       render: (_: unknown, row: TransferSummary) => (

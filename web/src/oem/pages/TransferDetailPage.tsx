@@ -322,6 +322,7 @@ export default function TransferDetailPage() {
   const [previewing, setPreviewing] = useState<TransferFile | null>(null)
   const [filesToolbar, setFilesToolbar] = useState<HTMLElement | null>(null)
   const [notifyUserIds, setNotifyUserIds] = useState<number[]>([])
+  const [signerName, setSignerName] = useState('')
   const recipientChoices = useRecipientChoices()
   const recoveryScoped = realm === 'internal' && can.recover && !permissions.has('oem:transfer_view')
   const detailKey = ['oem', ...queryScope, 'transfer', id] as const
@@ -389,7 +390,7 @@ export default function TransferDetailPage() {
       }
       try {
         const submitted = choosing
-          ? await api.send(id, latest.summary.version, notifyUserIds)
+          ? await api.send(id, latest.summary.version, notifyUserIds, signerName)
           : await api.send(id, latest.summary.version)
         setDetail(submitted)
         Message.success(submitted.summary.lifecycleStatus === 'RELEASED'
@@ -478,6 +479,10 @@ export default function TransferDetailPage() {
               <RecipientChoiceSelect choices={recipientChoices.data ?? []} value={notifyUserIds} onChange={setNotifyUserIds}
                 disabled={sending} style={{ width: 260 }} />
             )}
+            {caps.canSend && realm === 'oem' && (
+              <Input aria-label="签名" placeholder="签名（提供人姓名）" maxLength={32} value={signerName} onChange={setSignerName}
+                disabled={sending} style={{ width: 180 }} />
+            )}
             {caps.canSend && (
               <Button type="primary" loading={sending} disabled={detail.files.length === 0 || failedFiles || uploadBusy}
                 onClick={() => void send().catch(() => undefined)}>{summary.direction === 'INTERNAL_TO_OEM' ? '提交审批' : '发送文件'}</Button>
@@ -508,7 +513,11 @@ export default function TransferDetailPage() {
           size="small"
           column={{ xs: 1, md: 2, xl: 3 }}
           data={[
-            { label: '发送人', value: summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName },
+            {
+              label: '发送人',
+              value: summary.signerName ? `${summary.signerName}（${summary.sender.realName}）`
+                : summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName,
+            },
             { label: '提交时间', value: summary.sentAt ? fmtTime(summary.sentAt) : '-' },
             { label: '发送时间', value: summary.releasedAt ? fmtTime(summary.releasedAt) : '-' },
             { label: '最晚保留至', value: detail.expiresAt ? fmtTime(detail.expiresAt) : '-' },

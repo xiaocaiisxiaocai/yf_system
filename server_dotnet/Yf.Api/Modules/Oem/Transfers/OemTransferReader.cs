@@ -40,6 +40,11 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         {
             var userId = current.Id;
             var canView = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct);
+            // Only administrators see everyone's transfers; others see inbound ones the vendor chose to notify them about.
+            var seesAll = await OemAuthorizer.IsSystemAdminAsync(uow, current, ct);
+            var notified = db.OemTransferInternalRecipients.Where(item => item.UserId == userId).Select(item => item.TransferId);
+            // A supervisor also sees what the people in their organisations (and below) sent or were notified about.
+            var supervised = await SupervisedUserIdsAsync(db, userId, ct);
             var canRecover = await OemAuthorizer.HasAsync(uow, current, OemPermissions.ApprovalRecover, ct);
             var canApprove = await OemAuthorizer.HasAsync(uow, current, OemPermissions.FlowApprove, ct);
             var taskTransfers = db.OemFlowTasks.Where(task => canApprove && task.ApproverUserId == userId
@@ -48,7 +53,13 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             var blockedTransfers = db.OemFlowInstances.Where(instance => instance.Status == FlowInstanceStatuses.ApprovalBlocked)
                 .Select(instance => instance.TransferId);
             query = db.OemTransfers.Where(transfer => transfer.InternalSenderUserId == userId
-                || (canView && transfer.LifecycleStatus != TransferLifecycle.Draft)
+                || (canView && transfer.LifecycleStatus != TransferLifecycle.Draft
+                    && (seesAll
+                        || (transfer.Direction == TransferDirections.OemToInternal && notified.Contains(transfer.Id))
+                        || (transfer.Direction == TransferDirections.InternalToOem && transfer.InternalSenderUserId != null
+                            && supervised.Contains(transfer.InternalSenderUserId.Value))
+                        || (transfer.Direction == TransferDirections.OemToInternal
+                            && db.OemTransferInternalRecipients.Any(item => item.TransferId == transfer.Id && supervised.Contains(item.UserId)))))
                 || (transfer.LifecycleStatus != TransferLifecycle.Draft && taskTransfers.Contains(transfer.Id))
                 || (canRecover && approvalStatus == FlowInstanceStatuses.ApprovalBlocked
                     && transfer.Direction == TransferDirections.InternalToOem
@@ -95,7 +106,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     && (EF.Functions.Like(user.RealName, pattern, QueryValues.LikeEscape)
                         || byEmployeeNo && EF.Functions.Like(user.EmployeeNo, pattern, QueryValues.LikeEscape))))
                 || (transfer.OemSenderAccountId != null && db.OemAccounts.Any(account => account.Id == transfer.OemSenderAccountId
-                    && EF.Functions.Like(account.EmployeeNo, pattern, QueryValues.LikeEscape))));
+                    && EF.Functions.Like(account.EmployeeNo, pattern, QueryValues.LikeEscape)))
+                || (transfer.SignerName != null && EF.Functions.Like(transfer.SignerName, pattern, QueryValues.LikeEscape)));
         }
         // Submit time range: sentFrom inclusive, sentTo exclusive (the UI sends local day boundaries as instants).
         if (QueryValues.OptionalInstant(request, "sentFrom") is DateTime sentFrom) query = query.Where(transfer => transfer.SentAt >= sentFrom);
@@ -118,6 +130,25 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             .Page(offset, size).AsNoTracking().ToArrayAsync(ct);
         var summaries = await SummariesAsync(uow, rows, current, ct);
         return new OemPageResponse<OemTransferSummaryResponse>(rows.Select(transfer => summaries[transfer.Id]).ToArray(), total, page, size);
+    }
+
+    /// <summary>The people in the organisations this user leads, including every organisation below them (current membership).</summary>
+    internal static async Task<ulong[]> SupervisedUserIdsAsync(YfDbContext db, ulong leaderId, CancellationToken ct)
+    {
+        var led = await db.Departments.AsNoTracking().Where(item => item.LeaderAccountId == leaderId).Select(item => item.Id).ToArrayAsync(ct);
+        if (led.Length == 0) return [];
+        var departments = await db.Departments.AsNoTracking().Select(item => new { item.Id, item.ParentId }).ToArrayAsync(ct);
+        var children = departments.Where(item => item.ParentId.HasValue).ToLookup(item => item.ParentId!.Value, item => item.Id);
+        var visited = new HashSet<ulong>();
+        var pending = new Queue<ulong>(led);
+        while (pending.TryDequeue(out var current))
+        {
+            if (!visited.Add(current)) continue;
+            foreach (var child in children[current]) pending.Enqueue(child);
+        }
+        var ids = visited.ToArray();
+        return await db.Users.AsNoTracking().Where(user => user.UserType == "INTERNAL" && user.DepartmentId != null
+            && Enumerable.Contains(ids, user.DepartmentId.Value)).Select(user => user.Id).ToArrayAsync(ct);
     }
 
     private static async Task<ulong[]> DepartmentSubtreeAsync(YfDbContext db, ulong id, CancellationToken ct)
@@ -225,9 +256,21 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         IReadOnlySet<string> permissions = new HashSet<string>();
         var approvalBlocked = false;
         string[] tasks = [];
+        var seesAll = false;
+        var notified = false;
+        var inScope = false;
         if (actor is InternalOemActor)
         {
             permissions = await OemAuthorizer.InternalPermissionsAsync(uow, actor.Id, ct);
+            seesAll = await OemAuthorizer.IsSystemAdminAsync(uow, actor, ct);
+            var supervised = await SupervisedUserIdsAsync(uow.Db, actor.Id, ct);
+            if (supervised.Length > 0)
+                inScope = transfer.Direction == TransferDirections.InternalToOem
+                    ? transfer.InternalSenderUserId is ulong senderId && supervised.Contains(senderId)
+                    : await uow.Db.OemTransferInternalRecipients.AsNoTracking()
+                        .AnyAsync(item => item.TransferId == transfer.Id && Enumerable.Contains(supervised, item.UserId), ct);
+            notified = transfer.Direction == TransferDirections.OemToInternal && await uow.Db.OemTransferInternalRecipients.AsNoTracking()
+                .AnyAsync(item => item.TransferId == transfer.Id && item.UserId == actor.Id, ct);
             if (transfer.Direction == TransferDirections.InternalToOem)
             {
                 approvalBlocked = await uow.Db.OemFlowInstances.AsNoTracking()
@@ -239,12 +282,12 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     .Where(task => task.ApproverUserId == actor.Id).Select(task => task.Status).ToArrayAsync(ct);
             }
         }
-        return Evaluate(actor, permissions, transfer, approvalBlocked, tasks);
+        return Evaluate(actor, permissions, transfer, approvalBlocked, tasks, seesAll, notified, inScope);
     }
 
     /// <param name="approverTaskStatuses">The caller's own approval task statuses on the transfer (internal, outbound only).</param>
     private static TransferCapabilities Evaluate(OemActor actor, IReadOnlySet<string> permissions, OemTransfer transfer,
-        bool approvalBlocked, IReadOnlyCollection<string> approverTaskStatuses)
+        bool approvalBlocked, IReadOnlyCollection<string> approverTaskStatuses, bool seesAll, bool notified, bool inScope)
     {
         // Only a task the user has to decide or did decide shows the transfer: one not reached yet, reassigned
         // away or cancelled does not, and neither does any task once the approval permission is gone.
@@ -253,7 +296,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var activeTask = canApprove && approverTaskStatuses.Contains(FlowTaskStatuses.Pending);
         var facts = new TransferFacts(transfer.Direction, transfer.OemCompanyId, transfer.LifecycleStatus,
             transfer.InternalSenderUserId, transfer.OemSenderAccountId, approvalBlocked);
-        return TransferAccess.Evaluate(facts, ActorFacts.For(actor, permissions, activeTask, anyTask));
+        return TransferAccess.Evaluate(facts, ActorFacts.For(actor, permissions, activeTask, anyTask, seesAll, notified, inScope));
     }
 
     /// <summary>A file the detail view marks downloadable: validated, available and not past its purge time.</summary>
@@ -312,9 +355,29 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         // Content access per row, evaluated in batch with the same rule as CapabilitiesAsync.
         IReadOnlySet<string> permissions = new HashSet<string>();
         var taskStatuses = new Dictionary<ulong, string[]>();
+        var seesAll = false;
+        IReadOnlySet<ulong> notified = new HashSet<ulong>();
+        IReadOnlySet<ulong> inScope = new HashSet<ulong>();
         if (actor is InternalOemActor)
         {
             permissions = await OemAuthorizer.InternalPermissionsAsync(uow, actor.Id, ct);
+            seesAll = await OemAuthorizer.IsSystemAdminAsync(uow, actor, ct);
+            var notifiedActorId = actor.Id;
+            notified = (await db.OemTransferInternalRecipients.AsNoTracking()
+                .Where(item => item.UserId == notifiedActorId && Enumerable.Contains(ids, item.TransferId))
+                .Select(item => item.TransferId).ToArrayAsync(ct)).ToHashSet();
+            var supervised = await SupervisedUserIdsAsync(db, notifiedActorId, ct);
+            if (supervised.Length > 0)
+            {
+                var inboundIds = transfers.Where(transfer => transfer.Direction == TransferDirections.OemToInternal).Select(transfer => transfer.Id).ToArray();
+                var supervisedRecipients = inboundIds.Length == 0 ? [] : await db.OemTransferInternalRecipients.AsNoTracking()
+                    .Where(item => Enumerable.Contains(inboundIds, item.TransferId) && Enumerable.Contains(supervised, item.UserId))
+                    .Select(item => item.TransferId).ToArrayAsync(ct);
+                inScope = transfers.Where(transfer => transfer.Direction == TransferDirections.InternalToOem
+                        ? transfer.InternalSenderUserId is ulong senderId && supervised.Contains(senderId)
+                        : supervisedRecipients.Contains(transfer.Id))
+                    .Select(transfer => transfer.Id).ToHashSet();
+            }
             var outboundIds = transfers.Where(transfer => transfer.Direction == TransferDirections.InternalToOem).Select(transfer => transfer.Id).ToArray();
             if (outboundIds.Length > 0)
             {
@@ -335,7 +398,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             var outbound = transfer.Direction == TransferDirections.InternalToOem;
             var capabilities = Evaluate(actor, permissions, transfer,
                 approvalBlocked: actor is InternalOemActor && outbound && instance?.Status == FlowInstanceStatuses.ApprovalBlocked,
-                taskStatuses.GetValueOrDefault(transfer.Id) ?? []);
+                taskStatuses.GetValueOrDefault(transfer.Id) ?? [], seesAll, notified.Contains(transfer.Id), inScope.Contains(transfer.Id));
             var approvalStatus = transfer.Direction == TransferDirections.OemToInternal ? "NOT_REQUIRED" : instance?.Status switch
             {
                 null => null,
@@ -351,7 +414,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     : new OemPersonRefResponse("unknown", 0UL, "", "");
             result[transfer.Id] = new OemTransferSummaryResponse(
                 transfer.Id, transfer.Direction, transfer.OemCompanyId, companies.GetValueOrDefault(transfer.OemCompanyId),
-                transfer.Title, sender, transfer.LifecycleStatus, approvalStatus,
+                transfer.Title, sender, transfer.SignerName, transfer.LifecycleStatus, approvalStatus,
                 ApprovalBlockedReason: !forVendor && instance?.Status == FlowInstanceStatuses.ApprovalBlocked ? instance.BlockedReason : null,
                 ValidationSummary: ValidationSummary(own.Select(file => file.ScanStatus).ToArray()),
                 FileCount: own.Length,

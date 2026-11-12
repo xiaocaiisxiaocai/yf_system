@@ -904,6 +904,7 @@ export interface OemTransferSummaryResponse {
   companyName: string | null
   title: string
   sender: OemPersonRefResponse
+  signerName: string | null
   lifecycleStatus: string
   approvalStatus: string | null
   approvalBlockedReason: string | null
@@ -1793,6 +1794,7 @@ export interface TransferCreate {
 export interface TransferSendRequest {
   version?: number | null
   recipientUserIds?: Array<number> | null
+  signerName?: string | null
 }
 
 export interface TransferUpdate {

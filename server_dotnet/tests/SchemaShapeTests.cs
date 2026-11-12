@@ -59,6 +59,7 @@ public sealed class SchemaShapeTests
         "20261110112602_AddOutsourceItemChanges",
         "20261110153153_AddOutsourceMails",
         "20261112031508_AddOemInboundRecipients",
+        "20261112040247_AddOemTransferSigner",
     ];
 
     [Fact]

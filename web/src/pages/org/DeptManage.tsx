@@ -93,7 +93,8 @@ function findPath(nodes: DeptNode[], id: number, parents: DeptNode[] = []): Dept
   return []
 }
 
-function toTreeData(nodes: DeptNode[]): DeptTreeData[] {
+/** Leader-based approval and routing need a leader, so managers see which active nodes still have none. */
+function toTreeData(nodes: DeptNode[], flagMissingLeader: boolean): DeptTreeData[] {
   return nodes.map((n) => {
     const kind = nodeKind(n)
     return {
@@ -103,9 +104,10 @@ function toTreeData(nodes: DeptNode[]): DeptTreeData[] {
           <span className="org-view-tree-name" title={n.name}>{n.name}</span>
           <span className="org-view-tree-kind">{ORG_KIND[kind].label}</span>
           {n.status === 'DISABLED' && <Tag color="red" size="small">禁用</Tag>}
+          {flagMissingLeader && n.status === 'ACTIVE' && !n.leader && <Tag color="gold" size="small">未设负责人</Tag>}
         </span>
       ),
-      children: n.children && n.children.length ? toTreeData(n.children) : undefined,
+      children: n.children && n.children.length ? toTreeData(n.children, flagMissingLeader) : undefined,
     }
   })
 }
@@ -414,7 +416,7 @@ export default function DeptManage() {
                 {visibleTree.length ? <Tree
                   blockNode
                   showLine
-                  treeData={toTreeData(visibleTree)}
+                  treeData={toTreeData(visibleTree, canManageLeader)}
                   expandedKeys={expandedKeys ?? allKeys(visibleTree)}
                   onExpand={(keys) => setExpandedKeys(keys.map(String))}
                   selectedKeys={selected ? [String(selected.id)] : []}

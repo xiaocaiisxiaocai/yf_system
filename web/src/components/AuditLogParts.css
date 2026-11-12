@@ -172,13 +172,16 @@
 }
 
 .audit-before {
-  color: var(--color-text-3);
-  background: #fff;
+  color: rgb(var(--red-6));
+  background: rgb(var(--red-1));
+  text-decoration: line-through;
+  text-decoration-color: rgb(var(--red-4));
 }
 
 .audit-after {
-  color: var(--color-text-1);
-  background: rgb(var(--primary-1));
+  color: rgb(var(--green-7));
+  background: rgb(var(--green-1));
+  font-weight: 500;
 }
 
 .audit-collections {

@@ -62,8 +62,9 @@ public sealed class OemFlowHardeningTests
         await world.Vendor.DeleteAsync($"/api/v1/oem/files/{file.Id()}", ct).Status(HttpStatusCode.NotFound);
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{id}/uploads/init", new { fileName = "x.pdf", fileSize = 10UL }, ct)
             .Status(HttpStatusCode.NotFound);
-        // An internal viewer may see it, but is not its sender.
-        await world.Viewer.DeleteAsync($"/api/v1/oem/files/{file.Id()}", ct).Status(HttpStatusCode.Forbidden);
+        // Staff holding only the view permission cannot see someone else's transfer either; an administrator can, but is not its sender.
+        await world.Viewer.DeleteAsync($"/api/v1/oem/files/{file.Id()}", ct).Status(HttpStatusCode.NotFound);
+        await world.Admin.DeleteAsync($"/api/v1/oem/files/{file.Id()}", ct).Status(HttpStatusCode.Forbidden);
         // The sender sees it and learns it is frozen.
         await world.Sender.DeleteAsync($"/api/v1/oem/files/{file.Id()}", ct).Status(HttpStatusCode.Conflict);
     }

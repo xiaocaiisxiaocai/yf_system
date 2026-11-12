@@ -33,7 +33,7 @@ public sealed class OemVendorViewTests
         }
 
         // Staff see the full picture.
-        var staff = await ViewAsync(world.Viewer);
+        var staff = await ViewAsync(world.Admin);
         Assert.Equal("APPROVED", staff.Approval);
         Assert.Equal("zp_sender", staff.EmployeeNo);
 
@@ -47,7 +47,7 @@ public sealed class OemVendorViewTests
         // A transfer whose approval was skipped reads as approved to the vendor, but staff still see SKIPPED.
         await using (var conn = await host.OpenAsync(ct))
             await conn.ExecuteAsync("UPDATE oem_flow_instances SET status='SKIPPED' WHERE transfer_id=@id", new { id });
-        Assert.Equal("SKIPPED", (await ViewAsync(world.Viewer)).Approval);
+        Assert.Equal("SKIPPED", (await ViewAsync(world.Admin)).Approval);
         Assert.Equal("APPROVED", (await ViewAsync(world.Vendor)).Approval);
     }
 }

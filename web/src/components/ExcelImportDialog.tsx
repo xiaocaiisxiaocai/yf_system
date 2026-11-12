@@ -66,6 +66,7 @@ export default function ExcelImportDialog<T>({
   const inputRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState('')
   const [prepared, setPrepared] = useState<PreparedImport<T> | null>(null)
+  const [source, setSource] = useState<ExcelImportRow[]>([])
   const [previewError, setPreviewError] = useState('')
   const [parsing, setParsing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -81,6 +82,7 @@ export default function ExcelImportDialog<T>({
   const reset = () => {
     setFileName('')
     setPrepared(null)
+    setSource([])
     setPreviewError('')
     setParsing(false)
     setSaving(false)
@@ -100,9 +102,10 @@ export default function ExcelImportDialog<T>({
     setPreviewError('')
     setParsing(true)
     try {
-      const source = await readExcelTable(file, { requiredHeaders, optionalHeaders, headerAliases, maxRows })
-      const next = await prepare(source)
-      if (next.preview.length !== source.length) throw new Error('预览结果与源文件行数不一致，请重新生成文件')
+      const table = await readExcelTable(file, { requiredHeaders, optionalHeaders, headerAliases, maxRows })
+      const next = await prepare(table)
+      if (next.preview.length !== table.length) throw new Error('预览结果与源文件行数不一致，请重新生成文件')
+      setSource(table)
       setPrepared(next)
     } catch (error) {
       setPreviewError(error instanceof Error ? error.message : 'Excel 文件无法读取')
@@ -118,6 +121,25 @@ export default function ExcelImportDialog<T>({
       await downloadExcelWorkbook(templateName, sheets)
     } catch (error) {
       Message.error(error instanceof Error ? error.message : '模板下载失败')
+    }
+  }
+
+  /** Exports the rows that failed as a workbook the user can fix and import again; passwords are never written out. */
+  const exportErrorRows = async () => {
+    const failed = rows.filter(row => row.status === 'INVALID' || row.status === 'FAILED')
+    const byRow = new Map(source.map(row => [row.rowNumber, row]))
+    const headers = [...requiredHeaders, ...optionalHeaders]
+    try {
+      await downloadExcelWorkbook(`${templateName.replace(/\.xlsx$/i, '')}_错误数据.xlsx`, [{
+        name: '错误数据',
+        headers: [...headers, '错误原因'],
+        rows: failed.map(row => [
+          ...headers.map(header => header.includes('密码') ? '' : byRow.get(row.rowNumber)?.values[header] ?? ''),
+          row.message ?? '',
+        ]),
+      }])
+    } catch (error) {
+      Message.error(error instanceof Error ? error.message : '错误数据导出失败')
     }
   }
 
@@ -184,6 +206,7 @@ export default function ExcelImportDialog<T>({
             <Typography.Text type="secondary">跳过 {counts.skipped}</Typography.Text>
             <Typography.Text type={counts.invalid ? 'error' : 'secondary'}>错误 {counts.invalid}</Typography.Text>
             {counts.created > 0 && <Typography.Text type="success">已新增 {counts.created}</Typography.Text>}
+            {counts.invalid > 0 && <Button size="mini" status="danger" onClick={() => void exportErrorRows()}>导出错误数据</Button>}
           </Space>
           <ResizableTable tableId="excel-import-preview"
             size="small"

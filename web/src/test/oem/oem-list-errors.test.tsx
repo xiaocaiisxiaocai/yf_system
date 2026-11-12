@@ -25,7 +25,7 @@ function summary(title: string): TransferSummary {
     companyId: 9,
     companyName: '甲厂',
     title,
-    sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' },
+    sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' }, signerName: null,
     lifecycleStatus: 'RELEASED',
     approvalStatus: 'APPROVED',
     approvalBlockedReason: null,

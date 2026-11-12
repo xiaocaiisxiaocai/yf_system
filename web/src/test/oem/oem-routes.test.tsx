@@ -28,7 +28,7 @@ const blockedSummary = {
   companyId: 9,
   companyName: '测试代工厂',
   title: '等待处置的传递单',
-  sender: { realm: 'internal' as const, id: 7, employeeNo: 'A0007', realName: 'ODM/OEMA 内部用户' },
+  sender: { realm: 'internal' as const, id: 7, employeeNo: 'A0007', realName: 'ODM/OEMA 内部用户' }, signerName: null,
   lifecycleStatus: 'SEALED' as const,
   approvalStatus: 'APPROVAL_BLOCKED' as const,
   approvalBlockedReason: '原审批人已停用',

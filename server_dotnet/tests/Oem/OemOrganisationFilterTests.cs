@@ -40,11 +40,13 @@ public sealed class OemOrganisationFilterTests
 
         static ulong[] Ids(JsonNode page) => page["list"]!.AsArray().Select(row => row!.Id()).Order().ToArray();
         async Task<JsonNode> Filter(ulong organisation, string extra = "") =>
-            await world.Viewer.GetAsync($"/api/v1/oem/transfers?departmentId={organisation}{extra}", ct).Ok();
+            await world.Admin.GetAsync($"/api/v1/oem/transfers?departmentId={organisation}{extra}", ct).Ok();
 
         // A user who can only use OEM still has access to the shared organisation options.
         Assert.NotEmpty((await world.Viewer.GetAsync("/api/v1/departments", ct).Ok()).AsArray());
-        var all = Ids(await world.Viewer.GetAsync("/api/v1/oem/transfers", ct).Ok());
+        // Staff holding only the view permission see none of these (they are other people's); administrators see all.
+        Assert.Empty(Ids(await world.Viewer.GetAsync("/api/v1/oem/transfers", ct).Ok()));
+        var all = Ids(await world.Admin.GetAsync("/api/v1/oem/transfers", ct).Ok());
         Assert.Equal(6, all.Length);
         Assert.Contains(inbound, all);
         Assert.Contains(noOrganisation, all);

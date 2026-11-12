@@ -156,6 +156,8 @@ public sealed record OemTransferSummaryResponse(
     string? CompanyName,
     string Title,
     OemPersonRefResponse Sender,
+    /// <summary>For a vendor-sent transfer: the vendor contact who signed it.</summary>
+    string? SignerName,
     string LifecycleStatus,
     string? ApprovalStatus,
     string? ApprovalBlockedReason,

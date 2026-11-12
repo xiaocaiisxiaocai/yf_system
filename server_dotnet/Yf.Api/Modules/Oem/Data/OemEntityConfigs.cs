@@ -200,6 +200,8 @@ public sealed class OemTransferConfig : IEntityTypeConfiguration<OemTransfer>
         b.Property(x => x.Description).OptionalText("description", 1024);
         b.Property(x => x.InternalSenderUserId).HasColumnName("internal_sender_user_id");
         b.Property(x => x.OemSenderAccountId).HasColumnName("oem_sender_account_id");
+        b.Property(x => x.SignerContactId).HasColumnName("signer_contact_id");
+        b.Property(x => x.SignerName).HasColumnName("signer_name").HasMaxLength(32);
         b.Property(x => x.LifecycleStatus).Text("lifecycle_status", 24);
         b.Property(x => x.RetentionTemplateId).HasColumnName("retention_template_id");
         b.Property(x => x.RetentionMode).OptionalText("retention_mode", 32);

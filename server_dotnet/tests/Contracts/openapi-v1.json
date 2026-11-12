@@ -12703,6 +12703,7 @@
           "releasedAt",
           "sender",
           "sentAt",
+          "signerName",
           "title",
           "totalBytes",
           "validationSummary",
@@ -12730,6 +12731,10 @@
           },
           "sender": {
             "$ref": "#/components/schemas/OemPersonRefResponse"
+          },
+          "signerName": {
+            "type": "string",
+            "nullable": true
           },
           "lifecycleStatus": {
             "type": "string"
@@ -16410,6 +16415,7 @@
       "TransferSendRequest": {
         "required": [
           "recipientUserIds",
+          "signerName",
           "version"
         ],
         "type": "object",
@@ -16425,6 +16431,10 @@
               "type": "integer",
               "format": "int64"
             },
+            "nullable": true
+          },
+          "signerName": {
+            "type": "string",
             "nullable": true
           }
         },

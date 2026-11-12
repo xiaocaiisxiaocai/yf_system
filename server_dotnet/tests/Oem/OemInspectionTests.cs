@@ -22,8 +22,8 @@ public sealed class OemInspectionTests
     private static TransferFacts Inbound(string lifecycle) => new(TransferDirections.OemToInternal, Company, lifecycle, null, 7);
     private static ActorFacts Vendor(ulong id = 8, ulong company = Company) => new(OemRealms.Oem, id, company, false, false, false, false, false);
     private static ActorFacts Staff(ulong id, bool view = false, bool download = false, bool create = false,
-        bool activeTask = false, bool anyTask = false, bool recover = false) =>
-        new(OemRealms.Internal, id, null, view, download, create, activeTask, anyTask, recover);
+        bool activeTask = false, bool anyTask = false, bool recover = false, bool admin = false, bool notified = false, bool scope = false) =>
+        new(OemRealms.Internal, id, null, view, download, create, activeTask, anyTask, recover, admin, notified, scope);
 
     [Fact]
     public void DraftsArePrivateToTheirAuthor()
@@ -42,7 +42,7 @@ public sealed class OemInspectionTests
         Assert.Equal(ContentPurpose.Review, TransferAccess.Evaluate(sealedTransfer, Staff(3, activeTask: true, anyTask: true)).ContentAccess);
         // An approver of an earlier node keeps reading while later nodes decide.
         Assert.Equal(ContentPurpose.Review, TransferAccess.Evaluate(sealedTransfer, Staff(3, anyTask: true)).ContentAccess);
-        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(sealedTransfer, Staff(4, view: true, download: true)).ContentAccess);
+        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(sealedTransfer, Staff(4, view: true, download: true, admin: true)).ContentAccess);
         Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(sealedTransfer, Staff(1)).ContentAccess);
 
         var released = Outbound(TransferLifecycle.Released);
@@ -51,8 +51,10 @@ public sealed class OemInspectionTests
         // After release the company side can still check what went out; none of it is a vendor receipt.
         Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(released, Staff(1)).ContentAccess);
         Assert.Equal(ContentPurpose.Review, TransferAccess.Evaluate(released, Staff(3, anyTask: true)).ContentAccess);
-        Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(released, Staff(4, view: true, download: true)).ContentAccess);
-        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(released, Staff(5, view: true)).ContentAccess);
+        // Only administrators read other people's outbound transfers; plain view + download staff do not even see them.
+        Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(released, Staff(4, view: true, download: true, admin: true)).ContentAccess);
+        Assert.False(TransferAccess.Evaluate(released, Staff(4, view: true, download: true)).View);
+        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(released, Staff(5, view: true, admin: true)).ContentAccess);
         Assert.False(TransferAccess.Evaluate(released, Staff(1)).IsRecipient);
 
         // Transfers closed without release stay unreadable.
@@ -82,9 +84,17 @@ public sealed class OemInspectionTests
         Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(Inbound(TransferLifecycle.Sealed), Vendor()).ContentAccess);
         Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(Inbound(TransferLifecycle.Sealed), Vendor(7)).ContentAccess);
         Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Vendor()).ContentAccess);
-        Assert.Equal(ContentPurpose.Recipient, TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, view: true, download: true)).ContentAccess);
-        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, view: true)).ContentAccess);
-        Assert.False(TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, download: true)).View);
+        // Inbound: the staff the vendor chose to notify and administrators see it; other view + download staff do not.
+        Assert.Equal(ContentPurpose.Recipient, TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, view: true, download: true, notified: true)).ContentAccess);
+        Assert.Equal(ContentPurpose.Recipient, TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, view: true, download: true, admin: true)).ContentAccess);
+        Assert.False(TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, view: true, download: true)).View);
+        Assert.Equal(ContentPurpose.None, TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, view: true, notified: true)).ContentAccess);
+        Assert.False(TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(2, download: true, notified: true, admin: true)).View);
+        // A supervisor whose organisation contains the sender or a notified person sees it like that person, but needs the view permission.
+        Assert.Equal(ContentPurpose.Recipient, TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(6, view: true, download: true, scope: true)).ContentAccess);
+        Assert.False(TransferAccess.Evaluate(Inbound(TransferLifecycle.Released), Staff(6, download: true, scope: true)).View);
+        Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(Outbound(TransferLifecycle.Released), Staff(6, view: true, download: true, scope: true)).ContentAccess);
+        Assert.False(TransferAccess.Evaluate(Outbound(TransferLifecycle.Released), Staff(6, view: true, download: true)).View);
     }
 
     [Fact]

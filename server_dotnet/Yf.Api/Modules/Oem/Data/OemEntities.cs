@@ -113,6 +113,9 @@ public sealed class OemTransfer
     public string? Description { get; set; }
     public ulong? InternalSenderUserId { get; set; }
     public ulong? OemSenderAccountId { get; set; }
+    /// <summary>For a vendor-sent transfer: the vendor contact who signed it (the shared account is not a person).</summary>
+    public ulong? SignerContactId { get; set; }
+    public string? SignerName { get; set; }
     public string LifecycleStatus { get; set; } = null!;
     public ulong RetentionTemplateId { get; set; }
     public string? RetentionMode { get; set; }

@@ -56,6 +56,11 @@ internal static class OemAuthorizer
         return codes.Contains(permission, StringComparer.Ordinal);
     }
 
+    /// <summary>Whether the caller is a system administrator: the only internal staff who see every transfer.</summary>
+    public static async Task<bool> IsSystemAdminAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct) =>
+        actor is InternalOemActor internalActor
+        && await AccessService.IsSystemAdminAsync(uow.Connection, uow.Transaction, internalActor.User.Id, ct);
+
     public static async Task RequireAsync(OemUnitOfWork uow, OemActor actor, string permission, CancellationToken ct)
     {
         if (!await HasAsync(uow, actor, permission, ct)) throw ApiException.Forbidden();

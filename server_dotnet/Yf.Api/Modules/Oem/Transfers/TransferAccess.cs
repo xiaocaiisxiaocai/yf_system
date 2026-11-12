@@ -14,20 +14,27 @@ public sealed record TransferFacts(
 /// <summary>
 /// The facts about a caller: realm identity, internal permissions, and whether the
 /// caller currently holds an activated (PENDING) approval task on the transfer, or
-/// held any task on it historically.
+/// held any task on it historically. <c>SeesAll</c> marks a system administrator; <c>IsNotified</c> marks someone the
+/// vendor chose to notify about this inbound transfer; <c>InScope</c> marks a supervisor (organisation leader) whose
+/// organisation, including everything below it, contains this transfer's internal sender or a notified person.
 /// </summary>
 public sealed record ActorFacts(
     string Realm, ulong Id, ulong? CompanyId, bool CanView, bool CanDownload, bool CanCreate,
-    bool HasActiveReviewTask, bool HasAnyTask, bool CanRecover = false)
+    bool HasActiveReviewTask, bool HasAnyTask, bool CanRecover = false, bool SeesAll = false, bool IsNotified = false,
+    bool InScope = false)
 {
-    public static ActorFacts For(OemActor actor, IReadOnlySet<string> permissions, bool hasActiveReviewTask, bool hasAnyTask) => actor switch
+    public static ActorFacts For(OemActor actor, IReadOnlySet<string> permissions, bool hasActiveReviewTask, bool hasAnyTask,
+        bool seesAll = false, bool isNotified = false, bool inScope = false) => actor switch
     {
         OemAccountActor account => new(OemRealms.Oem, account.AccountId, account.CompanyId, false, false, false, false, false),
         _ => new(OemRealms.Internal, actor.Id, null,
             permissions.Contains(OemPermissions.TransferView), permissions.Contains(OemPermissions.FileDownload),
             permissions.Contains(OemPermissions.TransferCreate), hasActiveReviewTask, hasAnyTask,
-            permissions.Contains(OemPermissions.ApprovalRecover)),
+            permissions.Contains(OemPermissions.ApprovalRecover), seesAll, isNotified, inScope),
     };
+
+    /// <summary>View permission over this transfer although it is not the actor's own: administrators and supervisors in scope.</summary>
+    public bool ViewsAll => CanView && (SeesAll || InScope);
 }
 
 public enum ContentPurpose { None, Recipient, Sender, Review }
@@ -62,13 +69,15 @@ public static class TransferAccess
         if (transfer.Lifecycle == TransferLifecycle.Draft)
             return new(isActualSender, isActualSender, isActualSender ? ContentPurpose.Sender : ContentPurpose.None);
 
+        // Internal staff see their own transfers, the ones they approve and the inbound ones the vendor chose to notify
+        // them about; only administrators (with view permission) see everyone's.
         bool view;
         if (outbound)
             // The vendor learns nothing about an outbound transfer until it is released.
             view = isOem ? ownCompany && transfer.Lifecycle == TransferLifecycle.Released
-                : isActualSender || actor.CanView || actor.HasAnyTask || recoveryView;
+                : isActualSender || actor.ViewsAll || actor.HasAnyTask || recoveryView;
         else
-            view = isOem ? ownCompany : actor.CanView;
+            view = isOem ? ownCompany : actor.CanView && (actor.SeesAll || actor.IsNotified || actor.InScope);
         if (!view) return new(false, false, ContentPurpose.None);
         if (closedWithoutRelease) return new(true, false, ContentPurpose.None);
 
@@ -84,16 +93,16 @@ public static class TransferAccess
         else
         {
             // Released. On the company side what went out stays reviewable: the sender, every approver who
-            // decided on it, and staff holding view + download may read it. None of these is a vendor receipt.
+            // decided on it, and administrators holding view + download may read it. None of these is a vendor receipt.
             content = outbound
                 ? isOem ? ContentPurpose.Recipient
                     : isActualSender ? ContentPurpose.Sender
                     : actor.HasAnyTask ? ContentPurpose.Review
-                    : actor.CanView && actor.CanDownload ? ContentPurpose.Sender : ContentPurpose.None
+                    : actor.ViewsAll && actor.CanDownload ? ContentPurpose.Sender : ContentPurpose.None
                 : isOem ? ContentPurpose.Sender
                     : actor.CanView && actor.CanDownload ? ContentPurpose.Recipient : ContentPurpose.None;
         }
-        var recoveryOnly = recoveryView && !isActualSender && !actor.CanView && !actor.HasAnyTask;
+        var recoveryOnly = recoveryView && !isActualSender && !actor.ViewsAll && !actor.HasAnyTask;
         return new(true, false, content, recoveryOnly);
     }
 }
