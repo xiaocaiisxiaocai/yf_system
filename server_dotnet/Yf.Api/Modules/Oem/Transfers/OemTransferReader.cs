@@ -24,6 +24,10 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var db = uow.Db;
+        // Organisation membership is internal information, including whether a filter matches.
+        if (current is OemAccountActor && request.Query.ContainsKey("departmentId")) throw ApiException.Forbidden();
+        var departmentId = QueryValues.OptionalUInt64(request, "departmentId");
+        if (departmentId == 0) throw ApiException.BadRequest("请求参数错误: departmentId");
         IQueryable<OemTransfer> query;
         if (current is OemAccountActor account)
         {
@@ -63,6 +67,14 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         if (request.Query["mine"] == "true")
             query = current is OemAccountActor ? query.Where(transfer => transfer.OemSenderAccountId == current.Id)
                 : query.Where(transfer => transfer.InternalSenderUserId == current.Id);
+        if (departmentId is ulong selectedDepartment)
+        {
+            var departmentIds = await DepartmentSubtreeAsync(db, selectedDepartment, ct);
+            // Current sender membership, not an approval snapshot. Inbound vendor transfers have no internal sender.
+            query = query.Where(transfer => transfer.InternalSenderUserId != null
+                && db.Users.Any(user => user.Id == transfer.InternalSenderUserId && user.DepartmentId != null
+                    && departmentIds.Contains(user.DepartmentId.Value)));
+        }
         var keyword = request.Query["keyword"].ToString().Trim();
         if (keyword.Length > 0)
         {
@@ -106,6 +118,23 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             .Page(offset, size).AsNoTracking().ToArrayAsync(ct);
         var summaries = await SummariesAsync(uow, rows, current, ct);
         return new OemPageResponse<OemTransferSummaryResponse>(rows.Select(transfer => summaries[transfer.Id]).ToArray(), total, page, size);
+    }
+
+    private static async Task<ulong[]> DepartmentSubtreeAsync(YfDbContext db, ulong id, CancellationToken ct)
+    {
+        // One small projection avoids a query per hierarchy level. Keep disabled organisations searchable for history.
+        var departments = await db.Departments.AsNoTracking().Select(item => new { item.Id, item.ParentId }).ToArrayAsync(ct);
+        if (!departments.Any(item => item.Id == id)) return [];
+        var children = departments.Where(item => item.ParentId.HasValue).ToLookup(item => item.ParentId!.Value, item => item.Id);
+        var visited = new HashSet<ulong>();
+        var pending = new Queue<ulong>();
+        pending.Enqueue(id);
+        while (pending.TryDequeue(out var current))
+        {
+            if (!visited.Add(current)) continue;
+            foreach (var child in children[current]) pending.Enqueue(child);
+        }
+        return visited.ToArray();
     }
 
     public Task<OemTransferDetailResponse> DetailAsync(OemActor actor, ulong id, CancellationToken ct) =>

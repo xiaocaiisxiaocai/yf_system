@@ -58,6 +58,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
 
 function createApi(overrides: Partial<OemApi> = {}): OemApi {
   return {
+    departments: vi.fn().mockResolvedValue([]),
     listTransfers: vi.fn().mockResolvedValue({ list: [], total: 0, page: 1, pageSize: 20 }),
     companyOptions: vi.fn().mockResolvedValue([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }]),
     createTransfer: vi.fn().mockResolvedValue(detail(41)),

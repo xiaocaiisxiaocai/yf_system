@@ -96,7 +96,7 @@ function page<T>(list: T[]): Page<T> {
 function renderOem(element: ReactNode, api: Partial<OemApi>, permissions: string[] = []) {
   const client = createAppQueryClient()
   const value: OemContextValue = {
-    api: api as OemApi,
+    api: { departments: vi.fn().mockResolvedValue([]), ...api } as OemApi,
     realm: 'internal',
     base: '/oem',
     permissions: new Set(permissions),

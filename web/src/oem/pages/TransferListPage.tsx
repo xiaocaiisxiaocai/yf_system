@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs } from '@arco-design/web-react'
+import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs, TreeSelect } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import { oemRequestError } from '../api/requestError'
-import type { CompanyOption, TransferFile, TransferSummary } from '../api/types'
+import type { CompanyOption, DepartmentNode, TransferFile, TransferSummary } from '../api/types'
 import { downloadOemFile } from '../components/downloadOemFile'
 import OemFilePreview from '../components/OemFilePreview'
 import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
@@ -392,6 +392,10 @@ function dayStart(day: string, offsetDays = 0) {
   return date.toISOString()
 }
 
+function organizationTree(nodes: DepartmentNode[]): { key: string; value: string; title: string; children: ReturnType<typeof organizationTree> }[] {
+  return nodes.map(node => ({ key: String(node.id), value: String(node.id), title: node.name, children: organizationTree(node.children) }))
+}
+
 export default function TransferListPage() {
   const { api, realm, base, queryScope, userId } = useOem()
   const can = useCan()
@@ -403,6 +407,16 @@ export default function TransferListPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const companyParam = Number(searchParams.get('companyId'))
   const companyId = realm === 'internal' && Number.isSafeInteger(companyParam) && companyParam > 0 ? companyParam : undefined
+  const departmentParam = Number(searchParams.get('departmentId'))
+  const departmentId = realm === 'internal' && Number.isSafeInteger(departmentParam) && departmentParam > 0 ? departmentParam : undefined
+  const changeDepartment = (value: string | undefined) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current)
+      if (value) next.set('departmentId', value); else next.delete('departmentId')
+      return next
+    }, { replace: true })
+    setPage(1)
+  }
   const changeCompany = (value: number | undefined) => {
     setSearchParams((current) => {
       const next = new URLSearchParams(current)
@@ -424,10 +438,11 @@ export default function TransferListPage() {
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
-    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId, scope, sender, sentRange }],
+    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId, scope, sender, sentRange, departmentId }],
     queryFn: () => api.listTransfers({
       page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, companyId, scope,
       sender: sender || undefined,
+      departmentId,
       sentFrom: sentRange ? dayStart(sentRange[0]) : undefined,
       sentTo: sentRange ? dayStart(sentRange[1], 1) : undefined,
     }),
@@ -438,6 +453,13 @@ export default function TransferListPage() {
     enabled: realm === 'internal',
     retry: false,
   })
+  const departments = useQuery({
+    queryKey: ['oem', ...queryScope, 'department-options'],
+    queryFn: () => api.departments(),
+    enabled: realm === 'internal',
+    retry: false,
+  })
+  const departmentOptions = useMemo(() => organizationTree(departments.data ?? []), [departments.data])
   const rows: TransferSummary[] = transfers.data?.list ?? []
   // 选项只含启用的厂商；从已停用厂商的“传递记录”进入时，用列表里的厂商名补一个选项，避免只显示编号。
   const companyFilterOptions = useMemo(() => {
@@ -550,6 +572,13 @@ export default function TransferListPage() {
             onChange={(value) => { setStatus(value); setPage(1) }} />
           <Input.Search allowClear placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'} style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
           <Input.Search allowClear aria-label="发送人" placeholder="发送人" style={{ width: 150 }} onSearch={(value) => { setSender(value.trim()); setPage(1) }} />
+          {realm === 'internal' && <TreeSelect
+            allowClear showSearch aria-label="组织架构" placeholder="组织架构" style={{ width: 190 }}
+            treeData={departmentOptions} loading={departments.isFetching}
+            filterTreeNode={(input, node) => String(node.props.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
+            value={departmentId ? String(departmentId) : undefined}
+            onChange={changeDepartment}
+          />}
           <DatePicker.RangePicker aria-label="提交时间" style={{ width: 240 }} placeholder={['提交时间起', '提交时间止']}
             onChange={(value) => { setSentRange(value?.length === 2 ? [value[0], value[1]] : undefined); setPage(1) }} />
           <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
@@ -563,6 +592,10 @@ export default function TransferListPage() {
           />
         </Space>
       </div>
+      {realm === 'internal' && departments.isError && (
+        <Alert type="error" style={{ marginBottom: 12 }} content="组织架构加载失败，请重试"
+          action={<Button size="small" loading={departments.isFetching} onClick={() => void departments.refetch()}>重试组织架构</Button>} />
+      )}
       {transfers.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}
           content={oemRequestError(transfers.error, '传递单列表加载失败，请重试')}

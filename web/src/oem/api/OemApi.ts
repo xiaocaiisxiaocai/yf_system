@@ -22,6 +22,8 @@ export interface TransferQuery {
   /** latest（默认）：仍有文件在服务器上；purged：全部文件已从服务器删除的历史记录。 */
   scope?: 'latest' | 'purged'
   sender?: string
+  /** 内部发送人当前所属组织，包含下级；仅内部入口使用。 */
+  departmentId?: number
   /** 提交时间范围：起（含）止（不含），ISO 时刻。 */
   sentFrom?: string
   sentTo?: string
