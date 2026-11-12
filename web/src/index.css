@@ -1287,3 +1287,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 
 /* 下拉为空时说明原因（例如没有符合条件的负责人）。 */
 .select-empty-note { padding: 12px; color: var(--color-text-3); font-size: 12px; text-align: center; }
+
+/* 项目列表顶部的状态页签只作筛选，不带内容区。 */
+.project-status-tabs { flex: 0 0 auto; margin-bottom: 8px; }
+.project-status-tabs .arco-tabs-content { display: none; }

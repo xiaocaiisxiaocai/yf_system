@@ -516,6 +516,27 @@ describe('ProjectList migrated behavior', () => {
     expect(params.get('status')).toBe('IN_PROGRESS')
   })
 
+  it('状态页签：总表不带状态，其余页签按状态筛选并写回地址', async () => {
+    mocks.get.mockImplementation((url: string) => Promise.resolve({ data: url === '/projects' ? page() : [] }))
+    render(
+      <MemoryRouter initialEntries={['/projects?page=3']}>
+        <ProjectList />
+        <LocationProbe />
+      </MemoryRouter>,
+    )
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['总表', '进行中', '已完成', '已终止'])
+    expect(screen.getByRole('tab', { name: '总表' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: '已完成' }))
+    await waitFor(() => expect(new URLSearchParams(locationProbe.search).get('status')).toBe('COMPLETED'))
+    expect(new URLSearchParams(locationProbe.search).get('page')).toBeNull()
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
+      params: expect.objectContaining({ status: 'COMPLETED', page: 1 }),
+    })))
+    expect(screen.getByRole('tab', { name: '已完成' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: '总表' }))
+    await waitFor(() => expect(new URLSearchParams(locationProbe.search).get('status')).toBeNull())
+  })
+
   it('ignores invalid address parameters and the supplier filter for supplier accounts', async () => {
     mocks.auth.user = { ...mocks.auth.user, userType: 'SUPPLIER' }
     mocks.get.mockImplementation((url: string) => Promise.resolve({ data: url === '/projects' ? page() : [] }))
