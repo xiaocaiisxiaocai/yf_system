@@ -89,8 +89,8 @@ const OEM_TARGET_LABELS: Record<string, string> = {
 const PURPOSE_LABELS: Record<string, string> = { RECIPIENT: '接收方', SENDER: '发送方', REVIEW: '审批人', NONE: '无', DOWNLOAD: '下载', PREVIEW: '预览' }
 const SEND_APPROVAL_LABELS: Record<string, string> = { REQUIRED: '需要审批', NOT_REQUIRED: '无需审批', SKIPPED: '按策略免审' }
 const RETENTION_LABELS: Record<string, string> = {
-  KEEP: '不自动删除', AFTER_RELEASE: '发布后到期删除', AFTER_FIRST_RECEIPT: '首次接收后宽限删除',
-  FIRST_RECEIPT_OR_DEADLINE: '首次接收宽限或最晚期限',
+  KEEP: '不自动删除', AFTER_RELEASE: '发布后到期删除', AFTER_FIRST_RECEIPT: '首次下载后删除',
+  FIRST_RECEIPT_OR_DEADLINE: '首次下载后删除或发布后到期',
 }
 const PURGE_REASON_LABELS: Record<string, string> = {
   RETENTION: '保留期到期', BLOCKED: '文件阻断', DRAFT_EXPIRED: '草稿过期', DRAFT_DELETED: '草稿删除',

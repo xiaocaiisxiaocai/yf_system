@@ -15,8 +15,8 @@ import OemMailRulesPanel from '../../components/OemMailRulesPanel'
 const MODES = [
   { value: 'KEEP', label: '不自动删除' },
   { value: 'AFTER_RELEASE', label: '发布后到期删除' },
-  { value: 'AFTER_FIRST_RECEIPT', label: '首次接收后宽限删除' },
-  { value: 'FIRST_RECEIPT_OR_DEADLINE', label: '首次接收宽限或最晚期限（先到为准）' },
+  { value: 'AFTER_FIRST_RECEIPT', label: '首次下载后删除' },
+  { value: 'FIRST_RECEIPT_OR_DEADLINE', label: '首次下载后删除或发布后到期（先到为准）' },
 ]
 
 /** 策略对全部传递单生效：缩短期限会让已有附件立即到期被删，保存前必须确认。 */
@@ -114,7 +114,7 @@ export function RetentionPage() {
             </Form.Item>
           )}
           {(mode === 'AFTER_FIRST_RECEIPT' || mode === 'FIRST_RECEIPT_OR_DEADLINE') && (
-            <Form.Item field="receiptGraceMinutes" label="首次完整下载后宽限（分钟）" rules={[{ required: true }]}>
+            <Form.Item field="receiptGraceMinutes" label="首次下载后保留（分钟）" rules={[{ required: true }]}>
               <InputNumber min={1} max={5256000} />
             </Form.Item>
           )}

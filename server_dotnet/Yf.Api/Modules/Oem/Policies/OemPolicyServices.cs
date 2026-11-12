@@ -198,8 +198,8 @@ public sealed class OemRetentionTemplateService(IDbContextFactory<YfDbContext> d
     {
         RetentionModes.Keep => "不自动删除",
         RetentionModes.AfterRelease => $"发布 {Duration(releaseTtl)} 后删除",
-        RetentionModes.AfterFirstReceipt => $"首名接收方完整下载 {Duration(receiptGrace)} 后删除；无人下载时不会自动删除",
-        RetentionModes.FirstReceiptOrDeadline => $"首名接收方完整下载 {Duration(receiptGrace)} 后删除，最迟发布 {Duration(releaseTtl)} 后删除",
+        RetentionModes.AfterFirstReceipt => $"首次下载 {Duration(receiptGrace)} 后删除；无人下载时不会自动删除",
+        RetentionModes.FirstReceiptOrDeadline => $"首次下载 {Duration(receiptGrace)} 后删除，最迟发布 {Duration(releaseTtl)} 后删除",
         _ => mode,
     };
 
