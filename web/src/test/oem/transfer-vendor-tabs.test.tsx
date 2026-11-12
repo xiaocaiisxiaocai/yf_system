@@ -70,7 +70,7 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
     const api = renderList('oem')
     await vi.waitFor(() => expect(api.listTransfers).toHaveBeenCalled())
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['最新', '历史（已删除）'])
-    expect(screen.queryByLabelText('组织架构')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('发送人组织')).not.toBeInTheDocument()
     expect(api.departments).not.toHaveBeenCalled()
   })
 
@@ -82,7 +82,7 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
     await user.type(senderInput, '测试员工')
     fireEvent.keyDown(senderInput, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 })
     await vi.waitFor(() => expect(lastQuery(api).sender).toBe('测试员工'))
-    const organization = screen.getByLabelText('组织架构')
+    const organization = screen.getByLabelText('发送人组织')
     await user.click(organization)
     const input = organization.querySelector('input')!
     fireEvent.change(input, { target: { value: '电控课' } })
@@ -117,19 +117,37 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
     })
     await user.click(await screen.findByLabelText('下一页'))
     await vi.waitFor(() => expect(lastQuery(api).page).toBe(2))
-    await user.click(screen.getByLabelText('组织架构'))
+    await user.click(screen.getByLabelText('发送人组织'))
     const division = await screen.findByText('工程事业部')
     fireEvent.click(division.closest('.arco-tree-node-title')!)
     await vi.waitFor(() => expect(lastQuery(api)).toMatchObject({ page: 1, departmentId: 1 }))
+  })
+
+  it('停用的组织仍可选，但带“已禁用”标记', async () => {
+    const user = userEvent.setup()
+    renderList('internal', '/oem/transfers', {
+      departments: vi.fn().mockResolvedValue([
+        { id: 1, name: '工程事业部', status: 'ACTIVE', children: [{ id: 5, name: '旧研发部', status: 'DISABLED', children: [] }] },
+      ]),
+    })
+    await user.click(await screen.findByLabelText('发送人组织'))
+    expect(await screen.findByText('旧研发部（已禁用）')).toBeInTheDocument()
+    expect(screen.getByText('工程事业部')).toBeInTheDocument()
+  })
+
+  it('地址里的组织已不存在时显示说明而不是一串编号', async () => {
+    const api = renderList('internal', '/oem/transfers?departmentId=99')
+    await vi.waitFor(() => expect(lastQuery(api)).toMatchObject({ departmentId: 99 }))
+    expect(await screen.findByText('组织 #99（已不存在）')).toBeInTheDocument()
   })
 
   it('组织加载失败可单独重试，保留地址中的筛选条件', async () => {
     const user = userEvent.setup()
     const departments = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([{ id: 2, name: '研发部', children: [] }])
     const api = renderList('internal', '/oem/transfers?departmentId=2&companyId=9', { departments })
-    await user.click(await screen.findByRole('button', { name: '重试组织架构' }))
+    await user.click(await screen.findByRole('button', { name: '重新加载组织' }))
     expect(await screen.findByText('研发部')).toBeInTheDocument()
-    expect(screen.queryByText('组织架构加载失败，请重试')).not.toBeInTheDocument()
+    expect(screen.queryByText('发送人组织加载失败，请重试')).not.toBeInTheDocument()
     expect(lastQuery(api)).toMatchObject({ departmentId: 2, companyId: 9 })
     expect(departments).toHaveBeenCalledTimes(2)
   })

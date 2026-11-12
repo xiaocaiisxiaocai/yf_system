@@ -392,8 +392,18 @@ function dayStart(day: string, offsetDays = 0) {
   return date.toISOString()
 }
 
+// 停用的组织仍可选（用于查历史），但要标出来，和组织架构页的“禁用”一致。
 function organizationTree(nodes: DepartmentNode[]): { key: string; value: string; title: string; children: ReturnType<typeof organizationTree> }[] {
-  return nodes.map(node => ({ key: String(node.id), value: String(node.id), title: node.name, children: organizationTree(node.children) }))
+  return nodes.map(node => ({
+    key: String(node.id),
+    value: String(node.id),
+    title: node.status === 'DISABLED' ? `${node.name}（已禁用）` : node.name,
+    children: organizationTree(node.children),
+  }))
+}
+
+function hasDepartment(nodes: DepartmentNode[], id: number): boolean {
+  return nodes.some(node => node.id === id || hasDepartment(node.children, id))
 }
 
 export default function TransferListPage() {
@@ -459,7 +469,12 @@ export default function TransferListPage() {
     enabled: realm === 'internal',
     retry: false,
   })
-  const departmentOptions = useMemo(() => organizationTree(departments.data ?? []), [departments.data])
+  // 地址里的组织已不存在时补一个说明项，避免下拉框只显示一串编号（列表此时为空）。
+  const departmentOptions = useMemo(() => {
+    const tree = organizationTree(departments.data ?? [])
+    if (!departmentId || !departments.data || hasDepartment(departments.data, departmentId)) return tree
+    return [...tree, { key: String(departmentId), value: String(departmentId), title: `组织 #${departmentId}（已不存在）`, children: [] }]
+  }, [departments.data, departmentId])
   const rows: TransferSummary[] = transfers.data?.list ?? []
   // 选项只含启用的厂商；从已停用厂商的“传递记录”进入时，用列表里的厂商名补一个选项，避免只显示编号。
   const companyFilterOptions = useMemo(() => {
@@ -573,7 +588,7 @@ export default function TransferListPage() {
           <Input.Search allowClear placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'} style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
           <Input.Search allowClear aria-label="发送人" placeholder="发送人" style={{ width: 150 }} onSearch={(value) => { setSender(value.trim()); setPage(1) }} />
           {realm === 'internal' && <TreeSelect
-            allowClear showSearch aria-label="组织架构" placeholder="组织架构" style={{ width: 190 }}
+            allowClear showSearch aria-label="发送人组织" placeholder="发送人组织" style={{ width: 190 }}
             treeData={departmentOptions} loading={departments.isFetching}
             filterTreeNode={(input, node) => String(node.props.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
             value={departmentId ? String(departmentId) : undefined}
@@ -593,8 +608,8 @@ export default function TransferListPage() {
         </Space>
       </div>
       {realm === 'internal' && departments.isError && (
-        <Alert type="error" style={{ marginBottom: 12 }} content="组织架构加载失败，请重试"
-          action={<Button size="small" loading={departments.isFetching} onClick={() => void departments.refetch()}>重试组织架构</Button>} />
+        <Alert type="error" style={{ marginBottom: 12 }} content="发送人组织加载失败，请重试"
+          action={<Button size="small" loading={departments.isFetching} onClick={() => void departments.refetch()}>重新加载组织</Button>} />
       )}
       {transfers.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}
