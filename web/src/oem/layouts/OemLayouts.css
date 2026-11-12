@@ -19,12 +19,10 @@
 .oem-transfer-detail > .oem-transfer-files-card { display: flex; flex: 0 1 auto; flex-direction: column; box-sizing: border-box; min-height: 220px; }
 .oem-transfer-files-card > .arco-card-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; }
 .oem-transfer-files-card .page-table-host { flex: 1 1 auto; min-height: 0; }
-/* 顶部信息：标签在上、内容在下的紧凑网格，随宽度自动分列；“说明”单独占一行。 */
-.oem-transfer-meta { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px 32px; margin: 0; }
-.oem-transfer-meta > div { min-width: 0; }
-.oem-transfer-meta dt { color: var(--app-text-muted); font-size: 12px; line-height: 20px; }
-.oem-transfer-meta dd { margin: 2px 0 0; color: var(--color-text-1); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
-.oem-transfer-meta > .oem-transfer-meta-wide { grid-column: 1 / -1; }
+/* 顶部信息：带边框的表格，标签列有底色，内容允许换行。 */
+.oem-transfer-meta { min-width: 0; }
+.oem-transfer-meta .arco-descriptions-item-label { width: 112px; min-width: 112px; background: var(--color-fill-1); color: var(--color-text-2); font-size: 13px; white-space: nowrap; }
+.oem-transfer-meta .arco-descriptions-item-value { min-width: 0; color: var(--color-text-1); font-size: 14px; overflow-wrap: anywhere; }
 .oem-transfer-detail .page-table .arco-table-body { max-height: none !important; }
 .oem-transfer-detail > .oem-transfer-approval-card { display: flex; flex: 0 1 auto; flex-direction: column; box-sizing: border-box; max-height: 40%; min-height: 140px; }
 .oem-transfer-approval-card > .arco-card-body { flex: 1; min-height: 0; overflow: auto; }

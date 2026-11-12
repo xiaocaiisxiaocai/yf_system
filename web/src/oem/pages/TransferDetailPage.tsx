@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { actionSlots } from '../../components/ActionSlots'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, Button, Card, Empty, Input, Message, Modal, Popconfirm, Result, Select, Space, Spin, Steps, Table, Tag, Typography,
+  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Select, Space, Spin, Steps, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -485,16 +485,20 @@ export default function TransferDetailPage() {
           <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${summary.approvalBlockedReason}`} />
         )}
         {detail.closedReason && <Alert type="warning" style={{ marginBottom: 12 }} content={`结束原因：${detail.closedReason}`} />}
-        <dl className="oem-transfer-meta">
-          {[
+        {/* 带边框的信息表：每行三组“标签 + 内容”，说明占两格；删除策略不在这里展示。 */}
+        <Descriptions
+          className="oem-transfer-meta"
+          border
+          size="small"
+          column={{ xs: 1, md: 2, xl: 3 }}
+          data={[
             { label: '发送人', value: summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName },
             { label: '提交时间', value: summary.sentAt ? fmtTime(summary.sentAt) : '-' },
             { label: '发送时间', value: summary.releasedAt ? fmtTime(summary.releasedAt) : '-' },
-            { label: '删除策略', value: detail.retention.summary ?? '-' },
             { label: '最晚保留至', value: detail.expiresAt ? fmtTime(detail.expiresAt) : '-' },
-          ].map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}
-          {detail.description && <div className="oem-transfer-meta-wide"><dt>说明</dt><dd>{detail.description}</dd></div>}
-        </dl>
+            ...(detail.description ? [{ label: '说明', span: 2, value: detail.description }] : []),
+          ]}
+        />
       </Card>
 
       <Card className="oem-transfer-files-card" title="附件" extra={<span ref={setFilesToolbar} />}>
