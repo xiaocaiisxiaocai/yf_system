@@ -6,6 +6,7 @@ import { fmtSize } from '../../api/types'
 import { oemRequestError } from '../api/requestError'
 import { isQuietRequestError } from '../../api/quietRequest'
 import { useOem } from '../OemContext'
+import { splitSupported, unsupportedMessage } from '../../utils/uploadExtensions'
 
 type Phase = 'queued' | 'hashing' | 'uploading' | 'merging' | 'cancelling' | 'done' | 'failed'
 
@@ -117,8 +118,15 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   const chooseLocked = useRef(false)
   const [entries, setEntries] = useState<Entry[]>([])
   const [dragging, setDragging] = useState(false)
+  const [allowedExtensions, setAllowedExtensions] = useState<string[] | null>(null)
   const busy = entries.some((entry) => ['hashing', 'uploading', 'merging', 'cancelling'].includes(entry.phase))
 
+  useEffect(() => {
+    // Unknown rules (request failed / not loaded) never block a pick; the server still validates.
+    let cancelled = false
+    void Promise.resolve(api.uploadRules?.()).then((rules) => { if (!cancelled && rules) setAllowedExtensions(rules.allowedExtensions) }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [api])
   useEffect(() => { entriesRef.current = entries }, [entries])
   useEffect(() => { onBusyChange?.(busy) }, [busy, onBusyChange])
   useEffect(() => { onQueueChange?.(entries.length) }, [entries.length, onQueueChange])
@@ -285,7 +293,11 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     if (!files?.length || chooseLocked.current || busy || disabled) return
     chooseLocked.current = true
     try {
-      const queued = Array.from(files).map((file) => ({ key: ++nextKey, file, phase: 'queued' as const, percent: 0 }))
+      const { accepted, rejected } = splitSupported(Array.from(files), allowedExtensions)
+      if (rejected.length > 0) Message.error(unsupportedMessage(rejected))
+      if (input.current) input.current.value = ''
+      if (accepted.length === 0) return
+      const queued = accepted.map((file) => ({ key: ++nextKey, file, phase: 'queued' as const, percent: 0 }))
       const next = [...entriesRef.current, ...queued]
       entriesRef.current = next
       setEntries(next)

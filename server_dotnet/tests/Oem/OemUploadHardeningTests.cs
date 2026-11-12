@@ -45,6 +45,21 @@ public sealed class OemUploadHardeningTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task UploadRulesTellEachSideItsAllowedExtensions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        foreach (var client in new[] { world.Admin, world.Vendor })
+        {
+            var rules = await client.GetAsync("/api/v1/oem/upload-rules", ct).Ok();
+            var extensions = rules["allowedExtensions"]!.AsArray().Select(item => item!.GetValue<string>()).ToArray();
+            Assert.Contains("pdf", extensions);
+            Assert.DoesNotContain("exe", extensions);
+        }
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task UploadInitIsRefusedWhileAVendorHasTooManyFilesAwaitingValidation()
     {
         var ct = TestContext.Current.CancellationToken;

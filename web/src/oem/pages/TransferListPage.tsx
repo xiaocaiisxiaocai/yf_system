@@ -4,7 +4,6 @@ import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal,
 import { IconDownload, IconEye, IconSearch, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
-import { isVersionConflict } from '../../api/versionConflict'
 import { oemRequestError } from '../api/requestError'
 import type { CompanyOption, DepartmentNode, TransferFile, TransferSummary } from '../api/types'
 import { downloadOemFile } from '../components/downloadOemFile'
@@ -56,9 +55,6 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   const [draftId, setDraftId] = useState<number | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [createOutcomeUnknown, setCreateOutcomeUnknown] = useState(false)
-  /** Set when an existing draft's recipient can no longer receive files. */
-  const [recipientBlocked, setRecipientBlocked] = useState<string | null>(null)
-  const [discarding, setDiscarding] = useState(false)
   const beginCompanyRequest = useLatestRequest()
   const recipientChoices = useRecipientChoices()
   const choices = recipientChoices.data ?? []
@@ -110,7 +106,8 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
     submitLocked.current = true
     setSaving(true)
     setSubmitError(null)
-    setRecipientBlocked(null)
+    // A draft created by this very submit is removed again when anything fails, so a failed attempt leaves nothing behind.
+    let createdHere: number | null = null
     try {
       if (!uploader.current?.hasFiles()) {
         Message.warning('请先选择要发送的文件')
@@ -118,10 +115,14 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       }
       let activeDraftId = draftId
       if (activeDraftId) {
-        // A previous send response may have been lost. Confirm the draft is still writable
-        // before applying the current recipient-account check or resuming uploads.
+        // A leftover from a failed clean-up: if it already went through, show it; otherwise remove it and start over.
         const current = await api.transfer(activeDraftId)
         if (leaveFinishedDraft(current)) return
+        if (!(await rollbackNewDraft(activeDraftId))) {
+          setSubmitError('操作失败，请稍后重试')
+          return
+        }
+        activeDraftId = null
       }
       let oemCompanyId: number | undefined
       // A vendor names the company staff to notify; when nobody can be notified it may still send (no mail).
@@ -139,14 +140,9 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         // the options before resuming uploads so an invalid recipient never gets
         // another upload attempt; the server still checks again when sending.
         // A failed refresh is already shown next to the vendor field, with a retry action.
-        const latestCompanies = draftId !== null ? await loadCompanyOptions().catch(() => null) : companies
-        if (!latestCompanies) return
-        const company = latestCompanies.find((item) => item.id === oemCompanyId)
+        const company = companies.find((item) => item.id === oemCompanyId)
         if (!company?.canReceive) {
-          const reason = company?.unavailableReason || NO_RECEIVING_ACCOUNT_REASON
-          // The draft is bound to its vendor: offer a way out instead of repeating the same error.
-          if (draftId !== null) setRecipientBlocked(reason)
-          else setSubmitError(reason)
+          setSubmitError(company?.unavailableReason || NO_RECEIVING_ACCOUNT_REASON)
           return
         }
       }
@@ -162,11 +158,13 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
           throw error
         }
         activeDraftId = created.summary.id
+        createdHere = activeDraftId
         setDraftId(activeDraftId)
       }
       const uploaded = await uploader.current.uploadAll(activeDraftId)
       if (!uploaded) {
-        setSubmitError('部分文件上传失败。已上传成功的文件不会重复，请修复失败项后再次提交。')
+        if (createdHere !== null) await rollbackNewDraft(createdHere)
+        setSubmitError('文件上传失败，请修复失败项后重新提交。')
         return
       }
 
@@ -194,75 +192,38 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         throw error
       }
     } catch (error) {
-      setSubmitError(oemRequestError(error, '操作失败，请重试'))
+      const message = oemRequestError(error, '操作失败，请重试')
+      if (createdHere !== null) await rollbackNewDraft(createdHere)
+      setSubmitError(createdHere !== null ? `${message}，请修正后重新提交` : message)
     } finally {
       submitLocked.current = false
       setSaving(false)
     }
   }
 
-  const openDraft = (id: number) => {
-    void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
-    onClose()
-    navigate(`${base}/transfers/${id}`)
-  }
-
-  /** Deletes a draft bound to an unavailable vendor so the sender can choose another one. */
-  const discardDraft = async () => {
-    const id = draftId
-    if (!id || submitLocked.current) return
-    submitLocked.current = true
-    setDiscarding(true)
+  /** Deletes the draft this submit created (with its uploads) and resets the local queue. False when it could not be removed. */
+  const rollbackNewDraft = async (id: number): Promise<boolean> => {
     try {
       const current = await api.transfer(id)
-      if (leaveFinishedDraft(current)) return
+      if (transferClosedNotice(current.summary)) return false
       await api.deleteDraft(id, current.summary.version)
       void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
-      // The deleted draft took its uploads with it: the local files start over on the next draft.
       uploader.current?.resetForNewDraft()
       setDraftId(null)
-      setRecipientBlocked(null)
-      setSubmitError(null)
-      form.resetFields(['oemCompanyId'])
-      Message.success('草稿已删除，请重新选择厂商后提交')
-    } catch (error) {
-      if (isVersionConflict(error)) {
-        const checked = await api.transfer(id).catch(() => null)
-        if (checked && leaveFinishedDraft(checked)) return
-      }
-      setSubmitError(`删除草稿失败：${oemRequestError(error, '操作失败，请重试')}`)
-    } finally {
-      submitLocked.current = false
-      setDiscarding(false)
+      return true
+    } catch {
+      return false
     }
   }
 
   const close = () => {
-    if (saving || discarding) return
-    if (createOutcomeUnknown) {
-      void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
-      onClose()
-      return
-    }
-    if (!draftId) {
-      onClose()
-      return
-    }
-    Modal.confirm({
-      title: '草稿已保留',
-      content: '已创建的草稿和成功上传的文件会保留，不会自动删除。你可以现在打开草稿继续，或稍后从列表进入。',
-      okText: '打开草稿',
-      cancelText: '留在列表',
-      onOk: () => openDraft(draftId),
-      onCancel: () => {
-        void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
-        onClose()
-      },
-    })
+    if (saving) return
+    void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
+    onClose()
   }
 
   const actionText = realm === 'internal' ? '提交审批' : '发送文件'
-  const busy = saving || discarding
+  const busy = saving
   return (
     <Modal
       title="发送文件"
@@ -275,7 +236,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       maskClosable={!busy}
       escToExit={!busy}
       cancelButtonProps={{ disabled: busy }}
-      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown || discarding || recipientBlocked !== null
+      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown 
         || (realm === 'internal' && (companyOptionsLoading || !!companyOptionsError || !companies.some((company) => company.canReceive))) }}
       unmountOnExit
     >
@@ -346,26 +307,10 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         <Form.Item label="文件" required>
           <OemUploader ref={uploader} deferred disabled={busy} onQueueChange={setFileCount} />
         </Form.Item>
-        {recipientBlocked && draftId && (
-          <Alert type="warning" style={{ marginBottom: 12 }} content={(
-            <Space direction="vertical" size="small">
-              <span>草稿的目标厂商当前无法接收文件：{recipientBlocked}</span>
-              <span>草稿已绑定该厂商。可在厂商启用账号后打开草稿继续，或删除草稿后重新选择厂商。</span>
-              <Space size="small">
-                <Button size="small" disabled={busy} onClick={() => openDraft(draftId)}>打开草稿</Button>
-                <Button size="small" status="danger" loading={discarding} disabled={saving}
-                  onClick={() => void discardDraft()}>删除草稿并重新选择</Button>
-              </Space>
-            </Space>
-          )} />
-        )}
         {submitError && <Alert type="error" content={submitError} />}
         {createOutcomeUnknown && (
           <Alert type="warning" style={{ marginTop: 12 }}
-            content="草稿创建结果未知。请关闭窗口并从列表确认，避免重复创建传递单。" />
-        )}
-        {draftId && !busy && !recipientBlocked && (
-          <Alert type="info" style={{ marginTop: 12 }} content="草稿已创建。再次提交只会继续失败或未完成的文件，不会重复上传成功文件。" />
+            content="提交结果未知。请关闭窗口并从列表确认，避免重复发送。" />
         )}
       <EnterSubmit /></Form>
     </Modal>

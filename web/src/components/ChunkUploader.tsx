@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'r
 import { Alert, Button, Input, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
 import { fmtSize } from '../api/types'
+import { splitSupported, unsupportedMessage } from '../utils/uploadExtensions'
 import { createChunkHasher, fileMd5, uploadFingerprint } from '../api/file-hash'
 import {
   abortUpload,
+  fetchAllowedExtensions,
   initUpload,
   mergeUpload,
   putUploadChunk,
@@ -208,6 +210,13 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   const rejectionToastsRef = useRef<Set<string>>(new Set())
   const [closing, setClosing] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const [allowedExtensions, setAllowedExtensions] = useState<string[] | null>(null)
+  useEffect(() => {
+    // Unknown rules (request failed / not loaded) never block a pick; the server still validates.
+    let cancelled = false
+    void Promise.resolve(fetchAllowedExtensions?.()).then((list) => { if (!cancelled && list) setAllowedExtensions(list) }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [])
   const dragDepth = useRef(0)
   const uploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_FILES)).current
   const chunkUploadSlots = useRef(createUploadSlots(MAX_CONCURRENT_CHUNKS)).current
@@ -567,8 +576,11 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
     }
   }
 
-  const addFiles = (files: FileList | File[] | null) => {
-    if (!canAddMore || closingRef.current || !files || files.length === 0) return
+  const addFiles = (picked: FileList | File[] | null) => {
+    if (!canAddMore || closingRef.current || !picked || picked.length === 0) return
+    const { accepted: files, rejected } = splitSupported(Array.from(picked), allowedExtensions)
+    if (rejected.length > 0) Message.error(unsupportedMessage(rejected))
+    if (files.length === 0) return
     if (entries.length === 0) {
       batchStartedRef.current = false
       batchCancelledRef.current = false

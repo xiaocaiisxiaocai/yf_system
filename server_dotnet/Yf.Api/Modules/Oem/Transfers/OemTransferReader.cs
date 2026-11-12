@@ -66,6 +66,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     && transfer.LifecycleStatus == TransferLifecycle.Sealed
                     && blockedTransfers.Contains(transfer.Id)));
         }
+        // An unfinished transfer (the short-lived record behind a send that has not completed or failed) is never listed.
+        query = query.Where(transfer => transfer.LifecycleStatus != TransferLifecycle.Draft);
         var direction = request.Query["direction"].ToString();
         if (direction.Length > 0) query = query.Where(transfer => transfer.Direction == direction);
         // Comma-separated so the UI can filter by a group of lifecycle states (e.g. every "not sent" outcome).

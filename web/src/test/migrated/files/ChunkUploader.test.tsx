@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   post: vi.fn(),
   put: vi.fn(),
   delete: vi.fn(),
+  get: vi.fn(),
   fileMd5: vi.fn(),
   uploadFingerprint: vi.fn(),
   blobSha256: vi.fn(),
@@ -14,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../../../api/client', () => ({
-  default: { post: mocks.post, put: mocks.put, delete: mocks.delete },
+  default: { post: mocks.post, put: mocks.put, delete: mocks.delete, get: mocks.get },
 }))
 vi.mock('../../../api/file-hash', () => ({
   fileMd5: mocks.fileMd5,
@@ -121,6 +122,16 @@ describe('ChunkUploader DOM contracts', () => {
     expect(screen.getByText(/拖入\.xlsx/)).toBeVisible()
     expect(screen.getByText(/assembly\.stp/)).toBeVisible()
     expect(startButton()).toBeEnabled()
+  })
+
+  it('rejects a file whose format is not allowed right when it is dropped', async () => {
+    mocks.get.mockResolvedValue({ data: { allowedExtensions: ['xlsx', 'stp'] } })
+    renderUploader()
+    await waitFor(() => expect(mocks.get).toHaveBeenCalled())
+    await Promise.resolve()
+    dropFiles(uploadFile('病毒.exe'))
+    expect(await screen.findByText(/不支持的文件格式，已拒绝：病毒\.exe/)).toBeInTheDocument()
+    expect(startButton()).toBeDisabled()
   })
 
   it('creates hash workers only after a file receives one of the two upload slots', async () => {

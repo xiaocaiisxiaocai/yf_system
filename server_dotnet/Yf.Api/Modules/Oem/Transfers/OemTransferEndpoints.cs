@@ -27,6 +27,8 @@ internal static class OemTransferEndpoints
         oem.MapPost("/transfers/{id:long}/cancel", (ulong id, CancelTransferRequest body, HttpContext c, OemApprovalService s, CancellationToken ct) =>
             s.CancelAsync(OemActorAccessor.Get(c), id, body, ct)).Produces<OemTransferDetailResponse>();
 
+        oem.MapGet("/upload-rules", (HttpContext c, OemUploadService s, CancellationToken ct) =>
+            s.RulesAsync(OemActorAccessor.Get(c), ct)).Produces<OemUploadRulesResponse>();
         oem.MapPost("/transfers/{id:long}/uploads/init", (ulong id, OemUploadInit body, HttpContext c, OemUploadService s, CancellationToken ct) =>
             s.InitAsync(OemActorAccessor.Get(c), id, body, ct)).Produces<OemUploadSessionInitResponse>();
         oem.MapGet("/uploads/{sessionId}", (string sessionId, HttpContext c, OemUploadService s, CancellationToken ct) =>

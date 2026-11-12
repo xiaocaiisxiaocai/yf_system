@@ -73,8 +73,8 @@ public sealed class OemOrganisationFilterTests
         Assert.Empty(Ids(await Filter(world.Org.Division, "&mine=true")));
         var tomorrow = Uri.EscapeDataString(DateTime.UtcNow.AddDays(1).ToString("O"));
         Assert.Empty(Ids(await Filter(world.Org.Division, "&sentFrom=" + tomorrow)));
-        // A create-only sender retains their own drafts but cannot gain access to other employees' transfers.
-        Assert.Equal(new[] { sectionFirst, sectionSecond, privateDraft }.Order(),
+        // A create-only sender sees their own finished transfers (an unfinished one is never listed) but cannot gain access to other employees' transfers.
+        Assert.Equal(new[] { sectionFirst, sectionSecond }.Order(),
             Ids(await world.Sender.GetAsync($"/api/v1/oem/transfers?departmentId={world.Org.Division}", ct).Ok()));
 
         // Membership changes affect the filter immediately; it is not a historical approval snapshot.

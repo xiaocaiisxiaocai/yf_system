@@ -5,6 +5,13 @@ import type { ApiResponses } from './types'
 export type UploadedChunkDigest = UploadedChunkDigestResponse
 export type UploadInitResult = UploadInitResponse
 
+/** The extension whitelist (lower-case, no dot); an empty list means no restriction. Failures stay silent: the server re-checks. */
+export async function fetchAllowedExtensions() {
+  const response = await http.get<ApiResponses['GET /uploads/allowed-extensions']>('/uploads/allowed-extensions',
+    { quietNetworkError: true, quietClientError: true } as QuietRequestConfig)
+  return response.data.allowedExtensions
+}
+
 export function initUpload(request: InitUploadRequest, config: Pick<QuietRequestConfig, 'quietClientError'> = {}) {
   return http.post<UploadInitResult>('/uploads/init', request, config as QuietRequestConfig)
 }

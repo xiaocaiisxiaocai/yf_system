@@ -32,6 +32,8 @@ public static class FilesModule
             HttpContext context, ulong projectId, UploadService service, CancellationToken ct) =>
             await service.ListActiveAsync(context, projectId, ct));
 
+        api.MapGet("/uploads/allowed-extensions", async (HttpContext context, UploadService service, CancellationToken ct) =>
+            await service.AllowedExtensionsAsync(context, ct));
         api.MapPost("/uploads/init", async (
             HttpContext context, InitUploadRequest request, UploadService service, FileRateLimiter limiter, CancellationToken ct) =>
         {
@@ -137,6 +139,9 @@ internal sealed class UploadChangeNotifier(IProjectRealtimePublisher publisher) 
     public Task PublishAsync(ulong projectId, string kind, CancellationToken ct = default) =>
         publisher.PublishAsync(projectId, kind, ct);
 }
+
+/// <summary>The extensions Robot collaboration accepts (empty list = no restriction), lower-case without a dot.</summary>
+public sealed record UploadRulesResponse(IReadOnlyList<string> AllowedExtensions);
 
 public sealed record InitUploadRequest(
     ulong ProjectId,

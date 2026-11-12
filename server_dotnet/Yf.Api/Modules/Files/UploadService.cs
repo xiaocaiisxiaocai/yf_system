@@ -432,6 +432,18 @@ public sealed partial class UploadService(
         return result;
     }
 
+    /// <summary>Lets the client reject an unsupported file before any upload session is created.</summary>
+    public async Task<UploadRulesResponse> AllowedExtensionsAsync(HttpContext context, CancellationToken ct)
+    {
+        _ = AccessService.GetCurrent(context);
+        await using var conn = await db.OpenAsync(ct);
+        await using var ef = EfDb.Use(conn);
+        var configured = await ef.SystemConfigs.AsNoTracking().Where(config => config.CfgKey == "upload.allowed_exts")
+            .Select(config => config.CfgValue).SingleOrDefaultAsync(ct);
+        return new UploadRulesResponse((configured ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(item => item.ToLowerInvariant()).ToArray());
+    }
+
     private async Task<string> ValidateFileAsync(MySqlConnection conn, InitUploadRequest request, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.FileName) || request.FileName.EnumerateRunes().Count() > 255

@@ -92,6 +92,8 @@ export class OemApi {
   removeFile = (fileId: number) => this.delete<'DELETE /oem/files/{id}'>(`/oem/files/${fileId}`)
 
   // Uploads
+  /** The extensions this side may upload; checked in the browser so an unsupported file never creates a draft. */
+  uploadRules = () => this.get<'GET /oem/upload-rules', { allowedExtensions: string[] }>('/oem/upload-rules')
   initUpload = (transferId: number, body: UploadInitRequest) =>
     this.post<'POST /oem/transfers/{id}/uploads/init', UploadInit>(`/oem/transfers/${transferId}/uploads/init`, body)
   /**

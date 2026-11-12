@@ -251,6 +251,9 @@ public sealed record OemTransferDetailResponse(
     IReadOnlyList<OemTransferFileResponse> Files,
     OemApprovalInfoResponse? Approval);
 
+/// <summary>The file extensions the signed-in side may upload (company: outbound list, vendor: inbound list), lower-case without a dot.</summary>
+public sealed record OemUploadRulesResponse(IReadOnlyList<string> AllowedExtensions);
+
 public sealed record OemUploadSessionInitResponse(
     string SessionId,
     uint ChunkSize,

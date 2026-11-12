@@ -49,7 +49,6 @@ export const DIRECTION_LABEL: Record<Direction, string> = {
 
 /** List filter groups; a comma-separated value matches any of its lifecycle states. */
 export const LIFECYCLE_OPTIONS = [
-  { value: 'DRAFT', label: '草稿' },
   { value: 'SEALED', label: '处理中' },
   { value: 'RELEASED', label: '已发送' },
   { value: 'REJECTED,BLOCKED,CANCELLED', label: '未发送' },

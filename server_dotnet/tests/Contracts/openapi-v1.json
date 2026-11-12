@@ -3783,6 +3783,35 @@
         }
       }
     },
+    "/api/v1/uploads/allowed-extensions": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadRulesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/uploads/init": {
       "post": {
         "tags": [
@@ -7152,6 +7181,35 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OemTransferDetailResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/oem/upload-rules": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OemUploadRulesResponse"
                 }
               }
             }
@@ -12780,6 +12838,21 @@
         },
         "additionalProperties": false
       },
+      "OemUploadRulesResponse": {
+        "required": [
+          "allowedExtensions"
+        ],
+        "type": "object",
+        "properties": {
+          "allowedExtensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "OemUploadSessionInitResponse": {
         "required": [
           "chunkSize",
@@ -16454,6 +16527,21 @@
           "resumed": {
             "type": "boolean",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "UploadRulesResponse": {
+        "required": [
+          "allowedExtensions"
+        ],
+        "type": "object",
+        "properties": {
+          "allowedExtensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false

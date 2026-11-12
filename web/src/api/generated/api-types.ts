@@ -933,6 +933,10 @@ export interface OemUploadInit {
   fileMd5?: string | null
 }
 
+export interface OemUploadRulesResponse {
+  allowedExtensions: Array<string>
+}
+
 export interface OemUploadSessionInitResponse {
   sessionId: string
   chunkSize: number
@@ -1818,6 +1822,10 @@ export interface UploadInitResponse {
   resumed?: boolean | null
 }
 
+export interface UploadRulesResponse {
+  allowedExtensions: Array<string>
+}
+
 export interface UploadSessionResponse {
   sessionId: string
   status: string
@@ -2033,6 +2041,7 @@ export interface ApiResponses {
   "POST /oem/transfers/{id}/cancel": OemTransferDetailResponse
   "POST /oem/transfers/{id}/send": OemTransferDetailResponse
   "POST /oem/transfers/{id}/uploads/init": OemUploadSessionInitResponse
+  "GET /oem/upload-rules": OemUploadRulesResponse
   "DELETE /oem/uploads/{sessionId}": EmptyResponse
   "GET /oem/uploads/{sessionId}": OemUploadSessionResponse
   "PUT /oem/uploads/{sessionId}/chunks/{index}": EmptyResponse
@@ -2104,6 +2113,7 @@ export interface ApiResponses {
   "PUT /robot-parts/{id}": RobotPartResponse
   "GET /supplier-contacts": Array<SupplierContactOption>
   "GET /supplier-options": Array<SupplierOption>
+  "GET /uploads/allowed-extensions": UploadRulesResponse
   "POST /uploads/init": UploadInitResponse
   "DELETE /uploads/{sessionId}": EmptyResponse
   "GET /uploads/{sessionId}": UploadSessionResponse

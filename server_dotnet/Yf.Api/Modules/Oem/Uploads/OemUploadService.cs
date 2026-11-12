@@ -39,6 +39,16 @@ public sealed partial class OemUploadService(
     /// </summary>
     internal const int MaxUnfinishedValidationsPerCompany = 100;
 
+    /// <summary>Lets the client reject an unsupported file before any draft or upload session is created.</summary>
+    public async Task<OemUploadRulesResponse> RulesAsync(OemActor actor, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+        var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        var settings = await OemSettings.LoadAsync(uow.Db, ct);
+        var direction = current is InternalOemActor ? TransferDirections.InternalToOem : TransferDirections.OemToInternal;
+        return new OemUploadRulesResponse(settings.AllowedExtensions(direction).Order(StringComparer.Ordinal).ToArray());
+    }
+
     public async Task<OemUploadSessionInitResponse> InitAsync(OemActor actor, ulong transferId, OemUploadInit request, CancellationToken ct)
     {
         rateLimiter.Require(actor, OemDownloadRateLimiter.UploadInitScope);
