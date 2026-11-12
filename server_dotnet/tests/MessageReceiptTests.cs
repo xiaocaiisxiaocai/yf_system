@@ -182,8 +182,8 @@ public sealed class MessageReceiptTests
         var supplier = new CurrentUser(201, "summary-supplier", "SUPPLIER", 100);
 
         await using var conn = await database.Database.OpenAsync(ct);
-        var first = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第一条" }, null, null, ct);
-        var second = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第二条" }, null, null, ct);
+        var first = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第一条", SignerName = "测试签名" }, null, null, ct);
+        var second = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第二条", SignerName = "测试签名" }, null, null, ct);
 
         var row = await conn.QuerySingleAsync<(string Status, int RetryCount, string DedupeKey, string Body, long DelaySeconds)>(
             new CommandDefinition("""
@@ -201,7 +201,7 @@ public sealed class MessageReceiptTests
         // Once the worker claims the summary, the next message starts a new one.
         await conn.ExecuteAsync(new CommandDefinition(
             "UPDATE email_outbox SET status='SENDING',dedupe_key=NULL WHERE event_type='MESSAGE_CREATED'", cancellationToken: ct));
-        var third = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第三条" }, null, null, ct);
+        var third = await service.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "第三条", SignerName = "测试签名" }, null, null, ct);
         var bodies = (await conn.QueryAsync<string>(new CommandDefinition(
             "SELECT body FROM email_outbox WHERE event_type='MESSAGE_CREATED' ORDER BY id", cancellationToken: ct))).ToArray();
         Assert.Equal(2, bodies.Length);
@@ -224,7 +224,7 @@ public sealed class MessageReceiptTests
             WHERE event_type='MESSAGE_CREATED' AND dedupe_key IS NOT NULL
             """, transaction: claim, cancellationToken: ct)));
         var racing = Task.Run(() => service.CreateAsync(conn, supplier, 1001,
-            new MessageCreateRequest { Content = "第四条" }, null, null, ct), ct);
+            new MessageCreateRequest { Content = "第四条", SignerName = "测试签名" }, null, null, ct), ct);
         // Release the claim only once the merge's UPDATE is queued behind it (or has already finished); the worker's
         // own connection is idle after its UPDATE, so any session still running that statement is the merge.
         await LockWaitProbe.WaitForRunningStatementAsync(

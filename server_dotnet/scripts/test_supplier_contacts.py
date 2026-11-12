@@ -75,8 +75,9 @@ def run_supplier_contact_checks(client, Client, conn, check):
           sorted(email for user_id, email in rows if user_id == supplier_user["id"])
           == sorted([zhang["email"], li["email"]]))
 
-    # With no active contact the supplier works unsigned again (a typed name is still accepted as free text).
+    # The signature stays required (free text) even when no contact is active.
     for contact in (zhang, li):
         client.call("PUT", f"/api/v1/admin/supplier-contacts/{contact['id']}/status", {"status": "DISABLED"})
-    plain = supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages", {"content": "无联络人时可不签名"})
-    check("suppliers without active contacts send unsigned messages", plain["signerName"] is None)
+    supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages", {"content": "无联络人也要签名"}, expected=400)
+    plain = supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages", {"content": "无联络人也要签名", "signerName": "任意同事"})
+    check("suppliers still sign with a typed name when no contact is active", plain["signerName"] == "任意同事")

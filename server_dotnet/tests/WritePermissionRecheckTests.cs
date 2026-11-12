@@ -52,11 +52,11 @@ public sealed class WritePermissionRecheckTests
 
         await using var conn = await database.Database.OpenAsync(ct);
         // Control: with the permission in place the very same call succeeds.
-        await messages.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "撤销权限前的留言" }, null, ct);
+        await messages.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "撤销权限前的留言", SignerName = "测试签名" }, null, ct);
         Assert.Equal(1, await MessageCountAsync(conn, ct));
 
         var denied = await RevokeWhileWaitingAsync(database, 9002, "message:create",
-            () => messages.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "撤销权限后的留言" }, null, ct), ct);
+            () => messages.CreateAsync(conn, supplier, 1001, new MessageCreateRequest { Content = "撤销权限后的留言", SignerName = "测试签名" }, null, ct), ct);
 
         Assert.Equal((403, 40301, DefaultForbiddenMessage), (denied.Status, denied.Code, denied.Message));
         Assert.Equal(1, await MessageCountAsync(conn, ct));

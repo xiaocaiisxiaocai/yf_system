@@ -188,7 +188,7 @@ public sealed class OemTransferService(
         transfer.ManifestSha256 = Manifest(files);
         if (transfer.Title == DraftTitlePlaceholder) transfer.Title = GeneratedTitle(files);
         var notified = await ChooseInboundRecipientsAsync(uow, current, transfer, recipientUserIds, ct);
-        await SignAsync(uow, current, transfer, signerName, ct);
+        await SignAsync(current, transfer, signerName);
         OemTransferProgression.Touch(uow, transfer);
         await uow.Db.SaveChangesAsync(ct);
         if (plan is not null) await engine.CreateAsync(uow, transfer, current.Id, plan, ct);
@@ -232,25 +232,21 @@ public sealed class OemTransferService(
 
     /// <summary>
     /// A vendor sending files must sign with the name of the person who provides them (the shared login is not a person):
-    /// the signature is always required and is free text, not limited to registered contacts.
+    /// the signature is always required and is free text, not matched against registered contacts (no contact id is recorded).
     /// </summary>
-    private static async Task SignAsync(OemUnitOfWork uow, OemActor current, OemTransfer transfer, string? signerName, CancellationToken ct)
+    private static Task SignAsync(OemActor current, OemTransfer transfer, string? signerName)
     {
         var name = string.IsNullOrWhiteSpace(signerName) ? null : signerName.Trim();
         if (current is not OemAccountActor || transfer.Direction != TransferDirections.OemToInternal)
         {
             if (name is not null) throw ApiException.BadRequest("公司发出的传递单不需要签名");
-            return;
+            return Task.CompletedTask;
         }
-        var active = uow.Db.OemCompanyContacts.AsNoTracking()
-            .Where(contact => contact.OemCompanyId == transfer.OemCompanyId && contact.Status == OemStatus.Active);
         if (name is null) throw ApiException.BadRequest("请填写签名（提供人姓名）");
         if (name.EnumerateRunes().Count() > 32) throw ApiException.BadRequest("签名不能超过 32 个字符");
-        // When the name happens to be a registered contact the link (and its spelling) is kept; otherwise only the name is stored.
-        var contact = await active.Where(item => item.Name == name).OrderBy(item => item.Id)
-            .Select(item => new { item.Id, item.Name }).FirstOrDefaultAsync(ct);
-        transfer.SignerContactId = contact?.Id;
-        transfer.SignerName = contact?.Name ?? name;
+        transfer.SignerContactId = null;
+        transfer.SignerName = name;
+        return Task.CompletedTask;
     }
 
     /// <summary>Removes an attachment from an unsent draft (content is purged; metadata kept for audit).</summary>

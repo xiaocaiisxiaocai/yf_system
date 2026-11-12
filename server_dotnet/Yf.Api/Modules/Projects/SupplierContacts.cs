@@ -45,25 +45,16 @@ internal static class SupplierContacts
 
     /// <summary>
     /// Supplier messages and uploads carry a typed signature: the name of the contact who provided them. It is
-    /// required whenever the supplier has an active contact and may be any person's name of that company (typed freely,
-    /// not necessarily a registered contact); suppliers without contacts keep working unsigned. Internal senders never sign.
+    /// always required for supplier accounts and is the typed name of any person of that company (free text, not matched
+    /// against registered contacts and no contact id is recorded). Internal senders never sign.
     /// </summary>
-    internal static async Task<ContactSignature> ResolveSignatureAsync(
+    internal static Task<ContactSignature> ResolveSignatureAsync(
         YfDbContext db, CurrentUser actor, string? signerName, CancellationToken ct)
     {
-        if (actor.IsInternal || actor.SupplierId is not { } supplierId) return default;
+        if (actor.IsInternal || actor.SupplierId is null) return Task.FromResult(default(ContactSignature));
         var name = NormalizeSignerName(signerName);
-        var active = db.SupplierContacts.AsNoTracking()
-            .Where(contact => contact.SupplierId == supplierId && contact.Status == AccountStatuses.Active);
-        if (name is null)
-        {
-            if (await active.AnyAsync(ct)) throw ApiException.BadRequest("请填写签名（提供人姓名）");
-            return default;
-        }
+        if (name is null) throw ApiException.BadRequest("请填写签名（提供人姓名）");
         if (name.EnumerateRunes().Count() > 32) throw ApiException.BadRequest("签名不能超过 32 个字符");
-        // Free text: when the name happens to be a registered contact the link is kept (and its spelling), otherwise only the name is stored.
-        var contact = await active.Where(item => item.Name == name)
-            .Select(item => new { item.Id, item.Name }).FirstOrDefaultAsync(ct);
-        return contact is null ? new(null, name) : new(contact.Id, contact.Name);
+        return Task.FromResult(new ContactSignature(null, name));
     }
 }
