@@ -6,8 +6,8 @@ import { useColumnLayout } from './useColumnLayout'
 /**
  * 列宽、显示列和铺满剩余宽度。`specs` 必须是稳定常量。
  * 指定列保持设定宽度，其余列平分容器多出来的宽度；`growFixed` 时多出的宽度全部给指定列。
- * `growFixed` 下一旦开始拖动列宽，指定列（左边）按当前宽度固定住、不再吸收变化：被拖的列从实际宽度开始跟手，
- * 它右边的列随之位移（总宽超出时出现横向滚动）；恢复默认或双击该列表头边缘后重新铺满。
+ * 一旦开始拖动某一列，其余列都按当前显示的宽度固定住，不再随之变化：只有被拖的列从实际宽度开始跟手，
+ * 它右边的列整体位移（总宽超出时出现横向滚动，没有最大宽度限制）；恢复默认后重新铺满。
  */
 export function useAdjustableColumns<T extends { key: string; title?: ReactNode }>(
   tableId: string,
@@ -46,34 +46,37 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
     }
   }, [active, hostRef, reservedWidth])
   const components = useMemo(() => ({ header: { cell: ResizableHeaderCell } }), [])
-  // 指定列有了手动宽度就不再把多余宽度分给它。
-  const growPinned = growFixed && fixedKey in layout.widths
-  const sized = withFlexibleColumn(layout.apply([...columns]), growPinned ? 0 : tableWidth, fixedKey, growFixed)
+  // 有了手动宽度之后不再自动分配多余宽度，否则拖一列会带动别的列变宽或变窄。
+  // 铺满只给指定的那一列（growFixed）时，它被固定后才停止；否则任何手动宽度都会停止铺满。
+  const filling = growFixed ? !(fixedKey in layout.widths) : Object.keys(layout.widths).length === 0
+  const sized = withFlexibleColumn(layout.apply([...columns]), filling ? tableWidth : 0, fixedKey, growFixed)
   const scrollX = sized.reduce((sum, column) => sum + column.width, 0)
   const sizedRef = useRef(sized)
   sizedRef.current = sized
   const { actions: layoutActions } = layout
   const actions = useMemo(() => {
-    if (!growFixed) return layoutActions
     const shown = (key: string) => sizedRef.current.find((column) => column.key === key)?.width
-    const pinGrowColumn = (changing: string) => {
-      const grown = shown(fixedKey)
-      if (changing !== fixedKey && grown !== undefined && !(fixedKey in layout.widths)) layoutActions.setWidth(fixedKey, grown)
+    // The first manual change freezes every other column at the width it is showing now.
+    const pinOthers = (changing: string) => {
+      if (Object.keys(layout.widths).length > 0) return
+      for (const column of sizedRef.current) {
+        if (column.key !== changing) layoutActions.setWidth(column.key, column.width)
+      }
     }
     return {
       ...layoutActions,
       widthOf: (key: string) => shown(key) ?? layoutActions.widthOf(key),
       setWidth: (key: string, width: number | null) => {
-        if (width !== null) pinGrowColumn(key)
+        if (width !== null) pinOthers(key)
         layoutActions.setWidth(key, width)
       },
       beginResize: (key: string, clientX: number) => {
-        pinGrowColumn(key)
+        pinOthers(key)
         layoutActions.beginResize(key, clientX, shown(key))
       },
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- layout.widths is read at call time through the latest render's closure
-  }, [growFixed, fixedKey, layoutActions, layout.widths])
+  }, [layoutActions, layout.widths])
   return {
     hostClassName: 'adjustable-table-host',
     tableClassName: 'page-table--resizable',

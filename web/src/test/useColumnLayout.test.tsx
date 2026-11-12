@@ -40,12 +40,14 @@ describe('useColumnLayout', () => {
     expect(other.result.current.hidden).toEqual([])
   })
 
-  it('clamps widths, reports limits, writes only after a drag ends, and reset clears storage', () => {
+  it('clamps to the minimum only (no maximum), reports limits, writes only after a drag ends, and reset clears storage', () => {
     const key = columnLayoutStorageKey('t', 1)
     const { result } = renderHook(() => useColumnLayout(key, SPECS))
-    expect(result.current.actions.limitsOf('due')).toEqual({ min: 80, max: 200 })
+    expect(result.current.actions.limitsOf('due')).toEqual({ min: 80 })
     act(() => { result.current.actions.setWidth('due', 999) })
-    expect(result.current.actions.widthOf('due')).toBe(200)
+    expect(result.current.actions.widthOf('due')).toBe(999)
+    act(() => { result.current.actions.setWidth('due', 10) })
+    expect(result.current.actions.widthOf('due')).toBe(80)
 
     act(() => { result.current.actions.beginResize('owner', 100) })
     act(() => { window.dispatchEvent(new PointerEvent('pointermove', { clientX: 140 })) })

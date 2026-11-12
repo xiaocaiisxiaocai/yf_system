@@ -8,7 +8,7 @@ interface ColumnResizeActions {
   setWidth: (key: string, width: number | null) => void
   widthOf: (key: string) => number
   /** 该列允许的宽度范围，供读屏报告当前值。 */
-  limitsOf?: (key: string) => { min: number; max: number }
+  limitsOf?: (key: string) => { min: number }
 }
 
 const ColumnResizeContext = createContext<ColumnResizeActions | null>(null)
@@ -31,7 +31,6 @@ export function ResizableHeaderCell({ className, column, children }: {
           aria-orientation="vertical"
           aria-valuenow={actions.widthOf(columnKey)}
           aria-valuemin={actions.limitsOf?.(columnKey).min}
-          aria-valuemax={actions.limitsOf?.(columnKey).max}
           className="table-col-resize"
           aria-label={`调整${label}列宽`}
           title="拖动或用左右方向键调整列宽，双击或按 Home 键恢复默认"

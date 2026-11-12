@@ -11,6 +11,7 @@ import { downloadOemFile } from '../components/downloadOemFile'
 import OemFilePreview from '../components/OemFilePreview'
 import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
+import { actionSlots } from '../../components/ActionSlots'
 import RecipientChoiceSelect from '../components/RecipientChoiceSelect'
 import { useRecipientChoices } from '../components/useRecipientChoices'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
@@ -571,15 +572,18 @@ export default function TransferListPage() {
     {
       key: 'actions', title: '操作',
       render: (_: unknown, row: TransferSummary) => row.downloadableCount > 0 && (
-        <span className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}><Space size={8}>
-          {row.previewableCount > 0 && (
-            <Button size="small" icon={<IconEye />} aria-label={`预览 ${row.title}`}
-              disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
-          )}
-          <Button size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
-            loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
-            onClick={() => void openRow(row, 'download')}>下载</Button>
-        </Space></span>
+        <span className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}>
+          {/* Fixed slots: a row without a preview keeps its empty slot, so the download buttons line up down the column. */}
+          {actionSlots([
+            row.previewableCount > 0 && (
+              <Button key="preview" size="small" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+                disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
+            ),
+            <Button key="download" size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
+              loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
+              onClick={() => void openRow(row, 'download')}>下载</Button>,
+          ], 'oem-file')}
+        </span>
       ),
     },
   ], [base, realm, downloadingId, openRow])

@@ -62,7 +62,11 @@ function promptText(title: string, placeholder: string, initial = ''): Promise<s
   })
 }
 
-function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChanged: (next: TransferDetail) => void }) {
+/**
+ * The approver's decision buttons sit in the attachment card's header (next to the files being reviewed). The step-by-step flow card
+ * below is only for staff who can reassign approvers, and whenever the approval is blocked.
+ */
+function ApprovalPanel({ detail, onChanged, toolbarHost }: { detail: TransferDetail; onChanged: (next: TransferDetail) => void; toolbarHost: HTMLElement | null }) {
   const { api, userId, base, realm, permissions } = useOem()
   const can = useCan()
   const navigate = useNavigate()
@@ -164,21 +168,22 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
   }
 
   const current = approval.nodes.findIndex((node) => node.status === 'PENDING' || node.status === 'WAITING')
+  const showFlow = can.recover || approval.status === 'APPROVAL_BLOCKED'
+  const decisionButtons = myTask && toolbarHost ? createPortal(
+    <Space size={8}>
+      <Button type="primary" size="small" loading={deciding === 'approve'} disabled={deciding !== null}
+        onClick={() => void approve(myTask)}>审批通过</Button>
+      <Button status="danger" size="small" loading={deciding === 'reject'} disabled={deciding !== null}
+        onClick={() => void reject(myTask)}>驳回</Button>
+    </Space>,
+    toolbarHost,
+  ) : null
   return (
-    <Card className="oem-transfer-approval-card" title={`审批流程（${approval.templateName ?? '-'}）`}>
+    <>
+    {decisionButtons}
+    {showFlow && <Card className="oem-transfer-approval-card" title={`审批流程（${approval.templateName ?? '-'}）`}>
       {approval.status === 'APPROVAL_BLOCKED' && (
         <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${approval.blockedReason ?? ''}。需要具有异常处置权限的管理员改派审批人或终止传递。`} />
-      )}
-      {myTask && (
-        <Alert type="info" style={{ marginBottom: 12 }} content={
-          <Space>
-            <span>请审阅附件后处理此审批任务。</span>
-            <Button type="primary" size="small" loading={deciding === 'approve'} disabled={deciding !== null}
-              onClick={() => void approve(myTask)}>审批通过</Button>
-            <Button status="danger" size="small" loading={deciding === 'reject'} disabled={deciding !== null}
-              onClick={() => void reject(myTask)}>驳回</Button>
-          </Space>
-        } />
       )}
       <Steps direction="vertical" current={current < 0 ? approval.nodes.length + 1 : current + 1} size="small">
         {approval.nodes.map((node) => (
@@ -207,6 +212,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
           />
         ))}
       </Steps>
+    </Card>}
       <Modal title="改派审批人" visible={Boolean(reassigning)} confirmLoading={reassignSaving}
         closable={!reassignSaving} maskClosable={!reassignSaving} escToExit={!reassignSaving}
         cancelButtonProps={{ disabled: reassignSaving }}
@@ -219,7 +225,7 @@ function ApprovalPanel({ detail, onChanged }: { detail: TransferDetail; onChange
           <Typography.Text type="secondary">改派不会替原审批人做决定；原任务保留为“已改派”记录。</Typography.Text>
         </Space>
       </Modal>
-    </Card>
+    </>
   )
 }
 
@@ -550,7 +556,7 @@ export default function TransferDetailPage() {
         )}
       </Card>
 
-      {detail.approval && realm === 'internal' && <ApprovalPanel detail={detail} onChanged={setDetail} />}
+      {detail.approval && realm === 'internal' && <ApprovalPanel detail={detail} onChanged={setDetail} toolbarHost={filesToolbar} />}
       <OemFilePreview file={previewing} onClose={() => setPreviewing(null)} />
     </div>
   )

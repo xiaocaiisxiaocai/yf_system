@@ -5,6 +5,7 @@ export interface ColumnLayoutSpec {
   title: string
   defaultWidth: number
   minWidth?: number
+  /** 已不再限制列宽，保留字段只为兼容现有列配置。 */
   maxWidth?: number
   /** 始终显示，仍可调整列宽。 */
   locked?: boolean
@@ -23,9 +24,9 @@ export function columnLayoutStorageKey(tableId: string, userId: number | undefin
 
 export function clampColumnWidth(width: number, spec: ColumnLayoutSpec) {
   const min = spec.minWidth ?? 72
-  const max = Math.max(min, spec.maxWidth ?? 480)
   if (!Number.isFinite(width)) return spec.defaultWidth
-  return Math.round(Math.min(max, Math.max(min, width)))
+  // 列宽没有上限：宽出容器时表格出现横向滚动。
+  return Math.round(Math.max(min, width))
 }
 
 export function normalizeColumnLayout(value: unknown, specs: readonly ColumnLayoutSpec[]): ColumnLayout {

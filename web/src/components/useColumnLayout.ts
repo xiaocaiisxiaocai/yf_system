@@ -100,8 +100,7 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
 
   const limitsOf = useCallback((key: string) => {
     const spec = specsRef.current.find((item) => item.key === key)
-    const min = spec?.minWidth ?? 72
-    return { min, max: Math.max(min, spec?.maxWidth ?? 480) }
+    return { min: spec?.minWidth ?? 72 }
   }, [])
 
   const actions = useMemo(() => ({ beginResize, setWidth, widthOf, limitsOf }), [beginResize, setWidth, widthOf, limitsOf])

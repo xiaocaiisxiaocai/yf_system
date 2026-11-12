@@ -50,13 +50,13 @@ function renderList() {
 }
 
 describe('column layout storage', () => {
-  it('drops unknown values, keeps locked columns, and clamps widths', () => {
+  it('drops unknown values, keeps locked columns, clamps to the minimum only and has no maximum width', () => {
     expect(normalizeColumnLayout({
       hidden: ['name', 'sectionName', 'missing'],
       widths: { name: 10, sectionName: 9999, actions: 140, missing: 20, robotTypeName: 'wide' },
     }, specs)).toEqual({
       hidden: ['sectionName'],
-      widths: { name: 96, sectionName: 480 },
+      widths: { name: 96, sectionName: 9999 },
     })
     expect(normalizeColumnLayout('{', specs)).toEqual({ hidden: [], widths: {} })
   })
@@ -212,7 +212,7 @@ describe('project list columns', () => {
     expect(handle).toHaveAttribute('aria-orientation', 'vertical')
     expect(handle).toHaveAttribute('aria-valuenow', '96')
     expect(handle).toHaveAttribute('aria-valuemin')
-    expect(handle).toHaveAttribute('aria-valuemax')
+    expect(handle).not.toHaveAttribute('aria-valuemax')
     fireEvent.pointerDown(handle, { button: 0, clientX: 40 })
     fireEvent.pointerMove(window, { clientX: 120 })
     fireEvent.pointerUp(window, { clientX: 120 })
