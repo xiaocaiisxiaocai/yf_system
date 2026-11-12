@@ -38,6 +38,12 @@ function renderList(realm: 'internal' | 'oem', initial = realm === 'internal' ? 
 
 const lastQuery = (api: OemApi) => (api.listTransfers as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0] as { companyId?: number; departmentId?: number; page: number; sender?: string }
 
+async function openSenderFilter(_user?: unknown) {
+  const header = screen.getAllByRole('columnheader').find((cell) => cell.textContent?.includes('发送人') && cell.querySelector('.arco-table-filters'))!
+  fireEvent.click(header.querySelector('.arco-table-filters')!)
+  return await screen.findByRole('textbox', { name: '筛选发送人' })
+}
+
 describe('ODM/OEMA 传递单按厂商分页签', () => {
   it('“全部”在前，每个厂商一个页签；切换页签只查该厂商', async () => {
     const user = userEvent.setup()
@@ -78,8 +84,8 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
     const user = userEvent.setup()
     const api = renderList('internal', '/oem/transfers?companyId=9')
     await screen.findByRole('tab', { name: '甲厂' })
-    const senderInput = screen.getByRole('textbox', { name: '发送人' })
-    await user.type(senderInput, '测试员工')
+    const senderInput = await openSenderFilter(user)
+    fireEvent.change(senderInput, { target: { value: '测试员工' } })
     fireEvent.keyDown(senderInput, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 })
     await vi.waitFor(() => expect(lastQuery(api).sender).toBe('测试员工'))
     const organization = screen.getByLabelText('发送人组织')

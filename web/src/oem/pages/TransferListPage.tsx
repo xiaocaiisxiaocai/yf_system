@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs, TreeSelect } from '@arco-design/web-react'
-import { IconDownload, IconEye, IconUpload } from '@arco-design/web-react/icon'
+import { IconDownload, IconEye, IconSearch, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
@@ -477,6 +477,8 @@ export default function TransferListPage() {
   const [sentRange, setSentRange] = useState<[string, string] | undefined>()
   const [creating, setCreating] = useState(false)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
+  const [selectedIds, setSelectedIds] = useState<(string | number)[]>([])
+  const [batching, setBatching] = useState(false)
   const [picking, setPicking] = useState<{ title: string; files: TransferFile[] } | null>(null)
   const [previewing, setPreviewing] = useState<TransferFile | null>(null)
   const tableHostRef = useRef<HTMLDivElement>(null)
@@ -543,6 +545,31 @@ export default function TransferListPage() {
       setDownloadingId(null)
     }
   }, [api, transfers])
+  // Batch download: every downloadable file of the ticked transfers, one after another (a single archive of large engineering files would not fit in memory).
+  const downloadSelected = useCallback(async () => {
+    setBatching(true)
+    try {
+      const files: TransferFile[] = []
+      for (const id of selectedIds) {
+        const detail = await api.transfer(Number(id))
+        files.push(...detail.files.filter((file) => file.downloadable))
+      }
+      if (files.length === 0) {
+        Message.warning('所选传递单没有可下载的文件')
+        return
+      }
+      for (const [index, file] of files.entries()) {
+        if (index > 0) await new Promise((resolve) => setTimeout(resolve, 600))
+        await downloadOemFile(api, file.id)
+      }
+      Message.success(`已开始下载 ${files.length} 个文件`)
+      setSelectedIds([])
+    } catch {
+      // The HTTP client already shows the reason.
+    } finally {
+      setBatching(false)
+    }
+  }, [api, selectedIds])
   const transferColumns = useMemo(() => [
     {
       key: 'title', title: '文件', dataIndex: 'title', ellipsis: true,
@@ -555,7 +582,18 @@ export default function TransferListPage() {
       render: (_: unknown, row: TransferSummary) => <Counterpart direction={row.direction} companyName={row.companyName} realm={realm} />,
     },
     // A vendor-sent transfer shows the contact who signed it, with the shared login in brackets (as in Robot).
-    { key: 'sender', title: '发送人', render: (_: unknown, row: TransferSummary) => row.signerName ? `${row.signerName}（${row.sender.realName}）` : row.sender.realName },
+    {
+      key: 'sender', title: '发送人',
+      render: (_: unknown, row: TransferSummary) => row.signerName ? `${row.signerName}（${row.sender.realName}）` : row.sender.realName,
+      filteredValue: sender ? [sender] : [],
+      filterIcon: <IconSearch />,
+      filterDropdown: ({ confirm }: { confirm?: Function }) => (
+        <div className="oem-sender-filter" style={{ padding: 8 }}>
+          <Input.Search allowClear autoFocus aria-label="筛选发送人" placeholder="输入发送人姓名或账号" defaultValue={sender} style={{ width: 200 }}
+            onSearch={(value) => { setSender(value.trim()); setPage(1); confirm?.() }} />
+        </div>
+      ),
+    },
     {
       key: 'status', title: '状态',
       render: (_: unknown, row: TransferSummary) => (
@@ -586,7 +624,7 @@ export default function TransferListPage() {
         </span>
       ),
     },
-  ], [base, realm, downloadingId, openRow])
+  ], [base, realm, downloadingId, openRow, sender])
   const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
   const columnSpecs = realm === 'internal' ? OEM_TRANSFER_COLUMNS : PORTAL_TRANSFER_COLUMNS
   const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef)
@@ -624,7 +662,6 @@ export default function TransferListPage() {
           <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
             onChange={(value) => { setStatus(value); setPage(1) }} />
           <Input.Search allowClear placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'} style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
-          <Input.Search allowClear aria-label="发送人" placeholder="发送人" style={{ width: 150 }} onSearch={(value) => { setSender(value.trim()); setPage(1) }} />
           {realm === 'internal' && <TreeSelect
             allowClear showSearch aria-label="发送人组织" placeholder="发送人组织" style={{ width: 190 }}
             treeData={departmentOptions} loading={departments.isFetching}
@@ -635,6 +672,9 @@ export default function TransferListPage() {
           <DatePicker.RangePicker aria-label="提交时间" style={{ width: 240 }} placeholder={['提交时间起', '提交时间止']}
             onChange={(value) => { setSentRange(value?.length === 2 ? [value[0], value[1]] : undefined); setPage(1) }} />
           <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
+          <Button icon={<IconDownload />} disabled={selectedIds.length === 0} loading={batching} onClick={() => void downloadSelected()}>
+            批量下载{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
+          </Button>
           <ColumnVisibilityPicker
             specs={columnSpecs}
             hidden={table.hidden}
@@ -664,7 +704,15 @@ export default function TransferListPage() {
             data={rows}
             columns={table.columns}
             components={table.components}
-            onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.id}`), style: { cursor: 'pointer' } })}
+            rowSelection={{ type: 'checkbox', selectedRowKeys: selectedIds, preserveSelectedRowKeys: true, onChange: (keys) => setSelectedIds(keys) }}
+            onRow={(row) => ({
+              onClick: (event) => {
+                // Ticking a row's checkbox must not open its detail page.
+                if ((event.target as HTMLElement).closest('.arco-table-cell-check-box, .arco-checkbox')) return
+                navigate(`${base}/transfers/${row.id}`)
+              },
+              style: { cursor: 'pointer' },
+            })}
             pagination={{ current: page, total, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
         </div>

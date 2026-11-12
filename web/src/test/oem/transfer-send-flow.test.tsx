@@ -119,6 +119,12 @@ async function choose(dialog: HTMLElement, user: ReturnType<typeof userEvent.set
   await waitFor(() => expect(within(dialog).getByRole('button', { name: '提交审批' })).toBeEnabled())
 }
 
+async function openSenderFilter(_user?: unknown) {
+  const header = screen.getAllByRole('columnheader').find((cell) => cell.textContent?.includes('发送人') && cell.querySelector('.arco-table-filters'))!
+  fireEvent.click(header.querySelector('.arco-table-filters')!)
+  return await screen.findByRole('textbox', { name: '筛选发送人' })
+}
+
 describe('ODM/OEMA 一键发送文件', () => {
   beforeEach(() => {
     hashMocks.fileMd5.mockResolvedValue('md5')
@@ -469,8 +475,8 @@ describe('ODM/OEMA 一键发送文件', () => {
     const row = screen.getByRole('link', { name: '图纸.zip' }).closest('tr')!
     expect(within(row).getByText(fmtTime('2026-11-20T02:00:00Z'))).toBeInTheDocument()
 
-    const senderInput = screen.getByPlaceholderText('发送人')
-    await user.type(senderInput, '张三')
+    const senderInput = await openSenderFilter(user)
+    fireEvent.change(senderInput, { target: { value: '张三' } })
     fireEvent.keyDown(senderInput, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 })
     await waitFor(() => expect(listTransfers).toHaveBeenLastCalledWith(expect.objectContaining({ sender: '张三', scope: 'latest', page: 1 })))
 

@@ -319,9 +319,8 @@ public sealed class OemNotificationTests
         var version = Version(draft) + 1;
         var send = $"/api/v1/oem/transfers/{id}/send";
 
-        // The shared vendor login must sign with the name of one of the vendor's active contacts.
+        // The shared vendor login must sign with a person's name (free text, not limited to registered contacts).
         await world.Vendor.PostAsync(send, new { version, recipientUserIds = new[] { receiver } }, ct).Status(HttpStatusCode.BadRequest);
-        await world.Vendor.PostAsync(send, new { version, recipientUserIds = new[] { receiver }, signerName = "冒名者" }, ct).Status(HttpStatusCode.BadRequest);
         var sent = await world.Vendor.PostAsync(send, new { version, recipientUserIds = new[] { receiver }, signerName = $"  {world.Vendor.Signer}  " }, ct).Ok();
         Assert.Equal(world.Vendor.Signer, sent["summary"]!["signerName"]!.GetValue<string>());
         await host.RunOemJobsAsync(ct);
@@ -361,15 +360,16 @@ public sealed class OemNotificationTests
         Assert.Contains(id, Ids(await upperLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
         Assert.Contains(TransferId(outbound), Ids(await upperLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
 
-        // A vendor with no registered contact cannot sign at all, so it cannot send.
+        // The signature is free text: any person's name works even when the vendor has no registered contact, but it stays required.
         var noContact = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "无联络人" }, ct).Ok();
         await host.UploadAsync(world.Vendor, TransferId(noContact), "n.pdf", OemTestHost.Pdf("n"), ct);
         await using (var conn = await host.OpenAsync(ct))
             await conn.ExecuteAsync("UPDATE oem_company_contacts SET status='DISABLED' WHERE oem_company_id=@CompanyId", new { world.CompanyId });
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(noContact)}/send",
-            new { version = Version(noContact) + 1, recipientUserIds = new[] { receiver }, signerName = world.Vendor.Signer }, ct).Status(HttpStatusCode.BadRequest);
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(noContact)}/send",
             new { version = Version(noContact) + 1, recipientUserIds = new[] { receiver } }, ct).Status(HttpStatusCode.BadRequest);
+        var freeSigned = await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(noContact)}/send",
+            new { version = Version(noContact) + 1, recipientUserIds = new[] { receiver }, signerName = " 临时同事 " }, ct).Ok();
+        Assert.Equal("临时同事", freeSigned["summary"]!["signerName"]!.GetValue<string>());
 
         // Company-sent transfers take no signature.
         var second = await CreateOutboundAsync(world, "不签名", ct);

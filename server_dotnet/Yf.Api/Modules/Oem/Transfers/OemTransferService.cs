@@ -231,8 +231,8 @@ public sealed class OemTransferService(
     }
 
     /// <summary>
-    /// A vendor sending files must sign with the name of one of its active contacts (the shared login is not a person):
-    /// the signature is always required and must match a registered, active contact of that vendor.
+    /// A vendor sending files must sign with the name of the person who provides them (the shared login is not a person):
+    /// the signature is always required and is free text, not limited to registered contacts.
     /// </summary>
     private static async Task SignAsync(OemUnitOfWork uow, OemActor current, OemTransfer transfer, string? signerName, CancellationToken ct)
     {
@@ -246,14 +246,11 @@ public sealed class OemTransferService(
             .Where(contact => contact.OemCompanyId == transfer.OemCompanyId && contact.Status == OemStatus.Active);
         if (name is null) throw ApiException.BadRequest("请填写签名（提供人姓名）");
         if (name.EnumerateRunes().Count() > 32) throw ApiException.BadRequest("签名不能超过 32 个字符");
-        // The column collation compares case- and width-insensitively; store the registered spelling.
+        // When the name happens to be a registered contact the link (and its spelling) is kept; otherwise only the name is stored.
         var contact = await active.Where(item => item.Name == name).OrderBy(item => item.Id)
-            .Select(item => new { item.Id, item.Name }).FirstOrDefaultAsync(ct)
-            ?? throw ApiException.BadRequest(await active.AnyAsync(ct)
-                ? $"签名「{name}」不是该厂商登记的联络人，请核对姓名"
-                : "该厂商还没有登记联络人，无法签名，请联系公司管理员");
-        transfer.SignerContactId = contact.Id;
-        transfer.SignerName = contact.Name;
+            .Select(item => new { item.Id, item.Name }).FirstOrDefaultAsync(ct);
+        transfer.SignerContactId = contact?.Id;
+        transfer.SignerName = contact?.Name ?? name;
     }
 
     /// <summary>Removes an attachment from an unsent draft (content is purged; metadata kept for audit).</summary>

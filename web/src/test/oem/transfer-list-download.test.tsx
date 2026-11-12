@@ -151,4 +151,22 @@ describe('ODM/OEMA 传递单列表直接下载', () => {
     expect(startDownload).not.toHaveBeenCalled()
     await vi.waitFor(() => expect(api.listTransfers).toHaveBeenCalledTimes(2))
   })
+
+  it('勾选多行后批量下载所选传递单的全部可下载文件，且勾选不进入详情', async () => {
+    const user = userEvent.setup()
+    const first = summary(51, '甲.zip', 1)
+    const second = summary(52, '乙.zip', 2)
+    const { startDownload } = renderList([first, second], {
+      51: detail(first, [file(401, '甲.zip')]),
+      52: detail(second, [file(402, '乙1.zip'), file(403, '乙2.zip'), file(404, '已清理.zip', false)]),
+    })
+    const batch = await screen.findByRole('button', { name: /批量下载/ })
+    expect(batch).toBeDisabled()
+    await screen.findByRole('link', { name: '乙.zip' })
+    for (const name of ['甲.zip', '乙.zip']) await user.click(within(screen.getByRole('link', { name }).closest('tr')!).getByRole('checkbox'))
+    expect(screen.getByTestId('location')).toHaveTextContent('/oem-portal/transfers')
+    expect(screen.getByTestId('location')).not.toHaveTextContent('/transfers/')
+    await user.click(await screen.findByRole('button', { name: /批量下载（2）/ }))
+    await vi.waitFor(() => expect(startDownload.mock.calls.map((call) => call[0])).toEqual([401, 402, 403]), { timeout: 5000 })
+  })
 })

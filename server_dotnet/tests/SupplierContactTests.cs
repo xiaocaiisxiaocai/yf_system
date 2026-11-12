@@ -94,12 +94,10 @@ public sealed class SupplierContactTests
         var unsigned = await Assert.ThrowsAsync<ApiException>(() => messages.CreateAsync(
             conn, supplier, projectId, new MessageCreateRequest { Content = "没有签名" }, null, ct));
         Assert.Equal("请填写签名（提供人姓名）", unsigned.Message);
-        var stranger = await Assert.ThrowsAsync<ApiException>(() => messages.CreateAsync(
-            conn, supplier, projectId, new MessageCreateRequest { Content = "冒名", SignerName = "王五" }, null, ct));
-        Assert.Equal("签名「王五」不是该供应商登记的联络人，请核对姓名", stranger.Message);
-        var disabledSigner = await Assert.ThrowsAsync<ApiException>(() => messages.CreateAsync(
-            conn, supplier, projectId, new MessageCreateRequest { Content = "已停用", SignerName = "李四四" }, null, ct));
-        Assert.Equal(400, disabledSigner.Status);
+        // The signature is free text: a name that is not a registered contact is accepted as typed.
+        using (var free = Json(await messages.CreateAsync(conn, supplier, projectId,
+                   new MessageCreateRequest { Content = "同事代发", SignerName = " 王五 " }, null, ct)))
+            Assert.Equal("王五", free.RootElement.GetProperty("signerName").GetString());
         using (var signed = Json(await messages.CreateAsync(conn, supplier, projectId,
                    new MessageCreateRequest { Content = "张三提供的资料说明", SignerName = " 张三 " }, null, ct)))
             Assert.Equal("张三", signed.RootElement.GetProperty("signerName").GetString());

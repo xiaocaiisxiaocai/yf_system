@@ -47,12 +47,12 @@ def run_supplier_contact_checks(client, Client, conn, check):
     unsigned = supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages",
                                     {"content": "未签名"}, expected=400)
     stranger = supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages",
-                                    {"content": "冒名", "signerName": "王五"}, expected=400)
+                                    {"content": "同事代发", "signerName": "王五"})
     signed = supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages",
                                   {"content": "张三的说明", "signerName": " 张三 "})
-    check("supplier messages carry a typed signature checked against the contacts",
+    check("supplier messages carry a freely typed signature",
           unsigned["message"] == "请填写签名（提供人姓名）"
-          and "不是该供应商登记的联络人" in stranger["message"]
+          and stranger["signerName"] == "王五"
           and signed["signerName"] == "张三")
 
     payload = b"supplier signed upload"
@@ -75,10 +75,8 @@ def run_supplier_contact_checks(client, Client, conn, check):
           sorted(email for user_id, email in rows if user_id == supplier_user["id"])
           == sorted([zhang["email"], li["email"]]))
 
-    # Disabled contacts can no longer sign; with none active the supplier works unsigned again.
+    # With no active contact the supplier works unsigned again (a typed name is still accepted as free text).
     for contact in (zhang, li):
         client.call("PUT", f"/api/v1/admin/supplier-contacts/{contact['id']}/status", {"status": "DISABLED"})
-    supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages",
-                         {"content": "停用签名", "signerName": "张三"}, expected=400)
     plain = supplier_client.call("POST", f"/api/v1/projects/{project_id}/messages", {"content": "无联络人时可不签名"})
     check("suppliers without active contacts send unsigned messages", plain["signerName"] is None)

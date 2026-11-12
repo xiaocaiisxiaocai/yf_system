@@ -45,8 +45,8 @@ internal static class SupplierContacts
 
     /// <summary>
     /// Supplier messages and uploads carry a typed signature: the name of the contact who provided them. It is
-    /// required whenever the supplier has an active contact and must exactly match one of those contacts
-    /// (after trimming); suppliers without contacts keep working unsigned. Internal senders never sign.
+    /// required whenever the supplier has an active contact and may be any person's name of that company (typed freely,
+    /// not necessarily a registered contact); suppliers without contacts keep working unsigned. Internal senders never sign.
     /// </summary>
     internal static async Task<ContactSignature> ResolveSignatureAsync(
         YfDbContext db, CurrentUser actor, string? signerName, CancellationToken ct)
@@ -61,10 +61,9 @@ internal static class SupplierContacts
             return default;
         }
         if (name.EnumerateRunes().Count() > 32) throw ApiException.BadRequest("签名不能超过 32 个字符");
-        // The column collation compares case- and width-insensitively; store the registered spelling.
+        // Free text: when the name happens to be a registered contact the link is kept (and its spelling), otherwise only the name is stored.
         var contact = await active.Where(item => item.Name == name)
-            .Select(item => new { item.Id, item.Name }).SingleOrDefaultAsync(ct)
-            ?? throw ApiException.BadRequest($"签名「{name}」不是该供应商登记的联络人，请核对姓名");
-        return new(contact.Id, contact.Name);
+            .Select(item => new { item.Id, item.Name }).FirstOrDefaultAsync(ct);
+        return contact is null ? new(null, name) : new(contact.Id, contact.Name);
     }
 }
