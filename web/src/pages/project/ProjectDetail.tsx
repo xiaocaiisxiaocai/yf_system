@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Drawer, Empty, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Descriptions, Drawer, Empty, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconDown, IconLeft, IconUp } from '@arco-design/web-react/icon'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -483,47 +483,52 @@ function ProjectDetailContent({ id }: { id?: string }) {
           </div>
         </div>
         <div className="project-facts-row">
-          <dl className={`project-facts${metadataOpen ? ' is-expanded' : ''}`}>
-            {[
-              // 先 Robot 信息、再项目信息；折叠时只留标 essential 的六项（顺序不变）。
-              { label: 'Robot 厂商', value: detailText(project.supplierName), essential: true },
-              { label: 'Robot 型号', value: detailText(project.robotModelName), essential: true },
-              { label: 'Robot 类型', value: detailText(project.robotTypeName) },
-              { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
-              { label: 'Robot 负责人', value: detailText(project.robotOwnerName) },
-              { label: '机型', value: detailText(project.machineModel) },
-              { label: '负责人', value: responsibleLabel, essential: true },
-              { label: '工令号', value: detailText(project.workOrderNos?.join('、')), essential: true },
-              { label: '课别', value: detailText(project.sectionName) },
-              { label: '优先级', value: detailText(project.priorityName), essential: true },
-              { label: '需求完成时间', value: detailText(project.expectedCompletionDate), essential: true },
-              { label: '创建人', value: project.createdByName || '-' },
-            ].filter((item) => metadataOpen || item.essential).map(({ label, value }) => (
-              <div key={label}><dt>{label}</dt><dd title={typeof value === 'string' ? value : undefined}>{value}</dd></div>
-            ))}
-            {(metadataOpen || project.description) && (
-              <div className="project-facts-description">
-                <dt>项目说明</dt>
-                <dd>
-                  {project.description ? (
-                    <Typography.Ellipsis className="project-description" rows={2} expandable={{ single: true }}
-                      expandRender={(expanded) => (
-                        <Button type="text" size="mini" aria-expanded={expanded}
-                          aria-label={expanded ? '收起项目说明' : '展开项目说明'}>
-                          {expanded ? '收起' : '展开'}
-                        </Button>
-                      )}>
-                      {project.description}
-                    </Typography.Ellipsis>
-                  ) : '-'}
-                </dd>
-              </div>
-            )}
-            {metadataOpen && <div><dt>更新时间</dt><dd>{fmtTime(project.updatedAt)}</dd></div>}
-          </dl>
-          <Button className="project-facts-toggle" type="text" size="small" aria-expanded={metadataOpen} onClick={() => setMetadataOpen((open) => !open)}>
-            {metadataOpen ? '收起资料' : '全部资料'}{metadataOpen ? <IconUp /> : <IconDown />}
-          </Button>
+          {/* 带边框的资料表：先 Robot 信息、再项目信息，每行三组“标签 + 内容”；折叠时只留标 essential 的六项。 */}
+          <Descriptions
+            className="project-facts-table"
+            border
+            size="small"
+            column={{ xs: 1, md: 2, xl: 3 }}
+            data={[
+              ...[
+                { label: 'Robot 厂商', value: detailText(project.supplierName), essential: true },
+                { label: 'Robot 型号', value: detailText(project.robotModelName), essential: true },
+                { label: 'Robot 类型', value: detailText(project.robotTypeName) },
+                { label: 'Robot 料号', value: detailText(project.robotPartNumber) },
+                { label: 'Robot 负责人', value: detailText(project.robotOwnerName) },
+                { label: '机型', value: detailText(project.machineModel) },
+                { label: '负责人', value: responsibleLabel, essential: true },
+                { label: '工令号', value: detailText(project.workOrderNos?.join('、')), essential: true },
+                { label: '课别', value: detailText(project.sectionName) },
+                { label: '优先级', value: detailText(project.priorityName), essential: true },
+                { label: '需求完成时间', value: detailText(project.expectedCompletionDate), essential: true },
+                { label: '创建人', value: project.createdByName || '-' },
+              ].filter((item) => metadataOpen || item.essential)
+                .map(({ label, value }) => ({ label, value: <span title={typeof value === 'string' ? value : undefined}>{value}</span> })),
+              ...((metadataOpen || project.description) ? [{
+                label: '项目说明',
+                // 展开时让出最后一格给更新时间，折叠时占满一行。
+                span: metadataOpen ? 2 : 3,
+                value: project.description ? (
+                  <Typography.Ellipsis className="project-description" rows={2} expandable={{ single: true }}
+                    expandRender={(expanded) => (
+                      <Button type="text" size="mini" aria-expanded={expanded}
+                        aria-label={expanded ? '收起项目说明' : '展开项目说明'}>
+                        {expanded ? '收起' : '展开'}
+                      </Button>
+                    )}>
+                    {project.description}
+                  </Typography.Ellipsis>
+                ) : '-',
+              }] : []),
+              ...(metadataOpen ? [{ label: '更新时间', value: fmtTime(project.updatedAt) }] : []),
+            ]}
+          />
+          <div className="project-facts-more">
+            <Button className="project-facts-toggle" type="text" size="small" aria-expanded={metadataOpen} onClick={() => setMetadataOpen((open) => !open)}>
+              {metadataOpen ? '收起资料' : '全部资料'}{metadataOpen ? <IconUp /> : <IconDown />}
+            </Button>
+          </div>
         </div>
         {project.hasCopyHistory && (
           <div className="project-copy-reference-bar">
