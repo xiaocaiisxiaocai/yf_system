@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Layout, Menu, Button, Drawer, Alert } from '@arco-design/web-react'
+import { Layout, Menu, Button, Drawer } from '@arco-design/web-react'
 import {
   IconHome,
   IconFile,
@@ -21,20 +21,15 @@ import CollaborationNotifications from '../components/CollaborationNotifications
 import RouteErrorBoundary from '../components/RouteErrorBoundary'
 import AccountMenu from '../components/AccountMenu'
 import AppRail from './AppRail'
+import { businessHomes, collaborationPages } from './navigation'
 
 const { Sider, Header, Content } = Layout
 
-const MENU_ITEMS = [
-  { code: 'dashboard', path: '/', label: '工作台', icon: <IconHome /> },
-  { code: 'project:list', path: '/projects', label: 'Robot仿真协作', icon: <IconFile /> },
-  { code: 'supplier:list', path: '/suppliers', label: '供应商管理', icon: <IconUserGroup /> },
-  { code: 'org:user', path: '/org/users', label: '用户管理', icon: <IconUser /> },
-  { code: 'org:dept', path: '/org/depts', label: '组织架构', icon: <IconMindMapping /> },
-  { code: 'rbac:role', path: '/rbac/roles', label: '角色与权限', icon: <IconSafe /> },
-  { code: 'log:audit', path: '/logs', label: '操作日志', icon: <IconHistory /> },
-  { code: 'system:config', path: '/system/config', label: '系统参数', icon: <IconSettings /> },
-  { code: 'system:dict', path: '/system/dictionaries', label: '数据字典', icon: <IconBook /> },
-]
+const MENU_ICONS = {
+  dashboard: <IconHome />, 'project:list': <IconFile />, 'supplier:list': <IconUserGroup />,
+  'org:user': <IconUser />, 'org:dept': <IconMindMapping />, 'rbac:role': <IconSafe />,
+  'log:audit': <IconHistory />, 'system:config': <IconSettings />, 'system:dict': <IconBook />,
+}
 
 export default function AdminLayout() {
   const { generation, menus, permissions, token, user } = useAuth(useShallow((state) => ({
@@ -55,9 +50,10 @@ export default function AdminLayout() {
     }
   })
 
-  const items = MENU_ITEMS.filter((m) => menus.includes(m.code)
-    || (m.code === 'org:dept' && user?.userType === 'INTERNAL' && permissions.includes('dept:leader_manage')))
+  const items = collaborationPages({ menus, permissions, user })
   const hasMenus = items.length > 0
+  const homes = businessHomes({ menus, permissions, user })
+  const hasNavigation = hasMenus || Boolean(homes.oem || homes.outsource)
   const canUseCollaboration = Boolean(
     token && menus.includes('project:list') && permissions.includes('project:list'),
   )
@@ -100,7 +96,7 @@ export default function AdminLayout() {
           aria-label={collapsed ? m.label : undefined}
           renderItemInTooltip={() => m.label}
         >
-          {m.icon}
+          {MENU_ICONS[m.code]}
           {!collapsed && m.label}
         </Menu.Item>
       ))}
@@ -110,7 +106,7 @@ export default function AdminLayout() {
   return (
     <Layout className="layout-shell">
       <Header className="layout-header">
-        {hasMenus && <Button
+        {hasNavigation && <Button
           className="mobile-menu-trigger"
           type="text"
           aria-label="打开导航菜单"
@@ -148,18 +144,12 @@ export default function AdminLayout() {
           </button>
         </Sider>}
         <Content className="layout-content">
-          {!hasMenus && <Alert
-            type="info"
-            title="暂无可用功能，请联系管理员"
-            content="当前账号尚未分配菜单权限。你仍可通过右上角账号菜单维护个人资料、修改密码或退出登录。"
-            style={{ marginBottom: 16 }}
-          />}
           <RouteErrorBoundary>
             <Outlet />
           </RouteErrorBoundary>
         </Content>
       </Layout>
-      {hasMenus && <Drawer
+      {hasNavigation && <Drawer
         className="mobile-nav-drawer"
         title={(
           <div className="drawer-brand">
@@ -175,7 +165,7 @@ export default function AdminLayout() {
         onCancel={() => setMobileMenuOpen(false)}
       >
         <AppRail active="collaboration" variant="drawer" onNavigate={() => setMobileMenuOpen(false)} />
-        {menu(true)}
+        {hasMenus && menu(true)}
       </Drawer>}
     </Layout>
   )

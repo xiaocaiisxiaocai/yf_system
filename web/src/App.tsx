@@ -14,7 +14,7 @@ const AdminLayout = lazy(() => import('./layouts/AdminLayout'))
 const Login = lazy(() => import('./pages/Login'))
 const ChangePassword = lazy(() => import('./pages/ChangePassword'))
 const Profile = lazy(() => import('./pages/Profile'))
-const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Home = lazy(() => import('./pages/Home'))
 const NotFound = lazy(() => import('./pages/NotFound'))
 const ProjectList = lazy(() => import('./pages/project/ProjectList'))
 const ProjectDetail = lazy(() => import('./pages/project/ProjectDetail'))
@@ -176,10 +176,10 @@ export default function App() {
             </Guard>
           }
         >
-          <Route index element={<Dashboard />} />
+          <Route index element={<Home />} />
           <Route path="profile" element={<Profile />} />
-          <Route path="projects" element={<Guard menu="project:list"><ProjectList /></Guard>} />
-          <Route path="projects/:id" element={<Guard menu="project:list"><ProjectDetail /></Guard>} />
+          <Route path="projects" element={<Guard menu="project:list" permission="project:list"><ProjectList /></Guard>} />
+          <Route path="projects/:id" element={<Guard menu="project:list" permission="project:list"><ProjectDetail /></Guard>} />
           <Route path="suppliers" element={<Guard menu="supplier:list" anyPermission={['supplier:manage', 'supplier:account']}><SupplierList /></Guard>} />
           <Route path="org/users" element={<Guard menu="org:user" permission="user:manage"><UserList /></Guard>} />
           <Route path="org/depts" element={<OrganizationRoute />} />

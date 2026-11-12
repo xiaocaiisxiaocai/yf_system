@@ -140,7 +140,8 @@ describe('ODM/OEMA 前端入口与路由', () => {
 
   it('在 ODM/OEMA 区域可从业务切换栏回到协作平台', async () => {
     const user = userEvent.setup()
-    setInternalSession(['oem:transfer_view'])
+    setInternalSession(['oem:transfer_view', 'project:list'])
+    useAuth.setState({ menus: ['dashboard'] })
     render(
       <MemoryRouter initialEntries={['/oem/transfers']}>
         <Routes>

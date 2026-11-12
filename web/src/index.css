@@ -122,7 +122,7 @@ html, body, #root {
 
 /* 布局 */
 .layout-shell { height: 100vh; min-width: 0; }
-.layout-main { flex: 1; min-width: 0; min-height: 0; }
+.layout-main.arco-layout { flex: 1; flex-direction: row; min-width: 0; min-height: 0; }
 .layout-header {
   flex: 0 0 56px;
   display: flex;
@@ -136,6 +136,11 @@ html, body, #root {
 .layout-profile > span:not(.arco-avatar) { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
 .layout-profile:hover { background: var(--color-fill-1); }
 .layout-content { min-width: 0; padding: 16px; overflow: auto; }
+.access-empty { display: grid; place-items: start center; box-sizing: border-box; min-height: 100%; padding: clamp(40px, 12vh, 120px) 8px 32px; }
+.access-empty-card { box-sizing: border-box; width: 100%; max-width: 480px; padding: 36px 24px; border: 1px solid var(--app-border); border-radius: var(--app-radius); background: var(--color-bg-2); text-align: center; }
+.access-empty-icon { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: var(--color-fill-2); color: var(--color-text-3); font-size: 24px; }
+.access-empty-card h1 { margin: 18px 0 8px; color: var(--app-text); font-size: 20px; line-height: 28px; font-weight: 600; }
+.access-empty-card p { margin: 0 0 24px; color: var(--app-text-muted); }
 .mobile-menu-trigger { display: none; }
 .layout-sider { min-height: 0; background: #17243a; }
 .layout-sider > .arco-layout-sider-children {
