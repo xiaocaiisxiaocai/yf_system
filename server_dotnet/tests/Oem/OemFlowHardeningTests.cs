@@ -36,7 +36,7 @@ public sealed class OemFlowHardeningTests
         var content = OemTestHost.Pdf(new string('r', 2000));
         var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "范围头" }, ct).Ok();
         var file = await host.UploadAsync(world.Vendor, TransferId(draft), "range.pdf", content, ct);
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        await world.Vendor.VendorSendAsync(TransferId(draft), Version(draft) + 1, ct).Ok();
         await host.RunOemJobsAsync(ct);
 
         await world.Viewer.PostAsync($"/api/v1/oem/files/{file.Id()}/download-sessions", null, ct).Ok();

@@ -155,7 +155,7 @@ public sealed class OemWorkerResilienceTests
 
         var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "清理会话" }, ct).Ok();
         var fileId = (await host.UploadAsync(world.Vendor, TransferId(draft), "session.pdf", OemTestHost.Pdf("session"), ct)).Id();
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        await world.Vendor.VendorSendAsync(TransferId(draft), Version(draft) + 1, ct).Ok();
         await host.RunOemJobsAsync(ct);
         var oldSession = (await world.Viewer.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Ok())["downloadSessionId"]!.GetValue<string>();
         var liveSession = (await world.Viewer.PostAsync($"/api/v1/oem/files/{fileId}/download-sessions", null, ct).Ok())["downloadSessionId"]!.GetValue<string>();

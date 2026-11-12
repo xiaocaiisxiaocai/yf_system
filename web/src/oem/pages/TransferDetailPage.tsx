@@ -8,6 +8,8 @@ import {
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { downloadOemFile } from '../components/downloadOemFile'
+import RecipientChoiceSelect from '../components/RecipientChoiceSelect'
+import { useRecipientChoices } from '../components/useRecipientChoices'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
 import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
@@ -319,6 +321,8 @@ export default function TransferDetailPage() {
   const [cancelling, setCancelling] = useState(false)
   const [previewing, setPreviewing] = useState<TransferFile | null>(null)
   const [filesToolbar, setFilesToolbar] = useState<HTMLElement | null>(null)
+  const [notifyUserIds, setNotifyUserIds] = useState<number[]>([])
+  const recipientChoices = useRecipientChoices()
   const recoveryScoped = realm === 'internal' && can.recover && !permissions.has('oem:transfer_view')
   const detailKey = ['oem', ...queryScope, 'transfer', id] as const
   const detailQuery = useQuery({
@@ -377,8 +381,16 @@ export default function TransferDetailPage() {
         handleNoLongerDraft(latest)
         return
       }
+      // A vendor names the company staff to notify; required whenever anyone can be notified.
+      const choosing = realm === 'oem' && latest.summary.direction === 'OEM_TO_INTERNAL'
+      if (choosing && (recipientChoices.data?.length ?? 0) > 0 && notifyUserIds.length === 0) {
+        Message.warning('请选择要通知的公司人员')
+        return
+      }
       try {
-        const submitted = await api.send(id, latest.summary.version)
+        const submitted = choosing
+          ? await api.send(id, latest.summary.version, notifyUserIds)
+          : await api.send(id, latest.summary.version)
         setDetail(submitted)
         Message.success(submitted.summary.lifecycleStatus === 'RELEASED'
           ? '文件已发送'
@@ -462,6 +474,10 @@ export default function TransferDetailPage() {
           {summary.direction === 'INTERNAL_TO_OEM' && realm === 'internal' && <ApprovalTag value={summary.approvalStatus} />}</Space>}
         extra={
           <Space>
+            {caps.canSend && realm === 'oem' && (recipientChoices.data?.length ?? 0) > 0 && (
+              <RecipientChoiceSelect choices={recipientChoices.data ?? []} value={notifyUserIds} onChange={setNotifyUserIds}
+                disabled={sending} style={{ width: 260 }} />
+            )}
             {caps.canSend && (
               <Button type="primary" loading={sending} disabled={detail.files.length === 0 || failedFiles || uploadBusy}
                 onClick={() => void send().catch(() => undefined)}>{summary.direction === 'INTERNAL_TO_OEM' ? '提交审批' : '发送文件'}</Button>

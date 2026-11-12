@@ -70,7 +70,7 @@ export type RetentionTemplate = Narrow<Api.OemRetentionTemplateResponse, { mode:
 
 /** Single-company responses (create/update/status) carry no account counts; list rows do. */
 export type Company = Narrow<Api.OemCompanyResponse, { status: ActiveStatus }>
-  & Partial<Pick<Api.OemCompanyListItemResponse, 'accountCount' | 'activeAccountCount' | 'contactCount'>>
+  & Partial<Pick<Api.OemCompanyListItemResponse, 'accountCount' | 'activeAccountCount' | 'contactCount' | 'internalRecipientCount'>>
 
 export type CompanyListItem = Narrow<Api.OemCompanyListItemResponse, { status: ActiveStatus }>
 
@@ -111,6 +111,10 @@ export type UploadedFile = Api.OemUploadedFileResponse
 export type DownloadSession = Api.OemDownloadSessionResponse
 export type ApproverOption = Api.OemFlowPersonResponse
 export type InternalUserOption = Api.OemInternalUserOptionResponse
+/** Internal staff mailed when a vendor sends files; `canReceive` false means they currently get no mail. */
+export type InternalRecipient = Api.OemInternalRecipientResponse
+/** A person a vendor may choose to notify when sending files (name only). */
+export type RecipientChoice = Api.OemRecipientChoiceResponse
 export type AccountBrief = Api.OemAccountBrief
 
 // Request bodies (generated request schemas, enum-like fields narrowed).

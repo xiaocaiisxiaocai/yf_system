@@ -33,7 +33,7 @@ public sealed class OemWriteEntryLimitTests
         var world = await OutboundWorldAsync(host, ct);
         var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "限流回传" }, ct).Ok();
         var fileId = (await host.UploadAsync(world.Vendor, TransferId(inbound), "limit.pdf", OemTestHost.Pdf("limit"), ct)).Id();
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(inbound)}/send", new { version = Version(inbound) + 1 }, ct).Ok();
+        await world.Vendor.VendorSendAsync(TransferId(inbound), Version(inbound) + 1, ct).Ok();
         await host.RunOemJobsAsync(ct);
         ulong viewerId;
         await using (var conn = await host.OpenAsync(ct))

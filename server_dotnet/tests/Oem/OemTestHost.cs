@@ -273,6 +273,14 @@ internal sealed class ApiClient(HttpClient http, CookieContainer cookies)
     public Task<ApiResponse> PostAsync(string path, object? body, CancellationToken ct) => SendAsync(HttpMethod.Post, path, body ?? new { }, ct);
     public Task<ApiResponse> PutAsync(string path, object? body, CancellationToken ct) => SendAsync(HttpMethod.Put, path, body ?? new { }, ct);
     public Task<ApiResponse> DeleteAsync(string path, CancellationToken ct) => SendAsync(HttpMethod.Delete, path, null, ct);
+
+    /// <summary>Sends an inbound draft as a vendor, notifying everyone it may choose (a vendor must choose when anyone is on its list).</summary>
+    public async Task<ApiResponse> VendorSendAsync(ulong transferId, ulong version, CancellationToken ct)
+    {
+        var choices = (await GetAsync("/api/v1/oem/transfer-recipient-choices", ct)).Expect(HttpStatusCode.OK).AsArray()
+            .Select(item => item!["userId"]!.GetValue<ulong>()).ToArray();
+        return await PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version, recipientUserIds = choices }, ct);
+    }
 }
 
 internal sealed record ApiResponse(HttpStatusCode Status, string Body)

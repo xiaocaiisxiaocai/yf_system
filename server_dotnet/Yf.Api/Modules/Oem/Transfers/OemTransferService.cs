@@ -5,6 +5,7 @@ using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
+using Yf.Api.Modules.Oem.Notifications;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Validation;
 
@@ -23,6 +24,8 @@ public sealed record TransferUpdate(
     string? Description = null,
     ulong? Version = null);
 public sealed record TransferVersionRequest(ulong? Version);
+/// <summary>Send a draft. A vendor sending files also names the company staff to notify (from its notification list).</summary>
+public sealed record TransferSendRequest(ulong? Version, ulong[]? RecipientUserIds);
 
 /// <summary>
 /// Transfer drafts, sending, listing and detail. The direction is always derived from
@@ -142,7 +145,8 @@ public sealed class OemTransferService(
     /// Freezes the manifest and starts validation/approval/release. Outbound transfers are
     /// routed now: any routing problem fails the send and the transfer stays a draft.
     /// </summary>
-    public async Task<OemTransferDetailResponse> SendAsync(OemActor actor, ulong id, ulong? expectedVersion, CancellationToken ct)
+    public async Task<OemTransferDetailResponse> SendAsync(OemActor actor, ulong id, ulong? expectedVersion, CancellationToken ct,
+        IReadOnlyCollection<ulong>? recipientUserIds = null)
     {
         var version = OemValidation.ExpectedVersion(expectedVersion);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
@@ -180,6 +184,7 @@ public sealed class OemTransferService(
         transfer.ReceiptGraceMinutes = retention.ReceiptGraceMinutes;
         transfer.ManifestSha256 = Manifest(files);
         if (transfer.Title == DraftTitlePlaceholder) transfer.Title = GeneratedTitle(files);
+        var notified = await ChooseInboundRecipientsAsync(uow, current, transfer, recipientUserIds, ct);
         OemTransferProgression.Touch(uow, transfer);
         await uow.Db.SaveChangesAsync(ct);
         if (plan is not null) await engine.CreateAsync(uow, transfer, current.Id, plan, ct);
@@ -187,11 +192,37 @@ public sealed class OemTransferService(
         {
             targetName = transfer.Title, files = files.Length, manifest = transfer.ManifestSha256, retentionMode = retention.Mode,
             approval = plan is null ? "NOT_REQUIRED" : plan.Plan.RequiresNoApproval ? "SKIPPED" : "REQUIRED",
+            notifyRecipients = notified,
             skippedNodes = plan?.Plan.Nodes.Where(node => node.Skipped).Select(node => new { node.Name, node.SkipReason }),
         }, ct);
         await progression.AdvanceAsync(uow, id, current, ct);
         await dispatcher.CommitAsync(uow, ct);
         return await reader.DetailAsync(current, id, ct);
+    }
+
+    /// <summary>
+    /// A vendor sending files chooses whom to notify from its notification list: at least one when anyone on the list can receive,
+    /// and only people on that list. Stored before release so the release mail goes to exactly these people.
+    /// </summary>
+    private static async Task<int> ChooseInboundRecipientsAsync(
+        OemUnitOfWork uow, OemActor current, OemTransfer transfer, IReadOnlyCollection<ulong>? recipientUserIds, CancellationToken ct)
+    {
+        var chosen = (recipientUserIds ?? []).Distinct().ToArray();
+        if (current is not OemAccountActor || transfer.Direction != TransferDirections.OemToInternal)
+        {
+            if (chosen.Length > 0) throw ApiException.BadRequest("公司发出的传递单不需要选择通知人员");
+            return 0;
+        }
+        var candidates = (await OemRecipients.CompanyInternalRecipientsAsync(uow.Db, transfer.OemCompanyId, ct))
+            .Select(candidate => candidate.Id).ToHashSet();
+        if (candidates.Count > 0 && chosen.Length == 0) throw ApiException.BadRequest("请选择要通知的公司人员");
+        if (chosen.Any(userId => !candidates.Contains(userId))) throw ApiException.BadRequest("所选通知人员已不可选，请刷新后重新选择");
+        await uow.Db.OemTransferInternalRecipients.Where(item => item.TransferId == transfer.Id).ExecuteDeleteAsync(ct);
+        uow.Db.OemTransferInternalRecipients.AddRange(chosen.Select(userId => new OemTransferInternalRecipient
+        {
+            TransferId = transfer.Id, UserId = userId,
+        }));
+        return chosen.Length;
     }
 
     /// <summary>Removes an attachment from an unsent draft (content is purged; metadata kept for audit).</summary>

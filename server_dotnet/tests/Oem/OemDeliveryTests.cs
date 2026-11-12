@@ -86,7 +86,7 @@ public sealed class OemDeliveryTests
         var content = OemTestHost.Pdf(new string('d', 4000));
         var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传工装" }, ct).Ok();
         var file = await world.Host.UploadAsync(world.Vendor, TransferId(draft), "fixture.pdf", content, ct);
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        await world.Vendor.VendorSendAsync(TransferId(draft), Version(draft) + 1, ct).Ok();
         await world.Host.RunOemJobsAsync(ct);
         return (TransferId(draft), file.Id(), content);
     }

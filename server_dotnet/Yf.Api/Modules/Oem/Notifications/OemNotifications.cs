@@ -61,6 +61,36 @@ internal static class OemRecipients
             .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName, null)).ToArrayAsync(ct);
     }
 
+    /// <summary>Internal staff who can view and download ODM/OEMA files: by default on every vendor's notification list.</summary>
+    public static Task<MailRecipient[]> InboundCandidatesAsync(YfDbContext db, CancellationToken ct) =>
+        InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
+
+    /// <summary>
+    /// The vendor's notification list as it can be chosen and mailed now: every internal staff member with ODM/OEMA view + download
+    /// and an email, minus those removed from all vendors and those removed from this vendor.
+    /// </summary>
+    public static async Task<MailRecipient[]> CompanyInternalRecipientsAsync(YfDbContext db, ulong companyId, CancellationToken ct)
+    {
+        var excluded = (await db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct))
+            .Concat(await db.OemCompanyRecipientExclusions.AsNoTracking().Where(item => item.OemCompanyId == companyId)
+                .Select(item => item.UserId).ToArrayAsync(ct))
+            .ToHashSet();
+        return (await InboundCandidatesAsync(db, ct))
+            .Where(holder => !excluded.Contains(holder.Id) && !string.IsNullOrWhiteSpace(holder.Email)).ToArray();
+    }
+
+    /// <summary>
+    /// The people the vendor chose to notify for this inbound transfer who are still on its notification list (not removed since,
+    /// still active with ODM/OEMA view + download). Nobody else is mailed about the transfer.
+    /// </summary>
+    public static async Task<MailRecipient[]> TransferInternalRecipientsAsync(YfDbContext db, ulong transferId, ulong companyId, CancellationToken ct)
+    {
+        var chosen = await db.OemTransferInternalRecipients.AsNoTracking().Where(item => item.TransferId == transferId)
+            .Select(item => item.UserId).ToArrayAsync(ct);
+        if (chosen.Length == 0) return [];
+        return (await CompanyInternalRecipientsAsync(db, companyId, ct)).Where(holder => chosen.Contains(holder.Id)).ToArray();
+    }
+
     public static async Task<MailRecipient[]> VendorContactsAsync(
         YfDbContext db, ulong companyId, CancellationToken ct, ulong? preferredAnchorAccountId = null)
     {
@@ -149,10 +179,17 @@ public sealed class OemNotificationHandler(AppOptions options, OemAuditWriter au
             case TransferReleasedEvent:
                 var recipients = transfer.Direction == TransferDirections.InternalToOem
                     ? await OemRecipients.VendorContactsAsync(uow.Db, transfer.OemCompanyId, ct)
-                    : await OemRecipients.InternalWithAllAsync(uow.Db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
-                if (transfer.Direction == TransferDirections.InternalToOem && recipients.Length == 0 && OemMailEvents.Allowed(settings, OemMailEvents.TransferReleased))
-                    await audit.WriteAsync(uow, null, "OEM_EMAIL_SKIPPED_MISSING_EMAIL", "oem_transfer", transfer.Id,
-                        new { eventType = OemMailEvents.TransferReleased, reason = "厂商没有启用的联络人邮箱，通知未入队" }, ct);
+                    : await OemRecipients.TransferInternalRecipientsAsync(uow.Db, transfer.Id, transfer.OemCompanyId, ct);
+                if (recipients.Length == 0 && OemMailEvents.Allowed(settings, OemMailEvents.TransferReleased))
+                    await audit.WriteAsync(uow, null, transfer.Direction == TransferDirections.InternalToOem
+                            ? "OEM_EMAIL_SKIPPED_MISSING_EMAIL" : "OEM_EMAIL_SKIPPED_NO_INTERNAL_RECIPIENT", "oem_transfer", transfer.Id,
+                        new
+                        {
+                            eventType = OemMailEvents.TransferReleased,
+                            reason = transfer.Direction == TransferDirections.InternalToOem
+                                ? "厂商没有启用的联络人邮箱，通知未入队"
+                                : "厂商发送时没有选择可接收的公司人员，通知未入队",
+                        }, ct);
                 foreach (var recipient in recipients)
                     await EnqueueAsync(uow, settings, OemMailEvents.TransferReleased, $"oem:released:{transfer.Id}:{OemRecipients.DedupeRecipient(recipient)}",
                         recipient, facts, $"新文件已送达：{transfer.Title}", "有新的文件传递给您，请登录平台查看和下载。", null, ct);
@@ -320,7 +357,8 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
                 return stillPending ? OutboxDecision.Allow : Stale();
             case OemMailEvents.TransferReleased:
                 if (transfer.Direction != TransferDirections.OemToInternal || transfer.LifecycleStatus != TransferLifecycle.Released) return Stale();
-                var holders = await OemRecipients.InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
+                // Recheck before delivery: still chosen for this transfer and still on the vendor's notification list.
+                var holders = await OemRecipients.TransferInternalRecipientsAsync(db, transfer.Id, transfer.OemCompanyId, ct);
                 return holders.Any(holder => holder.Id == recipientId) ? OutboxDecision.Allow : Stale();
             case OemMailEvents.ApprovalBlocked:
                 var stillBlocked = await db.OemFlowInstances.AnyAsync(instance => instance.TransferId == transferId

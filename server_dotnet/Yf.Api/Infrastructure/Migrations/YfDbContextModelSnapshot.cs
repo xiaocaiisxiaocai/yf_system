@@ -3128,6 +3128,34 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemCompanyRecipientExclusion", b =>
+                {
+                    b.Property<ulong>("OemCompanyId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("oem_company_id");
+
+                    b.Property<ulong>("UserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("user_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.HasKey("OemCompanyId", "UserId");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("idx_oem_company_recipient_exclusions_user");
+
+                    b.ToTable("oem_company_recipient_exclusions", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadLease", b =>
                 {
                     b.Property<string>("Id")
@@ -3920,6 +3948,27 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemInternalRecipientExclusion", b =>
+                {
+                    b.Property<ulong>("UserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("user_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.HasKey("UserId");
+
+                    b.ToTable("oem_internal_recipient_exclusions", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemRefreshToken", b =>
                 {
                     b.Property<ulong>("Id")
@@ -4366,6 +4415,26 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_oem_transfer_files_purge_retry");
 
                     b.ToTable("oem_transfer_files", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemTransferInternalRecipient", b =>
+                {
+                    b.Property<ulong>("TransferId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("transfer_id");
+
+                    b.Property<ulong>("UserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("TransferId", "UserId");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("idx_oem_transfer_internal_recipients_user");
+
+                    b.ToTable("oem_transfer_internal_recipients", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
@@ -4970,6 +5039,23 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasConstraintName("fk_oem_company_contacts_company");
                 });
 
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemCompanyRecipientExclusion", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemCompany", null)
+                        .WithMany()
+                        .HasForeignKey("OemCompanyId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_company_recipient_exclusions_company");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_company_recipient_exclusions_user");
+                });
+
             modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemDownloadLease", b =>
                 {
                     b.HasOne("Yf.Api.Modules.Oem.Data.OemDownloadSession", null)
@@ -5094,6 +5180,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasConstraintName("fk_oem_flow_scopes_template");
                 });
 
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemInternalRecipientExclusion", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_internal_recipient_exclusions_user");
+                });
+
             modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemRefreshToken", b =>
                 {
                     b.HasOne("Yf.Api.Modules.Oem.Data.OemAccount", null)
@@ -5135,6 +5231,23 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_oem_transfer_files_transfer");
+                });
+
+            modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemTransferInternalRecipient", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemTransfer", null)
+                        .WithMany()
+                        .HasForeignKey("TransferId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_transfer_internal_recipients_transfer");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_oem_transfer_internal_recipients_user");
                 });
 
             modelBuilder.Entity("Yf.Api.Modules.Oem.Data.OemUploadSession", b =>

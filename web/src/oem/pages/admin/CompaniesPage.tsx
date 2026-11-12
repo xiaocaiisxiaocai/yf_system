@@ -1,13 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
+  Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import { oemRequestError } from '../../api/requestError'
-import type { Company, CompanyContact, VendorAccount } from '../../api/types'
+import type { Company, CompanyContact, InternalRecipient, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../../components/ExcelImportDialog'
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../../utils/excelWorkbook'
@@ -77,6 +77,94 @@ interface OemContactImportPayload {
   name: string
   email: string
   sortNo: number
+}
+
+interface InternalRecipientsDrawerProps {
+  /** A vendor's own list, 'all' for removals that apply to every vendor, or null when closed. */
+  target: Company | 'all' | null
+  onClose: () => void
+  onChanged: () => void
+}
+
+/**
+ * A notification list. Everyone with ODM/OEMA view + download is on every vendor's list by default; people removed here
+ * (from all vendors, or from one) are no longer offered to the vendor when it sends files.
+ */
+function InternalRecipientsDrawer({ target, onClose, onChanged }: InternalRecipientsDrawerProps) {
+  const { api } = useOem()
+  const [rows, setRows] = useState<InternalRecipient[]>([])
+  const [keyword, setKeyword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const loadId = useRef(0)
+
+  const load = useCallback(async () => {
+    const current = ++loadId.current
+    if (!target) { setRows([]); setFailed(false); setLoading(false); return }
+    setLoading(true)
+    try {
+      const result = target === 'all' ? await api.allInternalRecipients() : await api.internalRecipients(target.id)
+      if (loadId.current !== current) return
+      setRows(result)
+      setFailed(false)
+    } catch {
+      if (loadId.current === current) setFailed(true)
+    } finally {
+      if (loadId.current === current) setLoading(false)
+    }
+  }, [api, target])
+  useLoadEffect(load)
+
+  const toggle = async (person: InternalRecipient) => {
+    if (!target || busyId !== null) return
+    setBusyId(person.userId)
+    try {
+      const result = target === 'all'
+        ? await api.setRecipientRemovedFromAll(person.userId, !person.removed)
+        : await api.setCompanyRecipientRemoved(target.id, person.userId, !person.removed)
+      loadId.current += 1
+      setRows(result)
+      onChanged()
+    } catch {
+      // The request layer displays the reason.
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const term = keyword.trim().toLowerCase()
+  const shown = rows
+    .filter(person => !term || [person.realName, person.employeeNo, person.departmentName ?? ''].some(value => value.toLowerCase().includes(term)))
+    .sort((a, b) => Number(a.removed) - Number(b.removed))
+  return (
+    <Drawer width="min(760px, 100vw)" title={`可通知人员 · ${target === 'all' ? '全部厂商' : target?.name ?? ''}`} visible={!!target}
+      onCancel={onClose} unmountOnExit footer={<Button onClick={onClose}>关闭</Button>}>
+      {failed && <Alert type="error" style={{ marginBottom: 12 }} content="可通知人员加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
+      <Input.Search allowClear placeholder="姓名、工号或组织" style={{ width: 260, marginBottom: 12 }} value={keyword} onChange={setKeyword} />
+      <ResizableTable tableId="oem-internal-recipients" rowKey="userId" size="small" pagination={false} loading={loading} data={shown}
+        noDataElement={<Empty description="没有具备 ODM/OEMA 查看和下载权限的人员" />}
+        columns={[
+          { title: '姓名', width: 160, render: (_: unknown, person: InternalRecipient) => `${person.realName}（${person.employeeNo}）` },
+          { title: '组织', width: 140, render: (_: unknown, person: InternalRecipient) => person.departmentName ?? '-' },
+          { title: '邮箱', width: 180, render: (_: unknown, person: InternalRecipient) => person.email ?? '-' },
+          {
+            title: '状态', width: 110, render: (_: unknown, person: InternalRecipient) => person.removed
+              ? <Tag>已移除</Tag>
+              : person.canReceive ? <Tag color="green">可通知</Tag> : <Tag color="orange">{person.unavailableReason ?? '无法接收'}</Tag>,
+          },
+          {
+            title: '操作', width: 80, render: (_: unknown, person: InternalRecipient) => (
+              <Button size="mini" type="text" status={person.removed ? undefined : 'danger'} loading={busyId === person.userId}
+                disabled={busyId !== null && busyId !== person.userId} onClick={() => void toggle(person)}>
+                {person.removed ? '恢复' : '移除'}
+              </Button>
+            ),
+          },
+        ]}
+      />
+    </Drawer>
+  )
 }
 
 interface ContactsDrawerProps {
@@ -409,6 +497,7 @@ export default function CompaniesPage() {
   const [saving, setSaving] = useState(false)
   const [accountsOf, setAccountsOf] = useState<Company | null>(null)
   const [contactsOf, setContactsOf] = useState<Company | null>(null)
+  const [recipientsOf, setRecipientsOf] = useState<Company | 'all' | null>(null)
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [contactImportOpen, setContactImportOpen] = useState(false)
   const [accountExporting, setAccountExporting] = useState(false)
@@ -778,12 +867,14 @@ export default function CompaniesPage() {
     { key: 'status', title: '状态', width: 70, align: 'center' as const, render: (_: unknown, row: Company) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
     {
-      key: 'actions', title: '操作', width: 370, fixed: 'right' as const,
+      key: 'actions', title: '操作', width: 450, fixed: 'right' as const,
       render: (_: unknown, row: Company) => (
         <Space size={4}>
           {can.viewTransfers && <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers?companyId=${row.id}`)}>传递记录</Button>}
           {can.manageAccounts && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号管理</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => setContactsOf(row)}>联络人</Button>}
+          {can.manageCompanies && <Button size="mini" type="text" status={row.internalRecipientCount ? undefined : 'warning'}
+            title={row.internalRecipientCount ? undefined : '无人可通知'} onClick={() => setRecipientsOf(row)}>可通知人员</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
           {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
             onOk={() => toggleCompanyStatus(row)}>
@@ -827,6 +918,7 @@ export default function CompaniesPage() {
             can.manageAccounts && { key: 'accounts', label: '导出账号', loading: accountExporting, onClick: () => void exportAllAccounts() },
             can.manageCompanies && { key: 'contacts', label: '导出联络人', loading: contactExporting, onClick: () => void exportAllContacts() },
           ]} />
+          {can.manageCompanies && <Button onClick={() => setRecipientsOf('all')}>可通知人员</Button>}
           {can.manageCompanies && (
             <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setEditing('new') }}>新增厂商</Button>
           )}
@@ -913,6 +1005,12 @@ export default function CompaniesPage() {
         key={contactsOf?.id ?? 'contacts-closed'}
         company={contactsOf}
         onClose={() => setContactsOf(null)}
+        onChanged={() => void load().catch(() => undefined)}
+      />
+      <InternalRecipientsDrawer
+        key={recipientsOf === 'all' ? 'recipients-all' : recipientsOf?.id ?? 'recipients-closed'}
+        target={recipientsOf}
+        onClose={() => setRecipientsOf(null)}
         onChanged={() => void load().catch(() => undefined)}
       />
     </Card>

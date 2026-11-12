@@ -59,6 +59,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
 function createApi(overrides: Partial<OemApi> = {}): OemApi {
   return {
     departments: vi.fn().mockResolvedValue([]),
+    transferRecipientChoices: vi.fn().mockResolvedValue([]),
     listTransfers: vi.fn().mockResolvedValue({ list: [], total: 0, page: 1, pageSize: 20 }),
     companyOptions: vi.fn().mockResolvedValue([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }]),
     createTransfer: vi.fn().mockResolvedValue(detail(41)),
@@ -256,6 +257,41 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(api.createTransfer).toHaveBeenCalledWith({})
     expect(send).toHaveBeenCalledTimes(1)
     expect(transfer).toHaveBeenCalledTimes(2)
+  })
+
+  it('厂商发件时须从可通知人员中勾选，只把勾选的人交给发送接口', async () => {
+    const user = userEvent.setup()
+    const api = createApi({
+      transferRecipientChoices: vi.fn().mockResolvedValue([{ userId: 51, realName: '王五' }, { userId: 52, realName: '赵六' }]),
+    } as Partial<OemApi>)
+    renderList(api, 'oem')
+
+    await user.click(await screen.findByRole('button', { name: '发送文件' }))
+    const dialog = await screen.findByRole('dialog')
+    await within(dialog).findByText('通知公司人员')
+    await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
+    await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
+    expect(await within(dialog).findByText('请选择要通知的公司人员')).toBeInTheDocument()
+    expect(api.createTransfer).not.toHaveBeenCalled()
+
+    await user.click(within(dialog).getByRole('combobox'))
+    fireEvent.click((await screen.findAllByText('王五')).at(-1)!)
+    await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
+    await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, [51]))
+  })
+
+  it('没有可通知的公司人员时厂商仍可发送，并提示不会邮件提醒', async () => {
+    const user = userEvent.setup()
+    const api = createApi()
+    renderList(api, 'oem')
+
+    await user.click(await screen.findByRole('button', { name: '发送文件' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('没有可通知的公司人员，发送后不会邮件提醒。')).toBeInTheDocument()
+    expect(within(dialog).queryByText('通知公司人员')).not.toBeInTheDocument()
+    await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
+    await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
+    await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, []))
   })
 
   it('草稿创建结果未知时阻止盲目重试，并提示回列表确认', async () => {

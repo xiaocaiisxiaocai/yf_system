@@ -22,8 +22,8 @@ internal static class OemTransferEndpoints
             await s.DeleteAsync(OemActorAccessor.Get(c), id, QueryValues.OptionalUInt64(c.Request, "version"), ct);
             return EmptyResponse.Instance;
         }).Produces<EmptyResponse>();
-        oem.MapPost("/transfers/{id:long}/send", (ulong id, TransferVersionRequest body, HttpContext c, OemTransferService s, CancellationToken ct) =>
-            s.SendAsync(OemActorAccessor.Get(c), id, body.Version, ct)).Produces<OemTransferDetailResponse>();
+        oem.MapPost("/transfers/{id:long}/send", (ulong id, TransferSendRequest body, HttpContext c, OemTransferService s, CancellationToken ct) =>
+            s.SendAsync(OemActorAccessor.Get(c), id, body.Version, ct, body.RecipientUserIds)).Produces<OemTransferDetailResponse>();
         oem.MapPost("/transfers/{id:long}/cancel", (ulong id, CancelTransferRequest body, HttpContext c, OemApprovalService s, CancellationToken ct) =>
             s.CancelAsync(OemActorAccessor.Get(c), id, body, ct)).Produces<OemTransferDetailResponse>();
 

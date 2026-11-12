@@ -306,7 +306,7 @@ public sealed class OemTransferFlowTests
         // Extension whitelist for the inbound direction.
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{id}/uploads/init", new { fileName = "tool.exe", fileSize = 10 }, ct).Status(HttpStatusCode.BadRequest);
         await host.UploadAsync(world.Vendor, id, "process.pdf", OemTestHost.Pdf("process"), ct);
-        var sent = await world.Vendor.PostAsync($"/api/v1/oem/transfers/{id}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        var sent = await world.Vendor.VendorSendAsync(id, Version(draft) + 1, ct).Ok();
         Assert.Equal("NOT_REQUIRED", sent["summary"]!["approvalStatus"]!.GetValue<string>());
 
         // Sealed: internal viewers see metadata only; content is locked until validation finishes.
@@ -447,8 +447,7 @@ public sealed class OemTransferFlowTests
             new { title = "入站不可恢复终止" }, ct).Ok();
         var inboundId = TransferId(inbound);
         await host.UploadAsync(world.Vendor, inboundId, "inbound.pdf", OemTestHost.Pdf("inbound"), ct);
-        var inboundSent = await world.Vendor.PostAsync($"/api/v1/oem/transfers/{inboundId}/send",
-            new { version = Version(inbound) + 1 }, ct).Ok();
+        var inboundSent = await world.Vendor.VendorSendAsync(inboundId, Version(inbound) + 1, ct).Ok();
         await recovery.PostAsync($"/api/v1/oem/transfers/{inboundId}/cancel",
             new { reason = "不应允许终止入站传递", version = Version(inboundSent) }, ct)
             .Status(HttpStatusCode.Conflict);

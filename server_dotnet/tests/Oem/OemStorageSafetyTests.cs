@@ -16,7 +16,7 @@ public sealed class OemStorageSafetyTests
         for (var index = 0; index < count; index++)
             await host.UploadAsync(world.Vendor, id, $"bulk-{index}.pdf", OemTestHost.Pdf("bulk" + index), ct);
         var detail = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{id}/send", new { version = Version(detail) }, ct).Ok();
+        await world.Vendor.VendorSendAsync(id, Version(detail), ct).Ok();
         await host.RunOemJobsAsync(ct);
         await using var conn = await host.OpenAsync(ct);
         return (await conn.QueryAsync<(ulong FileId, string Path)>(
@@ -88,7 +88,7 @@ public sealed class OemStorageSafetyTests
         var transferId = TransferId(draft);
         await host.UploadAsync(world.Vendor, transferId, "restored.pdf", OemTestHost.Pdf("restored"), ct);
         var detail = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version = Version(detail) }, ct).Ok();
+        await world.Vendor.VendorSendAsync(transferId, Version(detail), ct).Ok();
         if (available) await host.RunOemJobsAsync(ct);
         await using var conn = await host.OpenAsync(ct);
         var (fileId, relative) = await conn.QuerySingleAsync<(ulong FileId, string Path)>(

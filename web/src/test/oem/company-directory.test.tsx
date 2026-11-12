@@ -87,6 +87,10 @@ function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
     setAccountStatus: vi.fn(),
     deleteAccount: vi.fn(),
     resetAccountPassword: vi.fn(),
+    internalRecipients: vi.fn().mockResolvedValue([]),
+    setCompanyRecipientRemoved: vi.fn(),
+    allInternalRecipients: vi.fn().mockResolvedValue([]),
+    setRecipientRemovedFromAll: vi.fn(),
     ...overrides,
   }
 }
@@ -113,6 +117,38 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     expect(within(dialog).queryByLabelText('联系电话')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('联系邮箱')).not.toBeInTheDocument()
   })
+  it('可通知人员默认全员：可在单个厂商中移除或恢复，也可一次从全部厂商移除', async () => {
+    const user = userEvent.setup()
+    const person = { userId: 51, employeeNo: 'E051', realName: '王五', departmentName: '采购课', email: 'w@example.invalid', canReceive: true, unavailableReason: null, removed: false }
+    const leader = { userId: 52, employeeNo: 'E052', realName: '赵六', departmentName: '采购部', email: 'z@example.invalid', canReceive: true, unavailableReason: null, removed: false }
+    const setCompanyRecipientRemoved = vi.fn().mockResolvedValue([person, { ...leader, removed: true }])
+    const setRecipientRemovedFromAll = vi.fn().mockResolvedValue([person, { ...leader, removed: true }])
+    renderDirectory(baseApi({
+      internalRecipients: vi.fn().mockResolvedValue([person, leader]),
+      setCompanyRecipientRemoved,
+      allInternalRecipients: vi.fn().mockResolvedValue([person, leader]),
+      setRecipientRemovedFromAll,
+    }), ['oem:company_manage'])
+
+    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
+    const open = within(row).getByRole('button', { name: '可通知人员' })
+    expect(open).toHaveAttribute('title', '无人可通知')
+    await user.click(open)
+    let drawer = document.querySelector<HTMLElement>('.arco-drawer')!
+    const leaderRow = (await within(drawer).findByText('赵六（E052）')).closest('tr')!
+    await user.click(within(leaderRow).getByRole('button', { name: '移除' }))
+    await waitFor(() => expect(setCompanyRecipientRemoved).toHaveBeenCalledWith(7, 52, true))
+    expect(await within(drawer).findByText('已移除')).toBeInTheDocument()
+    expect(within(drawer).getByRole('button', { name: '恢复' })).toBeInTheDocument()
+    await user.click(within(drawer).getByRole('button', { name: '关闭' }))
+
+    await user.click(screen.getAllByRole('button', { name: '可通知人员' }).find(button => !button.closest('tr'))!)
+    drawer = (await screen.findByText('可通知人员 · 全部厂商')).closest<HTMLElement>('.arco-drawer')!
+    const allRow = (await within(drawer).findByText('赵六（E052）')).closest('tr')!
+    await user.click(within(allRow).getByRole('button', { name: '移除' }))
+    await waitFor(() => expect(setRecipientRemovedFromAll).toHaveBeenCalledWith(52, true))
+  })
+
   it('账号和联络人 Excel 批量入口位于 ODM/OEMA 厂商总表页', async () => {
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
 

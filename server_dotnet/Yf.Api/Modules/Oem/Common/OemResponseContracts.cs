@@ -18,7 +18,25 @@ public sealed record OemCompanyListItemResponse(
     DateTime UpdatedAt,
     long AccountCount,
     long ActiveAccountCount,
-    long ContactCount);
+    long ContactCount,
+    long InternalRecipientCount);
+
+/// <summary>A person a vendor may choose to notify when sending files: name only, no employee number.</summary>
+public sealed record OemRecipientChoiceResponse(ulong UserId, string RealName);
+
+/// <summary>
+/// An internal staff member on a notification list (everyone with ODM/OEMA view + download is on it by default).
+/// <c>Removed</c> marks someone taken off the list; <c>CanReceive</c> is false when they would get no mail (no email).
+/// </summary>
+public sealed record OemInternalRecipientResponse(
+    ulong UserId,
+    string EmployeeNo,
+    string RealName,
+    string? DepartmentName,
+    string? Email,
+    bool CanReceive,
+    string? UnavailableReason,
+    bool Removed);
 
 public sealed record OemCompanyResponse(
     ulong Id,

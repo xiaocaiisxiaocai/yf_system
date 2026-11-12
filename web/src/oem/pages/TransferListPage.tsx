@@ -11,6 +11,8 @@ import { downloadOemFile } from '../components/downloadOemFile'
 import OemFilePreview from '../components/OemFilePreview'
 import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
+import RecipientChoiceSelect from '../components/RecipientChoiceSelect'
+import { useRecipientChoices } from '../components/useRecipientChoices'
 import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTags'
 import { LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
 import Counterpart from '../components/Counterpart'
@@ -57,6 +59,8 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   const [recipientBlocked, setRecipientBlocked] = useState<string | null>(null)
   const [discarding, setDiscarding] = useState(false)
   const beginCompanyRequest = useLatestRequest()
+  const recipientChoices = useRecipientChoices()
+  const choices = recipientChoices.data ?? []
 
   const loadCompanyOptions = useCallback(async (): Promise<CompanyOption[]> => {
     const isLatest = beginCompanyRequest()
@@ -119,6 +123,13 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         if (leaveFinishedDraft(current)) return
       }
       let oemCompanyId: number | undefined
+      // A vendor names the company staff to notify; when nobody can be notified it may still send (no mail).
+      let recipientUserIds: number[] | undefined
+      if (realm === 'oem') {
+        const values = await form.validate().catch(() => null) as { recipientUserIds?: number[] } | null
+        if (!values) return
+        recipientUserIds = values.recipientUserIds ?? []
+      }
       if (realm === 'internal') {
         oemCompanyId = (await form.validate() as { oemCompanyId: number }).oemCompanyId
         // A draft can stay open while its recipient account is disabled. Refresh
@@ -160,7 +171,9 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       const latest = await api.transfer(activeDraftId)
       if (leaveFinishedDraft(latest)) return
       try {
-        const submitted = await api.send(activeDraftId, latest.summary.version)
+        const submitted = recipientUserIds
+          ? await api.send(activeDraftId, latest.summary.version, recipientUserIds)
+          : await api.send(activeDraftId, latest.summary.version)
         const lifecycle = submitted.summary.lifecycleStatus
         if (lifecycle !== 'SEALED' && lifecycle !== 'RELEASED') {
           leaveFinishedDraft(submitted)
@@ -308,6 +321,19 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
                 onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
             </Space>
           )} />
+        )}
+        {realm === 'oem' && choices.length > 0 && (
+          <Form.Item field="recipientUserIds" label="通知公司人员"
+            rules={[{ required: true, type: 'array', minLength: 1, message: '请选择要通知的公司人员' }]}>
+            <RecipientChoiceSelect choices={choices} disabled={busy} />
+          </Form.Item>
+        )}
+        {realm === 'oem' && recipientChoices.isSuccess && choices.length === 0 && (
+          <Alert type="info" style={{ marginBottom: 12 }} content="没有可通知的公司人员，发送后不会邮件提醒。" />
+        )}
+        {realm === 'oem' && recipientChoices.isError && (
+          <Alert type="error" style={{ marginBottom: 12 }} content="可通知人员加载失败"
+            action={<Button size="small" onClick={() => void recipientChoices.refetch()}>重试</Button>} />
         )}
         <Form.Item label="文件" required>
           <OemUploader ref={uploader} deferred disabled={busy} onQueueChange={setFileCount} />

@@ -72,7 +72,7 @@ public sealed class OemDirectoryRulesTests
             .Status(HttpStatusCode.Conflict, 40901);
         Assert.Contains("1 个进行中的传递单", refused.Json!["message"]!.GetValue<string>());
 
-        inbound = await world.Vendor.PostAsync($"/api/v1/oem/transfers/{inboundId}/send", new { version = Version(inbound) }, ct).Ok();
+        inbound = await world.Vendor.VendorSendAsync(inboundId, Version(inbound), ct).Ok();
         Assert.Equal("SEALED", inbound["summary"]!["lifecycleStatus"]!.GetValue<string>());
         refused = await world.Admin.PutAsync($"/api/v1/oem/companies/{world.CompanyId}/status", new { status = "DISABLED" }, ct)
             .Status(HttpStatusCode.Conflict, 40901);

@@ -567,6 +567,7 @@ export interface OemCompanyListItemResponse {
   accountCount: number
   activeAccountCount: number
   contactCount: number
+  internalRecipientCount: number
 }
 
 export interface OemCompanyOptionResponse {
@@ -670,6 +671,17 @@ export interface OemImportRowResult {
   message: string | null
 }
 
+export interface OemInternalRecipientResponse {
+  userId: number
+  employeeNo: string
+  realName: string
+  departmentName: string | null
+  email: string | null
+  canReceive: boolean
+  unavailableReason: string | null
+  removed: boolean
+}
+
 export interface OemInternalUserOptionResponse {
   id: number
   employeeNo: string
@@ -751,6 +763,15 @@ export interface OemPersonRefResponse {
   id: number
   employeeNo: string
   realName: string
+}
+
+export interface OemRecipientChoiceResponse {
+  userId: number
+  realName: string
+}
+
+export interface OemRecipientRemovalRequest {
+  removed: boolean
 }
 
 export interface OemRetentionTemplateResponse {
@@ -1769,13 +1790,14 @@ export interface TransferCreate {
   oemCompanyId?: number | null
 }
 
+export interface TransferSendRequest {
+  version?: number | null
+  recipientUserIds?: Array<number> | null
+}
+
 export interface TransferUpdate {
   title?: string | null
   description?: string | null
-  version?: number | null
-}
-
-export interface TransferVersionRequest {
   version?: number | null
 }
 
@@ -1967,6 +1989,8 @@ export interface ApiResponses {
   "GET /oem/companies/{id}/contacts": Array<OemCompanyContactResponse>
   "POST /oem/companies/{id}/contacts": OemCompanyContactResponse
   "POST /oem/companies/{id}/contacts/import": OemImportResponse
+  "GET /oem/companies/{id}/internal-recipients": Array<OemInternalRecipientResponse>
+  "PUT /oem/companies/{id}/internal-recipients/{userId}": Array<OemInternalRecipientResponse>
   "PUT /oem/companies/{id}/status": OemCompanyResponse
   "PUT /oem/company-contacts/{id}": OemCompanyContactResponse
   "PUT /oem/company-contacts/{id}/status": OemCompanyContactResponse
@@ -1987,6 +2011,8 @@ export interface ApiResponses {
   "PUT /oem/flow-templates/{id}/definition": OemFlowTemplateResponse
   "PUT /oem/flow-templates/{id}/nodes": OemFlowTemplateResponse
   "PUT /oem/flow-templates/{id}/scopes": OemFlowTemplateResponse
+  "GET /oem/internal-recipients": Array<OemInternalRecipientResponse>
+  "PUT /oem/internal-recipients/{userId}": Array<OemInternalRecipientResponse>
   "GET /oem/internal-user-options": Array<OemInternalUserOptionResponse>
   "GET /oem/notify-policies": Array<OemSettingResponse>
   "PUT /oem/notify-policies": Array<OemSettingResponse>
@@ -1994,6 +2020,7 @@ export interface ApiResponses {
   "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
   "POST /oem/retention-templates": OemRetentionTemplateResponse
   "PUT /oem/retention-templates/{id}": OemRetentionTemplateResponse
+  "GET /oem/transfer-recipient-choices": Array<OemRecipientChoiceResponse>
   "GET /oem/transfers": OemPageResponseOfOemTransferSummaryResponse
   "POST /oem/transfers": OemTransferDetailResponse
   "DELETE /oem/transfers/{id}": EmptyResponse
