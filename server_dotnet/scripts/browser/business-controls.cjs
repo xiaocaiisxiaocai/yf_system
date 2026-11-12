@@ -113,6 +113,7 @@ async function choose(page, placeholder, optionName) {
       if (index === 0) {
         await api(supplierContext, 'POST', '/projects/' + project.id + '/messages', {
           content: messageText,
+          signerName: '浏览器测试签名',
         }, supplierToken);
       }
       pendingProjects.push(project);

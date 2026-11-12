@@ -140,8 +140,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
       };
       page.on('request', countDashboard);
       await page.goto(s.base + '/');
-      await page.getByText('暂无可用功能，请联系管理员', { exact: true }).waitFor();
-      await page.getByText('工作台不可用', { exact: true }).waitFor();
+      await page.getByRole('heading', { name: '暂未开通功能权限', exact: true }).waitFor();
       assert.equal(dashboardRequests, 0, 'no dashboard API without dashboard menu');
       assert.equal(await page.getByRole('button', { name: '打开导航菜单', exact: true }).count(), 0);
       await page.getByRole('button', { name: '账号菜单：' + noMenu.realName, exact: true }).click();
@@ -240,7 +239,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
       await denied;
       await refreshedProfile;
       await page.waitForURL(s.base + '/');
-      await page.getByText('暂无可用功能，请联系管理员', { exact: true }).waitFor();
+      await page.getByRole('heading', { name: '暂未开通功能权限', exact: true }).waitFor();
       assert.equal(await page.getByRole('menuitem', { name: '用户管理', exact: true }).count(), 0);
       assert.equal(await page.getByRole('heading', { name: '用户管理', exact: true }).count(), 0);
       await api(revokeContext, 'GET', '/admin/users', undefined, revokeAuth.accessToken, 403);

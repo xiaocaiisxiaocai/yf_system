@@ -27,8 +27,8 @@ const {
         await page.getByRole('tab', { name: tab, exact: true }).waitFor();
       }
       await page.getByRole('tab', { name: 'Robot 料号', exact: true }).click();
-      await page.getByRole('columnheader', { name: 'Robot 厂商', exact: true }).waitFor();
-      await page.getByRole('columnheader', { name: 'Robot 型号', exact: true }).waitFor();
+      await page.getByRole('columnheader', { name: /Robot 厂商/ }).first().waitFor();
+      await page.getByRole('columnheader', { name: /Robot 型号/ }).first().waitFor();
     });
 
     const partNumber = 'BROWSER-' + suffix.toUpperCase();

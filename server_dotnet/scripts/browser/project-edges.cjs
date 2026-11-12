@@ -103,9 +103,11 @@ function updatePayload(current, overrides) {
         await toolbar.locator('.arco-select').nth(position).click();
         await page.getByRole('option', { name: label, exact: true }).click();
       });
-      const state = await choose(0, '进行中', { keyword: prefix, status: 'IN_PROGRESS', page: 1 });
+      // 状态已改为列表上方的页签；厂商下拉是工具栏里的第一个选择框。
+      const state = await listAction({ keyword: prefix, status: 'IN_PROGRESS', page: 1 },
+        () => page.getByRole('tab', { name: '进行中', exact: true }).click());
       assert.equal(state.total, 13); assert(state.list.every(item => item.status === 'IN_PROGRESS'));
-      const supplier = await choose(2, f.suppliers.b.name, {
+      const supplier = await choose(0, f.suppliers.b.name, {
         keyword: prefix, supplierId: f.suppliers.b.id, status: 'IN_PROGRESS', page: 1,
       });
       assert.equal(supplier.total, 1); assert.equal(supplier.list[0].id, projects[11].id);
@@ -344,8 +346,7 @@ function updatePayload(current, overrides) {
       ];
       for (const [status, label, expectedIds] of expectedStatuses) {
         const data = await listAction({ keyword: statusPrefix, status, page: 1 }, async () => {
-          await page.locator('.page-toolbar .arco-select').first().click();
-          await page.getByRole('option', { name: label, exact: true }).click();
+          await page.getByRole('tab', { name: label, exact: true }).click();
         });
         assert.equal(data.total, expectedIds.length);
         assert.deepEqual(new Set(data.list.map(item => item.id)), new Set(expectedIds));

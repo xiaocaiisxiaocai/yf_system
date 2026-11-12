@@ -43,6 +43,8 @@ async function initUpload(
     fileSize: bytes.length,
     fileLastModified,
     fileFingerprint: fileFingerprint(fileName, bytes, fileLastModified),
+    // 供应商上传必须带自由填写的签名；内部账号忽略该字段。
+    signerName: '浏览器测试签名',
   }, token);
   try {
     return (await request()).json();

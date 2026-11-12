@@ -242,7 +242,8 @@ async function assertInsideViewport(locator, page, label) {
       const name = prefix + '-prestart-close.zip';
       let uploadRequests = 0;
       const countUpload = request => {
-        if (pathOf(request).startsWith('/api/v1/uploads/')) uploadRequests += 1;
+        // 读取格式白名单只是查询规则，不创建上传会话。
+        if (pathOf(request).startsWith('/api/v1/uploads/') && !pathOf(request).endsWith('/allowed-extensions')) uploadRequests += 1;
       };
       page.on('request', countUpload);
       try {

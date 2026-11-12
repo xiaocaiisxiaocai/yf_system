@@ -125,7 +125,7 @@ async function chooseNotificationTab(drawer, name) {
     const supplierToken = supplierAuth.accessToken;
     const supplierContacts = await json(
       adminContext, adminToken, 'GET', `/admin/suppliers/${f.suppliers.a.id}/contacts`);
-    supplierSigner = supplierContacts.find(item => item.status === 'ACTIVE')?.name ?? null;
+    supplierSigner = supplierContacts.find(item => item.status === 'ACTIVE')?.name ?? '浏览器测试签名';
     const marker = crypto.randomBytes(5).toString('hex');
     const project = await createProjectGroup(
       adminContext, adminToken, f.suppliers.a.id, '协作联动-' + marker);

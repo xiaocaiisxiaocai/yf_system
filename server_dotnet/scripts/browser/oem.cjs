@@ -474,6 +474,15 @@ async function openReleasedFile(page, url, fileName) {
       const modal = visibleModal(page);
       await modal.getByLabel('选择文件', { exact: true }).setInputFiles(inbound);
       await modal.getByText(inboundName, { exact: true }).waitFor();
+      // 厂商回传必须自由填写签名，不再要求是已录入的联络人。
+      await modal.getByLabel('签名', { exact: true }).fill('浏览器厂商签名');
+      // 通知人员必须显式选择：打开下拉后选第一位可通知人员（没有可选人员时该表单项不出现）。
+      const notify = modal.getByLabel('通知公司人员', { exact: true });
+      if (await notify.count()) {
+        await notify.click();
+        await page.getByRole('option').first().click();
+        await page.keyboard.press('Escape');
+      }
       const sent = await action(page, '/send', 'POST',
         () => modal.getByRole('button', { name: '发送文件', exact: true }).click());
       assert.equal(sent.summary.direction, 'OEM_TO_INTERNAL');
@@ -505,6 +514,65 @@ async function openReleasedFile(page, url, fileName) {
       await downloadRow(page, row, received);
       assert.equal(sha(received), sha(inbound));
       await page.screenshot({ path: OUT + '/oem-internal-inbound.png', fullPage: true });
+    });
+
+    await record('厂商门户选择不支持的格式时当场拒绝，不创建传递单或上传会话', async () => {
+      const page = portal.page;
+      await page.goto(s.base + '/oem-portal/transfers');
+      const writes = [];
+      const watch = request => {
+        const url = new URL(request.url());
+        if (request.method() !== 'GET' && url.pathname.startsWith('/api/v1/oem/') && !url.pathname.startsWith('/api/v1/oem/auth/')) writes.push(request.method() + ' ' + url.pathname);
+      };
+      page.on('request', watch);
+      try {
+        await page.getByRole('button', { name: '发送文件', exact: true }).click();
+        const modal = visibleModal(page);
+        await modal.getByLabel('选择文件', { exact: true }).setInputFiles({
+          name: 'unsupported-' + marker + '.exe', mimeType: 'application/octet-stream', buffer: Buffer.from('MZ'),
+        });
+        await page.getByText(/不支持的文件格式|不支持.*格式/).first().waitFor();
+        assert.equal(await modal.getByText('unsupported-' + marker + '.exe', { exact: true }).count(), 0, 'rejected file must not be queued');
+        assert.deepEqual(writes, [], 'no transfer or upload session may be created: ' + writes.join(', '));
+        await page.screenshot({ path: OUT + '/oem-unsupported-format.png' });
+        await page.keyboard.press('Escape');
+      } finally {
+        page.off('request', watch);
+      }
+    });
+
+    await record('厂商传递单列表：发送人列头筛选带上参数并只留下匹配的行', async () => {
+      const page = portal.page;
+      await page.goto(s.base + '/oem-portal/transfers');
+      await page.getByRole('link', { name: inboundName, exact: true }).waitFor();
+      await page.getByRole('columnheader', { name: /发送人/ }).locator('.arco-table-filters').click();
+      const input = page.getByLabel('筛选发送人', { exact: true });
+      const filtered = page.waitForResponse(r => {
+        const url = new URL(r.url());
+        return url.pathname === '/api/v1/oem/transfers' && url.searchParams.get('sender') === '不存在的发送人-' + marker;
+      });
+      await input.fill('不存在的发送人-' + marker);
+      await input.press('Enter');
+      const body = await (await filtered).json();
+      assert.equal(body.total, 0);
+      await page.getByRole('link', { name: inboundName, exact: true }).waitFor({ state: 'hidden' });
+    });
+
+    await record('厂商传递单列表：勾选多行批量下载，每个文件各发起一次下载', async () => {
+      const page = portal.page;
+      await page.goto(s.base + '/oem-portal/transfers');
+      await page.getByRole('link', { name: inboundName, exact: true }).waitFor();
+      const rows = page.locator('tbody tr').filter({ has: page.getByRole('checkbox') });
+      const count = Math.min(await rows.count(), 2);
+      assert(count >= 1, 'need at least one selectable transfer');
+      const sessions = [];
+      page.on('response', r => { if (/\/api\/v1\/oem\/files\/\d+\/download-sessions$/.test(new URL(r.url()).pathname)) sessions.push(r.status()); });
+      for (let i = 0; i < count; i += 1) await rows.nth(i).getByRole('checkbox').locator('..').click();
+      assert.equal(new URL(page.url()).pathname, '/oem-portal/transfers', 'checking a row must not open the detail');
+      await page.getByRole('button', { name: new RegExp('批量下载（' + count + '）') }).click();
+      await page.waitForResponse(r => /\/download-sessions$/.test(new URL(r.url()).pathname), { timeout: 30000 });
+      await page.waitForTimeout(1500);
+      assert(sessions.length >= count && sessions.every(status => status === 200 || status === 201), 'every selected file starts a download session: ' + sessions.join(','));
     });
   } catch (error) {
     if (lastPage) {

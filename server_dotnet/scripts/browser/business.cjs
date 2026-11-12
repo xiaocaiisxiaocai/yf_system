@@ -82,6 +82,9 @@ async function upload(page, projectId, file) {
   await page.getByRole('tab', { name: '文件', exact: true }).click();
   await page.getByRole('button', { name: '上传文件', exact: true }).click();
   await page.getByLabel('选择上传文件').setInputFiles(files);
+  // 供应商上传必须自由填写签名（不再匹配联络人）；内部账号没有该输入框。
+  const signature = page.getByLabel('签名', { exact: true });
+  if (await signature.count()) await signature.fill('浏览器测试签名');
   const result = await action(
     page,
     '/merge',
@@ -255,6 +258,7 @@ async function preview(page, name, kind, label) {
         await vendor.getByText(text, { exact: true }).waitFor();
         const response = key + '公司供应商自动验收回复';
         await vendor.getByPlaceholder('输入留言，Ctrl+Enter 发送').fill(response);
+        await vendor.getByLabel('签名', { exact: true }).fill('浏览器测试签名');
         await action(vendor, '/projects/' + project.id + '/messages', 'POST',
           () => vendor.getByRole('button', { name: '发送', exact: true }).click());
         await internal.reload();
