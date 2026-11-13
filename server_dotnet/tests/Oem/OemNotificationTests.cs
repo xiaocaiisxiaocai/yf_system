@@ -194,6 +194,37 @@ public sealed class OemNotificationTests
     }
 
     [Fact(Timeout = 240_000)]
+    public async Task InternalStaffWithoutEmailCanStillBeChosenAndReceiveInboundFilesJustWithoutMail()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var noMail = await host.CreateInternalUserAsync("zp_nomail", "NoMail#2026xx", ["oem:transfer_view", "oem:file_download"], world.Org.Section, ct);
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE users SET email='' WHERE id=@noMail", new { noMail });
+
+        // Listed for the vendor to choose even though no mail can reach them.
+        var choices = (await world.Vendor.GetAsync("/api/v1/oem/transfer-recipient-choices", ct).Ok()).AsArray()
+            .Select(item => item!["userId"]!.GetValue<ulong>()).ToArray();
+        Assert.Contains(noMail, choices);
+
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "无邮箱接收人" }, ct).Ok();
+        var id = TransferId(draft);
+        await host.UploadAsync(world.Vendor, id, "in.pdf", OemTestHost.Pdf("nm"), ct);
+        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{id}/send",
+            new { version = Version(draft) + 1, recipientUserIds = new[] { noMail }, signerName = world.Vendor.Signer }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
+
+        // They receive (see and open) the transfer, but no release mail is queued for anyone.
+        var client = await host.LoginInternalAsync("zp_nomail", "NoMail#2026xx", ct);
+        var visible = (await client.GetAsync("/api/v1/oem/transfers", ct).Ok())["list"]!.AsArray().Select(item => item!.Id()).ToArray();
+        Assert.Contains(id, visible);
+        await client.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
+        Assert.DoesNotContain(await MailsAsync(host, ct), mail => mail.EventType == OemMailEvents.TransferReleased
+            && mail.DedupeKey?.StartsWith($"oem:released:{id}:", StringComparison.Ordinal) == true);
+    }
+
+    [Fact(Timeout = 240_000)]
     public async Task InboundFilesMailOnlyThePeopleTheVendorChoseFromItsList()
     {
         var ct = TestContext.Current.CancellationToken;

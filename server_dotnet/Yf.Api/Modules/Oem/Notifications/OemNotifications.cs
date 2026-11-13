@@ -66,26 +66,27 @@ internal static class OemRecipients
         InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
 
     /// <summary>
-    /// The notification list as it can be chosen and mailed now (one list for every vendor): every internal staff member with
-    /// ODM/OEMA view + download and an email, minus those an administrator removed.
+    /// The list a vendor can choose from (one list for every vendor): every internal staff member with ODM/OEMA view + download,
+    /// minus those an administrator removed. A person without an email can still be chosen and receives the transfer;
+    /// they simply get no mail (<see cref="TransferInternalRecipientsAsync"/> keeps only those with an email).
     /// </summary>
     public static async Task<MailRecipient[]> InboundRecipientsAsync(YfDbContext db, CancellationToken ct)
     {
         var removed = (await db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct)).ToHashSet();
-        return (await InboundCandidatesAsync(db, ct))
-            .Where(holder => !removed.Contains(holder.Id) && !string.IsNullOrWhiteSpace(holder.Email)).ToArray();
+        return (await InboundCandidatesAsync(db, ct)).Where(holder => !removed.Contains(holder.Id)).ToArray();
     }
 
     /// <summary>
     /// The people the vendor chose to notify for this inbound transfer who are still on the list (not removed since,
-    /// still active with ODM/OEMA view + download). Nobody else is mailed about the transfer.
+    /// still active with ODM/OEMA view + download) and have an email. Nobody else is mailed about the transfer.
     /// </summary>
     public static async Task<MailRecipient[]> TransferInternalRecipientsAsync(YfDbContext db, ulong transferId, CancellationToken ct)
     {
         var chosen = await db.OemTransferInternalRecipients.AsNoTracking().Where(item => item.TransferId == transferId)
             .Select(item => item.UserId).ToArrayAsync(ct);
         if (chosen.Length == 0) return [];
-        return (await InboundRecipientsAsync(db, ct)).Where(holder => chosen.Contains(holder.Id)).ToArray();
+        return (await InboundRecipientsAsync(db, ct))
+            .Where(holder => chosen.Contains(holder.Id) && !string.IsNullOrWhiteSpace(holder.Email)).ToArray();
     }
 
     public static async Task<MailRecipient[]> VendorContactsAsync(
