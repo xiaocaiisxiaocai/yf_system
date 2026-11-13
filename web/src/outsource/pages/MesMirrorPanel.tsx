@@ -19,8 +19,8 @@ const validPage = (value: number | undefined) => Number.isInteger(value) && (val
 
 const PREVIEW_COLUMNS = [
   { title: '工令', dataIndex: 'workOrderNo', width: 130 },
-  { title: '客户', dataIndex: 'customerName', width: 240, ellipsis: true },
-  { title: '机型', dataIndex: 'deviceModels', width: 160, ellipsis: true },
+  { title: '客户', dataIndex: 'customerName', width: 300, ellipsis: true },
+  { title: '机型', dataIndex: 'deviceModels', width: 260, ellipsis: true },
 ]
 
 /** IPMS (its MES monitoring module) connection, daily fetch time and manual fetches, on the outsourcing settings page. */
@@ -173,14 +173,14 @@ export default function MesMirrorPanel() {
       { label: '最近一次', value: `${fmtTime(status.lastFinishedAt)}（${trigger}）` },
       { label: '结果', value: status.lastError ? <span className="outsource-sync-error">{status.lastError}</span> : `共 ${status.lastCount} 笔` },
     ]} />
-    <Modal title="确认抓取结果" visible={pending} closable={false} maskClosable={false} escToExit={false} unmountOnExit
+    <Modal title="确认抓取结果" style={{ width: 760, maxWidth: 'calc(100vw - 32px)' }} visible={pending} closable={false} maskClosable={false} escToExit={false} unmountOnExit
       footer={<Space>
         <Button disabled={working} onClick={() => void confirm(false)}>放弃，保留现有数据</Button>
         <Button type="primary" disabled={working} onClick={() => void confirm(true)}>合并已抓部分</Button>
       </Space>}>
       <p>已抓取 {status.fetched} 笔（{pendingText}）。合并会更新或新增这些工令，不会删除已有的其他工令。</p>
       <ResizableTable<PreviewRow> tableId="outsource-mes-preview" size="small" rowKey="workOrderNo" data={status.preview}
-        pagination={false} columns={PREVIEW_COLUMNS} scroll={{ x: 530, y: 260 }} />
+        pagination={false} columns={PREVIEW_COLUMNS} scroll={{ x: 690, y: 400 }} />
     </Modal>
   </section>
 }
