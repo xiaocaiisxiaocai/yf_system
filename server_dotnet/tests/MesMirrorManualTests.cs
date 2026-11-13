@@ -458,6 +458,22 @@ public sealed class MesMirrorManualTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task TheDailyFetchCanBeStoppedAndStartedAgain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_schedule_switch", 2, ct);
+        await using var _ = f.Database;
+        Assert.True((await f.Service.SettingsAsync(f.Admin, ct)).ScheduleEnabled);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SetScheduleAsync(f.Viewer, new(false), ct))).Status);
+
+        Assert.False((await f.Service.SetScheduleAsync(f.Admin, new(false), ct)).ScheduleEnabled);
+        await f.Service.SetScheduleAsync(f.Admin, new(false), ct); // unchanged: no second audit entry
+        Assert.True((await f.Service.SetScheduleAsync(f.Admin, new(true), ct)).ScheduleEnabled);
+        await using var connection = await f.Database.Database.OpenAsync(ct);
+        Assert.Equal(2, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM audit_logs WHERE action='OUTSOURCE_MES_MIRROR_SCHEDULE'"));
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task ConfirmWithoutAPendingResultIsRejected()
     {
         var ct = TestContext.Current.CancellationToken;

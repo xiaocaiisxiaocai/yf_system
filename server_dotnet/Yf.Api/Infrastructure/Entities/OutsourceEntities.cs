@@ -123,6 +123,8 @@ public sealed class OutsourceSyncState
     public int LastChanged { get; set; }
     public int LastClosed { get; set; }
     public int LastMissing { get; set; }
+    /// <summary>Whether the daily update of the outsourcing list runs; a manual sync works either way.</summary>
+    public bool ScheduleEnabled { get; set; } = true;
 }
 
 /// <summary>One changed field of an outsourcing item: IPMS sync or a purchasing edit. Kept with the item.</summary>
@@ -335,6 +337,7 @@ public sealed class OutsourceSyncStateConfig : IEntityTypeConfiguration<Outsourc
         b.HasKey(x => x.Id);
         b.Property(x => x.Id).ValueGeneratedNever();
         b.Property(x => x.SyncTime).HasColumnName("sync_time").HasMaxLength(5).IsRequired().HasDefaultValue("02:00");
+        b.Property(x => x.ScheduleEnabled).HasColumnName("schedule_enabled").HasDefaultValue(true);
         b.Property(x => x.ScheduledFor).HasColumnName("scheduled_for").HasColumnType("date");
         b.Property(x => x.LeaseUntil).HasColumnName("lease_until").HasColumnType("datetime(3)");
         b.Property(x => x.LastStartedAt).HasColumnName("last_started_at").HasColumnType("datetime(3)");

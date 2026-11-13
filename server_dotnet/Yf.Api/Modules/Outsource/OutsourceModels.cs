@@ -55,11 +55,14 @@ public sealed record OutsourceBatchResponse(OutsourceItemResponse[] Items);
 
 public sealed record OutsourceSyncTimeRequest(string? SyncTime);
 
+/// <summary>Starts (<c>true</c>) or stops (<c>false</c>) a daily scheduled task; manual runs work either way.</summary>
+public sealed record ScheduleSwitchRequest(bool Enabled);
+
 /// <summary>Manual sync: the given open items, or every open item when none are given.</summary>
 public sealed record OutsourceSyncRequest(ulong[]? ItemIds);
 
 public sealed record OutsourceSyncStatusResponse(
-    string SyncTime, bool IpmsConfigured, bool Running, DateTime? LastStartedAt, DateTime? LastFinishedAt,
+    string SyncTime, bool ScheduleEnabled, bool IpmsConfigured, bool Running, DateTime? LastStartedAt, DateTime? LastFinishedAt,
     DateTime? LastSuccessAt, string? LastError, string? LastTrigger, int LastProcessed, int LastChanged, int LastClosed, int LastMissing);
 
 public sealed record OutsourceItemChangeResponse(

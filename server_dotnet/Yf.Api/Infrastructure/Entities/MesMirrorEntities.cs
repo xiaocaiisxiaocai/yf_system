@@ -50,6 +50,8 @@ public sealed class MesMirrorState
     public string? ProtectedPassword { get; set; }
     /// <summary>Daily fetch time ("HH:mm", UTC+8) set on the page; empty means the configured <c>App:Ipms:MesSyncTime</c>.</summary>
     public string? SyncTime { get; set; }
+    /// <summary>Whether the daily fetch runs; manual fetches work either way.</summary>
+    public bool ScheduleEnabled { get; set; } = true;
 }
 
 public sealed class MesWorkOrderConfig : IEntityTypeConfiguration<MesWorkOrder>
@@ -104,5 +106,6 @@ public sealed class MesMirrorStateConfig : IEntityTypeConfiguration<MesMirrorSta
         b.Property(x => x.Account).HasColumnName("account").HasMaxLength(128);
         b.Property(x => x.ProtectedPassword).HasColumnName("protected_password").HasMaxLength(1024);
         b.Property(x => x.SyncTime).HasColumnName("sync_time").HasMaxLength(5);
+        b.Property(x => x.ScheduleEnabled).HasColumnName("schedule_enabled").HasDefaultValue(true);
     }
 }

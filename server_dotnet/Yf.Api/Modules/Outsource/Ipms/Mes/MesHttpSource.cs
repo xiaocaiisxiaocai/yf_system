@@ -90,13 +90,20 @@ public sealed class MesHttpSource(HttpClient http, IpmsOptions options, IMesSett
             ["usertype"] = 0, ["yzmState"] = 0, ["suffix"] = "",
         };
         var (status, text) = await PostAsync(connection.BaseUrl!, LoginPath, body, null, ct);
-        if (status == HttpStatusCode.OK && TryParse(text, out var root) && Code(root) == 200)
+        if (!TryParse(text, out var root))
+            throw new IpmsUnavailableException($"IPMS 登录接口没有回应（HTTP {(int)status}），请确认地址是接口地址（如 http://主机:6001）");
+        // The IPMS web client reads data.token.token; a plain data.token string is accepted as well.
+        if (status == HttpStatusCode.OK && Code(root) == 200 && root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object
+            && data.TryGetProperty("token", out var token))
         {
-            var value = root.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Object && data.TryGetProperty("token", out var t) ? t
-                : root.TryGetProperty("token", out t) ? t : default;
+            var value = token.ValueKind == JsonValueKind.Object && token.TryGetProperty("token", out var inner) ? inner : token;
             if (value.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(value.GetString())) return value.GetString()!;
         }
-        throw new IpmsUnavailableException("IPMS 登录失败，请检查账号和密码");
+        // IPMS's own reason (such as 账号或密码错误) helps the person fix the settings; it never echoes the password.
+        var reason = root.TryGetProperty("msg", out var msg) && msg.ValueKind == JsonValueKind.String ? msg.GetString()?.Trim() : null;
+        if (!string.IsNullOrEmpty(reason) && !string.IsNullOrEmpty(connection.Password)) reason = reason.Replace(connection.Password, "***", StringComparison.Ordinal);
+        throw new IpmsUnavailableException(string.IsNullOrEmpty(reason) ? "IPMS 登录失败，请检查账号和密码"
+            : $"IPMS 登录失败：{(reason.Length > 100 ? reason[..100] : reason)}");
     }
 
     private async Task<(HttpStatusCode Status, string Body)> PostAsync(string baseUrl, string path, JsonNode body, string? tokenValue, CancellationToken ct)

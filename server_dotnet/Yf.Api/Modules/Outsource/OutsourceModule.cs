@@ -111,8 +111,12 @@ public static class OutsourceModule
         });
         settings.MapPut("/sync-time", (OutsourceSyncTimeRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
             s.SetSyncTimeAsync(AccessService.GetCurrent(c), r, ct));
+        settings.MapPut("/sync-schedule", (ScheduleSwitchRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
+            s.SetScheduleAsync(AccessService.GetCurrent(c), r, ct));
 
         var mirror = endpoints.MapGroup("/api/v1/outsource/mes-mirror");
+        mirror.MapPut("/schedule", (ScheduleSwitchRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.SetScheduleAsync(AccessService.GetCurrent(c), r, ct));
         mirror.MapGet("/status", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.StatusAsync(AccessService.GetCurrent(c), ct));
         mirror.MapPost("/run", (MesMirrorRunRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>

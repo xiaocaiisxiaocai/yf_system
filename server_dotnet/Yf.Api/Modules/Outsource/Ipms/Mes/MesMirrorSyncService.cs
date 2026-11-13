@@ -516,11 +516,32 @@ public sealed class MesMirrorSyncService(
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.ExecuteSqlRawAsync("INSERT IGNORE INTO mes_mirror_state(id) VALUES(1)", ct);
-        var saved = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1).Select(x => new { x.BaseUrl, x.SyncTime }).SingleAsync(ct);
+        var saved = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1)
+            .Select(x => new { x.BaseUrl, x.SyncTime, x.ScheduleEnabled }).SingleAsync(ct);
         var configured = string.IsNullOrWhiteSpace(options.Ipms.MesBaseUrl) ? null : options.Ipms.MesBaseUrl;
         var current = await settings.ConnectionAsync(ct);
         return new(current.BaseUrl ?? "", configured, !string.IsNullOrWhiteSpace(saved.BaseUrl), current.Account,
-            !string.IsNullOrEmpty(current.Password), current.Complete, SyncTimeOf(saved.SyncTime));
+            !string.IsNullOrEmpty(current.Password), current.Complete, SyncTimeOf(saved.SyncTime), saved.ScheduleEnabled);
+    }
+
+    /// <summary>Starts or stops the daily fetch; a fetch already under way finishes, and manual fetches work either way.</summary>
+    public async Task<MesMirrorSettingsResponse> SetScheduleAsync(CurrentUser actor, ScheduleSwitchRequest request, CancellationToken ct)
+    {
+        var actorId = await AuthorizeAsync(actor, ct);
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await context.Database.OpenConnectionAsync(ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT IGNORE INTO mes_mirror_state(id) VALUES(1)", ct);
+        var before = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1).Select(x => x.ScheduleEnabled).SingleAsync(ct);
+        if (before != request.Enabled)
+        {
+            await context.MesMirrorState.Where(x => x.Id == 1).ExecuteUpdateAsync(x => x.SetProperty(r => r.ScheduleEnabled, request.Enabled), ct);
+            await audit.WriteAsync(context.Database.Connection(), null, actorId, "OUTSOURCE_MES_MIRROR_SCHEDULE", "mes_mirror_state", null, new
+            {
+                targetName = "IPMS 定时抓取",
+                changes = AuditChange.OnlyChanged(new AuditChange("scheduleEnabled", "定时任务", before ? "开启" : "停止", request.Enabled ? "开启" : "停止")),
+            }, null, ct);
+        }
+        return await BuildSettingsAsync(ct);
     }
 
     private string SyncTimeOf(string? saved) => string.IsNullOrWhiteSpace(saved) ? options.Ipms.MesSyncTime : saved;
@@ -591,7 +612,8 @@ public sealed class MesMirrorSyncService(
                 if (!(await settings.ConnectionAsync(stoppingToken)).Complete) continue;
                 await context.Database.ExecuteSqlRawAsync("INSERT IGNORE INTO mes_mirror_state(id) VALUES(1)", stoppingToken);
                 var state = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1)
-                    .Select(x => new { x.ScheduledFor, x.SyncTime }).SingleAsync(stoppingToken);
+                    .Select(x => new { x.ScheduledFor, x.SyncTime, x.ScheduleEnabled }).SingleAsync(stoppingToken);
+                if (!state.ScheduleEnabled) continue;
                 var now = await DbClock.UtcNowAsync(context, stoppingToken, 3);
                 if (!OutsourceIpmsSyncService.IsDue(SyncTimeOf(state.SyncTime), state.ScheduledFor, now, out var day)) continue;
                 var outcome = await RunAsync("SCHEDULED", day, stoppingToken);

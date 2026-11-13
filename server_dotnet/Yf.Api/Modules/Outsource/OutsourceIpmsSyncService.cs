@@ -63,6 +63,31 @@ public sealed class OutsourceIpmsSyncService(
         return await StatusAsync(context, ct);
     }
 
+    /// <summary>Starts or stops the daily update; a run already under way finishes, and manual syncs work either way.</summary>
+    public async Task<OutsourceSyncStatusResponse> SetScheduleAsync(CurrentUser actor, ScheduleSwitchRequest request, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        var connection = context.Database.Connection();
+        var tx = context.Database.RequireTransaction();
+        actor = await AccessService.LockActorAsync(connection, tx, actor, ct);
+        AccessService.RequireInternal(actor);
+        await AccessService.RequirePermissionAsync(connection, tx, actor, OutsourcePermissions.Settings, ct);
+        await EnsureRowAsync(context, ct);
+        var before = await context.OutsourceSyncState.AsNoTracking().Where(x => x.Id == 1).Select(x => x.ScheduleEnabled).SingleAsync(ct);
+        if (before != request.Enabled)
+        {
+            await context.OutsourceSyncState.Where(x => x.Id == 1).ExecuteUpdateAsync(s => s.SetProperty(x => x.ScheduleEnabled, request.Enabled), ct);
+            await audit.WriteAsync(connection, tx, actor.Id, "OUTSOURCE_SYNC_SCHEDULE", "outsource_settings", null, new
+            {
+                targetName = "更新外协清单定时任务",
+                changes = AuditChange.OnlyChanged(new AuditChange("scheduleEnabled", "定时任务", before ? "开启" : "停止", request.Enabled ? "开启" : "停止")),
+            }, null, ct);
+        }
+        await transaction.CommitAsync(ct);
+        return await StatusAsync(context, ct);
+    }
+
     /// <summary>Runs a sync now for the selected open items (or all of them) and returns the resulting status.</summary>
     public async Task<OutsourceSyncStatusResponse> SyncNowAsync(CurrentUser actor, OutsourceSyncRequest request, CancellationToken ct)
     {
@@ -247,7 +272,7 @@ public sealed class OutsourceIpmsSyncService(
                 await EnsureRowAsync(context, stoppingToken);
                 var state = await context.OutsourceSyncState.AsNoTracking().SingleAsync(x => x.Id == 1, stoppingToken);
                 var now = await DbClock.UtcNowAsync(context, stoppingToken, 3);
-                if (!IsDue(state.SyncTime, state.ScheduledFor, now, out var day)) continue;
+                if (!state.ScheduleEnabled || !IsDue(state.SyncTime, state.ScheduledFor, now, out var day)) continue;
                 var outcome = await RunAsync("SCHEDULED", null, null, day, stoppingToken);
                 if (outcome is not null)
                     logger.LogInformation("Outsourcing IPMS sync: {Processed} processed, {Changed} changed, {Closed} closed, {Missing} missing, error {Error}.",
@@ -268,7 +293,7 @@ public sealed class OutsourceIpmsSyncService(
         await EnsureRowAsync(context, ct);
         var state = await context.OutsourceSyncState.AsNoTracking().SingleAsync(x => x.Id == 1, ct);
         var now = await DbClock.UtcNowAsync(context, ct, 3);
-        return new(state.SyncTime, await ipms.IsConfiguredAsync(ct), state.LeaseUntil is { } lease && lease > now,
+        return new(state.SyncTime, state.ScheduleEnabled, await ipms.IsConfiguredAsync(ct), state.LeaseUntil is { } lease && lease > now,
             Utc(state.LastStartedAt), Utc(state.LastFinishedAt), Utc(state.LastSuccessAt), state.LastError, state.LastTrigger,
             state.LastProcessed, state.LastChanged, state.LastClosed, state.LastMissing);
     }

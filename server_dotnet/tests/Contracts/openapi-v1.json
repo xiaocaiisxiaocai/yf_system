@@ -8475,6 +8475,45 @@
         }
       }
     },
+    "/api/v1/outsource/settings/sync-schedule": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceSyncStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/items": {
       "get": {
         "tags": [
@@ -9009,6 +9048,45 @@
         "responses": {
           "200": {
             "description": "OK"
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/schedule": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleSwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesMirrorSettingsResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "Error",
@@ -10789,6 +10867,7 @@
           "configBaseUrl",
           "passwordSet",
           "saved",
+          "scheduleEnabled",
           "syncTime"
         ],
         "type": "object",
@@ -10814,6 +10893,9 @@
           },
           "syncTime": {
             "type": "string"
+          },
+          "scheduleEnabled": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false
@@ -14364,12 +14446,16 @@
           "lastSuccessAt",
           "lastTrigger",
           "running",
+          "scheduleEnabled",
           "syncTime"
         ],
         "type": "object",
         "properties": {
           "syncTime": {
             "type": "string"
+          },
+          "scheduleEnabled": {
+            "type": "boolean"
           },
           "ipmsConfigured": {
             "type": "boolean"
@@ -16222,6 +16308,18 @@
           "description": {
             "type": "string",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScheduleSwitchRequest": {
+        "required": [
+          "enabled"
+        ],
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
           }
         },
         "additionalProperties": false

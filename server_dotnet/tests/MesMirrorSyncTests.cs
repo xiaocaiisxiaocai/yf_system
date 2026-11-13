@@ -271,6 +271,25 @@ public sealed class MesMirrorSyncTests
     }
 
     [Theory(Timeout = 60_000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task TheScheduleRunsOnlyWhileItIsSwitchedOn(bool enabled)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("mes_mirror_switch", ct);
+        await database.InitializeAsync(ct);
+        // Due all day: the fetch time is midnight and no run happened today yet.
+        await database.ExecuteAsync($"INSERT INTO mes_mirror_state(id,sync_time,schedule_enabled) VALUES(1,'00:00',{(enabled ? 1 : 0)})", ct);
+        var source = new FakeMes { WorkOrders = { "A1" } };
+        var service = Service(database, source);
+        await service.StartAsync(ct);
+        var deadline = DateTime.UtcNow.AddSeconds(enabled ? 30 : 4);
+        while (DateTime.UtcNow < deadline && source.Calls == 0) await Task.Delay(200, ct);
+        await service.StopAsync(ct);
+        Assert.Equal(enabled, source.Calls > 0);
+    }
+
+    [Theory(Timeout = 60_000)]
     [InlineData(false, "")]
     [InlineData(false, "MesMirror")]
     [InlineData(true, "Fake")]

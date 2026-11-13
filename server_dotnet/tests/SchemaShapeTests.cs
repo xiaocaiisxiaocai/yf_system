@@ -65,6 +65,7 @@ public sealed class SchemaShapeTests
         "20261113071436_AddMesMirrorBaseUrl",
         "20261113083946_RemoveOemArchiveLimitSettings",
         "20261113091750_AddIpmsConnectionSettings",
+        "20261113095243_AddIpmsScheduleSwitches",
     ];
 
     [Fact]

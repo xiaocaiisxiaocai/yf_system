@@ -23,7 +23,7 @@ const stopped: Status = { ...idle, phase: 'AWAITING_CONFIRM', runMode: 'ALL', fe
 const pageFetched: Status = { ...idle, phase: 'AWAITING_CONFIRM', runMode: 'PAGE', page: 3, pageSize: 50, fetched: 50, pages: 1, total: 1778, pendingReason: 'PAGE_FETCHED', preview }
 const settings: Settings = {
   baseUrl: 'http://183.238.37.108:6001', configBaseUrl: 'http://183.238.37.108:6001', saved: false,
-  account: 'reader', passwordSet: true, accountConfigured: true, syncTime: '03:00',
+  account: 'reader', passwordSet: true, accountConfigured: true, syncTime: '03:00', scheduleEnabled: true,
 }
 
 function mock(status: Status, current: Settings = settings) {
@@ -183,6 +183,24 @@ describe('IPMS 连接与手动抓取', () => {
     await user.click(screen.getByRole('button', { name: '测试连接' }))
     expect(await screen.findByText(/IPMS 登录失败，请检查账号和密码/)).toBeInTheDocument()
     expect(put).not.toHaveBeenCalled()
+  })
+
+  it('定时抓取可以停止和开启，切换立即生效', async () => {
+    const user = userEvent.setup()
+    const { put } = mock(idle)
+    render(<MesMirrorPanel />)
+    const toggle = await screen.findByRole('switch', { name: '定时抓取' })
+    expect(toggle).toBeChecked()
+
+    put.mockResolvedValueOnce({ data: { ...settings, scheduleEnabled: false } } as never)
+    await user.click(toggle)
+    expect(put).toHaveBeenLastCalledWith('/outsource/mes-mirror/schedule', { enabled: false })
+    await waitFor(() => expect(toggle).not.toBeChecked())
+
+    put.mockResolvedValueOnce({ data: settings } as never)
+    await user.click(toggle)
+    expect(put).toHaveBeenLastCalledWith('/outsource/mes-mirror/schedule', { enabled: true })
+    await waitFor(() => expect(toggle).toBeChecked())
   })
 
   it('账号或密码没设好时显示未设定', async () => {

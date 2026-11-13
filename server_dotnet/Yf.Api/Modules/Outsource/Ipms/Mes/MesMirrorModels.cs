@@ -30,7 +30,8 @@ public sealed record MesMirrorSettingsRequest(string? BaseUrl, string? Account, 
 /// account and password are all set. <paramref name="SyncTime"/> is the daily fetch time ("HH:mm", UTC+8).
 /// </summary>
 public sealed record MesMirrorSettingsResponse(
-    string BaseUrl, string? ConfigBaseUrl, bool Saved, string Account, bool PasswordSet, bool AccountConfigured, string SyncTime);
+    string BaseUrl, string? ConfigBaseUrl, bool Saved, string Account, bool PasswordSet, bool AccountConfigured, string SyncTime,
+    bool ScheduleEnabled);
 
 /// <summary>
 /// Connection to test, nothing is saved or written. Blank fields fall back to the values in effect, so a saved password

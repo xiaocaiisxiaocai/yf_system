@@ -34,8 +34,9 @@ public sealed class MesHttpSourceTests
     private static HttpResponseMessage Json(string json, HttpStatusCode status = HttpStatusCode.OK) =>
         new(status) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
+    /// <summary>The real IPMS login answer: the token sits in <c>data.token.token</c> (as the IPMS web client reads it).</summary>
     private static HttpResponseMessage LoginOk(string token) =>
-        Json(JsonSerializer.Serialize(new { code = 200, msg = (string?)null, data = new { token } }));
+        Json(JsonSerializer.Serialize(new { code = 200, msg = (string?)null, data = new { token = new { token }, branchCode = "B1" } }));
 
     private static HttpResponseMessage Page(int total, params string[] workOrders) => Json(JsonSerializer.Serialize(new
     {
@@ -134,6 +135,39 @@ public sealed class MesHttpSourceTests
         var (source, _) = Create((_, _) => Json("""{"code":500,"msg":"账号或密码错误"}"""));
         var error = await Assert.ThrowsAsync<IpmsUnavailableException>(() => source.FetchPageAsync(1, 2, ct));
         AssertNoSecrets(error, "T1");
+    }
+
+    [Fact]
+    public async Task AcceptsAPlainTokenStringAsWell()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, handler) = Create((seen, _) => seen.Path == LoginPath
+            ? Json(JsonSerializer.Serialize(new { code = 200, data = new { token = "FLAT" } })) : Page(1, "A"));
+        await source.FetchPageAsync(1, 2, ct);
+        Assert.Equal("FLAT", handler.Requests.Last().Token);
+    }
+
+    [Fact]
+    public async Task ShowsTheReasonIpmsGivesForARejectedLogin()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, _) = Create((_, _) => Json($$"""{"code":500,"type":"error","msg":"账号或密码错误 {{Password}}"}""", HttpStatusCode.InternalServerError));
+        var result = await source.TestAsync(Connection(), ct);
+        Assert.Equal((false, "IPMS 登录失败：账号或密码错误 ***"), (result.Ok, result.Message));
+    }
+
+    [Fact]
+    public async Task PointsAtTheAddressWhenTheLoginUrlIsNotTheInterface()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, _) = Create((_, _) => new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent("<html><body>404 Not Found</body></html>", Encoding.UTF8, "text/html"),
+        });
+        var result = await source.TestAsync(Connection(), ct);
+        Assert.False(result.Ok);
+        Assert.Contains("HTTP 404", result.Message, StringComparison.Ordinal);
+        Assert.Contains("6001", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

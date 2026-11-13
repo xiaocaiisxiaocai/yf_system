@@ -612,6 +612,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(1024)")
                         .HasColumnName("protected_password");
 
+                    b.Property<bool>("ScheduleEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true)
+                        .HasColumnName("schedule_enabled");
+
                     b.Property<DateOnly?>("ScheduledFor")
                         .HasColumnType("date")
                         .HasColumnName("scheduled_for");
@@ -1388,6 +1394,12 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.Property<DateTime?>("LeaseUntil")
                         .HasColumnType("datetime(3)")
                         .HasColumnName("lease_until");
+
+                    b.Property<bool>("ScheduleEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true)
+                        .HasColumnName("schedule_enabled");
 
                     b.Property<DateOnly?>("ScheduledFor")
                         .HasColumnType("date")

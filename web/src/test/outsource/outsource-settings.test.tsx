@@ -83,6 +83,36 @@ describe('外协清单入口与设定', () => {
     expect(await screen.findByText('生管甲')).toBeInTheDocument()
   })
 
+  it('更新外协清单的定时同步可以停止和开启', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    const syncStatus = {
+      syncTime: '03:30', scheduleEnabled: true, ipmsConfigured: true, running: false, lastStartedAt: null, lastFinishedAt: null,
+      lastSuccessAt: null, lastError: null, lastTrigger: null, lastProcessed: 0, lastChanged: 0, lastClosed: 0, lastMissing: 0,
+    }
+    const mirrorSettings = {
+      baseUrl: 'http://183.238.37.108:6001', configBaseUrl: null, saved: true, account: 'reader', passwordSet: true,
+      accountConfigured: true, syncTime: '03:00', scheduleEnabled: true,
+    }
+    const mirrorStatus = {
+      phase: 'IDLE', runMode: null, page: null, pageSize: 100, fetched: 0, pages: 0, total: null, pendingReason: null, startedAt: null,
+      lastFinishedAt: null, lastSuccessAt: null, lastError: null, lastTrigger: null, lastCount: 0, mirrorCount: 0, preview: [],
+    }
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/sync-status') ? syncStatus : url.endsWith('/mes-mirror/settings') ? mirrorSettings
+        : url.endsWith('/mes-mirror/status') ? mirrorStatus : url.endsWith('/vendors') ? vendors : [],
+    } as never))
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { ...syncStatus, scheduleEnabled: false } } as never)
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+
+    await user.click(await screen.findByRole('tab', { name: 'IPMS 同步' }))
+    const toggle = await screen.findByRole('switch', { name: '定时同步' })
+    expect(toggle).toBeChecked()
+    await user.click(toggle)
+    expect(put).toHaveBeenCalledWith('/outsource/settings/sync-schedule', { enabled: false })
+    await waitFor(() => expect(toggle).not.toBeChecked())
+  })
+
   it('新增厂商提交去除空白后的名称并重新加载', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])

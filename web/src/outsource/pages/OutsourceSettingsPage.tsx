@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag,
+  Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag,
   TimePicker,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
@@ -385,6 +385,11 @@ function SyncTab() {
     return () => { active = false }
   }, [load])
 
+  const setSchedule = (enabled: boolean) => run(async () => {
+    const response = await http.put<ApiResponses['PUT /outsource/settings/sync-schedule']>('/outsource/settings/sync-schedule', { enabled })
+    setStatus(response.data); Message.success(enabled ? '定时同步已开启' : '定时同步已停止')
+  })
+
   const save = () => run(async () => {
     if (!time) return
     const response = await http.put<ApiResponses['PUT /outsource/settings/sync-time']>('/outsource/settings/sync-time', { syncTime: time })
@@ -402,6 +407,9 @@ function SyncTab() {
       <span>每日同步时间</span>
       <TimePicker aria-label="每日同步时间" format="HH:mm" value={time} allowClear={false} onChange={(value) => setTime(value)} style={{ width: 120 }} />
       <Button type="primary" loading={saving} disabled={!time || time === status.syncTime} onClick={() => void save()}>保存</Button>
+      <span>定时同步</span>
+      <Switch aria-label="定时同步" checkedText="开启" uncheckedText="停止" checked={status.scheduleEnabled} disabled={saving}
+        onChange={(value) => void setSchedule(value)} />
     </Space>
     <Descriptions column={1} border className="outsource-sync-descriptions" data={[
       { label: '最近成功', value: syncTime(status.lastSuccessAt) },

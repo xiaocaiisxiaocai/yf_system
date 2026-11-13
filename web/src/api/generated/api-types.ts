@@ -383,6 +383,7 @@ export interface MesMirrorSettingsResponse {
   passwordSet: boolean
   accountConfigured: boolean
   syncTime: string
+  scheduleEnabled: boolean
 }
 
 export interface MesMirrorStatusResponse {
@@ -1245,6 +1246,7 @@ export interface OutsourceSyncRequest {
 
 export interface OutsourceSyncStatusResponse {
   syncTime: string
+  scheduleEnabled: boolean
   ipmsConfigured: boolean
   running: boolean
   lastStartedAt: string | null
@@ -1688,6 +1690,10 @@ export interface RoleUpsert {
   description?: string | null
 }
 
+export interface ScheduleSwitchRequest {
+  enabled: boolean
+}
+
 export interface SmtpDiagnosisResponse {
   success: boolean
   steps: Array<SmtpDiagnosisStep>
@@ -2122,6 +2128,7 @@ export interface ApiResponses {
   "POST /outsource/mails/{id}/retry": OutsourceMailResponse
   "POST /outsource/mes-mirror/confirm": MesMirrorStatusResponse
   "POST /outsource/mes-mirror/run": MesMirrorStatusResponse
+  "PUT /outsource/mes-mirror/schedule": MesMirrorSettingsResponse
   "GET /outsource/mes-mirror/settings": MesMirrorSettingsResponse
   "PUT /outsource/mes-mirror/settings": MesMirrorSettingsResponse
   "GET /outsource/mes-mirror/status": MesMirrorStatusResponse
@@ -2132,6 +2139,7 @@ export interface ApiResponses {
   "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse
   "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
+  "PUT /outsource/settings/sync-schedule": OutsourceSyncStatusResponse
   "PUT /outsource/settings/sync-time": OutsourceSyncStatusResponse
   "GET /outsource/settings/types": Array<OutsourceTypeResponse>
   "POST /outsource/settings/types": OutsourceTypeResponse

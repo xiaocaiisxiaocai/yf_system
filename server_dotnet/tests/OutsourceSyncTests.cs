@@ -143,6 +143,13 @@ public sealed class OutsourceSyncTests
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => sync.SetSyncTimeAsync(viewer, new("03:30"), ct))).Status);
         Assert.Equal("03:30", (await sync.SetSyncTimeAsync(buyer, new("03:30"), ct)).SyncTime);
         Assert.Equal("03:30", (await sync.StatusAsync(viewer, ct)).SyncTime);
+
+        // The daily update can be stopped and started again; only the settings permission may switch it.
+        Assert.True((await sync.StatusAsync(viewer, ct)).ScheduleEnabled);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => sync.SetScheduleAsync(viewer, new(false), ct))).Status);
+        Assert.False((await sync.SetScheduleAsync(buyer, new(false), ct)).ScheduleEnabled);
+        Assert.False((await sync.StatusAsync(viewer, ct)).ScheduleEnabled);
+        Assert.True((await sync.SetScheduleAsync(buyer, new(true), ct)).ScheduleEnabled);
     }
 
     private static OutsourceItemQuery Query(bool includeClosed) => new(null, null, null, null, null, null, null, includeClosed);

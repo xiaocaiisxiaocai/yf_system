@@ -66,6 +66,11 @@
   gap: 12px 12px;
 }
 
+.ipms-connection-form > .arco-switch,
+.ipms-connection-form > .arco-picker {
+  justify-self: start;
+}
+
 .ipms-connection-form > label,
 .ipms-connection-form > span {
   color: var(--color-text-2);

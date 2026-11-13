@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Descriptions, Input, InputNumber, Message, Modal, Space, Tag, TimePicker } from '@arco-design/web-react'
+import { Button, Descriptions, Input, InputNumber, Message, Modal, Space, Switch, Tag, TimePicker } from '@arco-design/web-react'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import ResizableTable from '../../components/ResizableTable'
@@ -96,6 +96,11 @@ export default function MesMirrorPanel() {
     setStatus(response.data)
     Message.success(apply ? '已合并' : '已放弃，资料未改动')
   })
+  const setSchedule = (enabled: boolean) => run(async () => {
+    const response = await http.put<ApiResponses['PUT /outsource/mes-mirror/schedule']>('/outsource/mes-mirror/schedule', { enabled })
+    setSettings(response.data)
+    Message.success(enabled ? '定时抓取已开启' : '定时抓取已停止')
+  })
   const save = () => run(async () => {
     const response = await http.put<ApiResponses['PUT /outsource/mes-mirror/settings']>('/outsource/mes-mirror/settings',
       { baseUrl: address.trim(), account: account.trim(), password: password || null, syncTime: fetchTime })
@@ -137,6 +142,9 @@ export default function MesMirrorPanel() {
       <span>每日抓取时间</span>
       <TimePicker aria-label="每日抓取时间" format="HH:mm" value={fetchTime} allowClear={false}
         onChange={(value) => setFetchTime(value)} style={{ width: 120 }} disabled={!canStart} />
+      <span>定时抓取</span>
+      <Switch aria-label="定时抓取" checkedText="开启" uncheckedText="停止" checked={settings.scheduleEnabled} disabled={working}
+        onChange={(value) => void setSchedule(value)} />
     </div>
     <Space wrap>
       <Button type="primary" disabled={!canStart || !dirty} onClick={() => void save()}>保存</Button>
