@@ -24,7 +24,6 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
 {
     internal const int MaximumContactsPerVendor = 20;
     internal const int MaximumDefaultCc = 50;
-    private const int OptionLimit = 20;
 
     // ---- vendors and contacts ----
 
@@ -343,16 +342,18 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         return result;
     }
 
-    /// <summary>Active internal accounts with an email address, for picking copy recipients.</summary>
+    /// <summary>
+    /// Every active internal account, for picking copy recipients. Accounts without an email address are listed
+    /// too (empty <c>email</c>) so the picker can show them as unselectable instead of silently leaving them out.
+    /// </summary>
     public async Task<OutsourceCcUserResponse[]> CcUserOptionsAsync(CurrentUser actor, string? keyword, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await AuthorizeReadAsync(context, actor, ct);
         var term = keyword?.Trim() ?? "";
-        var query = context.Users.AsNoTracking().Where(x => x.UserType == UserTypes.Internal
-            && x.Status == AccountStatuses.Active && x.Email != "");
+        var query = context.Users.AsNoTracking().Where(x => x.UserType == UserTypes.Internal && x.Status == AccountStatuses.Active);
         if (term.Length > 0) query = query.Where(x => x.RealName.Contains(term) || x.EmployeeNo.Contains(term) || x.Email.Contains(term));
-        return await query.OrderBy(x => x.EmployeeNo).Take(OptionLimit)
+        return await query.OrderBy(x => x.EmployeeNo)
             .Select(x => new OutsourceCcUserResponse(x.Id, x.EmployeeNo, x.RealName, x.Email, x.Status)).ToArrayAsync(ct);
     }
 

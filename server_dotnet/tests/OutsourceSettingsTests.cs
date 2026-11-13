@@ -78,7 +78,13 @@ public sealed class OutsourceSettingsTests
         Assert.Equal([9613UL, 9612UL], cc.Select(x => x.UserId));
         var options = await service.CcUserOptionsAsync(buyer, "主管", ct);
         Assert.Equal([9612UL], options.Select(x => x.UserId));
-        Assert.DoesNotContain(await service.CcUserOptionsAsync(buyer, null, ct), x => x.UserId is 9614 or 9615 or 9616);
+        // The picker lists every active internal account (no cap), including ones without email so they show as unselectable.
+        await database.ExecuteAsync(string.Concat(Enumerable.Range(0, 30).Select(i =>
+            $"INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES({9700 + i},'os_bulk{i:D2}','unused','批量{i}','bulk{i}@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));")), ct);
+        var all = await service.CcUserOptionsAsync(buyer, null, ct);
+        Assert.Equal(30, all.Count(x => x.UserId >= 9700));
+        Assert.Contains(all, x => x.UserId == 9614 && x.Email == "");
+        Assert.DoesNotContain(all, x => x.UserId is 9615 or 9616);
 
         // Viewers read reference data but cannot change it; staff without outsource permissions and suppliers see nothing.
         Assert.Equal(2, (await service.VendorsAsync(viewer, ct)).Length);

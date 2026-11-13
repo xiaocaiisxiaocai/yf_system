@@ -83,6 +83,32 @@ describe('外协清单入口与设定', () => {
     expect(await screen.findByText('生管甲')).toBeInTheDocument()
   })
 
+  it('默认抄送的人员选项列出全部内部账号，可本地搜索，未填邮箱的不可选', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    const people = Array.from({ length: 30 }, (_, i) => ({
+      userId: 100 + i, employeeNo: `e${String(i).padStart(2, '0')}`, realName: `员工${i}`, email: `e${i}@example.test`, status: 'ACTIVE',
+    }))
+    const options = [...people, { userId: 200, employeeNo: 'nomail', realName: '无邮箱', email: '', status: 'ACTIVE' }]
+    const get = vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/cc-user-options') ? options : url.endsWith('/default-cc') ? cc : url.endsWith('/vendors') ? vendors : [],
+    } as never))
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+    await user.click(await screen.findByRole('tab', { name: '默认抄送' }))
+    await screen.findByText('生管甲')
+
+    const picker = screen.getByRole('combobox', { name: '选择抄送人员' })
+    await user.click(picker)
+    await user.keyboard('员工29')
+    expect(await screen.findByRole('option', { name: /员工29/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /员工28/ })).not.toBeInTheDocument()
+    await user.clear(picker.querySelector('input') ?? picker)
+    await user.keyboard('无邮箱')
+    expect(await screen.findByRole('option', { name: /未填写邮箱/ })).toHaveClass('arco-select-option-disabled')
+    expect(get.mock.calls.filter(([url]) => url === '/outsource/settings/cc-user-options')).toHaveLength(1)
+    expect(get).toHaveBeenCalledWith('/outsource/settings/cc-user-options')
+  })
+
   it('更新外协清单的定时同步可以停止和开启', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])

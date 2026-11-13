@@ -314,14 +314,18 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
   const [options, setOptions] = useState<CcUser[]>([])
   const [picked, setPicked] = useState<number>()
   const { saving, run } = useSaving()
-  const searchSequence = useRef(0)
+  const [optionsLoading, setOptionsLoading] = useState(false)
+  const optionsLoaded = useRef(false)
 
-  const search = async (keyword: string) => {
-    const seq = ++searchSequence.current
+  // 一次取回全部启用的内部账号，在本地搜索：不截断，未填邮箱的人显示为不可选。
+  const loadOptions = async () => {
+    if (optionsLoaded.current) return
+    optionsLoaded.current = true
+    setOptionsLoading(true)
     try {
-      const response = await http.get<ApiResponses['GET /outsource/settings/cc-user-options']>('/outsource/settings/cc-user-options', { params: { keyword } })
-      if (seq === searchSequence.current) setOptions(response.data)
-    } catch { /* 统一请求层提示 */ }
+      const response = await http.get<ApiResponses['GET /outsource/settings/cc-user-options']>('/outsource/settings/cc-user-options')
+      setOptions(response.data)
+    } catch { optionsLoaded.current = false /* 统一请求层提示 */ } finally { setOptionsLoading(false) }
   }
   const replace = (userIds: number[], message: string) => run(async () => {
     const response = await http.put<ApiResponses['PUT /outsource/settings/default-cc']>('/outsource/settings/default-cc', { userIds })
@@ -351,10 +355,15 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
   return <>
     <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">
       <Space wrap>
-        <Select aria-label="选择抄送人员" placeholder="搜索姓名、账号或邮箱" showSearch filterOption={false} allowClear style={{ width: 280 }}
-          value={picked} onChange={setPicked} onSearch={(value) => void search(value)} onFocus={() => { if (!options.length) void search('') }}
+        <Select aria-label="选择抄送人员" placeholder="搜索姓名、账号或邮箱" showSearch allowClear style={{ width: 360 }}
+          loading={optionsLoading} value={picked} onChange={setPicked} onFocus={() => void loadOptions()}
+          filterOption={(input, option) => String((option as { props?: { children?: unknown } }).props?.children ?? '')
+            .toLowerCase().includes(input.trim().toLowerCase())}
           options={options.filter((option) => !cc.some((row) => row.userId === option.userId))
-            .map((option) => ({ label: `${option.realName}（${option.email}）`, value: option.userId }))} />
+            .map((option) => ({
+              label: `${option.realName} · ${option.employeeNo} · ${option.email || '未填写邮箱'}`,
+              value: option.userId, disabled: !option.email,
+            }))} />
         <Button type="primary" icon={<IconPlus />} disabled={picked === undefined || saving} onClick={() => void add()}>加入</Button>
       </Space>
     </div>
