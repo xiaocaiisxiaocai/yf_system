@@ -403,6 +403,9 @@ async function openReleasedFile(page, url, fileName) {
       await page.screenshot({ path: OUT + '/oem-approval-inbox.png', fullPage: true });
       await row.getByRole('link', { name: outboundName, exact: true }).click();
       await page.waitForURL(s.base + '/oem/transfers/' + outboundId);
+      // 审批人在“待审批”状态下看到的详情页：决定按钮在附件卡片标题右侧。
+      await page.getByRole('button', { name: '审批通过', exact: true }).waitFor();
+      await page.screenshot({ path: OUT + '/oem-approver-pending.png', fullPage: true });
       const approved = await action(page, '/approve', 'POST',
         () => page.getByRole('button', { name: '审批通过', exact: true }).click());
       assert.equal(approved.summary.approvalStatus, 'APPROVED');
@@ -514,6 +517,30 @@ async function openReleasedFile(page, url, fileName) {
       await downloadRow(page, row, received);
       assert.equal(sha(received), sha(inbound));
       await page.screenshot({ path: OUT + '/oem-internal-inbound.png', fullPage: true });
+    });
+
+    await record('内部传递单详情：审批进度在附件表最后一列，没有审批流程卡片和改派入口', async () => {
+      const page = sender.page;
+      await page.goto(s.base + '/oem/transfers/' + outboundId);
+      const headers = page.getByRole('columnheader');
+      await headers.first().waitFor();
+      const names = (await headers.allInnerTexts()).map(text => text.trim());
+      assert.equal(names[names.length - 1], '审批', 'approval progress must be the last attachment column: ' + names.join('|'));
+      // 最后一列要在 1440 宽的窗口里完整可见，不能被挤到需要横向滚动才看得到的位置。
+      const box = await headers.last().boundingBox();
+      assert(box && box.x >= 0 && box.x + box.width <= 1440, 'approval column must be fully visible without horizontal scrolling: ' + JSON.stringify(box));
+      assert.equal(await page.getByText(/审批流程/).count(), 0, 'no approval flow card below the attachments');
+      assert.equal(await page.getByRole('button', { name: '改派', exact: true }).count(), 0, 'reassignment is gone');
+      // 操作列：按钮组的中心要和列头中心对齐（允许 6px 误差）。
+      const actionHeader = await page.getByRole('columnheader', { name: /操作/ }).first().boundingBox();
+      const group = await page.locator('.action-slots').first().boundingBox();
+      const buttons = await page.locator('.action-slots .arco-btn').evaluateAll(list => list.map(item => { const r = item.getBoundingClientRect(); return { x: r.x, w: r.width }; }));
+      console.log('ACTION-ALIGN', JSON.stringify({ actionHeader, group, buttons }));
+      const left = Math.min(...buttons.map(item => item.x));
+      const right = Math.max(...buttons.map(item => item.x + item.w));
+      const headerCenter = actionHeader.x + actionHeader.width / 2;
+      assert(Math.abs((left + right) / 2 - headerCenter) <= 6, 'action buttons must be centered under the 操作 header: ' + JSON.stringify({ left, right, headerCenter }));
+      await page.screenshot({ path: OUT + '/oem-detail-approval-column.png', fullPage: true });
     });
 
     await record('厂商门户选择不支持的格式时当场拒绝，不创建传递单或上传会话', async () => {

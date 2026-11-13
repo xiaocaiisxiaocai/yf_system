@@ -781,7 +781,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .action-slots--file > .action-slot { --action-slot-width: 52px; }
 /* 窄表格里操作列只放图标按钮，两个槽位要装进 76px 的列，否则两侧被单元格裁掉。 */
 .file-table--narrow .action-slots--file > .action-slot { --action-slot-width: 28px; }
-.action-slots--oem-file > .action-slot { --action-slot-width: 72px; }
+.action-slots--oem-file > .action-slot { --action-slot-width: 56px; }
 /* 外协设定：第二个操作是四个字（联络邮箱、可用厂商）。 */
 .action-slots--outsource > .action-slot:nth-child(2) { --action-slot-width: 60px; }
 

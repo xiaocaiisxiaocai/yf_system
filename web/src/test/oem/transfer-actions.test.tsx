@@ -135,9 +135,9 @@ describe('ODM/OEMA 审批进度', () => {
     await screen.findByText('图纸.pdf')
     const headers = screen.getAllByRole('columnheader').map((header) => header.textContent)
     expect(headers[headers.length - 1]).toBe('审批')
-    expect(screen.getAllByText('课别主管').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('已停用主管（A0021）').length).toBeGreaterThan(0)
-    expect(screen.getAllByText(/审批异常：原审批人已停用/).length).toBeGreaterThan(0)
+    // 审批列只留审批状态（和处理时间）；审批人姓名、节点说明不再铺在表里。
+    expect(screen.getAllByText('审批异常').length).toBeGreaterThan(1)
+    expect(screen.queryByText('已停用主管（A0021）')).not.toBeInTheDocument()
     expect(screen.queryByText(/审批流程/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '改派' })).not.toBeInTheDocument()
   })

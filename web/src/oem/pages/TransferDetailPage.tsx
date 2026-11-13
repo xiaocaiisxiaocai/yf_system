@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { actionSlots } from '../../components/ActionSlots'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Space, Spin, Table, Tag, Typography,
+  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Space, Spin, Table, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -12,7 +12,7 @@ import RecipientChoiceSelect from '../components/RecipientChoiceSelect'
 import { useRecipientChoices } from '../components/useRecipientChoices'
 import { fmtSize, fmtTime } from '../../api/types'
 import { isVersionConflict } from '../../api/versionConflict'
-import type { ApprovalInfo, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
+import type { ApprovalInfo, ApprovalStatus, ApprovalTask, TransferDetail, TransferFile } from '../api/types'
 import OemFilePreview from '../components/OemFilePreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
@@ -25,25 +25,15 @@ import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 
 const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
-  { key: 'name', title: '文件名', defaultWidth: 360, minWidth: 160, maxWidth: 2400, locked: true },
-  { key: 'size', title: '大小', defaultWidth: 110, minWidth: 80 },
-  { key: 'validation', title: '文件校验', defaultWidth: 200, minWidth: 120 },
-  { key: 'payload', title: '存储', defaultWidth: 110, minWidth: 80 },
-  { key: 'receipt', title: '接收 / 删除', defaultWidth: 220, minWidth: 140 },
-  { key: 'actions', title: '操作', defaultWidth: 200, minWidth: 120, maxWidth: 320, locked: true },
+  { key: 'name', title: '文件名', defaultWidth: 270, minWidth: 160, maxWidth: 2400, locked: true },
+  { key: 'size', title: '大小', defaultWidth: 80, minWidth: 80 },
+  { key: 'validation', title: '文件校验', defaultWidth: 140, minWidth: 120 },
+  { key: 'payload', title: '存储', defaultWidth: 80, minWidth: 80 },
+  { key: 'receipt', title: '接收 / 删除', defaultWidth: 210, minWidth: 140 },
+  { key: 'actions', title: '操作', defaultWidth: 210, minWidth: 120, maxWidth: 320, locked: true },
 ]
 
-const OEM_APPROVAL_COLUMN: ColumnLayoutSpec = { key: 'approval', title: '审批', defaultWidth: 260, minWidth: 180, maxWidth: 480 }
-
-const SOURCE_LABEL: Record<string, string> = {
-  DIRECT_LEADER: '上级主管', SPECIFIED_USERS: '指定人员',
-  // Approvals sent before the leader sources were merged keep their original source.
-  SECTION_LEADER: '课别主管', DEPARTMENT_LEADER: '部门主管', DIVISION_LEADER: '事业部主管',
-}
-const SKIP_LABEL: Record<string, string> = { INITIATOR_IS_LEADER: '发送人是主管，免审', ABOVE_SECTION: '发送人属于部门或事业部，免审' }
-const TASK_LABEL: Record<string, string> = {
-  WAITING: '等待', PENDING: '待审批', APPROVED: '已通过', REJECTED: '已驳回', NOT_NEEDED: '无需处理', SUPERSEDED: '已改派', CANCELLED: '已取消',
-}
+const OEM_APPROVAL_COLUMN: ColumnLayoutSpec = { key: 'approval', title: '审批', defaultWidth: 150, minWidth: 120, maxWidth: 320 }
 
 function promptText(title: string, placeholder: string, initial = ''): Promise<string | null> {
   return new Promise((resolve) => {
@@ -140,34 +130,23 @@ function ApprovalPanel({ detail, onChanged, toolbarHost }: { detail: TransferDet
   )
 }
 
-/** 审批进度：每个节点一行，写明审批人和处理结果；审批异常时标出原因。 */
-function ApprovalProgress({ approval }: { approval: ApprovalInfo }) {
+/** 审批列只留状态和时间：时间取最近一次审批处理的时间，还没处理过就不显示。 */
+function ApprovalProgress({ approval, status }: { approval: ApprovalInfo; status: ApprovalStatus | null }) {
+  const decidedAt = approval.nodes.flatMap((node) => node.tasks).map((task) => task.decidedAt)
+    .filter((value): value is string => Boolean(value)).sort().pop()
   return (
-    <Space direction="vertical" size={4} style={{ fontSize: 12 }}>
-      {approval.status === 'APPROVAL_BLOCKED' && <Tag size="small" color="orangered">审批异常：{approval.blockedReason ?? ''}</Tag>}
-      {approval.nodes.map((node) => (
-        <Space key={node.sortNo} direction="vertical" size={0}>
-          <span>{node.name}<Typography.Text type="secondary">（{SOURCE_LABEL[node.approverSource] ?? node.approverSource}）</Typography.Text></span>
-          {node.status === 'SKIPPED'
-            ? <Typography.Text type="secondary">{SKIP_LABEL[node.skipReason ?? ''] ?? '发送人即本节点审批人，按策略免审'}</Typography.Text>
-            : node.tasks.filter((task) => task.status !== 'SUPERSEDED').map((task) => (
-              <Space key={task.id} size={6} wrap>
-                <span>{task.approverName}（{task.approverEmployeeNo}）</span>
-                <Tag size="small">{TASK_LABEL[task.status] ?? task.status}</Tag>
-                {task.decidedAt && <Typography.Text type="secondary">{fmtTime(task.decidedAt)}</Typography.Text>}
-                {task.reason && <Typography.Text type="secondary">原因：{task.reason}</Typography.Text>}
-              </Space>
-            ))}
-        </Space>
-      ))}
+    <Space direction="vertical" size={2} align="center">
+      <ApprovalTag value={status} />
+      {decidedAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{fmtTime(decidedAt)}</Typography.Text>}
     </Space>
   )
 }
 
-function TransferFilesTable({ files, approval, canEdit, toolbarHost, onDownload, onPreview, onRemove }: {
+function TransferFilesTable({ files, approval, approvalStatus, canEdit, toolbarHost, onDownload, onPreview, onRemove }: {
   files: TransferFile[]
   /** 内部账号看得到：审批进度放在附件表的最后一列（整张传递单一份，合并成一格）。 */
   approval?: ApprovalInfo | null
+  approvalStatus?: ApprovalStatus | null
   canEdit: boolean
   /** 附件卡标题右侧的挂载点：“显示列”放在那里，不再单占一行。 */
   toolbarHost: HTMLElement | null
@@ -206,20 +185,21 @@ function TransferFilesTable({ files, approval, canEdit, toolbarHost, onDownload,
     },
     {
       key: 'actions', title: '操作',
+      // 只有可编辑时才有“移除”位：没有这个位就不占宽度，否则隐藏的空位会把可见按钮挤偏、和列头对不齐。
       render: (_: unknown, file: TransferFile) => actionSlots([
         file.downloadable && <Button key="download" size="small" icon={<IconDownload />} onClick={() => onDownload(file)}>下载</Button>,
         file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES && (
           <Button key="preview" size="small" icon={<IconEye />} onClick={() => onPreview(file)}>预览</Button>
         ),
-        canEdit && (
-          <Popconfirm key="remove" title="移除该附件？" onOk={() => onRemove(file)}><Button size="small" status="danger">移除</Button></Popconfirm>
-        ),
+        ...(canEdit ? [
+          <Popconfirm key="remove" title="移除该附件？" onOk={() => onRemove(file)}><Button size="small" status="danger">移除</Button></Popconfirm>,
+        ] : []),
       ], 'oem-file'),
     },
     ...(approval ? [{
       key: 'approval', title: '审批',
       onCell: (_: TransferFile, index: number) => ({ rowSpan: index === 0 ? files.length : 0 }),
-      render: () => <ApprovalProgress approval={approval} />,
+      render: () => <ApprovalProgress approval={approval} status={approvalStatus ?? null} />,
     }] : []),
   ]
   const fileColumnSpecs = approval ? [...OEM_TRANSFER_FILE_COLUMNS, OEM_APPROVAL_COLUMN] : OEM_TRANSFER_FILE_COLUMNS
@@ -488,6 +468,7 @@ export default function TransferDetailPage() {
           <TransferFilesTable
             files={detail.files}
             approval={realm === 'internal' ? detail.approval : null}
+            approvalStatus={summary.approvalStatus}
             canEdit={caps.canEdit}
             toolbarHost={filesToolbar}
             onDownload={(file) => void download(file).catch(() => undefined)}
