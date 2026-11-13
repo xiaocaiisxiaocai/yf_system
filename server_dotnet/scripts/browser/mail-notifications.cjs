@@ -251,6 +251,14 @@ const captured = async () => {
       assert(oemRows.length >= f.oem.contacts.length, 'OEM release mail fans out to all active company contacts');
       for (const contact of f.oem.contacts)
         assert(oemRows.some(item => item.recipientEmail === contact.email), 'active OEM contact receives mail: ' + contact.email);
+      // Vendor → company: only the person the vendor picked is mailed, never their section leader; and the transfer
+      // sent while the release reminder was off queued nothing, so the picked person has exactly one release row.
+      assert(f.oem.inboundRecipient && f.oem.inboundLeader && f.oem.quietInboundId, 'the OEM step recorded the inbound scenario');
+      const inboundRows = oemRows.filter(item => item.recipientEmail === f.oem.inboundRecipient);
+      assert.equal(inboundRows.length, 1,
+        'the picked person gets one release mail (none for the transfer sent while the reminder was off): ' + JSON.stringify(inboundRows));
+      assert(!oemRows.some(item => item.recipientEmail === f.oem.inboundLeader),
+        'the section leader of the picked person is not mailed about the vendor transfer');
 
       await capture(context, 'transient', 1);
       const firstDrain = await fetch(s.base + '/__test/mail/drain', {
@@ -293,6 +301,28 @@ const captured = async () => {
       const delivered = await captured();
       const deliveredRecipients = delivered.messages.flatMap(message => message.recipients).join('\n');
       for (const contact of generated) assert(deliveredRecipients.includes(contact.email));
+      assert(deliveredRecipients.includes(f.oem.inboundRecipient), 'the picked person receives the vendor release mail over SMTP');
+      // What the leader does get (for example the approval request of the company → vendor transfer) is listed by type.
+      const leaderRows = finalRows.filter(item => item.recipientEmail === f.oem.inboundLeader);
+      assert(!leaderRows.some(item => item.eventType === 'OEM_TRANSFER_RELEASED'), 'no vendor release mail is queued for the section leader');
+      f.oem.inboundMail = {
+        recipientRows: finalRows.filter(item => item.recipientEmail === f.oem.inboundRecipient).map(item => item.eventType + ':' + item.status),
+        recipientSmtpMessages: delivered.messages.filter(message => message.recipients.includes(f.oem.inboundRecipient)).length,
+        leaderRows: leaderRows.map(item => item.eventType + ':' + item.status),
+        leaderSmtpMessages: delivered.messages.filter(message => message.recipients.includes(f.oem.inboundLeader)).length,
+      };
+      save();
+      await navigate(page, '/system/config');
+      await page.getByRole('tab', { name: 'SMTP 配置', exact: true }).click();
+      const logScope = page.getByRole('combobox', { name: '邮件日志业务', exact: true });
+      await logScope.click();
+      await page.getByRole('option', { name: 'ODM/OEMA', exact: true }).click();
+      await page.getByRole('button', { name: 'ODM/OEMA 日志', exact: true }).waitFor();
+      await page.keyboard.press('Escape');
+      await page.locator('.arco-select-popup').first().waitFor({ state: 'hidden' }).catch(() => {});
+      // The log lists each delivered mail with its recipient; show the picked person's release mail.
+      await page.getByText(f.oem.inboundRecipient, { exact: false }).first().waitFor({ timeout: 15000 });
+      await page.screenshot({ path: OUT + '/mail-oem-inbound-delivered.png', animations: 'disabled' });
       assert(!deliveredRecipients.includes('auto_supplier_a'), 'shared supplier login is never an SMTP recipient');
       assert(delivered.messages.some(message => message.recipients.length === 1), 'mail is sent per recipient');
       const robotLogs = await readMail('collaboration');

@@ -101,6 +101,9 @@ async function openReleasedFile(page, url, fileName) {
     const inbound = OUT + '/' + inboundName;
     fs.copyFileSync(process.env.YF_PROJECT_ROOT + '/web/test/fixtures/pdf-compatibility.pdf', outbound);
     fs.writeFileSync(inbound, '%PDF-1.4\n% OEM inbound process sheet ' + marker + '\n%%EOF\n');
+    const quietName = 'oem-inbound-quiet-' + marker + '.pdf';
+    const quiet = OUT + '/' + quietName;
+    fs.writeFileSync(quiet, '%PDF-1.4\n% OEM inbound sent while the release reminder is off ' + marker + '\n%%EOF\n');
     const companyName = 'UI ODM/OEMA厂商-' + marker;
     const vendor = { username: 'uioem_' + marker, password: password(), changedPassword: password() };
 
@@ -133,10 +136,12 @@ async function openReleasedFile(page, url, fileName) {
           employeeNo: 'oem_' + key + '_' + marker, password: initial, realName,
           email: key + '.' + marker + '@example.invalid', departmentId: section.id, roleId,
         });
-        users[key] = { id: created.id, username: created.employeeNo, password: initial, changedPassword: password(), realName };
+        users[key] = { id: created.id, username: created.employeeNo, password: initial, changedPassword: password(), realName,
+          email: key + '.' + marker + '@example.invalid' };
       }
       await api(admin.context, 'PUT', '/admin/departments/' + section.id + '/leader', { leaderUserId: users.leader.id }, adminToken);
-      f.oem = { companyName, sectionId: section.id, users: Object.fromEntries(Object.entries(users).map(([key, user]) => [key, { id: user.id, username: user.username }])) };
+      f.oem = { companyName, sectionId: section.id, users: Object.fromEntries(Object.entries(users).map(([key, user]) =>
+        [key, { id: user.id, username: user.username, realName: user.realName, email: user.email }])) };
       save();
     });
 
@@ -470,31 +475,74 @@ async function openReleasedFile(page, url, fileName) {
     });
 
     let inboundId;
-    await record('ODM/OEMA 厂商从门户回传 PDF，无需内部审批', async () => {
+    // The vendor picks who at the company is told about the files; the person's section leader is not on the list
+    // (leaders may see the transfer, but release mail goes only to the people chosen at send time).
+    const sendInbound = async (filePath, fileName, screenshot) => {
       const page = portal.page;
       await page.goto(s.base + '/oem-portal/transfers');
       await page.getByRole('button', { name: '发送文件', exact: true }).click();
       const modal = visibleModal(page);
-      await modal.getByLabel('选择文件', { exact: true }).setInputFiles(inbound);
-      await modal.getByText(inboundName, { exact: true }).waitFor();
+      await modal.getByLabel('选择文件', { exact: true }).setInputFiles(filePath);
+      await modal.getByText(fileName, { exact: true }).waitFor();
       // 厂商回传必须自由填写签名，不再要求是已录入的联络人。
       await modal.getByLabel('签名', { exact: true }).fill('浏览器厂商签名');
-      // 通知人员必须显式选择：打开下拉后选第一位可通知人员（没有可选人员时该表单项不出现）。
+      // 通知人员必须显式选择：选内部发送人（课别主管不在可通知名单里）。
       const notify = modal.getByLabel('通知公司人员', { exact: true });
-      if (await notify.count()) {
-        await notify.click();
-        await page.getByRole('option').first().click();
-        await page.keyboard.press('Escape');
-      }
+      await notify.click();
+      const options = page.getByRole('option');
+      await options.first().waitFor();
+      const names = (await options.allInnerTexts()).map(text => text.trim());
+      assert(!names.some(name => name.includes(users.leader.realName)),
+        'the section leader has no download permission, so the vendor cannot pick them: ' + names.join('|'));
+      await options.filter({ hasText: users.sender.realName }).first().click();
+      await page.keyboard.press('Escape');
+      if (screenshot) await page.screenshot({ path: OUT + '/' + screenshot, fullPage: true });
       const sent = await action(page, '/send', 'POST',
         () => modal.getByRole('button', { name: '发送文件', exact: true }).click());
       assert.equal(sent.summary.direction, 'OEM_TO_INTERNAL');
       assert.equal(sent.summary.approvalStatus, 'NOT_REQUIRED');
-      inboundId = sent.summary.id;
-      await page.waitForURL('**/oem-portal/transfers/' + inboundId);
+      await page.waitForURL('**/oem-portal/transfers/' + sent.summary.id);
+      return sent.summary.id;
+    };
+
+    await record('ODM/OEMA 厂商从门户回传 PDF，无需内部审批，通知人选内部发送人', async () => {
+      inboundId = await sendInbound(inbound, inboundName, 'oem-vendor-inbound-recipient.png');
       f.oem.inboundId = inboundId;
+      f.oem.inboundRecipient = users.sender.email;
+      f.oem.inboundLeader = users.leader.email;
       save();
-      await page.screenshot({ path: OUT + '/oem-vendor-inbound-sent.png', fullPage: true });
+      await portal.page.screenshot({ path: OUT + '/oem-vendor-inbound-sent.png', fullPage: true });
+    });
+
+    await record('关闭“文件送达提醒”后厂商再回传：不产生送达邮件，之后恢复开关', async () => {
+      const rules = await newPage('oem-admin-rules');
+      await login(rules.page, 'admin', s.adminPassword);
+      await rules.page.waitForURL(s.base + '/');
+      const page = rules.page;
+      const rule = page.getByRole('switch', { name: '文件送达提醒', exact: true });
+      const saveRules = page.getByRole('button', { name: '保存 ODM/OEMA 邮件提醒', exact: true });
+      const setRule = async (on, screenshot) => {
+        await page.goto(s.base + '/oem/admin/settings?tab=notify');
+        await rule.waitFor();
+        const previous = (await rule.getAttribute('aria-checked')) === 'true';
+        if (previous !== on) {
+          await rule.click();
+          await saveRules.click();
+          await page.getByText('ODM/OEMA 邮件提醒规则已保存', { exact: true }).waitFor();
+        }
+        assert.equal(await rule.getAttribute('aria-checked'), String(on));
+        await page.screenshot({ path: OUT + '/' + screenshot, fullPage: true });
+        return previous;
+      };
+      const original = await setRule(false, 'oem-release-reminder-off.png');
+      try {
+        f.oem.quietInboundId = await sendInbound(quiet, quietName, null);
+        save();
+        await portal.page.screenshot({ path: OUT + '/oem-vendor-inbound-quiet-sent.png', fullPage: true });
+      } finally {
+        await setRule(original, 'oem-release-reminder-restored.png');
+        await rules.context.close();
+      }
     });
 
     lastPage = sender.page;
