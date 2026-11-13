@@ -8800,6 +8800,45 @@
         }
       }
     },
+    "/api/v1/outsource/items/completion": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceBatchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/items/{id}/changes": {
       "get": {
         "tags": [
@@ -13617,6 +13656,27 @@
           },
           "status": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceCompletionRequest": {
+        "required": [
+          "completed",
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceItemVersion"
+            },
+            "nullable": true
+          },
+          "completed": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "additionalProperties": false

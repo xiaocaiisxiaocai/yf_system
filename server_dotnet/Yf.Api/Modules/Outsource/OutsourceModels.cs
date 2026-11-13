@@ -51,6 +51,9 @@ public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string?
 
 public sealed record OutsourceBatchDelete(OutsourceItemVersion[]? Items);
 
+/// <summary><c>completed=true</c> marks the items 已完成; <c>false</c> reopens them.</summary>
+public sealed record OutsourceCompletionRequest(OutsourceItemVersion[]? Items, bool? Completed);
+
 public sealed record OutsourceBatchResponse(OutsourceItemResponse[] Items);
 
 public sealed record OutsourceSyncTimeRequest(string? SyncTime);

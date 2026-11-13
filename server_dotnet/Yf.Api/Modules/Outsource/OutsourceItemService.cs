@@ -377,6 +377,44 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         return EmptyResponse.Instance;
     }
 
+    /// <summary>
+    /// Purchasing marks items 已完成 (or reopens them). IPMS never reports closure, so this is the only way an item closes:
+    /// completed items are hidden by default, skipped by the IPMS sync, cannot be edited or mailed, and no vendor is told.
+    /// </summary>
+    public async Task<OutsourceBatchResponse> SetCompletionAsync(CurrentUser actor, OutsourceCompletionRequest request, CancellationToken ct)
+    {
+        var versions = ValidateBatch(request.Items);
+        if (request.Completed is not { } completed) throw ApiException.BadRequest("请指定标记为已完成或重新开启");
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
+        var locked = await LockAsync(context, versions, ct);
+        var now = DateTime.UtcNow;
+        foreach (var before in locked)
+        {
+            if ((before.ClosedAt is not null) == completed) continue;
+            await context.OutsourceItems.Where(x => x.Id == before.Id)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.ClosedAt, completed ? now : null), ct);
+            AuditChange[] changes = [new("completed", "完成状态", CompletionLabel(!completed), CompletionLabel(completed))];
+            OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
+            await context.SaveChangesAsync(ct);
+            await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
+                completed ? "OUTSOURCE_ITEM_COMPLETE" : "OUTSOURCE_ITEM_REOPEN", "outsource_item", before.Id, new
+                {
+                    targetName = before.WorkOrderNo, changes,
+                    batch = versions.Length > 1 ? versions.Length : (int?)null,
+                }, null, ct);
+        }
+        var reference = await OutsourceReference.LoadAsync(context, ct);
+        var ids = locked.Select(x => x.Id).ToArray();
+        var updated = await context.OutsourceItems.AsNoTracking().Where(x => ids.Contains(x.Id)).ToArrayAsync(ct);
+        await transaction.CommitAsync(ct);
+        var order = versions.Select((x, index) => (x.Id, index)).ToDictionary(x => x.Id, x => x.index);
+        return new(updated.OrderBy(x => order[x.Id]).Select(reference.Json).ToArray());
+    }
+
+    internal static string CompletionLabel(bool completed) => completed ? "已完成" : "未完成";
+
     private sealed record Change(DateOnly? Date, ulong? VendorId, ulong? TypeId, string? Remark, string? Status);
 
     private static Change ParseChange(string? date, ulong? vendorId, ulong? typeId, string? remark, string? status, bool requireAll)
@@ -416,7 +454,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
         var locked = await LockAsync(context, versions, ct);
-        if (locked.Any(x => x.ClosedAt is not null)) throw ApiException.Conflict("已结案的记录不能修改");
+        if (locked.Any(x => x.ClosedAt is not null)) throw ApiException.Conflict("已完成的记录不能修改，请先重新开启");
         var reference = await OutsourceReference.LoadAsync(context, ct);
         if (change.VendorId is { } vendorId && !reference.ActiveVendorIds.Contains(vendorId)) throw ApiException.BadRequest("外发厂商不存在或已停用");
         var newTypeCode = change.TypeId is { } typeId
@@ -674,7 +712,7 @@ internal static class OutsourceHistory
         ["customer"] = "客户", ["machineModel"] = "机型", ["mechanicalSection"] = "机构课别",
         ["mechanicalOwner"] = "机构执行人", ["electricalOwner"] = "电控执行人", ["workOrderIssuedOn"] = "工令下发",
         ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
-        ["latestDueDate"] = "最新交期",
+        ["latestDueDate"] = "最新交期", ["completed"] = "完成状态",
     };
 
     internal static string Label(string field) => Labels.GetValueOrDefault(field, field);

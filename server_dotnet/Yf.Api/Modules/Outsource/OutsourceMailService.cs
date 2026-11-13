@@ -152,7 +152,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         foreach (var item in items)
         {
             var response = responses[item.Id];
-            if (item.ClosedAt is not null) problems.Add($"工令 {item.WorkOrderNo} 已结案");
+            if (item.ClosedAt is not null) problems.Add($"工令 {item.WorkOrderNo} 已完成");
             else if (response.MatchState == OutsourceMatchStates.UnknownType) problems.Add($"工令 {item.WorkOrderNo} 的外发类型不在字典中");
             else if (response.MatchState == OutsourceMatchStates.VendorMismatch) problems.Add($"工令 {item.WorkOrderNo} 的外发类型与厂商不符");
             else if (vendors[item.VendorId].Status != AccountStatuses.Active) problems.Add($"工令 {item.WorkOrderNo} 的厂商已停用");

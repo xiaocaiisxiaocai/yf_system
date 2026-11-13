@@ -188,7 +188,7 @@ public sealed class OutsourceItemTests
         Assert.Equal(0UL, (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).Total);
         var closed = (await service.ListAsync(buyer, Query(includeClosed: true), 1, 20, 0, ct)).List.Single();
         Assert.True(closed.Closed);
-        Assert.Equal("已结案的记录不能修改", (await Assert.ThrowsAsync<ApiException>(() =>
+        Assert.Equal("已完成的记录不能修改，请先重新开启", (await Assert.ThrowsAsync<ApiException>(() =>
             service.UpdateAsync(buyer, closed.Id, new("2026-11-08", dingya.Id, null, null, "NORMAL", closed.UpdatedAt), ct))).Message);
 
         await using var connection = await database.Database.OpenAsync(ct);

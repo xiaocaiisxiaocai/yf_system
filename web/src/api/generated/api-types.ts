@@ -1058,6 +1058,11 @@ export interface OutsourceCcUserResponse {
   status: string
 }
 
+export interface OutsourceCompletionRequest {
+  items?: Array<OutsourceItemVersion> | null
+  completed?: boolean | null
+}
+
 export interface OutsourceContactResponse {
   id: number
   vendorId: number
@@ -2114,6 +2119,7 @@ export interface ApiResponses {
   "GET /outsource/items": PageResponseOfOutsourceItemResponse
   "PUT /outsource/items/batch": OutsourceBatchResponse
   "POST /outsource/items/batch-delete": EmptyResponse
+  "PUT /outsource/items/completion": OutsourceBatchResponse
   "GET /outsource/items/export": Blob
   "POST /outsource/items/import": AdminImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse

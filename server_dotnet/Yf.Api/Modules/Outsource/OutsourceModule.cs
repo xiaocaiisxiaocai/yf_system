@@ -84,6 +84,8 @@ public static class OutsourceModule
             s.BatchUpdateAsync(AccessService.GetCurrent(c), r, ct));
         items.MapPost("/batch-delete", (OutsourceBatchDelete r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.BatchDeleteAsync(AccessService.GetCurrent(c), r, ct));
+        items.MapPut("/completion", (OutsourceCompletionRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.SetCompletionAsync(AccessService.GetCurrent(c), r, ct));
         items.MapGet("/{id:long}/changes", (ulong id, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.ChangesAsync(AccessService.GetCurrent(c), id, ct));
         items.MapPost("/sync", (OutsourceSyncRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>

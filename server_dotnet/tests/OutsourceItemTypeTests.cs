@@ -249,7 +249,7 @@ public sealed class OutsourceItemTypeTests
         var error = await Assert.ThrowsAsync<ApiException>(() =>
             f.Items.UpdateAsync(f.Buyer, item.Id, new("2026-11-04", f.Dingya.Id, oemb.Id, null, "NORMAL", closed.UpdatedAt), ct));
 
-        Assert.Equal((409, "已结案的记录不能修改"), (error.Status, error.Message));
+        Assert.Equal((409, "已完成的记录不能修改，请先重新开启"), (error.Status, error.Message));
     }
 
     [Fact(Timeout = 180_000)]

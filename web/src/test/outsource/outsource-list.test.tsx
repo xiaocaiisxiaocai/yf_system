@@ -173,6 +173,40 @@ describe('外协清单页面', () => {
     }))
   })
 
+  it('勾选后可标记已完成；已完成的记录只能重新开启', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:view', 'outsource:manage'])
+    mockApi()
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items } } as never)
+    const { unmount } = render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    const row = (await screen.findByText('21089901')).closest('tr')!
+    await user.click(within(row).getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: '标记完成' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/completion', {
+      items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }], completed: true,
+    }))
+    unmount()
+
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/items' ? { list: [{ ...items[1], closed: true }], total: 1, page: 1, pageSize: 20 }
+        : url === '/outsource/items/summary' ? { total: 1, vendors: [{ vendorId: 2, count: 1 }] }
+          : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+    } as never))
+    put.mockClear()
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    const closedRow = (await screen.findByText('21089961')).closest('tr')!
+    expect(within(closedRow).getByText('已完成')).toBeInTheDocument()
+    await user.click(within(closedRow).getByRole('checkbox'))
+    expect(screen.queryByRole('button', { name: /发送邮件/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: '标记完成' })).toBeNull()
+    await user.click(screen.getByRole('button', { name: '重新开启 (1)' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/completion', {
+      items: [{ id: 2, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }], completed: false,
+    }))
+  })
+
   it('汇入模板与提交带外发类型，提示里写明要填类型', async () => {
     const user = userEvent.setup()
     setSession(['outsource:view', 'outsource:import'])

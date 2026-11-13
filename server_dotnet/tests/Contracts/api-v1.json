@@ -219,6 +219,7 @@
   "PUT /api/v1/oem/transfers/{}",
   "PUT /api/v1/oem/uploads/{}/chunks/{}",
   "PUT /api/v1/outsource/items/batch",
+  "PUT /api/v1/outsource/items/completion",
   "PUT /api/v1/outsource/items/{}",
   "PUT /api/v1/outsource/settings/contacts/{}",
   "PUT /api/v1/outsource/settings/contacts/{}/status",

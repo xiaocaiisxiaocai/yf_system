@@ -3,7 +3,7 @@ import {
   Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
+import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
@@ -208,6 +208,18 @@ export default function OutsourceListPage() {
     } catch { /* 统一请求层提示 */ }
   }
 
+  const setCompletion = async (completed: boolean) => {
+    const targets = selectedItems.filter((item) => item.closed !== completed)
+    try {
+      await http.put<ApiResponses['PUT /outsource/items/completion']>('/outsource/items/completion', {
+        items: targets.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt })), completed,
+      })
+      Message.success(completed ? `已将 ${targets.length} 条标记为已完成` : `已重新开启 ${targets.length} 条记录`)
+      setSelected([]); await load()
+    } catch { /* 统一请求层提示 */ }
+  }
+  const closedSelected = selectedItems.filter((item) => item.closed).length
+
   const prepareImport = async (rows: ExcelImportRow[]) => {
     const payload: ImportRow[] = rows.map((row) => ({
       rowNumber: row.rowNumber,
@@ -270,7 +282,7 @@ export default function OutsourceListPage() {
       title: '发送状态', width: 120, align: 'center',
       render: (_, item) => <Space size={4}>
         <Tag color={SEND_TAG[item.sendStatus]?.color}>{SEND_TAG[item.sendStatus]?.label ?? item.sendStatus}</Tag>
-        {item.closed && <Tag color="gray">已结案</Tag>}
+        {item.closed && <Tag color="gray">已完成</Tag>}
       </Space>,
     },
     {
@@ -304,18 +316,22 @@ export default function OutsourceListPage() {
           onChange={(value) => changeFilters({ sendStatus: value })} options={SEND_STATUS_OPTIONS} />
         <DatePicker.RangePicker aria-label="外发日期" style={{ width: 240 }} placeholder={['外发日期起', '外发日期止']}
           value={filters.dateRange} onChange={(value) => changeFilters({ dateRange: value?.length === 2 ? [value[0], value[1]] : undefined })} />
-        <Checkbox checked={filters.includeClosed} onChange={(value) => changeFilters({ includeClosed: value })}>显示已结案</Checkbox>
+        <Checkbox checked={filters.includeClosed} onChange={(value) => changeFilters({ includeClosed: value })}>显示已完成</Checkbox>
       </Space>
       <Space wrap>
-        {canManage && selected.length > 0 && <>
+        {canManage && closedSelected > 0 && <Button onClick={() => void setCompletion(false)}>重新开启 ({closedSelected})</Button>}
+        {canManage && selected.length > 0 && closedSelected === 0 && <>
           <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(selected)}>发送邮件 ({selected.length})</Button>
           <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({selected.length})</Button>
+          <Popconfirm title={`将所选 ${selected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
+            <Button icon={<IconCheckCircle />}>标记完成</Button>
+          </Popconfirm>
           <Popconfirm title={`删除所选 ${selected.length} 条记录？已发送给厂商的记录不能删除。`} onOk={removeSelected}>
             <Button status="danger">删除</Button>
           </Popconfirm>
         </>}
         {syncStatus && <SyncBadge status={syncStatus} />}
-        {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running}
+        {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running || closedSelected > 0}
           onClick={() => void syncNow()}>{selected.length > 0 ? `同步所选 (${selected.length})` : '立即同步'}</Button>}
         <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
         {canImport && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>汇入</Button>}
@@ -323,10 +339,10 @@ export default function OutsourceListPage() {
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
       : <Table<Item> className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
-        rowClassName={(item) => item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : ''}
+        rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : '',
+          item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
         rowSelection={canManage ? {
           type: 'checkbox', selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]),
-          checkboxProps: (item) => ({ disabled: item.closed }),
         } : undefined}
         noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}
         scroll={{ x: 2350, y: 'var(--page-table-scroll-y)' }}

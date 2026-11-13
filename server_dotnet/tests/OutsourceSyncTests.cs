@@ -152,5 +152,73 @@ public sealed class OutsourceSyncTests
         Assert.True((await sync.SetScheduleAsync(buyer, new(true), ct)).ScheduleEnabled);
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task PurchasingMarksItemsCompletedAndCanReopenThem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_done", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await database.ExecuteAsync("""
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
+              (80,'外协采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (81,'外协查看',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 80,id FROM permissions WHERE code LIKE 'outsource%';
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 81,id FROM permissions WHERE code IN ('outsource','outsource:view');
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9821,'os_done_buyer','unused','采购','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9822,'os_done_viewer','unused','主管','viewer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9821,80),(9822,81);
+            """, ct);
+        var buyer = new CurrentUser(9821, "os_done_buyer", "INTERNAL", null);
+        var viewer = new CurrentUser(9822, "os_done_viewer", "INTERNAL", null);
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var audit = new AuditService([]);
+        var settings = new OutsourceSettingsService(factory, audit);
+        var ipms = new StubIpms();
+        var items = new OutsourceItemService(factory, audit, ipms);
+        var sync = new OutsourceIpmsSyncService(factory, audit, ipms, new AppOptions(), NullLogger<OutsourceIpmsSyncService>.Instance);
+        var vendor = await settings.CreateVendorAsync(buyer, new("鼎亚", null, 1), ct);
+        var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
+        await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
+        ipms.Add("A1"); ipms.Add("B1");
+        await items.ImportAsync(buyer, new([new(2, "2026-11-04", "A1", "鼎亚", "OEMA"), new(3, "2026-11-04", "B1", "鼎亚", "OEMA")]), ct);
+        await database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT' WHERE work_order_no='B1'", ct);
+        var list = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List;
+        OutsourceItemVersion Version(OutsourceItemResponse item) => new(item.Id, item.UpdatedAt);
+        var a = list.Single(x => x.WorkOrderNo == "A1");
+        var b = list.Single(x => x.WorkOrderNo == "B1");
+
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => items.SetCompletionAsync(viewer, new([Version(a)], true), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => items.SetCompletionAsync(buyer, new([Version(a)], null), ct))).Status);
+        Assert.Equal(40903, (await Assert.ThrowsAsync<ApiException>(() =>
+            items.SetCompletionAsync(buyer, new([new(a.Id, a.UpdatedAt.AddSeconds(-5))], true), ct))).Code);
+
+        // Completing keeps the send status, hides the rows by default and records who did it.
+        var done = (await items.SetCompletionAsync(buyer, new([Version(a), Version(b)], true), ct)).Items;
+        Assert.All(done, x => Assert.True(x.Closed));
+        Assert.Equal("SENT", done.Single(x => x.Id == b.Id).SendStatus);
+        Assert.Empty((await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List);
+        Assert.Equal(0, (await items.SummaryAsync(viewer, false, ct)).Total);
+        var history = Assert.Single(await items.ChangesAsync(viewer, a.Id, ct));
+        Assert.Equal(("completed", "完成状态", "未完成", "已完成", "EDIT", "采购"),
+            (history.Field, history.Label, history.OldValue, history.NewValue, history.Source, history.ActorName));
+
+        // A completed item can no longer be edited, and the IPMS sync leaves it alone.
+        var completedA = done.Single(x => x.Id == a.Id);
+        var edit = await Assert.ThrowsAsync<ApiException>(() => items.UpdateAsync(buyer, a.Id,
+            new("2026-11-05", vendor.Id, null, "备注", "NORMAL", completedA.UpdatedAt), ct));
+        Assert.Equal((409, "已完成的记录不能修改，请先重新开启"), (edit.Status, edit.Message));
+        ipms.Orders["A1"] = ipms.Orders["A1"] with { Quantity = 9 };
+        Assert.Equal(0, (await sync.SyncNowAsync(buyer, new(null), ct)).LastProcessed);
+
+        // Reopening brings it back to the list and to the sync; repeating an unchanged state is a no-op.
+        var reopened = Assert.Single((await items.SetCompletionAsync(buyer, new([Version(completedA)], false), ct)).Items);
+        Assert.False(reopened.Closed);
+        Assert.Equal(reopened.UpdatedAt, Assert.Single((await items.SetCompletionAsync(buyer, new([Version(reopened)], false), ct)).Items).UpdatedAt);
+        Assert.Equal(["A1"], (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.Select(x => x.WorkOrderNo));
+        Assert.Equal((1, 1), ((await sync.SyncNowAsync(buyer, new(null), ct)) is var run ? (run.LastProcessed, run.LastChanged) : default));
+        Assert.Equal(["未完成", "已完成"], (await items.ChangesAsync(viewer, a.Id, ct)).Where(x => x.Field == "completed").Select(x => x.NewValue));
+    }
+
     private static OutsourceItemQuery Query(bool includeClosed) => new(null, null, null, null, null, null, null, includeClosed);
 }
