@@ -11,6 +11,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import shutil
@@ -221,6 +222,11 @@ class Client:
             LOGIN_REQUEST_BUDGET.record_without_waiting(self.base, login_account)
         elif pacing_mode == "wait":
             LOGIN_REQUEST_BUDGET.wait(self.base, login_account)
+        # 供应商留言和上传必须带自由填写的签名（内部账号会忽略该字段）；夹具默认补上，
+        # 只有显式期望 400 的用例（验证缺签名被拒）保持原样。
+        if (isinstance(body, dict) and method == "POST" and expected != 400 and "signerName" not in body
+                and re.search(r"^/api/v1/(projects/\d+/messages|uploads/init)$", path)):
+            body = {**body, "signerName": "接口测试签名"}
         req_headers = {"Origin": self.base}
         if self.token:
             req_headers["Authorization"] = "Bearer " + self.token
