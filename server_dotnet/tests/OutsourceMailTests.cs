@@ -77,8 +77,8 @@ public sealed class OutsourceMailTests
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id, duopu.Id]), ct);
         await settings.SetDefaultCcAsync(buyer, new([9913]), ct);
         foreach (var (no, customer) in new[] { ("A1", "客户甲"), ("B1", "客户乙"), ("C1", "客户甲") })
-            ipms.Orders[no] = new(no, customer, "ST-201L", null, null, null, null, null, null, "OEMA", 1, new DateOnly(2026, 12, 31), false);
-        await items.ImportAsync(buyer, new([new(2, "2026-11-04", "A1", "鼎亚"), new(3, "2026-11-04", "B1", "鼎亚"), new(4, "2026-11-04", "C1", "多普")]), ct);
+            ipms.Orders[no] = new(no, customer, "ST-201L", null, null, null, null, null, null, 1, new DateOnly(2026, 12, 31), false);
+        await items.ImportAsync(buyer, new([new(2, "2026-11-04", "A1", "鼎亚", "OEMA"), new(3, "2026-11-04", "B1", "鼎亚", "OEMA"), new(4, "2026-11-04", "C1", "多普", "OEMA")]), ct);
         var list = (await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
         ulong Id(string no) => list.Single(x => x.WorkOrderNo == no).Id;
         ulong[] all = [Id("A1"), Id("B1"), Id("C1")];
@@ -144,9 +144,9 @@ public sealed class OutsourceMailTests
 
         // Changes after sending: the changed cell is yellow next time; moving an item adds a withdrawal for the old vendor.
         var a = list.Single(x => x.WorkOrderNo == "A1");
-        await items.UpdateAsync(buyer, a.Id, new("2026-11-04", dingya.Id, "加急", "NORMAL", a.UpdatedAt), ct);
+        await items.UpdateAsync(buyer, a.Id, new("2026-11-04", dingya.Id, null, "加急", "NORMAL", a.UpdatedAt), ct);
         var b = list.Single(x => x.WorkOrderNo == "B1");
-        await items.UpdateAsync(buyer, b.Id, new("2026-11-04", duopu.Id, null, "NORMAL", b.UpdatedAt), ct);
+        await items.UpdateAsync(buyer, b.Id, new("2026-11-04", duopu.Id, null, null, "NORMAL", b.UpdatedAt), ct);
         var again = await mails.PreviewAsync(buyer, new([a.Id, b.Id]), ct);
         Assert.Equal(["NOTICE:" + dingya.Id, "NOTICE:" + duopu.Id, "WITHDRAW:" + dingya.Id], again.Mails.Select(x => x.Key));
         Assert.Contains("background:#ffff00;\">加急", again.Mails[0].HtmlBody, StringComparison.Ordinal);

@@ -21,7 +21,7 @@ public sealed class OutsourceIpmsSyncService(
 {
     internal const int BatchSize = 200;
     internal const int MaximumManualItems = 500;
-    internal const string DefaultSyncTime = "02:00";
+    internal const string DefaultSyncTime = "03:30";
     private static readonly TimeSpan ScanInterval = TimeSpan.FromMinutes(1);
     private const int LeaseMinutes = 10;
 
@@ -183,7 +183,6 @@ public sealed class OutsourceIpmsSyncService(
             new AuditChange("workOrderIssuedOn", "", item.WorkOrderIssuedOn, next.WorkOrderIssuedOn),
             new AuditChange("bomOn", "", item.BomOn, next.BomOn),
             new AuditChange("drawingReleasedOn", "", item.DrawingReleasedOn, next.DrawingReleasedOn),
-            new AuditChange("typeCode", "", item.TypeCode, next.TypeCode),
             new AuditChange("quantity", "", item.Quantity, next.Quantity),
             new AuditChange("latestDueDate", "", item.LatestDueDate, next.LatestDueDate));
         var changed = changes.Length > 0;
@@ -203,7 +202,7 @@ public sealed class OutsourceIpmsSyncService(
                 .SetProperty(x => x.MechanicalSection, next.MechanicalSection).SetProperty(x => x.MechanicalOwner, next.MechanicalOwner)
                 .SetProperty(x => x.ElectricalOwner, next.ElectricalOwner).SetProperty(x => x.WorkOrderIssuedOn, next.WorkOrderIssuedOn)
                 .SetProperty(x => x.BomOn, next.BomOn).SetProperty(x => x.DrawingReleasedOn, next.DrawingReleasedOn)
-                .SetProperty(x => x.TypeCode, next.TypeCode).SetProperty(x => x.Quantity, next.Quantity)
+                .SetProperty(x => x.Quantity, next.Quantity)
                 .SetProperty(x => x.LatestDueDate, next.LatestDueDate).SetProperty(x => x.OriginalDueDate, originalDue)
                 .SetProperty(x => x.SendStatus, sendStatus).SetProperty(x => x.IpmsSyncedAt, now)
                 .SetProperty(x => x.ClosedAt, closedAt), ct);
@@ -231,7 +230,7 @@ public sealed class OutsourceIpmsSyncService(
     {
         var local = utcNow.AddHours(8);
         businessDay = DateOnly.FromDateTime(local);
-        if (!TimeOnly.TryParseExact(syncTime, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)) at = new(2, 0);
+        if (!TimeOnly.TryParseExact(syncTime, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var at)) at = new(3, 30);
         return TimeOnly.FromDateTime(local) >= at && (scheduledFor is null || scheduledFor < businessDay);
     }
 

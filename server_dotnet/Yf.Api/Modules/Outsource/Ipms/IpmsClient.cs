@@ -5,7 +5,7 @@ namespace Yf.Api.Modules.Outsource.Ipms;
 
 /// <summary>
 /// The IPMS fields the outsourcing list copies for one work order. Every field is read-only in this system;
-/// IPMS stays the source of truth. See 外协清单契约 → 数据与字段归属.
+/// IPMS stays the source of truth. The outsourcing type is not one of them: staff enter it (外协契约 → 外发类型字典与防呆). See 外协清单契约 → 数据与字段归属.
 /// </summary>
 public sealed record IpmsWorkOrder(
     string WorkOrderNo,
@@ -17,7 +17,6 @@ public sealed record IpmsWorkOrder(
     DateOnly? WorkOrderIssuedOn,
     DateOnly? BomOn,
     DateOnly? DrawingReleasedOn,
-    string? OutsourceTypeCode,
     int? Quantity,
     DateOnly? DueDate,
     bool Closed);
@@ -49,14 +48,41 @@ public sealed class IpmsOptions
     public string FakeDataPath { get; set; } = "";
     public int TimeoutSeconds { get; set; } = 30;
 
+    /// <summary>MES monitoring service root, including the port (e.g. <c>http://host:6001</c>). Optional: the settings page can override it.</summary>
+    public string MesBaseUrl { get; set; } = "";
+    /// <summary>Dedicated read-only MES account. Secret: external configuration only, never logged.</summary>
+    public string MesAccount { get; set; } = "";
+    /// <summary>Password of <see cref="MesAccount"/>. Secret: external configuration only, never logged.</summary>
+    public string MesPassword { get; set; } = "";
+    /// <summary>Daily mirror time in business time (UTC+8), "HH:mm".</summary>
+    public string MesSyncTime { get; set; } = "03:00";
+    public int MesPageSize { get; set; } = 100;
+    public int MesPageDelaySeconds { get; set; } = 2;
+    public int MesPageTimeoutSeconds { get; set; } = 180;
+    /// <summary>A run that fetches fewer rows than this percentage of the previous success is not applied.</summary>
+    public int MesMinRatioPercent { get; set; } = 50;
+
     internal const string FakeMode = "Fake";
+    internal const string MesMirrorMode = "MesMirror";
 
     public void Validate()
     {
-        if (Mode is not ("" or FakeMode)) throw new InvalidOperationException("App:Ipms:Mode must be empty or Fake.");
+        if (Mode is not ("" or FakeMode or MesMirrorMode)) throw new InvalidOperationException("App:Ipms:Mode must be empty, Fake or MesMirror.");
         if (TimeoutSeconds is < 1 or > 600) throw new InvalidOperationException("App:Ipms:TimeoutSeconds must be between 1 and 600.");
         if (Mode == FakeMode && (FakeDataPath.Length == 0 || !Path.IsPathFullyQualified(FakeDataPath)))
             throw new InvalidOperationException("App:Ipms:FakeDataPath must be an absolute path when App:Ipms:Mode is Fake.");
+        if (Mode != MesMirrorMode) return;
+        // Messages name the setting only; values (the password above all) never appear in them.
+        if (!string.IsNullOrWhiteSpace(MesBaseUrl) && (!Uri.TryCreate(MesBaseUrl, UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https")))
+            throw new InvalidOperationException("App:Ipms:MesBaseUrl must be an absolute http or https URL when set (it can also be set on the settings page).");
+        if (string.IsNullOrWhiteSpace(MesAccount)) throw new InvalidOperationException("App:Ipms:MesAccount is required when App:Ipms:Mode is MesMirror.");
+        if (string.IsNullOrEmpty(MesPassword)) throw new InvalidOperationException("App:Ipms:MesPassword is required when App:Ipms:Mode is MesMirror.");
+        if (!TimeOnly.TryParseExact(MesSyncTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
+            throw new InvalidOperationException("App:Ipms:MesSyncTime must be HH:mm.");
+        if (MesPageSize is < 1 or > 200) throw new InvalidOperationException("App:Ipms:MesPageSize must be between 1 and 200.");
+        if (MesPageDelaySeconds is < 0 or > 60) throw new InvalidOperationException("App:Ipms:MesPageDelaySeconds must be between 0 and 60.");
+        if (MesPageTimeoutSeconds is < 10 or > 600) throw new InvalidOperationException("App:Ipms:MesPageTimeoutSeconds must be between 10 and 600.");
+        if (MesMinRatioPercent is < 1 or > 100) throw new InvalidOperationException("App:Ipms:MesMinRatioPercent must be between 1 and 100.");
     }
 }
 
@@ -70,7 +96,7 @@ public sealed class UnconfiguredIpmsClient : IIpmsClient
 
 /// <summary>
 /// Development/test data source. File shape:
-/// <c>{ "unavailable": false, "workOrders": [ { "workOrderNo": "21089901", "customer": "...", "outsourceTypeCode": "OEMA", ... } ] }</c>.
+/// <c>{ "unavailable": false, "workOrders": [ { "workOrderNo": "21089901", "customer": "...", ... } ] }</c>.
 /// <c>unavailable: true</c> simulates an IPMS outage.
 /// </summary>
 public sealed class FakeIpmsClient(string path) : IIpmsClient
@@ -103,7 +129,7 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
             var no = row.WorkOrderNo?.Trim();
             if (string.IsNullOrEmpty(no) || !wanted.Contains(no)) continue;
             result[no] = new(no, row.Customer, row.MachineModel, row.MechanicalSection, row.MechanicalOwner, row.ElectricalOwner,
-                row.WorkOrderIssuedOn, row.BomOn, row.DrawingReleasedOn, row.OutsourceTypeCode, row.Quantity, row.DueDate, row.Closed);
+                row.WorkOrderIssuedOn, row.BomOn, row.DrawingReleasedOn, row.Quantity, row.DueDate, row.Closed);
         }
         return result;
     }
@@ -125,7 +151,6 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
         public DateOnly? WorkOrderIssuedOn { get; set; }
         public DateOnly? BomOn { get; set; }
         public DateOnly? DrawingReleasedOn { get; set; }
-        public string? OutsourceTypeCode { get; set; }
         public int? Quantity { get; set; }
         public DateOnly? DueDate { get; set; }
         public bool Closed { get; set; }
@@ -134,7 +159,11 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
 
 internal static class IpmsClientFactory
 {
-    internal static IIpmsClient Create(AppOptions options) => options.Ipms.Mode == IpmsOptions.FakeMode
-        ? new FakeIpmsClient(options.Ipms.FakeDataPath)
-        : new UnconfiguredIpmsClient();
+    internal static IIpmsClient Create(AppOptions options, IServiceProvider services) => options.Ipms.Mode switch
+    {
+        IpmsOptions.FakeMode => new FakeIpmsClient(options.Ipms.FakeDataPath),
+        IpmsOptions.MesMirrorMode => new Mes.MesMirrorIpmsClient(
+            services.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<YfDbContext>>()),
+        _ => new UnconfiguredIpmsClient(),
+    };
 }

@@ -9022,6 +9022,247 @@
           }
         }
       }
+    },
+    "/api/v1/outsource/mes-mirror/status": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesMirrorStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/run": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesMirrorRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesMirrorStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/stop": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesMirrorStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/confirm": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesMirrorConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesMirrorStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/settings": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesMirrorSettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesMirrorSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesMirrorSettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/test": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesMirrorTestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesTestResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -10447,6 +10688,237 @@
             "type": "string"
           },
           "expiresInSeconds": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesMirrorConfirmRequest": {
+        "required": [
+          "apply"
+        ],
+        "type": "object",
+        "properties": {
+          "apply": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesMirrorPreviewRow": {
+        "required": [
+          "customerName",
+          "deviceModels",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "workOrderNo": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deviceModels": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesMirrorRunRequest": {
+        "required": [
+          "mode",
+          "page",
+          "pageSize"
+        ],
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "nullable": true
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesMirrorSettingsRequest": {
+        "required": [
+          "baseUrl"
+        ],
+        "type": "object",
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesMirrorSettingsResponse": {
+        "required": [
+          "accountConfigured",
+          "baseUrl",
+          "configBaseUrl",
+          "saved"
+        ],
+        "type": "object",
+        "properties": {
+          "baseUrl": {
+            "type": "string"
+          },
+          "configBaseUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "saved": {
+            "type": "boolean"
+          },
+          "accountConfigured": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesMirrorStatusResponse": {
+        "required": [
+          "fetched",
+          "lastCount",
+          "lastError",
+          "lastFinishedAt",
+          "lastSuccessAt",
+          "lastTrigger",
+          "mirrorCount",
+          "page",
+          "pageSize",
+          "pages",
+          "pendingReason",
+          "phase",
+          "preview",
+          "runMode",
+          "startedAt",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "phase": {
+            "type": "string"
+          },
+          "runMode": {
+            "type": "string",
+            "nullable": true
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "fetched": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "pages": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "pendingReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFinishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastTrigger": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "mirrorCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "preview": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesMirrorPreviewRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesMirrorTestRequest": {
+        "required": [
+          "baseUrl"
+        ],
+        "type": "object",
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesTestResult": {
+        "required": [
+          "elapsedMs",
+          "message",
+          "ok",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "elapsedMs": {
             "type": "integer",
             "format": "int32"
           }
@@ -12964,6 +13436,7 @@
           "outsourceDate",
           "remark",
           "status",
+          "typeId",
           "vendorId"
         ],
         "type": "object",
@@ -12980,6 +13453,11 @@
             "nullable": true
           },
           "vendorId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "typeId": {
             "type": "integer",
             "format": "int64",
             "nullable": true
@@ -13244,6 +13722,7 @@
         "required": [
           "outsourceDate",
           "rowNumber",
+          "typeName",
           "vendorName",
           "workOrderNo"
         ],
@@ -13262,6 +13741,10 @@
             "nullable": true
           },
           "vendorName": {
+            "type": "string",
+            "nullable": true
+          },
+          "typeName": {
             "type": "string",
             "nullable": true
           }
@@ -13479,6 +13962,7 @@
           "outsourceDate",
           "remark",
           "status",
+          "typeId",
           "vendorId"
         ],
         "type": "object",
@@ -13488,6 +13972,11 @@
             "nullable": true
           },
           "vendorId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "typeId": {
             "type": "integer",
             "format": "int64",
             "nullable": true

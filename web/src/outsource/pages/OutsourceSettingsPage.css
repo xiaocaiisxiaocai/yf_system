@@ -36,6 +36,22 @@
   color: rgb(var(--danger-6));
 }
 
+.mes-mirror-panel {
+  max-width: 760px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-2);
+}
+
+.mes-mirror-panel__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.mes-mirror-panel__ok {
+  color: rgb(var(--success-6));
+}
+
 .outsource-muted {
   color: var(--color-text-3);
 }

@@ -10,6 +10,7 @@ import { fmtTime, type ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
 import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
+import MesMirrorPanel from './MesMirrorPanel'
 import './OutsourceSettingsPage.css'
 
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
@@ -407,5 +408,6 @@ function SyncTab() {
         ? <span className="outsource-sync-error">{status.lastError}</span>
         : `处理 ${status.lastProcessed}，变更 ${status.lastChanged}，结案 ${status.lastClosed}，IPMS 查无 ${status.lastMissing}` },
     ]} />
+    <MesMirrorPanel />
   </div>
 }

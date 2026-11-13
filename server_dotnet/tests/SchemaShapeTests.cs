@@ -61,6 +61,8 @@ public sealed class SchemaShapeTests
         "20261112031508_AddOemInboundRecipients",
         "20261112040247_AddOemTransferSigner",
         "20261112080731_DropOemCompanyRecipientExclusions",
+        "20261113062752_AddMesMirror",
+        "20261113071436_AddMesMirrorBaseUrl",
     ];
 
     [Fact]

@@ -1,6 +1,7 @@
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Outsource.Ipms;
+using Yf.Api.Modules.Outsource.Ipms.Mes;
 
 namespace Yf.Api.Modules.Outsource;
 
@@ -8,7 +9,10 @@ namespace Yf.Api.Modules.Outsource;
 public static class OutsourceModule
 {
     public static IServiceCollection AddOutsourceModule(this IServiceCollection services) => services
-        .AddSingleton<IIpmsClient>(provider => IpmsClientFactory.Create(provider.GetRequiredService<AppOptions>()))
+        .AddSingleton<IIpmsClient>(provider => IpmsClientFactory.Create(provider.GetRequiredService<AppOptions>(), provider))
+        .AddSingleton<IMesSource>(provider => MesSourceFactory.Create(provider.GetRequiredService<AppOptions>(), provider))
+        .AddSingleton<MesMirrorSyncService>()
+        .AddSingleton<IHostedService>(provider => provider.GetRequiredService<MesMirrorSyncService>())
         .AddSingleton<OutsourceSettingsService>()
         .AddSingleton<OutsourceItemService>()
         .AddSingleton<OutsourceIpmsSyncService>()
@@ -105,6 +109,22 @@ public static class OutsourceModule
         });
         settings.MapPut("/sync-time", (OutsourceSyncTimeRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
             s.SetSyncTimeAsync(AccessService.GetCurrent(c), r, ct));
+
+        var mirror = endpoints.MapGroup("/api/v1/outsource/mes-mirror");
+        mirror.MapGet("/status", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.StatusAsync(AccessService.GetCurrent(c), ct));
+        mirror.MapPost("/run", (MesMirrorRunRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.StartAsync(AccessService.GetCurrent(c), r, ct));
+        mirror.MapPost("/stop", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.StopAsync(AccessService.GetCurrent(c), ct));
+        mirror.MapPost("/confirm", (MesMirrorConfirmRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.ConfirmAsync(AccessService.GetCurrent(c), r, ct));
+        mirror.MapGet("/settings", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.SettingsAsync(AccessService.GetCurrent(c), ct));
+        mirror.MapPut("/settings", (MesMirrorSettingsRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.SaveSettingsAsync(AccessService.GetCurrent(c), r, ct));
+        mirror.MapPost("/test", (MesMirrorTestRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.TestAsync(AccessService.GetCurrent(c), r, ct));
         return endpoints;
     }
 }

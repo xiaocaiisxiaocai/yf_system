@@ -559,6 +559,138 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.MesMirrorState", b =>
+                {
+                    b.Property<byte>("Id")
+                        .HasColumnType("tinyint unsigned")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BaseUrl")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)")
+                        .HasColumnName("base_url");
+
+                    b.Property<int>("LastCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("last_count");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("last_error");
+
+                    b.Property<DateTime?>("LastFinishedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_finished_at");
+
+                    b.Property<DateTime?>("LastStartedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_started_at");
+
+                    b.Property<DateTime?>("LastSuccessAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("last_success_at");
+
+                    b.Property<string>("LastTrigger")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("last_trigger");
+
+                    b.Property<DateTime?>("LeaseUntil")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("lease_until");
+
+                    b.Property<DateOnly?>("ScheduledFor")
+                        .HasColumnType("date")
+                        .HasColumnName("scheduled_for");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("mes_mirror_state", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.MesWorkOrder", b =>
+                {
+                    b.Property<string>("WorkOrderNo")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("work_order_no");
+
+                    b.Property<string>("BatchId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("batch_id");
+
+                    b.Property<string>("CustomerName")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)")
+                        .HasColumnName("customer_name");
+
+                    b.Property<string>("DeviceModels")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)")
+                        .HasColumnName("device_models");
+
+                    b.Property<DateTime>("FetchedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("fetched_at");
+
+                    b.Property<string>("RawJson")
+                        .IsRequired()
+                        .HasColumnType("longtext")
+                        .HasColumnName("raw_json");
+
+                    b.HasKey("WorkOrderNo");
+
+                    b.ToTable("mes_work_orders", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.MesWorkOrderStaging", b =>
+                {
+                    b.Property<string>("WorkOrderNo")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("work_order_no");
+
+                    b.Property<string>("BatchId")
+                        .IsRequired()
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("batch_id");
+
+                    b.Property<string>("CustomerName")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)")
+                        .HasColumnName("customer_name");
+
+                    b.Property<string>("DeviceModels")
+                        .HasMaxLength(256)
+                        .HasColumnType("varchar(256)")
+                        .HasColumnName("device_models");
+
+                    b.Property<DateTime>("FetchedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("fetched_at");
+
+                    b.Property<string>("RawJson")
+                        .IsRequired()
+                        .HasColumnType("longtext")
+                        .HasColumnName("raw_json");
+
+                    b.HasKey("WorkOrderNo");
+
+                    b.ToTable("mes_work_orders_staging", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.Message", b =>
                 {
                     b.Property<ulong>("Id")

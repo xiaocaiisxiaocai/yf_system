@@ -23,9 +23,9 @@ public sealed class OutsourceItemTests
             return Task.FromResult(found);
         }
 
-        public void Add(string no, string? type, bool closed = false) => Orders[no] = new(
+        public void Add(string no, bool closed = false) => Orders[no] = new(
             no, "超穎(泰國)", "ST-201L", "4.王家琦", "机构甲", "电控乙", new DateOnly(2026, 9, 30), null, null,
-            type, 1, new DateOnly(2026, 12, 31), closed);
+            1, new DateOnly(2026, 12, 31), closed);
     }
 
     [Fact(Timeout = 180_000)]
@@ -66,20 +66,20 @@ public sealed class OutsourceItemTests
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);
         await settings.SetTypeVendorsAsync(buyer, odm.Id, new([yuankong.Id]), ct);
 
-        ipms.Add("21089901", "OEMA【进料+制造】");
-        ipms.Add("21089961", "OEMA");
-        ipms.Add("21090001", "OEMA");
-        ipms.Add("21090101", "XYZ");
-        ipms.Add("21090201", "OEMA", closed: true);
-        ipms.Add("21090301", "OEMA");
-        ipms.Add("21089902", "odm-12345");
-        OutsourceImportRequest Request(params (string Date, string No, string Vendor)[] rows) =>
-            new(rows.Select((row, index) => new OutsourceImportRow(index + 2, row.Date, row.No, row.Vendor)).ToArray());
+        ipms.Add("21089901");
+        ipms.Add("21089961");
+        ipms.Add("21090001");
+        ipms.Add("21090101");
+        ipms.Add("21090201", closed: true);
+        ipms.Add("21090301");
+        ipms.Add("21089902");
+        OutsourceImportRequest Request(params (string Date, string No, string Vendor, string Type)[] rows) =>
+            new(rows.Select((row, index) => new OutsourceImportRow(index + 2, row.Date, row.No, row.Vendor, row.Type)).ToArray());
         var request = Request(
-            ("2026-11-04", "21089901", "鼎亚"), ("2026-11-04", "21089961", "元控"), ("2026-11-04", "99999999", "鼎亚"),
-            ("2026-11-04", "21090001", "鼎亚"), ("2026-11-05", "21090001", "鼎亚"), ("11/04/2026", "21090401", "鼎亚"),
-            ("2026-11-04", "21090501", "不存在"), ("2026-11-04", "21090101", "鼎亚"), ("2026-11-04", "21090201", "鼎亚"),
-            ("2026-11-04", "21090301", "停用厂"));
+            ("2026-11-04", "21089901", "鼎亚", "OEMA【进料+制造】"), ("2026-11-04", "21089961", "元控", "OEMA"), ("2026-11-04", "99999999", "鼎亚", "OEMA"),
+            ("2026-11-04", "21090001", "鼎亚", "OEMA"), ("2026-11-05", "21090001", "鼎亚", "OEMA"), ("11/04/2026", "21090401", "鼎亚", "OEMA"),
+            ("2026-11-04", "21090501", "不存在", "OEMA"), ("2026-11-04", "21090101", "鼎亚", "XYZ"), ("2026-11-04", "21090201", "鼎亚", "OEMA"),
+            ("2026-11-04", "21090301", "停用厂", "OEMA"));
 
         var preview = await service.PreviewImportAsync(planner, request, ct);
         Assert.Equal((1, 2, 7), (preview.Ready, preview.Skipped, preview.Invalid));
@@ -101,13 +101,13 @@ public sealed class OutsourceItemTests
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.PreviewImportAsync(viewer, request, ct))).Status);
         var imported = await service.ImportAsync(planner, request, ct);
         Assert.Equal((1, 2, 7), (imported.Created, imported.Skipped, imported.Failed));
-        var again = await service.ImportAsync(planner, Request(("2026-11-04", "21089901", "鼎亚"), ("2026-11-06", "21089902", "元控")), ct);
+        var again = await service.ImportAsync(planner, Request(("2026-11-04", "21089901", "鼎亚", "OEMA"), ("2026-11-06", "21089902", "元控", "odm-12345")), ct);
         Assert.Equal((1, 1, 0), (again.Created, again.Skipped, again.Failed));
         Assert.Equal("工令已存在，未覆盖现有资料", again.Rows.Single(x => x.Key == "21089901").Message);
 
         // An IPMS outage rejects the whole batch; nothing half-imported.
         ipms.Unavailable = true;
-        var outage = await Assert.ThrowsAsync<ApiException>(() => service.PreviewImportAsync(planner, Request(("2026-11-04", "21090001", "鼎亚")), ct));
+        var outage = await Assert.ThrowsAsync<ApiException>(() => service.PreviewImportAsync(planner, Request(("2026-11-04", "21090001", "鼎亚", "OEMA")), ct));
         Assert.Equal((503, "IPMS 暂时无法连接，请稍后再试"), (outage.Status, outage.Message));
         ipms.Unavailable = false;
 
@@ -128,14 +128,14 @@ public sealed class OutsourceItemTests
 
         // Purchasing edits: version check, type/vendor guard, and a sent row becomes "pending notice".
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.UpdateAsync(planner, first.Id, new("2026-11-04", dingya.Id, null, "PAUSED", first.UpdatedAt), ct))).Status);
+            service.UpdateAsync(planner, first.Id, new("2026-11-04", dingya.Id, null, null, "PAUSED", first.UpdatedAt), ct))).Status);
         var stale = await Assert.ThrowsAsync<ApiException>(() =>
-            service.UpdateAsync(buyer, first.Id, new("2026-11-04", dingya.Id, null, "PAUSED", first.UpdatedAt.AddSeconds(-1)), ct));
+            service.UpdateAsync(buyer, first.Id, new("2026-11-04", dingya.Id, null, null, "PAUSED", first.UpdatedAt.AddSeconds(-1)), ct));
         Assert.Equal(40903, stale.Code);
         var mismatch = await Assert.ThrowsAsync<ApiException>(() =>
-            service.UpdateAsync(buyer, first.Id, new("2026-11-04", yuankong.Id, null, "NORMAL", first.UpdatedAt), ct));
+            service.UpdateAsync(buyer, first.Id, new("2026-11-04", yuankong.Id, null, null, "NORMAL", first.UpdatedAt), ct));
         Assert.Equal("工令 21089901：OEMA【进料+制造】 不可配元控", mismatch.Message);
-        var paused = await service.UpdateAsync(buyer, first.Id, new("2026-11-08", dingya.Id, " 加急 ", "PAUSED", first.UpdatedAt), ct);
+        var paused = await service.UpdateAsync(buyer, first.Id, new("2026-11-08", dingya.Id, null, " 加急 ", "PAUSED", first.UpdatedAt), ct);
         Assert.Equal((new DateOnly(2026, 11, 8), "加急", "PAUSED", "UNSENT"), (paused.OutsourceDate, paused.Remark, paused.Status, paused.SendStatus));
         var edits = await service.ChangesAsync(viewer, first.Id, ct);
         Assert.Equal(["outsourceDate", "remark", "status"], edits.Select(x => x.Field).Order(StringComparer.Ordinal));
@@ -143,17 +143,17 @@ public sealed class OutsourceItemTests
         Assert.Equal(("正常", "暂停"), edits.Where(x => x.Field == "status").Select(x => (x.OldValue, x.NewValue)).Single());
         await database.ExecuteAsync($"UPDATE outsource_items SET send_status='SENT' WHERE id={first.Id}", ct);
         var sent = (await service.ListAsync(buyer, Query(vendorId: dingya.Id), 1, 20, 0, ct)).List.Single();
-        var noticed = await service.UpdateAsync(buyer, sent.Id, new("2026-11-08", dingya.Id, "", "PAUSED", sent.UpdatedAt), ct);
+        var noticed = await service.UpdateAsync(buyer, sent.Id, new("2026-11-08", dingya.Id, null, "", "PAUSED", sent.UpdatedAt), ct);
         Assert.Equal(("PENDING_NOTICE", (string?)null), (noticed.SendStatus, noticed.Remark));
 
         // Batch edits only change the given fields.
         var current = (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
         var batch = await service.BatchUpdateAsync(buyer, new(current.Select(x => new OutsourceItemVersion(x.Id, x.UpdatedAt)).ToArray(),
-            null, null, null, "CANCELLED"), ct);
+            null, null, null, null, "CANCELLED"), ct);
         Assert.All(batch.Items, x => Assert.Equal("CANCELLED", x.Status));
         Assert.Equal(new DateOnly(2026, 11, 8), batch.Items.Single(x => x.WorkOrderNo == "21089901").OutsourceDate);
         Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.BatchUpdateAsync(buyer, new([new(first.Id, DateTime.UtcNow)], null, null, null, null), ct))).Status);
+            service.BatchUpdateAsync(buyer, new([new(first.Id, DateTime.UtcNow)], null, null, null, null, null), ct))).Status);
 
         // The mapping is resolved on read: removing it flags the item instead of changing its vendor.
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([]), ct);
@@ -189,7 +189,7 @@ public sealed class OutsourceItemTests
         var closed = (await service.ListAsync(buyer, Query(includeClosed: true), 1, 20, 0, ct)).List.Single();
         Assert.True(closed.Closed);
         Assert.Equal("已结案的记录不能修改", (await Assert.ThrowsAsync<ApiException>(() =>
-            service.UpdateAsync(buyer, closed.Id, new("2026-11-08", dingya.Id, null, "NORMAL", closed.UpdatedAt), ct))).Message);
+            service.UpdateAsync(buyer, closed.Id, new("2026-11-08", dingya.Id, null, null, "NORMAL", closed.UpdatedAt), ct))).Message);
 
         await using var connection = await database.Database.OpenAsync(ct);
         var actions = (await connection.QueryAsync<string>(

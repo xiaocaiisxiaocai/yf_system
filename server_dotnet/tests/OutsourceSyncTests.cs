@@ -24,7 +24,7 @@ public sealed class OutsourceSyncTests
 
         public void Add(string no) => Orders[no] = new(
             no, "超穎(泰國)", "ST-201L", "4.王家琦", "机构甲", "电控乙", new DateOnly(2026, 9, 30), null, null,
-            "OEMA", 1, new DateOnly(2026, 12, 31), false);
+            1, new DateOnly(2026, 12, 31), false);
     }
 
     [Theory]
@@ -71,7 +71,7 @@ public sealed class OutsourceSyncTests
         await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
         foreach (var no in new[] { "A1", "B1", "C1", "D1", "E1" }) ipms.Add(no);
         var imported = await items.ImportAsync(buyer, new(new[] { "A1", "B1", "C1", "D1", "E1" }
-            .Select((no, index) => new OutsourceImportRow(index + 2, "2026-11-04", no, "鼎亚")).ToArray()), ct);
+            .Select((no, index) => new OutsourceImportRow(index + 2, "2026-11-04", no, "鼎亚", "OEMA")).ToArray()), ct);
         Assert.Equal(5, imported.Created);
         await database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT' WHERE work_order_no IN ('A1','E1')", ct);
         OutsourceItemResponse Row(IEnumerable<OutsourceItemResponse> rows, string no) => rows.Single(x => x.WorkOrderNo == no);

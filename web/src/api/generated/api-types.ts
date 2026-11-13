@@ -352,6 +352,63 @@ export interface MediaSessionResponse {
   expiresInSeconds: number
 }
 
+export interface MesMirrorConfirmRequest {
+  apply: boolean
+}
+
+export interface MesMirrorPreviewRow {
+  workOrderNo: string
+  customerName: string | null
+  deviceModels: string | null
+}
+
+export interface MesMirrorRunRequest {
+  mode?: string | null
+  page?: number | null
+  pageSize?: number | null
+}
+
+export interface MesMirrorSettingsRequest {
+  baseUrl?: string | null
+}
+
+export interface MesMirrorSettingsResponse {
+  baseUrl: string
+  configBaseUrl: string | null
+  saved: boolean
+  accountConfigured: boolean
+}
+
+export interface MesMirrorStatusResponse {
+  phase: string
+  runMode: string | null
+  page: number | null
+  pageSize: number
+  fetched: number
+  pages: number
+  total: number | null
+  pendingReason: string | null
+  startedAt: string | null
+  lastFinishedAt: string | null
+  lastSuccessAt: string | null
+  lastError: string | null
+  lastTrigger: string | null
+  lastCount: number
+  mirrorCount: number
+  preview: Array<MesMirrorPreviewRow>
+}
+
+export interface MesMirrorTestRequest {
+  baseUrl?: string | null
+}
+
+export interface MesTestResult {
+  ok: boolean
+  message: string
+  total: number | null
+  elapsedMs: number
+}
+
 export interface MessageImageResponse {
   id: number
   name: string
@@ -979,6 +1036,7 @@ export interface OutsourceBatchUpdate {
   items?: Array<OutsourceItemVersion> | null
   outsourceDate?: string | null
   vendorId?: number | null
+  typeId?: number | null
   remark?: string | null
   status?: string | null
 }
@@ -1046,6 +1104,7 @@ export interface OutsourceImportRow {
   outsourceDate?: string | null
   workOrderNo?: string | null
   vendorName?: string | null
+  typeName?: string | null
 }
 
 export interface OutsourceItemChangeResponse {
@@ -1096,6 +1155,7 @@ export interface OutsourceItemSummaryResponse {
 export interface OutsourceItemUpdate {
   outsourceDate?: string | null
   vendorId?: number | null
+  typeId?: number | null
   remark?: string | null
   status?: string | null
   expectedUpdatedAt?: string | null
@@ -2052,6 +2112,13 @@ export interface ApiResponses {
   "POST /outsource/mails/send": OutsourceMailSendResponse
   "GET /outsource/mails/{id}/attachment": Blob
   "POST /outsource/mails/{id}/retry": OutsourceMailResponse
+  "POST /outsource/mes-mirror/confirm": MesMirrorStatusResponse
+  "POST /outsource/mes-mirror/run": MesMirrorStatusResponse
+  "GET /outsource/mes-mirror/settings": MesMirrorSettingsResponse
+  "PUT /outsource/mes-mirror/settings": MesMirrorSettingsResponse
+  "GET /outsource/mes-mirror/status": MesMirrorStatusResponse
+  "POST /outsource/mes-mirror/stop": MesMirrorStatusResponse
+  "POST /outsource/mes-mirror/test": MesTestResult
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/contacts/{id}": OutsourceContactResponse
   "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse

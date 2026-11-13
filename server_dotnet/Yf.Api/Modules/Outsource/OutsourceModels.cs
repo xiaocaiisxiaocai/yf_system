@@ -19,7 +19,7 @@ public sealed record OutsourceTypeResponse(ulong Id, string Code, string Name, s
 
 public sealed record OutsourceCcUserResponse(ulong UserId, string EmployeeNo, string RealName, string Email, string Status);
 
-public sealed record OutsourceImportRow(int RowNumber, string? OutsourceDate, string? WorkOrderNo, string? VendorName);
+public sealed record OutsourceImportRow(int RowNumber, string? OutsourceDate, string? WorkOrderNo, string? VendorName, string? TypeName);
 
 public sealed record OutsourceImportRequest(OutsourceImportRow[]? Rows);
 
@@ -41,12 +41,13 @@ public sealed record OutsourceVendorCount(ulong VendorId, int Count);
 
 public sealed record OutsourceItemSummaryResponse(int Total, OutsourceVendorCount[] Vendors);
 
-public sealed record OutsourceItemUpdate(string? OutsourceDate, ulong? VendorId, string? Remark, string? Status, DateTime? ExpectedUpdatedAt);
+/// <summary><paramref name="TypeId"/> is optional: null keeps the current type (a record whose type was disabled can still be edited).
+public sealed record OutsourceItemUpdate(string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateTime? ExpectedUpdatedAt);
 
 public sealed record OutsourceItemVersion(ulong Id, DateTime ExpectedUpdatedAt);
 
 /// <summary>Batch edit: only the fields that are present change; an empty remark clears it.</summary>
-public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string? OutsourceDate, ulong? VendorId, string? Remark, string? Status);
+public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status);
 
 public sealed record OutsourceBatchDelete(OutsourceItemVersion[]? Items);
 

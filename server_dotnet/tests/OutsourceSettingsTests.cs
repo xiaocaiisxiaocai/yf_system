@@ -112,7 +112,7 @@ public sealed class OutsourceSettingsTests
             await File.WriteAllTextAsync(path, """
                 { "workOrders": [
                   { "workOrderNo": "21089901", "customer": "超穎(泰國)", "machineModel": "ST-201L", "mechanicalSection": "4.王家琦",
-                    "workOrderIssuedOn": "2026-09-30", "outsourceTypeCode": "ODM-234", "quantity": 1, "dueDate": "2026-12-31" },
+                    "workOrderIssuedOn": "2026-09-30", "quantity": 1, "dueDate": "2026-12-31" },
                   { "workOrderNo": "21089961", "closed": true }
                 ] }
                 """, ct);

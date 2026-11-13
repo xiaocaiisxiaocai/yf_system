@@ -80,7 +80,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     internal const int MaximumBatchItems = 500;
     internal const int MaximumExportRows = 10_000;
     private const string ChangedMessage = "外协记录已被他人修改，请刷新后重试";
-    private static readonly string[] ImportHeaders = ["外发日期", "工令", "外发厂商"];
+    private static readonly string[] ImportHeaders = ["外发日期", "工令", "外发厂商", "外发类型"];
 
     // ---- import ----
 
@@ -147,6 +147,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             WorkOrderNo = row.WorkOrderNo?.Trim() ?? "",
             DateText = row.OutsourceDate?.Trim() ?? "",
             VendorName = row.VendorName?.Trim() ?? "",
+            TypeText = row.TypeName?.Trim() ?? "",
         }).ToArray();
         var repeated = parsed.Where(x => x.WorkOrderNo.Length > 0).GroupBy(x => x.WorkOrderNo, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -155,7 +156,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             .Select(x => x.WorkOrderNo).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var result = new List<PlannedRow>(parsed.Length);
-        var lookups = new List<(int Index, string WorkOrderNo, DateOnly Date, ulong VendorId, string VendorName)>();
+        var lookups = new List<(int Index, string WorkOrderNo, DateOnly Date, ulong VendorId, string VendorName, string TypeCode, string TypeLabel)>();
         foreach (var row in parsed)
         {
             OutsourceImportPreviewRow Preview(string status, string? message) =>
@@ -173,8 +174,16 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             { result.Add(new("INVALID", Preview("INVALID", "外发厂商不在外协厂商目录中"), 0, null)); continue; }
             if (vendor.Status != AccountStatuses.Active)
             { result.Add(new("INVALID", Preview("INVALID", "外发厂商已停用"), 0, null)); continue; }
-            result.Add(new("PENDING", Preview("PENDING", null), vendor.Id, null));
-            lookups.Add((result.Count - 1, row.WorkOrderNo, date, vendor.Id, vendor.Name));
+            // The type is entered with the vendor; it must be an enabled dictionary type the vendor may take.
+            if (row.TypeText.Length == 0)
+            { result.Add(new("INVALID", Preview("INVALID", "请填写外发类型"), 0, null)); continue; }
+            if (reference.Find(row.TypeText) is not { } type)
+            { result.Add(new("INVALID", Preview("INVALID", $"外发类型「{row.TypeText}」不在字典中"), 0, null)); continue; }
+            var typeLabel = OutsourceSettingsService.Label(type.Code, type.Name);
+            if (reference.Match(row.TypeText, vendor.Id) != OutsourceMatchStates.Ok)
+            { result.Add(new("INVALID", Preview("INVALID", $"{typeLabel} 不可配{vendor.Name}") with { TypeLabel = typeLabel }, 0, null)); continue; }
+            result.Add(new("PENDING", Preview("PENDING", null) with { TypeLabel = typeLabel }, vendor.Id, null));
+            lookups.Add((result.Count - 1, row.WorkOrderNo, date, vendor.Id, vendor.Name, type.Code, typeLabel));
         }
         if (lookups.Count == 0) return result;
 
@@ -187,37 +196,21 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             var preview = result[lookup.Index].Preview;
             if (!foundIgnoringCase.TryGetValue(lookup.WorkOrderNo, out var order))
             { result[lookup.Index] = new("INVALID", preview with { Status = "INVALID", Message = "IPMS 查无此工令" }, 0, null); continue; }
-            var typeLabel = reference.Label(order.OutsourceTypeCode);
             var withIpms = preview with
             {
                 VendorName = lookup.VendorName, OutsourceDate = lookup.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                Customer = order.Customer, MachineModel = order.MachineModel, TypeLabel = typeLabel,
+                Customer = order.Customer, MachineModel = order.MachineModel, TypeLabel = lookup.TypeLabel,
                 Quantity = order.Quantity, LatestDueDate = order.DueDate,
             };
             if (order.Closed)
             { result[lookup.Index] = new("INVALID", withIpms with { Status = "INVALID", Message = "IPMS 显示该工令已结案" }, 0, null); continue; }
-            var match = reference.Match(order.OutsourceTypeCode, lookup.VendorId);
-            if (match == OutsourceMatchStates.UnknownType)
-            {
-                result[lookup.Index] = new("INVALID", withIpms with
-                {
-                    Status = "INVALID",
-                    Message = string.IsNullOrWhiteSpace(order.OutsourceTypeCode) ? "IPMS 未提供外发类型" : $"外发类型「{order.OutsourceTypeCode}」不在字典中",
-                }, 0, null);
-                continue;
-            }
-            if (match == OutsourceMatchStates.VendorMismatch)
-            {
-                result[lookup.Index] = new("INVALID", withIpms with
-                { Status = "INVALID", Message = $"{typeLabel} 不可配{lookup.VendorName}" }, 0, null);
-                continue;
-            }
             var item = new OutsourceItem
             {
                 WorkOrderNo = order.WorkOrderNo, OutsourceDate = lookup.Date, VendorId = lookup.VendorId,
                 Status = OutsourceItemStatuses.Normal, SendStatus = OutsourceSendStatuses.Unsent,
             };
             ApplyIpms(item, order, DateTime.UtcNow);
+            item.TypeCode = lookup.TypeCode; // entered by staff, not read from IPMS
             item.OriginalDueDate = order.DueDate;
             result[lookup.Index] = new("READY", withIpms with { Status = "READY" }, lookup.VendorId, item);
         }
@@ -235,7 +228,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         item.WorkOrderIssuedOn = order.WorkOrderIssuedOn;
         item.BomOn = order.BomOn;
         item.DrawingReleasedOn = order.DrawingReleasedOn;
-        item.TypeCode = Cut(order.OutsourceTypeCode, 64);
         item.Quantity = order.Quantity;
         item.LatestDueDate = order.DueDate;
         item.IpmsSyncedAt = syncedAt;
@@ -346,7 +338,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<OutsourceItemResponse> UpdateAsync(CurrentUser actor, ulong id, OutsourceItemUpdate request, CancellationToken ct)
     {
         if (request.ExpectedUpdatedAt is not { } expected) throw ApiException.BadRequest("expectedUpdatedAt 必须为当前记录的 updatedAt");
-        var change = ParseChange(request.OutsourceDate, request.VendorId, request.Remark, request.Status, requireAll: true);
+        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, requireAll: true);
         var result = await ApplyAsync(actor, [new OutsourceItemVersion(id, expected)], change, ct);
         return result.Items.Single();
     }
@@ -354,8 +346,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public Task<OutsourceBatchResponse> BatchUpdateAsync(CurrentUser actor, OutsourceBatchUpdate request, CancellationToken ct)
     {
         var items = ValidateBatch(request.Items);
-        var change = ParseChange(request.OutsourceDate, request.VendorId, request.Remark, request.Status, requireAll: false);
-        if (change.Date is null && change.VendorId is null && change.Remark is null && change.Status is null)
+        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, requireAll: false);
+        if (change.Date is null && change.VendorId is null && change.TypeId is null && change.Remark is null && change.Status is null)
             throw ApiException.BadRequest("请至少选择一项要修改的内容");
         return ApplyAsync(actor, items, change, ct);
     }
@@ -385,9 +377,9 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         return EmptyResponse.Instance;
     }
 
-    private sealed record Change(DateOnly? Date, ulong? VendorId, string? Remark, string? Status);
+    private sealed record Change(DateOnly? Date, ulong? VendorId, ulong? TypeId, string? Remark, string? Status);
 
-    private static Change ParseChange(string? date, ulong? vendorId, string? remark, string? status, bool requireAll)
+    private static Change ParseChange(string? date, ulong? vendorId, ulong? typeId, string? remark, string? status, bool requireAll)
     {
         DateOnly? parsedDate = null;
         if (date is not null || requireAll)
@@ -407,7 +399,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             normalizedRemark = remark?.Trim() ?? "";
             if (normalizedRemark.EnumerateRunes().Count() > 500) throw ApiException.BadRequest("备注最多 500 个字符");
         }
-        return new(parsedDate, vendorId, normalizedRemark, status);
+        return new(parsedDate, vendorId, typeId, normalizedRemark, status);
     }
 
     private static OutsourceItemVersion[] ValidateBatch(OutsourceItemVersion[]? items)
@@ -426,17 +418,23 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var locked = await LockAsync(context, versions, ct);
         if (locked.Any(x => x.ClosedAt is not null)) throw ApiException.Conflict("已结案的记录不能修改");
         var reference = await OutsourceReference.LoadAsync(context, ct);
-        if (change.VendorId is { } vendorId)
+        if (change.VendorId is { } vendorId && !reference.ActiveVendorIds.Contains(vendorId)) throw ApiException.BadRequest("外发厂商不存在或已停用");
+        var newTypeCode = change.TypeId is { } typeId
+            ? reference.CodeOf(typeId) ?? throw ApiException.BadRequest("外发类型不存在或已停用")
+            : null;
+        // Whenever the type or the vendor changes, the resulting pair must be allowed; an edit that touches neither is never blocked.
+        foreach (var item in locked)
         {
-            if (!reference.ActiveVendorIds.Contains(vendorId)) throw ApiException.BadRequest("外发厂商不存在或已停用");
-            foreach (var item in locked.Where(x => x.VendorId != vendorId))
-            {
-                var match = reference.Match(item.TypeCode, vendorId);
-                if (match == OutsourceMatchStates.UnknownType)
-                    throw ApiException.BadRequest($"工令 {item.WorkOrderNo} 的外发类型不在字典中，无法更换厂商");
-                if (match == OutsourceMatchStates.VendorMismatch)
-                    throw ApiException.BadRequest($"工令 {item.WorkOrderNo}：{reference.Label(item.TypeCode)} 不可配{reference.VendorNames[vendorId]}");
-            }
+            var typeChanged = TypeChanged(item, newTypeCode);
+            var vendorChanged = change.VendorId is { } moved && moved != item.VendorId;
+            if (!typeChanged && !vendorChanged) continue;
+            var typeCode = typeChanged ? newTypeCode : item.TypeCode;
+            var vendor = change.VendorId ?? item.VendorId;
+            var match = reference.Match(typeCode, vendor);
+            if (match == OutsourceMatchStates.UnknownType)
+                throw ApiException.BadRequest($"工令 {item.WorkOrderNo} 的外发类型不在字典中，请先选择外发类型");
+            if (match == OutsourceMatchStates.VendorMismatch)
+                throw ApiException.BadRequest($"工令 {item.WorkOrderNo}：{reference.Label(typeCode)} 不可配{reference.VendorNames[vendor]}");
         }
         foreach (var before in locked)
         {
@@ -444,15 +442,17 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             var vendor = change.VendorId ?? before.VendorId;
             var remark = change.Remark is null ? before.Remark : change.Remark.Length == 0 ? null : change.Remark;
             var status = change.Status ?? before.Status;
+            var typeCode = TypeChanged(before, newTypeCode) ? newTypeCode : before.TypeCode;
             var changes = AuditChange.OnlyChanged(
                 new AuditChange("outsourceDate", "外发日期", Text(before.OutsourceDate), Text(date)),
                 new AuditChange("vendor", "外发厂商", reference.VendorNames.GetValueOrDefault(before.VendorId), reference.VendorNames.GetValueOrDefault(vendor)),
+                new AuditChange("typeCode", "外发类型", reference.Label(before.TypeCode), reference.Label(typeCode)),
                 new AuditChange("remark", "备注", before.Remark, remark),
                 new AuditChange("status", "状态", OutsourceItemStatuses.Label(before.Status), OutsourceItemStatuses.Label(status)));
             if (changes.Length == 0) continue;
             var sendStatus = before.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : before.SendStatus;
             await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
-                .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor)
+                .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor).SetProperty(x => x.TypeCode, typeCode)
                 .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status)
                 .SetProperty(x => x.SendStatus, sendStatus), ct);
             OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
@@ -470,6 +470,10 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var order = versions.Select((x, index) => (x.Id, index)).ToDictionary(x => x.Id, x => x.index);
         return new(updated.OrderBy(x => order[x.Id]).Select(reference.Json).ToArray());
     }
+
+    /// <summary>Whether choosing <paramref name="newTypeCode"/> changes the item's type (the same dictionary type spelled differently is not a change).</summary>
+    private static bool TypeChanged(OutsourceItem item, string? newTypeCode) =>
+        newTypeCode is not null && OutsourceReference.Normalize(newTypeCode) != OutsourceReference.Normalize(item.TypeCode);
 
     /// <summary>Locks rows in id order (no deadlock between overlapping batches) and checks each client version.</summary>
     private static async Task<List<OutsourceItem>> LockAsync(YfDbContext context, OutsourceItemVersion[] versions, CancellationToken ct)
