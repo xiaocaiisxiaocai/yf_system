@@ -139,13 +139,11 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
     if release_manifest is not None and release_manifest.get("oem") != manifest.get("oem"):
         raise RuntimeError("Release sidecar OEM provenance does not match the packaged manifest")
     # publish-iis.ps1 copies THIRD-PARTY-NOTICES.md and the whole server_dotnet/licenses directory;
-    # SharpCompress (MIT) carries Apache-2.0 Commons Compress derived code, so its license, the
-    # Apache-2.0 text and the upstream NOTICE must ship alongside the DLL.
+    # the notices and the .NET license text they cite most often must ship with the application.
     required = {"Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html", "precompressed-assets.json",
                 "install-iis.ps1",
-                "maintain-iis.ps1", "maintenance-common.ps1", "README.md", "SharpCompress.dll",
-                "THIRD-PARTY-NOTICES.md", "licenses/SharpCompress-LICENSE.txt", "licenses/Apache-2.0.txt",
-                "licenses/Apache-Commons-Compress-NOTICE.txt"}
+                "maintain-iis.ps1", "maintenance-common.ps1", "README.md",
+                "THIRD-PARTY-NOTICES.md", "licenses/dotnet-LICENSE.txt"}
     missing_required = sorted(required - actual)
     if missing_required:
         raise RuntimeError("Required application, maintenance or license payload is missing: " + ", ".join(missing_required))

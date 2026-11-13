@@ -184,8 +184,7 @@ class ScriptSafetyTests(unittest.TestCase):
             package = Path(directory) / "license-fixture"
             present = ["Yf.Api.dll", "Yf.Api.runtimeconfig.json", "web.config", "wwwroot/index.html",
                        "precompressed-assets.json", "install-iis.ps1", "maintain-iis.ps1",
-                       "maintenance-common.ps1", "README.md", "SharpCompress.dll",
-                       "licenses/SharpCompress-LICENSE.txt"]
+                       "maintenance-common.ps1", "README.md", "licenses/MailKit-LICENSE.txt"]
             entries = []
             for name in present:
                 path = package / name
@@ -201,10 +200,9 @@ class ScriptSafetyTests(unittest.TestCase):
             output = result.stdout + result.stderr
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("license payload is missing", output)
-            for name in ("THIRD-PARTY-NOTICES.md", "licenses/Apache-2.0.txt",
-                         "licenses/Apache-Commons-Compress-NOTICE.txt"):
+            for name in ("THIRD-PARTY-NOTICES.md", "licenses/dotnet-LICENSE.txt"):
                 self.assertIn(name, output)
-            self.assertNotIn("licenses/SharpCompress-LICENSE.txt", output)
+            self.assertNotIn("licenses/MailKit-LICENSE.txt", output)
 
 
 if __name__ == "__main__":
