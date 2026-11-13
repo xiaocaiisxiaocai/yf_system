@@ -63,6 +63,7 @@ public sealed class SchemaShapeTests
         "20261112080731_DropOemCompanyRecipientExclusions",
         "20261113062752_AddMesMirror",
         "20261113071436_AddMesMirrorBaseUrl",
+        "20261113083946_RemoveOemArchiveLimitSettings",
     ];
 
     [Fact]
@@ -342,8 +343,8 @@ public sealed class SchemaShapeTests
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113"));
             Assert.Equal(16, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
-            Assert.Equal(48, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
-            Assert.Equal(28, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
+            Assert.Equal(44, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
+            Assert.Equal(24, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.scan.%'"));
             // 20 + the notification-list removals and per-transfer chosen recipients (AddOemInboundRecipients).
             Assert.Equal(22, await conn.ExecuteScalarAsync<int>(

@@ -27,18 +27,29 @@ function renderWithOem(element: React.ReactNode, api: Partial<OemApi>, permissio
 }
 
 describe('ODM/OEMA 文件校验界面', () => {
-  it('设置页显示文件与压缩结构规则，并过滤旧病毒扫描参数', async () => {
+  it('设置页显示文件规则，并过滤旧病毒扫描与压缩包上限参数', async () => {
     const settings: SettingItem[] = [
       {
+        key: 'oem.validation.max_retries',
+        label: '文件校验错误最大重试次数',
+        kind: 'integer',
+        value: '5',
+        min: 0,
+        max: 50,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
+      },
+      {
         key: 'oem.validation.archive_max_depth',
-        label: '压缩包最大嵌套层级',
+        label: '压缩包嵌套层级上限',
         kind: 'integer',
         value: '5',
         min: 1,
-        max: 20,
+        max: 32,
         readOnly: false,
         unsupportedReason: null,
-        hint: '超出层级的压缩包将判定为无效',
+        hint: null,
       },
       {
         key: 'oem.scan.max_signature_age_hours',
@@ -70,13 +81,13 @@ describe('ODM/OEMA 文件校验界面', () => {
 
     renderWithOem(<MemoryRouter><SettingsHub /></MemoryRouter>, api, ['oem:file_policy_manage'])
 
-    expect(await screen.findByLabelText('压缩包最大嵌套层级')).toHaveValue('5')
-    expect(screen.getByText('按需设置文件类型、上传容量、压缩包结构及下载限制。')).toBeInTheDocument()
-    expect(screen.queryByText(/病毒|扫描/)).not.toBeInTheDocument()
+    expect(await screen.findByLabelText('文件校验错误最大重试次数')).toHaveValue('5')
+    expect(screen.getByText('按需设置文件类型、上传容量及下载限制。')).toBeInTheDocument()
+    expect(screen.queryByText(/病毒|扫描|压缩包/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '保存更改' })).toBeDisabled()
   })
 
-  it('详情显示服务端返回的真实校验失败原因和暂存状态', async () => {
+  it('详情的状态列显示校验失败及服务端返回的原因', async () => {
     const detail: TransferDetail = {
       summary: {
         id: 44,
@@ -126,7 +137,7 @@ describe('ODM/OEMA 文件校验界面', () => {
         validationStatus: 'INVALID',
         payloadStatus: 'QUARANTINED',
         validationAttempts: 1,
-        validationMessage: '结构校验未通过：压缩包层级超过 5',
+        validationMessage: '文件内容与扩展名 .pdf 不符',
         createdAt: '2026-10-05T00:01:00Z',
         firstRecipientDownloadAt: null,
         purgeDueAt: null,
@@ -144,9 +155,11 @@ describe('ODM/OEMA 文件校验界面', () => {
       api,
     )
 
-    expect(await screen.findByText('结构校验未通过：压缩包层级超过 5')).toBeInTheDocument()
+    expect(await screen.findByText('文件内容与扩展名 .pdf 不符')).toBeInTheDocument()
     expect(screen.getByText('校验未通过')).toBeInTheDocument()
-    expect(screen.getByText('暂存中')).toBeInTheDocument()
+    // 校验与存储合并成一列「状态」，未通过时只显示校验结果。
+    expect(screen.getByText('状态')).toBeInTheDocument()
+    expect(screen.queryByText('暂存中')).not.toBeInTheDocument()
     expect(screen.queryByText(/病毒|扫描|隔离/)).not.toBeInTheDocument()
   })
 })

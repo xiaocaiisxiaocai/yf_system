@@ -1,6 +1,6 @@
 import { Tag } from '@arco-design/web-react'
 import type { ApprovalStatus, Lifecycle, PayloadStatus, ValidationStatus } from '../api/types'
-import { APPROVAL, LIFECYCLE, PAYLOAD, VALIDATION, type TagColor } from './statusLabels'
+import { APPROVAL, LIFECYCLE, VALIDATION, fileStatus, type TagColor } from './statusLabels'
 
 function StatusTag<T extends string>({ map, value }: { map: Record<T, [string, TagColor]>; value: T | null | undefined }) {
   if (!value) return null
@@ -11,4 +11,8 @@ function StatusTag<T extends string>({ map, value }: { map: Record<T, [string, T
 export const LifecycleTag = ({ value }: { value: Lifecycle }) => <StatusTag map={LIFECYCLE} value={value} />
 export const ApprovalTag = ({ value }: { value: ApprovalStatus | null }) => <StatusTag map={APPROVAL} value={value} />
 export const ValidationTag = ({ value }: { value: ValidationStatus | null }) => <StatusTag map={VALIDATION} value={value} />
-export const PayloadTag = ({ value }: { value: PayloadStatus }) => <StatusTag map={PAYLOAD} value={value} />
+/** The single status of an attached file (see fileStatus). */
+export function FileStatusTag({ file }: { file: { validationStatus: ValidationStatus; payloadStatus: PayloadStatus } }) {
+  const [label, color] = fileStatus(file)
+  return <Tag color={color} size="small">{label}</Tag>
+}

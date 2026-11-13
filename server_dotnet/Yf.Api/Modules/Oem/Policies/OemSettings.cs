@@ -70,10 +70,6 @@ public static class OemSettingCatalog
     public const string MaxConcurrentPerCompany = "oem.upload.max_concurrent_per_company";
     public const string MaxStoragePerCompany = "oem.upload.max_storage_per_company";
     public const string UploadSessionTtlHours = "oem.upload.session_ttl_hours";
-    public const string ArchiveMaxEntries = "oem.validation.archive_max_entries";
-    public const string ArchiveMaxDepth = "oem.validation.archive_max_depth";
-    public const string ArchiveMaxExpandedBytes = "oem.validation.archive_max_expanded_bytes";
-    public const string ArchiveMaxRatio = "oem.validation.archive_max_ratio";
     public const string ValidationMaxRetries = "oem.validation.max_retries";
     public const string BlockedRetentionHours = "oem.validation.blocked_retention_hours";
     public const string DraftTtlHours = "oem.transfer.draft_ttl_hours";
@@ -105,10 +101,6 @@ public static class OemSettingCatalog
         new(MaxConcurrentPerCompany, OemSettingKind.Integer, OemSettingGroup.File, "每厂商并发上传数", "4", 1, 100),
         new(MaxStoragePerCompany, OemSettingKind.Integer, OemSettingGroup.File, "每厂商在线占用上限", "107374182400", 1024 * 1024, 100 * 1024 * GiB),
         new(UploadSessionTtlHours, OemSettingKind.Integer, OemSettingGroup.File, "上传会话有效期（小时）", "24", 1, 720),
-        new(ArchiveMaxEntries, OemSettingKind.Integer, OemSettingGroup.File, "压缩包条目上限", "10000", 1, 1_000_000),
-        new(ArchiveMaxDepth, OemSettingKind.Integer, OemSettingGroup.File, "压缩包嵌套层级上限", "5", 1, 32),
-        new(ArchiveMaxExpandedBytes, OemSettingKind.Integer, OemSettingGroup.File, "压缩包解压后总量上限", "21474836480", 1024 * 1024, 1024 * GiB),
-        new(ArchiveMaxRatio, OemSettingKind.Integer, OemSettingGroup.File, "压缩比上限", "100", 1, 10_000),
         new(ValidationMaxRetries, OemSettingKind.Integer, OemSettingGroup.File, "文件校验错误最大重试次数", "5", 0, 50),
         new(BlockedRetentionHours, OemSettingKind.Integer, OemSettingGroup.File, "校验失败文件隔离保留时间（小时）", "72", 1, 24 * 90),
         new(DraftTtlHours, OemSettingKind.Integer, OemSettingGroup.File, "未发送草稿保留期限（小时）", "720", 1, 24 * 365),
@@ -187,13 +179,7 @@ public sealed class OemSettings(IReadOnlyDictionary<string, string?> values)
     public TimeSpan PurgeDrain => TimeSpan.FromMinutes(Long(OemSettingCatalog.PurgeDrainMinutes));
     public bool ReconcileRequired => !string.IsNullOrWhiteSpace(Raw(OemSettingCatalog.ReconcileRequired));
 
-    public ArchiveLimits ArchiveLimits => new(
-        Long(OemSettingCatalog.ArchiveMaxEntries), (int)Long(OemSettingCatalog.ArchiveMaxDepth),
-        Long(OemSettingCatalog.ArchiveMaxExpandedBytes), Long(OemSettingCatalog.ArchiveMaxRatio));
-
     public IReadOnlySet<string> AllowedExtensions(string direction) => Extensions(direction == Transfers.TransferDirections.InternalToOem
         ? OemSettingCatalog.AllowedExtsInternalToOem
         : OemSettingCatalog.AllowedExtsOemToInternal);
 }
-
-public sealed record ArchiveLimits(long MaxEntries, int MaxDepth, long MaxExpandedBytes, long MaxRatio);

@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261113071436_AddMesMirrorBaseUrl";
+    private const string Latest = "20261113083946_RemoveOemArchiveLimitSettings";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -88,6 +88,7 @@ public sealed class MigrationRoundTripTests
         // + AddOemInboundRecipients (Down drops the notification-list removals and per-transfer chosen recipients).
         // + AddOemTransferSigner (Down drops the vendor signer columns on oem_transfers).
         // + DropOemCompanyRecipientExclusions (one notification list for every vendor; the per-vendor table is gone again).
+        // + RemoveOemArchiveLimitSettings (Down restores nothing; the older version reads the missing archive limits as defaults).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);

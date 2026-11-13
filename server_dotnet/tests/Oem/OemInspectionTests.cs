@@ -1,22 +1,16 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
-using SharpCompress.Common;
-using SharpCompress.Writers;
-using SharpCompress.Writers.SevenZip;
 using Yf.Api.Modules.Oem.Common;
-using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Validation;
 using Yf.Api.Modules.Oem.Transfers;
 
 namespace Yf.Api.Tests.Oem;
 
-/// <summary>Pure rules: who can see/read a transfer, content signatures and archive inspection.</summary>
+/// <summary>Pure rules: who can see/read a transfer, content signatures and file validation.</summary>
 public sealed class OemInspectionTests
 {
     private const ulong Company = 5;
-    private static readonly ArchiveLimits Limits = new(100, 3, 10 * 1024 * 1024, 100);
 
     private static TransferFacts Outbound(string lifecycle) => new(TransferDirections.InternalToOem, Company, lifecycle, 1, null);
     private static TransferFacts Inbound(string lifecycle) => new(TransferDirections.OemToInternal, Company, lifecycle, null, 7);
@@ -139,147 +133,6 @@ public sealed class OemInspectionTests
     }
 
     [Fact]
-    public async Task ZipArchivesAreBoundedAndEncryptedArchivesRefused()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var work = Directory.CreateTempSubdirectory("oem-inspect-").FullName;
-        try
-        {
-            var plain = Write(work, "plain.zip", Zip(("a.txt", "hello"u8.ToArray())));
-            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(plain, "zip", Limits, work, ct)).Outcome);
-
-            var encrypted = Write(work, "encrypted.zip", EncryptedZip());
-            Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(encrypted, "zip", Limits, work, ct)).Outcome);
-
-            var bomb = Write(work, "bomb.zip", Zip(("zeros.bin", new byte[2 * 1024 * 1024])));
-            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(bomb, "zip", Limits, work, ct)).Outcome);
-
-            var many = Write(work, "many.zip", Zip(Enumerable.Range(0, 101).Select(i => ($"f{i}.txt", Encoding.ASCII.GetBytes("x" + i))).ToArray()));
-            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(many, "zip", Limits, work, ct)).Outcome);
-
-            // Nesting: depth 3 allowed, depth 4 refused; an encrypted archive hidden inside is still found.
-            var level1 = Zip(("leaf.txt", "x"u8.ToArray()));
-            var level2 = Zip(("l2.zip", level1));
-            var level3 = Zip(("l3.zip", level2));
-            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(Write(work, "d3.zip", level3), "zip", Limits, work, ct)).Outcome);
-            var level4 = Zip(("l4.zip", level3));
-            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(Write(work, "d4.zip", level4), "zip", Limits, work, ct)).Outcome);
-            var hidden = Zip(("inner.zip", EncryptedZip()));
-            Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(Write(work, "hidden.zip", hidden), "zip", Limits, work, ct)).Outcome);
-
-            foreach (var name in new[] { "inner.bin", "inner", "drawing.pdf" })
-            {
-                var renamed = Zip((name, EncryptedZip()));
-                Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(Write(work, "renamed.zip", renamed), "zip", Limits, work, ct)).Outcome);
-            }
-            var renamedDeep = Zip(("l4.bin", Zip(("l3.bin", Zip(("l2.bin", level1))))));
-            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(Write(work, "renamed-deep.zip", renamedDeep), "zip", Limits, work, ct)).Outcome);
-
-            Assert.Equal(ArchiveOutcome.NotArchive, (await ArchiveInspector.InspectAsync(Write(work, "a.pdf", OemTestHost.Pdf("x")), "pdf", Limits, work, ct)).Outcome);
-        }
-        finally
-        {
-            Directory.Delete(work, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task RarAndSevenZipArchivesAreFullyInspected()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var work = Directory.CreateTempSubdirectory("oem-rar-").FullName;
-        try
-        {
-            var sevenZip = Write(work, "plain.7z", SevenZip(("a.txt", "hello"u8.ToArray())));
-            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(sevenZip, "7z", Limits, work, ct)).Outcome);
-
-            var random = new byte[4096];
-            new Random(42).NextBytes(random);
-            var random2 = new byte[4096];
-            new Random(43).NextBytes(random2);
-            var incompressible = Write(work, "incompressible.7z", SevenZip(("a.bin", random), ("b.bin", random2)));
-            Assert.Equal(ArchiveOutcome.Accepted,
-                (await ArchiveInspector.InspectAsync(incompressible, "7z", Limits, work, ct)).Outcome);
-
-            var many = Write(work, "many.7z", SevenZip(Enumerable.Range(0, 101).Select(i => ($"f{i}.txt", Encoding.ASCII.GetBytes("x" + i))).ToArray()));
-            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(many, "7z", Limits, work, ct)).Outcome);
-
-            var large = Write(work, "large.7z", SevenZip(("large.bin", Enumerable.Repeat((byte)0x5A, 1024).ToArray())));
-            Assert.Equal(ArchiveOutcome.LimitExceeded,
-                (await ArchiveInspector.InspectAsync(large, "7z", Limits with { MaxExpandedBytes = 512, MaxRatio = long.MaxValue }, work, ct)).Outcome);
-
-            var highlyCompressed = Write(work, "ratio.7z", SevenZip(("zeros.bin", new byte[2 * 1024 * 1024])));
-            Assert.Equal(ArchiveOutcome.LimitExceeded,
-                (await ArchiveInspector.InspectAsync(highlyCompressed, "7z", Limits, work, ct)).Outcome);
-
-            var level1 = SevenZip(("leaf.txt", "x"u8.ToArray()));
-            var level2 = SevenZip(("l2.bin", level1));
-            var level3 = SevenZip(("l3.bin", level2));
-            Assert.Equal(ArchiveOutcome.Accepted,
-                (await ArchiveInspector.InspectAsync(Write(work, "d3.7z", level3), "7z", Limits, work, ct)).Outcome);
-            var level4 = SevenZip(("l4.bin", level3));
-            Assert.Equal(ArchiveOutcome.LimitExceeded,
-                (await ArchiveInspector.InspectAsync(Write(work, "d4.7z", level4), "7z", Limits, work, ct)).Outcome);
-
-            // Apache Commons Compress test fixture, Apache-2.0:
-            // https://github.com/apache/commons-compress/blob/master/src/test/resources/bla.encrypted.7z
-            var encryptedSevenZip = Convert.FromBase64String(
-                "N3q8ryccAAPOr6vM4AEAAAAAAAA2AAAAAAAAAMPV/c15gWF4/yjZnVseP50CUVynWCTYmSp6Ke098yYgF/M6rarfE3VIk5F/VKhRnpC3g8FD942gEXEDLnd12CRgkhC4qrpznDYACE9oBNV+7PMngR+vT6qzXjm/S08zuAzS7kP6aINNqGgZl3g9JTwGgqDCfkC35h3sjatUkdayb13cMgUiSA0sB7tR2E2lxhH/Hm30QeqD4dRDXT6l81+9PEOeQSNNZkrZfSy8lRJT5MKMAQtwUajG+BlU19/tUokPbvptGnP5PjZAHGEQrlK/avb4U0GKB12F4KU4v0zskuJwfX84UYn8fymldsL2Bn9pKrRQWx9b2AxZ97CUxdydqSv8Cc2U8gw1gJBMqOy7Af8JFTjOleTEou4N+ZdZw29Sf2QM1jKMJPSjGoVkwe2T8BmB4jM1PV+Hn8PAsrwN1K7vIMhOZEQyvSmXQFDSfDudsK6kFCdyZmqJjREA5baUovT+CsnOtEOy65EqnQmHtOh0ZYHPNn2UMuvzje+LVpw5OQaHXLyqSgA9PYSEuy9fqr+exsGfYZ6FE+K7UKPc5XLI60V7z6+4Z7em7vD6qG8IQYWNdQVJDXZbTmpDw/7nk+tXITiSCnowCfCNmLHbVSAubMECBTPUE2kDx01w49txxyIXBoFgAQmAgAAHCwEAAiQG8QcBClMHznmlTwXNceUjAwEBBV0AEAAAAQAMd4CRCgFx7ooQAAA=");
-            Assert.Equal(ArchiveOutcome.Encrypted,
-                (await ArchiveInspector.InspectAsync(Write(work, "encrypted.7z", encryptedSevenZip), "7z", Limits, work, ct)).Outcome);
-            Assert.Equal(ArchiveOutcome.Encrypted,
-                (await ArchiveInspector.InspectAsync(Write(work, "hidden.7z", SevenZip(("payload.bin", encryptedSevenZip))), "7z", Limits, work, ct)).Outcome);
-
-            // Minimal RAR5 fixture from ssokolow/rar-test-files, CC0-1.0:
-            // https://github.com/ssokolow/rar-test-files/blob/master/build/testfile.rar5.rar
-            var tinyRar = Convert.FromBase64String("UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAAkmeyhIgICjAAGjAC2gwLQDlA6/o/BboAAAQx0ZXN0ZmlsZS50eHRUZXN0aW5nIDEyMwodd1ZRAwUEAA==");
-            var rar = Write(work, "tiny.rar", tinyRar);
-            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(rar, "rar", Limits, work, ct)).Outcome);
-            Assert.Equal(ArchiveOutcome.LimitExceeded,
-                (await ArchiveInspector.InspectAsync(rar, "rar", Limits with { MaxEntries = 0 }, work, ct)).Outcome);
-            Assert.Equal(ArchiveOutcome.LimitExceeded,
-                (await ArchiveInspector.InspectAsync(rar, "rar", Limits with { MaxExpandedBytes = 5 }, work, ct)).Outcome);
-        }
-        finally
-        {
-            Directory.Delete(work, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task SolidAndNonSolidRarArchivesTakeTheSameEntryChecks()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var work = Directory.CreateTempSubdirectory("oem-rar-solid-").FullName;
-        try
-        {
-            // Fixtures from ssokolow/rar-test-files (CC0-1.0), build/testfile.rar{3,5}.solid.rar and
-            // build/testfile.rar5.rar: one 12-byte entry "testfile.txt".
-            var fixtures = new (string Name, bool Solid, string Base64)[]
-            {
-                ("rar3-solid.rar", true, "UmFyIRoHADvQcwgADQAAAAAAAAALIXSAgCwAGwAAAAwAAAAA/o/BbgAAISodNQwAIAAAAHRlc3RmaWxlLnR4dKcYVBNehL0MdSfwO2HcUnaQEg0Av4hn9qn/1MQ9ewBABwA="),
-                ("rar5-solid.rar", true, "UmFyIRoHAQAgtvoRCgEFBgQFAQGAgAAbCEy8IgICmwAGjAC2gwLQDlA6/o/BboAdAQx0ZXN0ZmlsZS50eHTGhBgwAi+zL9hTBVYqwVzjk5C/3+NbyYPzV5Add1ZRAwUEAA=="),
-                ("rar5.rar", false, "UmFyIRoHAQAzkrXlCgEFBgAFAQGAgAAkmeyhIgICjAAGjAC2gwLQDlA6/o/BboAAAQx0ZXN0ZmlsZS50eHRUZXN0aW5nIDEyMwodd1ZRAwUEAA=="),
-            };
-            foreach (var (name, solid, base64) in fixtures)
-            {
-                var path = Write(work, name, Convert.FromBase64String(base64));
-                using (var archive = SharpCompress.Archives.ArchiveFactory.OpenArchive(path, SharpCompress.Readers.ReaderOptions.ForFilePath))
-                    Assert.Equal(solid, archive.IsSolid);
-                Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(path, "rar", Limits, work, ct)).Outcome);
-                Assert.Equal(ArchiveOutcome.LimitExceeded,
-                    (await ArchiveInspector.InspectAsync(path, "rar", Limits with { MaxEntries = 0 }, work, ct)).Outcome);
-                Assert.Equal(ArchiveOutcome.LimitExceeded,
-                    (await ArchiveInspector.InspectAsync(path, "rar", Limits with { MaxExpandedBytes = 5 }, work, ct)).Outcome);
-            }
-        }
-        finally
-        {
-            Directory.Delete(work, recursive: true);
-        }
-    }
-
-    [Fact]
     public void RowLocksResolveTheOemTableAndKeyFromTheEfModel()
     {
         var options = new DbContextOptionsBuilder<Yf.Api.Infrastructure.YfDbContext>()
@@ -312,92 +165,7 @@ public sealed class OemInspectionTests
     }
 
     [Fact]
-    public async Task ADirectoryNameCannotHideNestedArchiveContent()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var work = Directory.CreateTempSubdirectory("oem-directory-entry-").FullName;
-        try
-        {
-            var path = Write(work, "directory.zip", Zip(("hidden/", EncryptedZip())));
-            Assert.Equal(ArchiveOutcome.Corrupt,
-                (await ArchiveInspector.InspectAsync(path, "zip", Limits, work, ct)).Outcome);
-        }
-        finally { Directory.Delete(work, recursive: true); }
-    }
-
-    [Fact]
-    public async Task ArchivesHiddenBehindLeadingOrTrailingBytesAreFoundAtEveryLevel()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var work = Directory.CreateTempSubdirectory("oem-embedded-").FullName;
-        try
-        {
-            byte[] Concat(params byte[][] parts) => parts.SelectMany(part => part).ToArray();
-            var random = new byte[2 * 1024 * 1024];
-            new Random(7).NextBytes(random);
-
-            // Readers tolerate data after the end record, so a trailing byte must not hide the archive.
-            var pdfWithZip = Write(work, "smuggled.pdf", Concat(OemTestHost.Pdf("x"), EncryptedZip(), [0x0A]));
-            Assert.Equal(ArchiveOutcome.Forbidden, (await ArchiveInspector.InspectAsync(pdfWithZip, "pdf", Limits, work, ct)).Outcome);
-
-            foreach (var payload in new[]
-            {
-                Concat([0x00], EncryptedZip()),
-                Concat([0x00], EncryptedZip(), "trailing"u8.ToArray()),
-                Concat(random, EncryptedZip(), "trailing"u8.ToArray()),
-            })
-            {
-                var prefixed = Write(work, "prefixed.zip", Zip(("drawing.bin", payload)));
-                Assert.Equal(ArchiveOutcome.Forbidden, (await ArchiveInspector.InspectAsync(prefixed, "zip", Limits, work, ct)).Outcome);
-            }
-
-            var large = Write(work, "large.zip", Zip(("noise.bin", random), ("drawing.pdf", OemTestHost.Pdf("x"))));
-            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(large, "zip", Limits, work, ct)).Outcome);
-        }
-        finally { Directory.Delete(work, recursive: true); }
-    }
-
-    [Fact]
-    public async Task OfficeDocumentsMayEmbedOfficePackagesButNothingElseNested()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var work = Directory.CreateTempSubdirectory("oem-ooxml-embedded-").FullName;
-        try
-        {
-            byte[] DocxWith(string name, byte[] content)
-            {
-                using var source = new ZipArchive(new MemoryStream(MinimalOoxml("docx")), ZipArchiveMode.Read);
-                var entries = source.Entries.Select(entry =>
-                {
-                    using var stream = entry.Open();
-                    using var copy = new MemoryStream();
-                    stream.CopyTo(copy);
-                    return (entry.FullName, copy.ToArray());
-                }).Append((name, content)).ToArray();
-                return Zip(entries);
-            }
-
-            var chart = Write(work, "chart.docx", DocxWith("word/embeddings/Microsoft_Excel_Worksheet.xlsx", MinimalOoxml("xlsx")));
-            Assert.Equal(ArchiveOutcome.Accepted, (await ArchiveInspector.InspectAsync(chart, "docx", Limits, work, ct)).Outcome);
-
-            var stray = Write(work, "stray.docx", DocxWith("word/media/archive.zip", Zip(("a.txt", "x"u8.ToArray()))));
-            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(stray, "docx", Limits, work, ct)).Outcome);
-
-            var deeper = Write(work, "deeper.docx", DocxWith("word/embeddings/package.zip", Zip(("inner.zip", Zip(("a.txt", "x"u8.ToArray()))))));
-            Assert.Equal(ArchiveOutcome.LimitExceeded, (await ArchiveInspector.InspectAsync(deeper, "docx", Limits, work, ct)).Outcome);
-
-            var hidden = Write(work, "hidden.docx", DocxWith("word/embeddings/secret.zip", EncryptedZip()));
-            Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(hidden, "docx", Limits, work, ct)).Outcome);
-
-            byte[] ole2 = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00, 0x00];
-            var encryptedOffice = Write(work, "encrypted-office.docx", DocxWith("word/embeddings/Microsoft_Excel_Worksheet.xlsx", ole2));
-            Assert.Equal(ArchiveOutcome.Encrypted, (await ArchiveInspector.InspectAsync(encryptedOffice, "docx", Limits, work, ct)).Outcome);
-        }
-        finally { Directory.Delete(work, recursive: true); }
-    }
-
-    [Fact]
-    public async Task ValidationPipelineRejectsTamperedDigestAndDisguisedContentWithoutAnEngine()
+    public async Task ValidationPipelineRejectsTamperedDigestAndDisguisedContent()
     {
         var ct = TestContext.Current.CancellationToken;
         var work = Directory.CreateTempSubdirectory("oem-validation-").FullName;
@@ -406,62 +174,94 @@ public sealed class OemInspectionTests
             var pipeline = new OemFileValidationPipeline();
             var validBytes = OemTestHost.Pdf("drawing");
             var validPath = Write(work, "valid.pdf", validBytes);
-            var validTarget = new ValidationTarget(validPath,
-                Convert.ToHexString(SHA256.HashData(validBytes)).ToLowerInvariant(), (ulong)validBytes.Length);
-            Assert.Equal(ValidationVerdict.Valid,
-                (await pipeline.RunAsync(validTarget, "pdf", Limits, work, ct)).Verdict);
+            Assert.Equal(ValidationVerdict.Valid, (await pipeline.RunAsync(Target(validPath, validBytes), "pdf", ct)).Verdict);
 
             var corruptBytes = validBytes.ToArray();
             corruptBytes[^2] ^= 0x3C;
             var corruptPath = Write(work, "corrupt.pdf", corruptBytes);
-            var tampered = await pipeline.RunAsync(validTarget with { Path = corruptPath }, "pdf", Limits, work, ct);
+            var tampered = await pipeline.RunAsync(Target(validPath, validBytes) with { Path = corruptPath }, "pdf", ct);
             Assert.Equal(ValidationVerdict.Invalid, tampered.Verdict);
             Assert.Contains("SHA-256", tampered.Message!);
 
             byte[] executable = [0x4D, 0x5A, 0x90, 0x00, 0x6E, 0x6F, 0x74];
-            var disguisedPath = Write(work, "disguised.pdf", executable);
-            var disguised = await pipeline.RunAsync(new ValidationTarget(disguisedPath,
-                Convert.ToHexString(SHA256.HashData(executable)).ToLowerInvariant(), (ulong)executable.Length),
-                "pdf", Limits, work, ct);
+            var disguised = await pipeline.RunAsync(Target(Write(work, "disguised.pdf", executable), executable), "pdf", ct);
             Assert.Equal(ValidationVerdict.Invalid, disguised.Verdict);
             Assert.Contains("可执行程序", disguised.Message!);
+
+            // An Office extension still needs a ZIP container; an OLE2 (encrypted or legacy) file under .docx does not match.
+            byte[] ole2 = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00, 0x00];
+            var wrongOffice = await pipeline.RunAsync(Target(Write(work, "encrypted.docx", ole2), ole2), "docx", ct);
+            Assert.Equal((ValidationVerdict.Invalid, "文件内容与扩展名 .docx 不符"), (wrongOffice.Verdict, wrongOffice.Message));
         }
-        finally
-        {
-            Directory.Delete(work, recursive: true);
-        }
+        finally { Directory.Delete(work, recursive: true); }
     }
 
+    /// <summary>Since 2026-11-13 only the format is checked: archive and Office contents are never opened.</summary>
     [Theory]
+    [InlineData("zip")]
     [InlineData("docx")]
-    [InlineData("xlsx")]
-    [InlineData("pptx")]
-    public async Task OoxmlValidationRequiresMatchingContentTypeAndMainPart(string extension)
+    public async Task ArchiveAndOfficeContentsAreNotInspected(string extension)
     {
         var ct = TestContext.Current.CancellationToken;
-        var work = Directory.CreateTempSubdirectory("oem-ooxml-").FullName;
+        var work = Directory.CreateTempSubdirectory("oem-format-only-").FullName;
         try
         {
             var pipeline = new OemFileValidationPipeline();
-            var validBytes = MinimalOoxml(extension);
-            var validPath = Write(work, "valid." + extension, validBytes);
-            var valid = await pipeline.RunAsync(Target(validPath, validBytes), extension, Limits, work, ct);
-            Assert.Equal(ValidationVerdict.Valid, valid.Verdict);
-
-            var disguisedBytes = Zip(("payload.txt", "ordinary zip"u8.ToArray()));
-            var disguisedPath = Write(work, "disguised." + extension, disguisedBytes);
-            var disguised = await pipeline.RunAsync(Target(disguisedPath, disguisedBytes), extension, Limits, work, ct);
-            Assert.Equal(ValidationVerdict.Invalid, disguised.Verdict);
-            Assert.False(string.IsNullOrWhiteSpace(disguised.Message));
+            byte[] executable = [0x4D, 0x5A, 0x90, 0x00, 0x6E, 0x6F, 0x74];
+            var random = new byte[256 * 1024];
+            new Random(7).NextBytes(random);
+            // Previously refused: an encrypted entry, an executable, an archive hidden behind leading bytes, unsafe names.
+            foreach (var content in new[]
+            {
+                EncryptedZip(),
+                Zip(("tools/setup.dat", executable)),
+                Zip(("drawing.bin", [.. random, .. EncryptedZip(), .. "trailing"u8.ToArray()])),
+                Zip(("../escape.txt", "x"u8.ToArray()), ("Same.txt", "x"u8.ToArray()), ("SAME.txt", "x"u8.ToArray())),
+                Zip(("inner.zip", Zip(("deeper.zip", Zip(("a.txt", "x"u8.ToArray())))))),
+            })
+            {
+                var result = await pipeline.RunAsync(Target(Write(work, "package." + extension, content), content), extension, ct);
+                Assert.Equal(ValidationVerdict.Valid, result.Verdict);
+            }
         }
-        finally
-        {
-            Directory.Delete(work, recursive: true);
-        }
-
-        static ValidationTarget Target(string path, byte[] content) => new(path,
-            Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(), (ulong)content.Length);
+        finally { Directory.Delete(work, recursive: true); }
     }
+
+    [Theory]
+    [InlineData("rar", new byte[] { 0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x01, 0x00, 0xFF })]
+    [InlineData("7z", new byte[] { 0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C, 0x00, 0x04, 0xFF })]
+    public async Task RarAndSevenZipOnlyNeedTheirSignature(string extension, byte[] content)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var work = Directory.CreateTempSubdirectory("oem-format-only-").FullName;
+        try
+        {
+            var pipeline = new OemFileValidationPipeline();
+            Assert.Equal(ValidationVerdict.Valid,
+                (await pipeline.RunAsync(Target(Write(work, "a." + extension, content), content), extension, ct)).Verdict);
+            var zip = Zip(("a.txt", "x"u8.ToArray()));
+            var mismatch = await pipeline.RunAsync(Target(Write(work, "b." + extension, zip), zip), extension, ct);
+            Assert.Equal((ValidationVerdict.Invalid, $"文件内容与扩展名 .{extension} 不符"), (mismatch.Verdict, mismatch.Message));
+        }
+        finally { Directory.Delete(work, recursive: true); }
+    }
+
+    [Fact]
+    public async Task OtherFilesMayCarryArchiveBytes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var work = Directory.CreateTempSubdirectory("oem-format-only-").FullName;
+        try
+        {
+            byte[] pdf = [.. OemTestHost.Pdf("cover"), .. EncryptedZip(), 0x0A];
+            var result = await new OemFileValidationPipeline().RunAsync(Target(Write(work, "cover.pdf", pdf), pdf), "pdf", ct);
+            Assert.Equal(ValidationVerdict.Valid, result.Verdict);
+        }
+        finally { Directory.Delete(work, recursive: true); }
+    }
+
+    private static ValidationTarget Target(string path, byte[] content) => new(path,
+        Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(), (ulong)content.Length);
 
     internal static byte[] Zip(params (string Name, byte[] Content)[] entries)
     {
@@ -472,39 +272,6 @@ public sealed class OemInspectionTests
                 using var stream = archive.CreateEntry(name, CompressionLevel.SmallestSize).Open();
                 stream.Write(content);
             }
-        return buffer.ToArray();
-    }
-
-    internal static byte[] MinimalOoxml(string extension)
-    {
-        var (partName, contentType, content) = extension switch
-        {
-            "docx" => ("word/document.xml",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
-                "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body/></w:document>"),
-            "xlsx" => ("xl/workbook.xml",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
-                "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"/>"),
-            "pptx" => ("ppt/presentation.xml",
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml",
-                "<p:presentation xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"/>"),
-            _ => throw new ArgumentOutOfRangeException(nameof(extension)),
-        };
-        var contentTypes = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
-            "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">" +
-            $"<Override PartName=\"/{partName}\" ContentType=\"{contentType}\"/>" +
-            "</Types>";
-        return Zip(
-            ("[Content_Types].xml", Encoding.UTF8.GetBytes(contentTypes)),
-            (partName, Encoding.UTF8.GetBytes(content)));
-    }
-
-    internal static byte[] SevenZip(params (string Name, byte[] Content)[] entries)
-    {
-        using var buffer = new MemoryStream();
-        using (var writer = WriterFactory.OpenWriter(buffer, ArchiveType.SevenZip, new SevenZipWriterOptions { LeaveStreamOpen = true }))
-            foreach (var (name, content) in entries)
-                writer.Write(name, new MemoryStream(content), null);
         return buffer.ToArray();
     }
 

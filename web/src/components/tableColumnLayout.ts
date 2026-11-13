@@ -131,6 +131,31 @@ export function withFlexibleColumn<T extends { key: string; width: number }>(
   })
 }
 
+/**
+ * 手动调过列宽后不再重新分配各列，但容器仍比合计宽时，多出的宽度给最后一个不固定的列
+ * （固定在右侧的操作列保持原宽；全是固定列时给最后一列），表格右侧不留空白。
+ * 正在拖的列（`resizingKey`）不接收多出的宽度，否则拖窄它会被立刻补回去：改给它右边最近的不固定列，没有就给左边最近的。
+ */
+export function withTrailingFill<T extends { key: string; width: number; fixed?: unknown }>(
+  columns: readonly T[],
+  containerWidth: number,
+  resizingKey?: string,
+): T[] {
+  if (!Number.isFinite(containerWidth) || columns.length === 0) return [...columns]
+  const slack = Math.floor(containerWidth) - columns.reduce((total, column) => total + column.width, 0)
+  if (!(slack > 0)) return [...columns]
+  const unfixed = columns.findLastIndex((column) => !column.fixed)
+  let target = unfixed >= 0 ? unfixed : columns.length - 1
+  const resizing = resizingKey === undefined ? -1 : columns.findIndex((column) => column.key === resizingKey)
+  if (resizing === target) {
+    const right = columns.findIndex((column, index) => index > resizing && !column.fixed)
+    const left = columns.findLastIndex((column, index) => index < resizing && !column.fixed)
+    const other = right >= 0 ? right : left
+    if (other >= 0) target = other
+  }
+  return columns.map((column, index) => index === target ? { ...column, width: column.width + slack } : column)
+}
+
 /** 正式环境里未知列没有有效宽度时使用，避免固定表格把该列压成不可见。 */
 export const UNKNOWN_COLUMN_FALLBACK_WIDTH = 160
 

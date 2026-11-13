@@ -133,7 +133,6 @@ const BYTE_SETTING_KEYS = new Set([
   'oem.upload.max_transfer_size',
   'oem.upload.chunk_size',
   'oem.upload.max_storage_per_company',
-  'oem.validation.archive_max_expanded_bytes',
 ])
 
 function formatBytes(bytes: number) {
@@ -167,8 +166,8 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
     try {
       const list = await api.settings(group)
       if (!isLatest()) return
-      // Do not let a stale server response revive the retired antivirus settings.
-      const visible = group === 'file' ? list.filter((item) => !item.key.startsWith('oem.scan.')) : list
+      // Do not let a stale server response revive retired settings (antivirus, archive limits).
+      const visible = group === 'file' ? list.filter((item) => !item.key.startsWith('oem.scan.') && !item.key.startsWith('oem.validation.archive_')) : list
       setItems(visible)
       setValues(Object.fromEntries(visible.map((item) => [item.key, item.value])))
     } catch {
@@ -199,7 +198,7 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
     <Space direction="vertical" style={{ width: '100%' }}>
       {group === 'file' && (
         <Typography.Paragraph type="secondary" style={{ margin: '0 0 8px' }}>
-          按需设置文件类型、上传容量、压缩包结构及下载限制。
+          按需设置文件类型、上传容量及下载限制。
         </Typography.Paragraph>
       )}
       {error && <Alert type="error" content={error} action={<Button size="small" onClick={() => void load()} disabled={saving}>重新加载</Button>} />}

@@ -16,7 +16,7 @@ import type { ApprovalInfo, ApprovalStatus, ApprovalTask, TransferDetail, Transf
 import OemFilePreview from '../components/OemFilePreview'
 import OemUploader, { type OemUploaderHandle } from '../components/OemUploader'
 import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
-import { ApprovalTag, LifecycleTag, PayloadTag, ValidationTag } from '../components/StatusTags'
+import { ApprovalTag, FileStatusTag, LifecycleTag } from '../components/StatusTags'
 import { transferClosedNotice } from '../components/statusLabels'
 import Counterpart from '../components/Counterpart'
 import { useCan, useOem } from '../OemContext'
@@ -27,8 +27,7 @@ import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'name', title: '文件名', defaultWidth: 270, minWidth: 160, maxWidth: 2400, locked: true },
   { key: 'size', title: '大小', defaultWidth: 80, minWidth: 80 },
-  { key: 'validation', title: '文件校验', defaultWidth: 140, minWidth: 120 },
-  { key: 'payload', title: '存储', defaultWidth: 80, minWidth: 80 },
+  { key: 'status', title: '状态', defaultWidth: 140, minWidth: 100 },
   { key: 'receipt', title: '接收 / 删除', defaultWidth: 210, minWidth: 140 },
   { key: 'actions', title: '操作', defaultWidth: 210, minWidth: 120, maxWidth: 320, locked: true },
 ]
@@ -163,17 +162,16 @@ function TransferFilesTable({ files, approval, approvalStatus, canEdit, toolbarH
     },
     { key: 'size', title: '大小', render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
     {
-      key: 'validation', title: '文件校验',
+      key: 'status', title: '状态',
       render: (_: unknown, file: TransferFile) => (
         <Space direction="vertical" size={0}>
-          <ValidationTag value={file.validationStatus} />
+          <FileStatusTag file={file} />
           {file.validationStatus !== 'VALID' && file.validationMessage && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>{file.validationMessage}</Typography.Text>
           )}
         </Space>
       ),
     },
-    { key: 'payload', title: '存储', render: (_: unknown, file: TransferFile) => <PayloadTag value={file.payloadStatus} /> },
     {
       key: 'receipt', title: '接收 / 删除',
       render: (_: unknown, file: TransferFile) => (

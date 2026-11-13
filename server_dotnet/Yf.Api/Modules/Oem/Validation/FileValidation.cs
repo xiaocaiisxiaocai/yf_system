@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using Yf.Api.Modules.Oem.Policies;
 
 namespace Yf.Api.Modules.Oem.Validation;
 
@@ -38,46 +37,23 @@ public sealed record ValidationResult(ValidationVerdict Verdict, string? Message
 public sealed record ValidationTarget(string Path, string Sha256, ulong Size);
 
 /// <summary>
-/// File-content validation pipeline. It verifies byte length and SHA-256, checks that
-/// the content signature agrees with the extension, and enforces archive structure and
-/// expansion limits. It does not perform or claim malware detection.
+/// File validation pipeline: it verifies byte length and SHA-256 and checks that the
+/// content signature agrees with the extension. Archives and Office documents are not
+/// opened (since 2026-11-13 only their format is checked). It does not perform or claim
+/// malware detection.
 /// </summary>
-public sealed class OemFileValidationPipeline(ILogger<OemFileValidationPipeline>? logger = null)
+public sealed class OemFileValidationPipeline
 {
-    public async Task<ValidationResult> RunAsync(
-        ValidationTarget target,
-        string extension,
-        ArchiveLimits limits,
-        string workDirectory,
-        CancellationToken ct)
+    public async Task<ValidationResult> RunAsync(ValidationTarget target, string extension, CancellationToken ct)
     {
         var integrity = await ValidateIntegrityAsync(target, ct);
         if (integrity is not null) return ValidationResult.Invalid(integrity);
 
         var signature = await FileSignatureInspector.InspectFileAsync(target.Path, extension, ct);
-        if (!signature.Accepted)
-            return ValidationResult.Invalid(signature.Reason ?? "文件内容与扩展名不符");
-
-        ArchiveVerdict archive;
-        try { archive = await ArchiveInspector.InspectAsync(target.Path, extension, limits, workDirectory, ct, logger); }
-        catch (InvalidDataException) { archive = new ArchiveVerdict(ArchiveOutcome.Corrupt, "压缩包内容无效"); }
-        catch (Exception error) when (IsContentFault(error))
-        {
-            // Archive readers report malformed structures with arbitrary runtime exceptions
-            // (IOException, InvalidOperationException, ArgumentException...). The bytes were
-            // just read in full and matched the recorded SHA-256, so the content is the cause
-            // and the verdict is final.
-            archive = new ArchiveVerdict(ArchiveOutcome.Corrupt, "压缩包已损坏或格式无效");
-        }
-
-        return archive.Outcome is ArchiveOutcome.Encrypted or ArchiveOutcome.LimitExceeded or ArchiveOutcome.Corrupt
-            or ArchiveOutcome.Forbidden
-            ? ValidationResult.Invalid(archive.Reason ?? "压缩包内容无效")
-            : ValidationResult.Valid;
+        return signature.Accepted
+            ? ValidationResult.Valid
+            : ValidationResult.Invalid(signature.Reason ?? "文件内容与扩展名不符");
     }
-
-    internal static bool IsContentFault(Exception error) =>
-        error is not (OperationCanceledException or ArchiveWorkspaceException or OutOfMemoryException);
 
     private static async Task<string?> ValidateIntegrityAsync(ValidationTarget target, CancellationToken ct)
     {

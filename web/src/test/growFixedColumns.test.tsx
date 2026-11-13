@@ -9,6 +9,7 @@ vi.mock('../components/tableColumnLayout', async (importOriginal) => ({
 }))
 
 import { useAdjustableColumns } from '../components/useAdjustableColumns'
+import { withTrailingFill } from '../components/tableColumnLayout'
 
 const specs: ColumnLayoutSpec[] = [
   { key: 'name', title: '文件名', defaultWidth: 360, minWidth: 160, maxWidth: 2400, locked: true },
@@ -42,7 +43,7 @@ describe('拖动列宽时左边固定', () => {
     expect(widths(result)).toEqual({ name: 690, size: 150, actions: 200 })
     expect(result.current.scrollX).toBe(1040)
 
-    // 往回缩：左边仍然不动，右侧出现空白而不是被文件名吃回去。
+    // 往回缩：左边仍然不动，不会被文件名吃回去。
     act(() => result.current.actions.beginResize('size', 740))
     fireEvent.pointerMove(window, { clientX: 700 })
     fireEvent.pointerUp(window, { clientX: 700 })
@@ -71,6 +72,37 @@ describe('拖动列宽时左边固定', () => {
     expect(result.current.actions.widthOf('name')).toBe(690)
     act(() => result.current.actions.setWidth('size', result.current.actions.widthOf('size') + 16))
     expect(widths(result)).toEqual({ name: 690, size: 126, actions: 200 })
+  })
+
+  it('手动调窄后合计不足容器宽度时，最后一列补足，右侧不留空白', () => {
+    const { result } = setup(true)
+    act(() => result.current.actions.beginResize('size', 700))
+    fireEvent.pointerMove(window, { clientX: 640 })
+    fireEvent.pointerUp(window, { clientX: 640 })
+    // 文件名固定在 690，大小缩到 80（下限），操作列补上 1000 - 690 - 80 = 230。
+    expect(widths(result)).toEqual({ name: 690, size: 80, actions: 230 })
+    expect(result.current.scrollX).toBe(1000)
+  })
+
+  it('保存的列宽合计比容器窄时（换了更宽的屏幕）同样补足', () => {
+    localStorage.setItem('yf:table-columns:grow-test:1', JSON.stringify({ hidden: [], widths: { name: 300, size: 100, actions: 150 } }))
+    const { result } = setup(false)
+    expect(widths(result)).toEqual({ name: 300, size: 100, actions: 600 })
+  })
+
+  it('拖窄接收补足的那一列时，多出的宽度改给别的列，被拖的列跟手变窄', () => {
+    const { result } = setup(true)
+    act(() => result.current.actions.beginResize('actions', 900))
+    fireEvent.pointerMove(window, { clientX: 820 })
+    fireEvent.pointerUp(window, { clientX: 820 })
+    // 操作列从 200 拖到 120（下限），左边最近的大小列补上 80，右侧不留空白。
+    expect(widths(result)).toEqual({ name: 690, size: 190, actions: 120 })
+    expect(result.current.scrollX).toBe(1000)
+  })
+
+  it('固定在右侧的列不吃多余宽度，补给它左边最后一个不固定的列', () => {
+    expect(withTrailingFill([{ key: 'a', width: 100 }, { key: 'b', width: 100 }, { key: 'ops', width: 80, fixed: 'right' }], 500)
+      .map((column) => column.width)).toEqual([100, 320, 80])
   })
 
   it('不开 growFixed 的表格行为不变：多余宽度由其余列分摊', () => {

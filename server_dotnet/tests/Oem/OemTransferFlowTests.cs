@@ -275,15 +275,15 @@ public sealed class OemTransferFlowTests
         Assert.Equal(ValidationStatuses.Invalid, blocked["files"]![0]!["validationStatus"]!.GetValue<string>());
         Assert.Contains("SHA-256", blocked["files"]![0]!["validationMessage"]!.GetValue<string>());
 
-        // Invalid format and encrypted archives remain blocked in quarantine.
+        // Content that does not match its extension stays blocked in quarantine.
         var mismatch = await CreateOutboundAsync(world, "非法归档", ct);
         var mismatchId = TransferId(mismatch);
-        await host.UploadAsync(world.Sender, mismatchId, "secret.zip", OemInspectionTests.EncryptedZip(), ct);
+        await host.UploadAsync(world.Sender, mismatchId, "secret.pdf", OemInspectionTests.EncryptedZip(), ct);
         await host.RunOemJobsAsync(ct);
         var inspected = await world.Sender.GetAsync($"/api/v1/oem/transfers/{mismatchId}", ct).Ok();
         var invalidArchive = Assert.Single(inspected["files"]!.AsArray())!;
         Assert.Equal(ValidationStatuses.Invalid, invalidArchive["validationStatus"]!.GetValue<string>());
-        Assert.Contains("加密", invalidArchive["validationMessage"]!.GetValue<string>());
+        Assert.Contains("不符", invalidArchive["validationMessage"]!.GetValue<string>());
         Assert.Equal("QUARANTINED", invalidArchive["payloadStatus"]!.GetValue<string>());
     }
 

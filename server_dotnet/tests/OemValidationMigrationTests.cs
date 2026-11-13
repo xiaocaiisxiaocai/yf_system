@@ -95,7 +95,8 @@ public sealed class OemValidationMigrationTests
         var settings = await db.SystemConfigs.ToDictionaryAsync(config => config.CfgKey, config => config.CfgValue, ct);
         Assert.DoesNotContain(settings.Keys, key => key.StartsWith("oem.scan.", StringComparison.Ordinal));
         Assert.Equal("7", settings["oem.validation.max_retries"]);
-        Assert.Equal("2", settings["oem.validation.archive_max_depth"]);
+        // The archive limits were renamed by the validation migration and later removed (RemoveOemArchiveLimitSettings).
+        Assert.DoesNotContain(settings.Keys, key => key.StartsWith("oem.validation.archive_", StringComparison.Ordinal));
         Assert.Equal("false", settings["notify.enabled"]);
     }
 }

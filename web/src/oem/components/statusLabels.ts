@@ -42,6 +42,18 @@ export const PAYLOAD: Record<PayloadStatus, [string, TagColor]> = {
   MISSING_UNVERIFIED: ['原因待核实', 'red'],
 }
 
+/**
+ * One status for an attached file, combining validation and storage: storage outcomes that end or break
+ * the file (deleted, lost) win; otherwise the validation step shows until it passes; a passed file shows
+ * where its bytes are (waiting for release, being moved, available).
+ */
+export function fileStatus(file: { validationStatus: ValidationStatus; payloadStatus: PayloadStatus }): [string, TagColor] {
+  if (['PURGE_PENDING', 'PURGED', 'STORAGE_LOST', 'MISSING_UNVERIFIED'].includes(file.payloadStatus)) return PAYLOAD[file.payloadStatus]
+  if (file.validationStatus !== 'VALID') return VALIDATION[file.validationStatus] ?? [file.validationStatus, 'gray']
+  if (file.payloadStatus === 'QUARANTINED') return VALIDATION.VALID
+  return PAYLOAD[file.payloadStatus] ?? [file.payloadStatus, 'gray']
+}
+
 export const DIRECTION_LABEL: Record<Direction, string> = {
   INTERNAL_TO_OEM: '公司 → ODM/OEMA',
   OEM_TO_INTERNAL: 'ODM/OEMA → 公司',

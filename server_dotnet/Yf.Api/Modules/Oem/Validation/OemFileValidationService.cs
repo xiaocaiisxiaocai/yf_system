@@ -209,33 +209,19 @@ public sealed class OemFileValidationService(
 
     private async Task<ValidationResult> ExecuteAsync(Claim claim, CancellationToken ct)
     {
-        string? workDirectory = null;
         try
         {
             var path = await storage.ResolveExistingFileAsync(claim.StoragePath, ct);
-            workDirectory = storage.SessionDirectory(Guid.NewGuid().ToString("D"), create: true, ct);
-            ArchiveLimits limits;
-            await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
-            {
-                var settings = await OemSettings.LoadAsync(uow.Db, ct);
-                limits = settings.ArchiveLimits;
-            }
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(Timeout(claim.Size));
             try
             {
-                return await pipeline.RunAsync(new ValidationTarget(path, claim.Sha256, claim.Size), claim.Extension, limits, workDirectory, timeout.Token);
+                return await pipeline.RunAsync(new ValidationTarget(path, claim.Sha256, claim.Size), claim.Extension, timeout.Token);
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
-                // The timeout scales with the file size; content that still cannot be checked in time (for
-                // example an archive that expands enormously) would only stall the single queue again on retry.
-                return ValidationResult.Invalid("文件校验超时，内容解压或检查耗时过长");
-            }
-            catch (OutOfMemoryException)
-            {
-                // Archive readers load RAR/7z headers whole; a header declaring vast numbers of entries ends here.
-                return ValidationResult.Invalid("压缩包结构过大，无法完成检查");
+                // The timeout scales with the file size, so a retry would only stall the single queue again.
+                return ValidationResult.Invalid("文件校验超时");
             }
         }
         catch (FileNotFoundException)
@@ -253,14 +239,6 @@ public sealed class OemFileValidationService(
             // toward ValidationMaxRetries instead of looping forever on lease expiry.
             logger.LogError(error, "OEM validation of file {FileId} failed unexpectedly.", claim.FileId);
             return ValidationResult.Error("文件校验过程出错");
-        }
-        finally
-        {
-            if (workDirectory is not null)
-            {
-                try { await storage.DeleteDirectoryAsync(workDirectory, CancellationToken.None); }
-                catch (Exception error) { logger.LogWarning("OEM validation work directory cleanup failed ({ErrorType}).", error.GetType().Name); }
-            }
         }
     }
 
