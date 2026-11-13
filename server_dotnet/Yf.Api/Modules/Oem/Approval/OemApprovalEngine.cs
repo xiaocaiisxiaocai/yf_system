@@ -241,40 +241,6 @@ public sealed class OemApprovalEngine
         await uow.Db.SaveChangesAsync(ct);
     }
 
-    /// <summary>
-    /// Replaces the approver of an open task. The old task is kept as SUPERSEDED (history
-    /// is never rewritten); the new task inherits the old one's state.
-    /// </summary>
-    internal async Task<OemFlowTask> ReassignAsync(OemUnitOfWork uow, OemFlowInstance instance, OemFlowTask task, ulong newApproverId,
-        string reason, ulong actorUserId, CancellationToken ct)
-    {
-        if (newApproverId == instance.InitiatorUserId) throw ApiException.BadRequest("新审批人不能是发送人本人");
-        // Recovery must not turn into approving on the approver's behalf.
-        if (newApproverId == actorUserId) throw ApiException.BadRequest("不能把审批任务改派给自己");
-        // A blocked flow may go back to its original approver once they are eligible again.
-        var restoring = newApproverId == task.ApproverUserId && instance.Status == FlowInstanceStatuses.ApprovalBlocked;
-        if (newApproverId == task.ApproverUserId && !restoring) throw ApiException.BadRequest("新审批人与原审批人相同");
-        var eligible = await ApprovalPlanningService.EligibleIdsAsync(uow.Db, [newApproverId], ct);
-        if (eligible.Length == 0) throw ApiException.BadRequest("新审批人必须是启用的内部账号且具备 ODM/OEMA 审批权限");
-        var conflict = await uow.Db.OemFlowTasks.AnyAsync(item => item.InstanceId == instance.Id && item.ApproverUserId == newApproverId
-            && item.Id != task.Id && item.Status != FlowTaskStatuses.Superseded && item.Status != FlowTaskStatuses.Cancelled, ct);
-        if (conflict) throw ApiException.BadRequest("新审批人已在本传递单的审批流程中");
-        var replacement = new OemFlowTask
-        {
-            InstanceId = instance.Id, InstanceNodeId = task.InstanceNodeId, ApproverUserId = newApproverId, Status = task.Status,
-            ReplacesTaskId = task.Id, ReassignReason = reason, ReassignedBy = actorUserId, ConcurrencyVersion = 0, CreatedAt = uow.Now,
-            // The new approver's wait starts now; a WAITING replacement is stamped when its node activates.
-            ActivatedAt = task.Status == FlowTaskStatuses.Pending ? uow.Now : null,
-        };
-        task.Status = FlowTaskStatuses.Superseded;
-        task.DecidedAt = uow.Now;
-        task.ConcurrencyVersion++;
-        uow.Db.OemFlowTasks.Add(replacement);
-        Touch(uow, instance);
-        await uow.Db.SaveChangesAsync(ct);
-        return replacement;
-    }
-
     /// <summary>Re-validates the active node's pending approvers; blocks the instance when the node can no longer be decided.</summary>
     internal async Task<string?> RevalidateActiveNodeAsync(OemUnitOfWork uow, OemFlowInstance instance, CancellationToken ct)
     {
@@ -286,7 +252,7 @@ public sealed class OemApprovalEngine
         var stillUsable = pending.Count(task => eligible.Contains(task.ApproverUserId));
         var blocked = node.ApprovalMode == ApprovalModes.Any ? stillUsable == 0 : stillUsable != pending.Length || pending.Length == 0;
         if (!blocked) return null;
-        // The node goes back to WAITING so that a later reassignment re-activates it through ActivateNextAsync.
+        // The node goes back to WAITING; the transfer can then only be terminated (approvers are not reassigned).
         foreach (var task in pending)
         {
             task.Status = FlowTaskStatuses.Waiting;

@@ -60,7 +60,5 @@ internal static class OemTransferEndpoints
             s.ApproveAsync(OemActorAccessor.Get(c), taskId, body, ct)).Produces<OemTransferDetailResponse>();
         oem.MapPost("/approvals/{taskId:long}/reject", (ulong taskId, ApprovalDecisionRequest body, HttpContext c, OemApprovalService s, CancellationToken ct) =>
             s.RejectAsync(OemActorAccessor.Get(c), taskId, body, ct)).Produces<OemTransferDetailResponse>();
-        oem.MapPost("/approvals/{taskId:long}/reassign", (ulong taskId, ReassignTaskRequest body, HttpContext c, OemApprovalService s, CancellationToken ct) =>
-            s.ReassignAsync(OemActorAccessor.Get(c), taskId, body, ct)).Produces<OemTransferDetailResponse>();
     }
 }

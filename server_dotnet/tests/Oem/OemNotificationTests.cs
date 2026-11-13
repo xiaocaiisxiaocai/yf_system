@@ -120,30 +120,32 @@ public sealed class OemNotificationTests
         Assert.DoesNotContain(mails, mail => mail.EventType == OemMailEvents.TransferReleased);
         Assert.Contains(mails, mail => mail.EventType == OemMailEvents.SenderReleased);
 
-        // A pending-approval mail whose task was reassigned is stale at send time.
-        var draft = await CreateOutboundAsync(world, "改派后过期", ct);
+        // A pending-approval mail is stale at send time once the transfer is terminated, and one for an email that changed is not sent.
+        var draft = await CreateOutboundAsync(world, "终止后过期", ct);
         await host.UploadAsync(world.Sender, TransferId(draft), "a.pdf", OemTestHost.Pdf("a"), ct);
         await world.Sender.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/send", new { version = Version(draft) + 1 }, ct).Ok();
         await host.RunOemJobsAsync(ct);
-        var backup = await host.CreateInternalUserAsync("mail_backup", "Backup#2026x", ["oem:flow_approve"], world.Org.Section, ct);
-        var detail = await world.Admin.GetAsync($"/api/v1/oem/transfers/{TransferId(draft)}", ct).Ok();
-        var task = detail["approval"]!["nodes"]![0]!["tasks"]![0]!;
-        await world.Admin.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",
-            new { newApproverUserId = backup, reason = "出差", version = task["version"]!.GetValue<ulong>() }, ct).Ok();
         var policy = new OemOutboxPolicy();
+        const string pendingSql = "SELECT id, event_type AS EventType, dedupe_key AS DedupeKey, recipient_email AS RecipientEmail, recipient_realm AS RecipientRealm, " +
+            "recipient_account_id AS AccountId, oem_transfer_id AS TransferId FROM email_outbox " +
+            "WHERE event_type='OEM_APPROVAL_PENDING' AND oem_transfer_id=@transferId ORDER BY id";
+        var pendingTransferId = TransferId(draft);
         await using (var conn = await host.OpenAsync(ct))
         await using (var tx = await conn.BeginTransactionAsync(ct))
         {
-            var rows = (await conn.QueryAsync<PolicyMail>(
-                "SELECT id, event_type AS EventType, dedupe_key AS DedupeKey, recipient_email AS RecipientEmail, recipient_realm AS RecipientRealm, " +
-                "recipient_account_id AS AccountId, oem_transfer_id AS TransferId FROM email_outbox " +
-                "WHERE event_type='OEM_APPROVAL_PENDING' ORDER BY id",
-                transaction: tx)).ToArray();
-            Assert.Equal(2, rows.Length);
-            Assert.False((await policy.EvaluateAsync(conn, tx, Info(rows[0]), ct)).Allowed);
-            Assert.True((await policy.EvaluateAsync(conn, tx, Info(rows[1]), ct)).Allowed);
-            await conn.ExecuteAsync("UPDATE users SET email='changed@example.invalid' WHERE id=@AccountId", rows[1], tx);
-            Assert.False((await policy.EvaluateAsync(conn, tx, Info(rows[1]), ct)).Allowed);
+            var row = Assert.Single(await conn.QueryAsync<PolicyMail>(pendingSql, new { transferId = pendingTransferId }, tx));
+            Assert.True((await policy.EvaluateAsync(conn, tx, Info(row), ct)).Allowed);
+            await conn.ExecuteAsync("UPDATE users SET email='changed@example.invalid' WHERE id=@AccountId", row, tx);
+            Assert.False((await policy.EvaluateAsync(conn, tx, Info(row), ct)).Allowed);
+        }
+        var current = await world.Admin.GetAsync($"/api/v1/oem/transfers/{pendingTransferId}", ct).Ok();
+        await world.Admin.PostAsync($"/api/v1/oem/transfers/{pendingTransferId}/cancel",
+            new { reason = "终止", version = current["summary"]!["version"]!.GetValue<ulong>() }, ct).Ok();
+        await using (var conn = await host.OpenAsync(ct))
+        await using (var tx = await conn.BeginTransactionAsync(ct))
+        {
+            var row = Assert.Single(await conn.QueryAsync<PolicyMail>(pendingSql, new { transferId = pendingTransferId }, tx));
+            Assert.False((await policy.EvaluateAsync(conn, tx, Info(row), ct)).Allowed);
         }
 
         // Turning collaboration mail off cancels only collaboration mail; OEM mail stays queued.
@@ -163,13 +165,12 @@ public sealed class OemNotificationTests
     }
 
     [Fact(Timeout = 240_000)]
-    public async Task RecoveredApprovalBlockMailIsStaleAtSendTime()
+    public async Task TerminatedApprovalBlockMailIsStaleAtSendTime()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var backup = await host.CreateInternalUserAsync("blocked_mail_backup", "Backup#2026x", ["oem:flow_approve"], world.Org.Section, ct);
-        var draft = await CreateOutboundAsync(world, "阻断已恢复", ct);
+        var draft = await CreateOutboundAsync(world, "阻断后终止", ct);
         var transferId = TransferId(draft);
         await host.UploadAsync(world.Sender, transferId, "a.pdf", OemTestHost.Pdf("a"), ct);
         await world.Sender.PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version = Version(draft) + 1 }, ct).Ok();
@@ -178,9 +179,8 @@ public sealed class OemNotificationTests
         await world.Admin.PutAsync($"/api/v1/admin/users/{world.LeaderId}/status", new { status = "DISABLED" }, ct).Ok();
         Assert.Equal(1, await host.Service<OemApprovalService>().RevalidateActiveInstancesAsync(ct));
         var blocked = await world.Admin.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
-        var blockedTask = blocked["approval"]!["nodes"]![0]!["tasks"]!.AsArray().Single()!;
-        await world.Admin.PostAsync($"/api/v1/oem/approvals/{blockedTask.Id()}/reassign",
-            new { newApproverUserId = backup, reason = "恢复审批", version = blockedTask["version"]!.GetValue<ulong>() }, ct).Ok();
+        await world.Admin.PostAsync($"/api/v1/oem/transfers/{transferId}/cancel",
+            new { reason = "审批人已停用，终止", version = blocked["summary"]!["version"]!.GetValue<ulong>() }, ct).Ok();
 
         var policy = new OemOutboxPolicy();
         await using var conn = await host.OpenAsync(ct);

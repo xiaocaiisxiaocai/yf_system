@@ -414,7 +414,7 @@ public sealed class OemTransferFlowTests
     }
 
     [Fact(Timeout = 240_000)]
-    public async Task DisabledApproverBlocksTheFlowUntilARecoveryAdminReassigns()
+    public async Task DisabledApproverBlocksTheFlowUntilARecoveryAdminTerminates()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
@@ -432,10 +432,6 @@ public sealed class OemTransferFlowTests
         // general approval or transfer-administration permission. The flow must already
         // be an outbound approval block before either recovery command is accepted.
         var inProgress = await world.Admin.GetAsync($"/api/v1/oem/transfers/{id}", ct).Ok();
-        var inProgressTask = inProgress["approval"]!["nodes"]![0]!["tasks"]![0]!;
-        await recovery.PostAsync($"/api/v1/oem/approvals/{inProgressTask.Id()}/reassign",
-            new { newApproverUserId = backupId, reason = "不应允许改派正常审批", version = inProgressTask["version"]!.GetValue<ulong>() }, ct)
-            .Status(HttpStatusCode.Conflict);
         await recovery.PostAsync($"/api/v1/oem/transfers/{id}/cancel",
             new { reason = "不应允许终止正常审批", version = Version(inProgress) }, ct)
             .Status(HttpStatusCode.Conflict);
@@ -472,33 +468,17 @@ public sealed class OemTransferFlowTests
         var options = (await recovery.GetAsync("/api/v1/oem/approver-options", ct).Ok()).AsArray();
         Assert.Contains(options, option => option!.Id() == backupId);
 
-        // Reassignment rules: never the initiator or the recovering admin, always an eligible approver, reason required.
-        var selfRecoveryId = await host.CreateInternalUserAsync("recover_approver", "Recover#2026x",
-            ["oem:approval_recover", "oem:flow_approve"], world.Org.Section, ct);
-        var selfRecovery = await host.LoginInternalAsync("recover_approver", "Recover#2026x", ct);
-        var toSelf = await selfRecovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",
-            new { newApproverUserId = selfRecoveryId, reason = "自己审", version = task["version"]!.GetValue<ulong>() }, ct).Status(HttpStatusCode.BadRequest);
-        Assert.Contains("不能把审批任务改派给自己", toSelf.Body);
+        // Approvers are never reassigned: the route does not exist. A recovery admin can only terminate, never approve on someone's behalf.
         await recovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",
-            new { newApproverUserId = world.SenderId, reason = "x", version = task["version"]!.GetValue<ulong>() }, ct).Status(HttpStatusCode.BadRequest);
-        await recovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",
-            new { newApproverUserId = backupId, reason = "", version = task["version"]!.GetValue<ulong>() }, ct).Status(HttpStatusCode.BadRequest);
-        var resumed = await recovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/reassign",
-            new { newApproverUserId = backupId, reason = "原主管离职", version = task["version"]!.GetValue<ulong>() }, ct).Ok();
-        Assert.Equal("PENDING", resumed["summary"]!["approvalStatus"]!.GetValue<string>());
-        Assert.Empty(resumed["files"]!.AsArray());
+            new { newApproverUserId = backupId, reason = "原主管离职", version = task["version"]!.GetValue<ulong>() }, ct).Status(HttpStatusCode.NotFound);
+        await recovery.PostAsync($"/api/v1/oem/approvals/{task.Id()}/approve", new { version = task["version"]!.GetValue<ulong>() }, ct)
+            .Status(HttpStatusCode.Forbidden);
+        var cancelled = await recovery.PostAsync($"/api/v1/oem/transfers/{id}/cancel",
+            new { reason = "原主管离职，终止后重新发送", version = Version(blocked) }, ct).Ok();
+        Assert.Equal("CANCELLED", Lifecycle(cancelled));
+        Assert.Empty(cancelled["files"]!.AsArray());
         await recovery.GetAsync($"/api/v1/oem/transfers/{id}", ct).Status(HttpStatusCode.NotFound);
         Assert.Empty((await recovery.GetAsync("/api/v1/oem/transfers?approvalStatus=APPROVAL_BLOCKED", ct).Ok())["list"]!.AsArray());
-        var tasks = resumed["approval"]!["nodes"]![0]!["tasks"]!.AsArray();
-        Assert.Equal(["SUPERSEDED", "PENDING"], tasks.Select(item => item!["status"]!.GetValue<string>()));
-
-        // A recovery admin may terminate, but never approve on someone's behalf.
-        var newTask = tasks[1]!;
-        await world.Admin.PostAsync($"/api/v1/oem/approvals/{newTask.Id()}/approve", new { version = newTask["version"]!.GetValue<ulong>() }, ct)
-            .Status(HttpStatusCode.Forbidden);
-        var cancelled = await world.Admin.PostAsync($"/api/v1/oem/transfers/{id}/cancel",
-            new { reason = "业务取消", version = resumed["summary"]!["version"]!.GetValue<ulong>() }, ct).Ok();
-        Assert.Equal("CANCELLED", Lifecycle(cancelled));
         await world.Admin.PostAsync($"/api/v1/oem/transfers/{id}/cancel", new { reason = "再次", version = Version(cancelled) }, ct).Status(HttpStatusCode.Conflict);
 
         // A comma-separated status filter matches any of the listed lifecycle states ("未发送" group in the UI).

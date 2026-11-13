@@ -215,8 +215,6 @@ public sealed record OemApprovalTaskResponse(
     string? ApproverEmployeeNo,
     string? Reason,
     DateTime? DecidedAt,
-    ulong? ReplacesTaskId,
-    string? ReassignReason,
     ulong Version);
 
 public sealed record OemApprovalNodeResponse(

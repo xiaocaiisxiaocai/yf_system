@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { actionSlots } from '../../components/ActionSlots'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Select, Space, Spin, Steps, Table, Tag, Typography,
+  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Space, Spin, Table, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -32,6 +32,8 @@ const OEM_TRANSFER_FILE_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'receipt', title: '接收 / 删除', defaultWidth: 220, minWidth: 140 },
   { key: 'actions', title: '操作', defaultWidth: 200, minWidth: 120, maxWidth: 320, locked: true },
 ]
+
+const OEM_APPROVAL_COLUMN: ColumnLayoutSpec = { key: 'approval', title: '审批', defaultWidth: 260, minWidth: 180, maxWidth: 480 }
 
 const SOURCE_LABEL: Record<string, string> = {
   DIRECT_LEADER: '上级主管', SPECIFIED_USERS: '指定人员',
@@ -63,26 +65,16 @@ function promptText(title: string, placeholder: string, initial = ''): Promise<s
 }
 
 /**
- * The approver's decision buttons sit in the attachment card's header (next to the files being reviewed). The step-by-step flow card
- * below is only for staff who can reassign approvers, and whenever the approval is blocked.
+ * The approver's decision buttons sit in the attachment card's header (next to the files being reviewed). The approval progress is
+ * the last column of the attachment table; approvers are not reassigned from here.
  */
 function ApprovalPanel({ detail, onChanged, toolbarHost }: { detail: TransferDetail; onChanged: (next: TransferDetail) => void; toolbarHost: HTMLElement | null }) {
-  const { api, userId, base, realm, permissions } = useOem()
-  const can = useCan()
-  const navigate = useNavigate()
-  const recoveryScoped = realm === 'internal' && can.recover && !permissions.has('oem:transfer_view')
+  const { api, userId } = useOem()
   const approval = detail.approval as ApprovalInfo
-  const [reassigning, setReassigning] = useState<ApprovalTask | null>(null)
-  const [candidates, setCandidates] = useState<{ id: number; employeeNo: string; realName: string }[]>([])
-  const [target, setTarget] = useState<number | undefined>()
-  const [reason, setReason] = useState('')
   const [deciding, setDeciding] = useState<'approve' | 'reject' | null>(null)
-  const [reassignSaving, setReassignSaving] = useState(false)
   const decidingRef = useRef(false)
-  const reassignLocked = useRef(false)
 
   const myTask = approval.nodes.flatMap((node) => node.tasks).find((task) => task.status === 'PENDING' && task.approverUserId === userId)
-  const open = ['WAITING_FILES', 'IN_PROGRESS', 'APPROVAL_BLOCKED'].includes(approval.status)
 
   /** One decision at a time; failures are already reported by the HTTP layer. */
   const decide = async (kind: 'approve' | 'reject', run: () => Promise<boolean>) => {
@@ -132,43 +124,6 @@ function ApprovalPanel({ detail, onChanged, toolbarHost }: { detail: TransferDet
       }
     }
   })
-  const searchCandidates = async (keyword: string) => setCandidates(await api.approverOptions(keyword))
-  const submitReassign = async () => {
-    if (reassignLocked.current) return
-    if (!reassigning || !target || !reason.trim()) {
-      Message.warning('请选择新审批人并填写改派原因')
-      return
-    }
-    reassignLocked.current = true
-    setReassignSaving(true)
-    try {
-      const next = await api.reassign(reassigning.id, target, reason.trim(), reassigning.version)
-      setReassigning(null)
-      Message.success('已改派')
-      if (recoveryScoped) {
-        navigate(`${base}/approvals?tab=blocked`, { replace: true })
-        return
-      }
-      onChanged(next)
-    } catch (error) {
-      // 40901 仍只保留对话框。40903 改用刷新后的任务版本，原因和目标审批人不动。
-      if (isVersionConflict(error) && reassigning) {
-        const taskId = reassigning.id
-        const latest = await api.transfer(detail.summary.id).catch(() => null)
-        if (latest) {
-          onChanged(latest)
-          const fresh = latest.approval?.nodes.flatMap((node) => node.tasks).find((item) => item.id === taskId)
-          if (fresh) setReassigning(fresh)
-        }
-      }
-    } finally {
-      reassignLocked.current = false
-      setReassignSaving(false)
-    }
-  }
-
-  const current = approval.nodes.findIndex((node) => node.status === 'PENDING' || node.status === 'WAITING')
-  const showFlow = can.recover || approval.status === 'APPROVAL_BLOCKED'
   const decisionButtons = myTask && toolbarHost ? createPortal(
     <Space size={8}>
       <Button type="primary" size="small" loading={deciding === 'approve'} disabled={deciding !== null}
@@ -181,56 +136,38 @@ function ApprovalPanel({ detail, onChanged, toolbarHost }: { detail: TransferDet
   return (
     <>
     {decisionButtons}
-    {showFlow && <Card className="oem-transfer-approval-card" title={`审批流程（${approval.templateName ?? '-'}）`}>
-      {approval.status === 'APPROVAL_BLOCKED' && (
-        <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${approval.blockedReason ?? ''}。需要具有异常处置权限的管理员改派审批人或终止传递。`} />
-      )}
-      <Steps direction="vertical" current={current < 0 ? approval.nodes.length + 1 : current + 1} size="small">
-        {approval.nodes.map((node) => (
-          <Steps.Step
-            key={node.sortNo}
-            title={<Space>{node.name}<Tag size="small">{SOURCE_LABEL[node.approverSource] ?? node.approverSource}</Tag>
-              {node.approvalMode === 'ALL' && <Tag size="small" color="purple">会签</Tag>}
-              {node.approvalMode === 'ANY' && <Tag size="small" color="arcoblue">或签</Tag>}
-              {node.usedFallback && <Tag size="small" color="orange">备用审批人</Tag>}</Space>}
-            description={node.status === 'SKIPPED' ? (SKIP_LABEL[node.skipReason ?? ''] ?? '发送人即本节点审批人，按策略免审') : (
-              <Space direction="vertical" size={2}>
-                {node.tasks.map((task) => (
-                  <Space key={task.id} size={6}>
-                    <span>{task.approverName}（{task.approverEmployeeNo}）</span>
-                    <Tag size="small">{TASK_LABEL[task.status] ?? task.status}</Tag>
-                    {task.decidedAt && <Typography.Text type="secondary">{fmtTime(task.decidedAt)}</Typography.Text>}
-                    {task.reason && <Typography.Text type="secondary">原因：{task.reason}</Typography.Text>}
-                    {task.reassignReason && <Typography.Text type="secondary">改派原因：{task.reassignReason}</Typography.Text>}
-                    {can.recover && open && ['WAITING', 'PENDING'].includes(task.status) && (
-                      <Button size="mini" type="text" onClick={() => { setReassigning(task); setTarget(undefined); setReason(''); void searchCandidates('') }}>改派</Button>
-                    )}
-                  </Space>
-                ))}
-              </Space>
-            )}
-          />
-        ))}
-      </Steps>
-    </Card>}
-      <Modal title="改派审批人" visible={Boolean(reassigning)} confirmLoading={reassignSaving}
-        closable={!reassignSaving} maskClosable={!reassignSaving} escToExit={!reassignSaving}
-        cancelButtonProps={{ disabled: reassignSaving }}
-        onCancel={() => { if (!reassignSaving) setReassigning(null) }} onOk={submitReassign} unmountOnExit>
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Select showSearch placeholder="搜索具有 ODM/OEMA 审批权限的员工" value={target} onChange={setTarget} filterOption={false}
-            onSearch={(value) => void searchCandidates(value)}
-            options={candidates.map((item) => ({ value: item.id, label: `${item.realName}（${item.employeeNo}）` }))} />
-          <Input.TextArea placeholder="改派原因（必填）" value={reason} onChange={setReason} maxLength={512} />
-          <Typography.Text type="secondary">改派不会替原审批人做决定；原任务保留为“已改派”记录。</Typography.Text>
-        </Space>
-      </Modal>
     </>
   )
 }
 
-function TransferFilesTable({ files, canEdit, toolbarHost, onDownload, onPreview, onRemove }: {
+/** 审批进度：每个节点一行，写明审批人和处理结果；审批异常时标出原因。 */
+function ApprovalProgress({ approval }: { approval: ApprovalInfo }) {
+  return (
+    <Space direction="vertical" size={4} style={{ fontSize: 12 }}>
+      {approval.status === 'APPROVAL_BLOCKED' && <Tag size="small" color="orangered">审批异常：{approval.blockedReason ?? ''}</Tag>}
+      {approval.nodes.map((node) => (
+        <Space key={node.sortNo} direction="vertical" size={0}>
+          <span>{node.name}<Typography.Text type="secondary">（{SOURCE_LABEL[node.approverSource] ?? node.approverSource}）</Typography.Text></span>
+          {node.status === 'SKIPPED'
+            ? <Typography.Text type="secondary">{SKIP_LABEL[node.skipReason ?? ''] ?? '发送人即本节点审批人，按策略免审'}</Typography.Text>
+            : node.tasks.filter((task) => task.status !== 'SUPERSEDED').map((task) => (
+              <Space key={task.id} size={6} wrap>
+                <span>{task.approverName}（{task.approverEmployeeNo}）</span>
+                <Tag size="small">{TASK_LABEL[task.status] ?? task.status}</Tag>
+                {task.decidedAt && <Typography.Text type="secondary">{fmtTime(task.decidedAt)}</Typography.Text>}
+                {task.reason && <Typography.Text type="secondary">原因：{task.reason}</Typography.Text>}
+              </Space>
+            ))}
+        </Space>
+      ))}
+    </Space>
+  )
+}
+
+function TransferFilesTable({ files, approval, canEdit, toolbarHost, onDownload, onPreview, onRemove }: {
   files: TransferFile[]
+  /** 内部账号看得到：审批进度放在附件表的最后一列（整张传递单一份，合并成一格）。 */
+  approval?: ApprovalInfo | null
   canEdit: boolean
   /** 附件卡标题右侧的挂载点：“显示列”放在那里，不再单占一行。 */
   toolbarHost: HTMLElement | null
@@ -279,15 +216,21 @@ function TransferFilesTable({ files, canEdit, toolbarHost, onDownload, onPreview
         ),
       ], 'oem-file'),
     },
+    ...(approval ? [{
+      key: 'approval', title: '审批',
+      onCell: (_: TransferFile, index: number) => ({ rowSpan: index === 0 ? files.length : 0 }),
+      render: () => <ApprovalProgress approval={approval} />,
+    }] : []),
   ]
+  const fileColumnSpecs = approval ? [...OEM_TRANSFER_FILE_COLUMNS, OEM_APPROVAL_COLUMN] : OEM_TRANSFER_FILE_COLUMNS
   const fileTableId = realm === 'oem' ? 'oem-portal-transfer-files' : 'oem-transfer-files'
   // 文件名常很长：屏幕有余量时多出的宽度都给文件名，其余列保持设定宽度。
-  const table = useAdjustableColumns(fileTableId, userId, OEM_TRANSFER_FILE_COLUMNS, columns, 'name', tableHostRef, true, true)
+  const table = useAdjustableColumns(fileTableId, userId, fileColumnSpecs, columns, 'name', tableHostRef, true, true)
   return (
     <>
       {toolbarHost && createPortal(
         <ColumnVisibilityPicker
-          specs={OEM_TRANSFER_FILE_COLUMNS}
+          specs={fileColumnSpecs}
           hidden={table.hidden}
           onToggle={table.toggle}
           onShowAll={table.showAll}
@@ -540,10 +483,11 @@ export default function TransferDetailPage() {
         {caps.canEdit && <div style={{ marginBottom: 16 }}><OemUploader ref={uploader} transferId={id} disabled={sending}
           onBusyChange={setUploadBusy} onUploaded={() => void load()} /></div>}
         {can.recover && !caps.canReadContent && detail.files.length === 0 ? (
-          <Alert type="info" content="异常处置权限不包含附件内容；此页仅显示完成改派或终止所需的审批任务信息。" />
+          <Alert type="info" content="异常处置权限不包含附件内容。" />
         ) : detail.files.length === 0 ? <Empty description="暂无附件" /> : (
           <TransferFilesTable
             files={detail.files}
+            approval={realm === 'internal' ? detail.approval : null}
             canEdit={caps.canEdit}
             toolbarHost={filesToolbar}
             onDownload={(file) => void download(file).catch(() => undefined)}

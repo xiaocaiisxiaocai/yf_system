@@ -472,6 +472,6 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     task.Id, task.Status, task.ApproverUserId,
                     names.GetValueOrDefault(task.ApproverUserId)?.RealName,
                     names.GetValueOrDefault(task.ApproverUserId)?.EmployeeNo,
-                    task.Reason, task.DecidedAt, task.ReplacesTaskId, task.ReassignReason, task.ConcurrencyVersion)).ToArray())).ToArray());
+                    task.Reason, task.DecidedAt, task.ConcurrencyVersion)).ToArray())).ToArray());
     }
 }

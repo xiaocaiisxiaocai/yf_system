@@ -302,7 +302,7 @@ public sealed class OemFlowTask
     public string? ReassignReason { get; set; }
     public ulong? ReassignedBy { get; set; }
     public DateTime? DecidedAt { get; set; }
-    /// <summary>When the task last became PENDING for its approver (node activation or reassignment).</summary>
+    /// <summary>When the task last became PENDING for its approver (node activation).</summary>
     public DateTime? ActivatedAt { get; set; }
     public ulong ConcurrencyVersion { get; set; }
     public DateTime CreatedAt { get; set; }

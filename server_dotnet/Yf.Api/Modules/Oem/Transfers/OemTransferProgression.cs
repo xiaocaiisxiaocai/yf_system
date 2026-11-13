@@ -35,7 +35,7 @@ public static class OemTransferFiles
 /// Process manager for a sent transfer. It is the only place that decides when a
 /// SEALED transfer is released, blocked, rejected or cancelled, and it is invoked
 /// after every event that can change that decision: send, validation result, promotion,
-/// approval decision, reassignment. Release and closure schedule file purges and raise
+/// approval decision. Release and closure schedule file purges and raise
 /// domain events in the same transaction.
 /// </summary>
 public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWriter audit)

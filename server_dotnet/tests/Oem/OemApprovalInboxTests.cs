@@ -1,3 +1,4 @@
+using System.Net;
 using System.Globalization;
 using System.Text.Json.Nodes;
 using Dapper;
@@ -69,7 +70,7 @@ public sealed class OemApprovalInboxTests
     }
 
     [Fact(Timeout = 240_000)]
-    public async Task TasksRecordWhenTheyBecomePendingOnActivationAdvanceAndReassignment()
+    public async Task TasksRecordWhenTheyBecomePendingOnActivationAndAdvance()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
@@ -114,13 +115,10 @@ public sealed class OemApprovalInboxTests
         Assert.True(reviewerActivatedAt > leaderActivatedAt);
         Assert.Equal(reviewerActivatedAt, second["activatedAt"]!.GetValue<DateTime>());
 
-        // A reassignment starts a new wait for the new approver.
+        // Approvers are never reassigned: the route is gone.
         await world.Admin.PostAsync($"/api/v1/oem/approvals/{second.Id("taskId")}/reassign",
-            new { newApproverUserId = backupId, reason = "出差", version = second["version"]!.GetValue<ulong>() }, ct).Ok();
-        var backupActivatedAt = await ActivatedAtAsync(backupId);
-        Assert.NotNull(backupActivatedAt);
-        Assert.True(backupActivatedAt > reviewerActivatedAt);
-        Assert.Empty(await PendingAsync(reviewer, "", ct));
+            new { newApproverUserId = backupId, reason = "出差", version = second["version"]!.GetValue<ulong>() }, ct).Status(HttpStatusCode.NotFound);
+        Assert.Single(await PendingAsync(reviewer, "", ct));
     }
 
     [Fact(Timeout = 240_000)]

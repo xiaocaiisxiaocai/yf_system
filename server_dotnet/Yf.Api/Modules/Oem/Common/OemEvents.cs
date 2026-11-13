@@ -13,7 +13,7 @@ public interface IOemEvent
 
 public sealed record TransferReleasedEvent(ulong TransferId) : IOemEvent;
 
-/// <summary>Approval tasks became actionable (node activation or reassignment).</summary>
+/// <summary>Approval tasks became actionable (node activation).</summary>
 public sealed record ApprovalTasksActivatedEvent(ulong TransferId, IReadOnlyList<ulong> TaskIds) : IOemEvent;
 
 public sealed record ApprovalBlockedEvent(ulong TransferId, string Reason) : IOemEvent;

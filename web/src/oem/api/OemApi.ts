@@ -126,9 +126,6 @@ export class OemApi {
     this.post<'POST /oem/approvals/{taskId}/approve', TransferDetail>(`/oem/approvals/${taskId}/approve`, { version, reason } satisfies Api.ApprovalDecisionRequest)
   reject = (taskId: number, version: number, reason: string) =>
     this.post<'POST /oem/approvals/{taskId}/reject', TransferDetail>(`/oem/approvals/${taskId}/reject`, { version, reason } satisfies Api.ApprovalDecisionRequest)
-  reassign = (taskId: number, newApproverUserId: number, reason: string, version: number) =>
-    this.post<'POST /oem/approvals/{taskId}/reassign', TransferDetail>(
-      `/oem/approvals/${taskId}/reassign`, { newApproverUserId, reason, version } satisfies Api.ReassignTaskRequest)
 
   // Options for senders
   companyOptions = () => this.get<'GET /oem/company-options', CompanyOption[]>('/oem/company-options')

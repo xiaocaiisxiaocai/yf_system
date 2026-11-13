@@ -1,11 +1,10 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../../api/queryClient'
 import type { OemApi } from '../../oem/api/OemApi'
-import type { TransferDetail } from '../../oem/api/types'
+import type { TransferDetail, TransferFile } from '../../oem/api/types'
 import { OemProvider } from '../../oem/OemContext'
 import TransferDetailPage from '../../oem/pages/TransferDetailPage'
 
@@ -69,8 +68,6 @@ function detail(): TransferDetail {
           approverEmployeeNo: 'A0021',
           reason: null,
           decidedAt: null,
-          replacesTaskId: null,
-          reassignReason: null,
           version: 3,
         }],
       }],
@@ -99,7 +96,7 @@ function renderDetail(api: Partial<OemApi>) {
   )
 }
 
-describe('ODM/OEMA 终止与改派', () => {
+describe('ODM/OEMA 终止传递', () => {
   it('同步连点终止只提交一次', async () => {
     let resolveCancel!: (value: TransferDetail) => void
     const cancel = vi.fn().mockImplementation(() => new Promise<TransferDetail>((resolve) => { resolveCancel = resolve }))
@@ -124,47 +121,24 @@ describe('ODM/OEMA 终止与改派', () => {
     resolveCancel({ ...detail(), summary: { ...detail().summary, lifecycleStatus: 'CANCELLED' } })
     expect(await screen.findByText('传递已终止')).toBeInTheDocument()
   })
-
-  it('同步连点改派只提交一次，失败后可再次提交', async () => {
-    const user = userEvent.setup()
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    let resolveReassign!: (value: TransferDetail) => void
-    const reassign = vi.fn()
-      .mockRejectedValueOnce(new Error('改派失败'))
-      .mockImplementationOnce(() => new Promise<TransferDetail>((resolve) => { resolveReassign = resolve }))
-    renderDetail({
-      transfer: vi.fn().mockResolvedValue(detail()),
-      approverOptions: vi.fn().mockResolvedValue([{ id: 12, employeeNo: 'A0012', realName: '新审批人' }]),
-      reassign,
-    })
-
-    await user.click(await screen.findByRole('button', { name: '改派' }))
-    const dialog = await screen.findByRole('dialog', { name: '改派审批人' })
-    await user.click(withinDialog(dialog))
-    // Arco 选项在下拉动画期间是 pointer-events: none，userEvent 点不到。
-    fireEvent.click(await screen.findByRole('option', { name: '新审批人（A0012）' }))
-    fireEvent.change(screen.getByPlaceholderText('改派原因（必填）'), { target: { value: '原审批人离职' } })
-    // 只在改派对话框内查找：上一用例的 Modal.confirm 在关闭动画结束前可能仍留在 DOM 里。
-    const ok = within(dialog).getByRole('button', { name: '确定' })
-    await act(async () => {
-      fireEvent.click(ok)
-      fireEvent.click(ok)
-    })
-    expect(reassign).toHaveBeenCalledTimes(1)
-    expect(reassign).toHaveBeenCalledWith(51, 12, '原审批人离职', 3)
-    expect(consoleError).not.toHaveBeenCalled()
-    expect(screen.getByRole('dialog', { name: '改派审批人' })).toBeInTheDocument()
-
-    await user.click(within(dialog).getByRole('button', { name: '确定' }))
-    expect(reassign).toHaveBeenCalledTimes(2)
-    resolveReassign(detail())
-    expect(await screen.findByText('已改派')).toBeInTheDocument()
-    consoleError.mockRestore()
-  })
 })
 
-function withinDialog(dialog: HTMLElement) {
-  const combo = dialog.querySelector('[role="combobox"]')
-  if (!combo) throw new Error('改派对话框里没有审批人选择框')
-  return combo
-}
+describe('ODM/OEMA 审批进度', () => {
+  it('审批进度放在附件表的最后一列，下方没有审批流程卡片，也没有改派入口', async () => {
+    const base = detail()
+    const file = {
+      id: 1, originalName: '图纸.pdf', ext: 'pdf', sizeBytes: 1024, sha256: 'a'.repeat(64), validationStatus: 'VALID', payloadStatus: 'AVAILABLE',
+      validationAttempts: 0, validationMessage: null, createdAt: '2026-10-05T00:00:00Z', firstRecipientDownloadAt: null, purgeDueAt: null, purgedAt: null, downloadable: false,
+    } as TransferFile
+    renderDetail({ transfer: vi.fn().mockResolvedValue({ ...base, files: [file, { ...file, id: 2, originalName: '清单.xlsx' }] }) })
+
+    await screen.findByText('图纸.pdf')
+    const headers = screen.getAllByRole('columnheader').map((header) => header.textContent)
+    expect(headers[headers.length - 1]).toBe('审批')
+    expect(screen.getAllByText('课别主管').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('已停用主管（A0021）').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/审批异常：原审批人已停用/).length).toBeGreaterThan(0)
+    expect(screen.queryByText(/审批流程/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '改派' })).not.toBeInTheDocument()
+  })
+})

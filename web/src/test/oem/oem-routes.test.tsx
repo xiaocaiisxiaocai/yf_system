@@ -81,8 +81,6 @@ const blockedDetail = {
         approverEmployeeNo: 'A0021',
         reason: null,
         decidedAt: null,
-        replacesTaskId: null,
-        reassignReason: null,
         version: 3,
       }],
     }],
@@ -248,7 +246,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(screen.queryByText('无操作权限')).not.toBeInTheDocument()
   })
 
-  it('仅有异常处置权限时进入受限阻断列表并取得改派和终止操作', async () => {
+  it('仅有异常处置权限时进入受限阻断列表并取得终止操作', async () => {
     const user = userEvent.setup()
     setInternalSession(['oem:approval_recover'])
     const get = vi.spyOn(http, 'get').mockImplementation(async (url, config) => {
@@ -266,12 +264,12 @@ describe('ODM/OEMA 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByText('这里只显示尚未发布且审批出现异常的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。')).toBeInTheDocument()
+    expect(await screen.findByText('这里只显示尚未发布且审批出现异常的传递单。处置管理员可以终止传递，不能代替审批人通过，也不能读取附件内容。')).toBeInTheDocument()
     await waitFor(() => expect(get).toHaveBeenCalledWith('/oem/transfers', expect.objectContaining({ params: expect.objectContaining({ approvalStatus: 'APPROVAL_BLOCKED' }) })))
     await user.click(screen.getByRole('button', { name: '处置' }))
     expect(await screen.findByRole('button', { name: '终止传递' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '改派' })).toBeInTheDocument()
-    expect(screen.getByText('异常处置权限不包含附件内容；此页仅显示完成改派或终止所需的审批任务信息。')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '改派' })).not.toBeInTheDocument()
+    expect(screen.getByText('异常处置权限不包含附件内容。')).toBeInTheDocument()
   })
 
   it('供应商账号即使收到异常权限字符串也不能进入 ODM/OEMA 内部恢复区', async () => {

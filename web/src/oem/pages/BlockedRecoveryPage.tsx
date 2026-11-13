@@ -72,7 +72,7 @@ export default function BlockedRecoveryPage() {
       </div>
       <Alert
         type="info"
-        content="这里只显示尚未发布且审批出现异常的传递单。处置管理员可以改派未完成任务或终止传递，不能代替审批人通过，也不能读取附件内容。"
+        content="这里只显示尚未发布且审批出现异常的传递单。处置管理员可以终止传递，不能代替审批人通过，也不能读取附件内容。"
         style={{ marginBottom: 16 }}
       />
       {blocked.isError && (

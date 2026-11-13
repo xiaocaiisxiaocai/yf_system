@@ -495,8 +495,6 @@ export interface OemApprovalTaskResponse {
   approverEmployeeNo: string | null
   reason: string | null
   decidedAt: string | null
-  replacesTaskId: number | null
-  reassignReason: string | null
   version: number
 }
 
@@ -1554,12 +1552,6 @@ export interface ProjectUpsertRequest {
   expectedUpdatedAt?: string | null
 }
 
-export interface ReassignTaskRequest {
-  newApproverUserId: number
-  reason: string
-  version?: number | null
-}
-
 export interface RetentionTemplateCreate {
   name: string
   mode: string
@@ -1981,7 +1973,6 @@ export interface ApiResponses {
   "PUT /oem/accounts/{id}/status": OemAccountResponse
   "GET /oem/approvals/pending": OemPageResponseOfOemPendingApprovalResponse
   "POST /oem/approvals/{taskId}/approve": OemTransferDetailResponse
-  "POST /oem/approvals/{taskId}/reassign": OemTransferDetailResponse
   "POST /oem/approvals/{taskId}/reject": OemTransferDetailResponse
   "GET /oem/approver-options": Array<OemFlowPersonResponse>
   "GET /oem/audit-logs": OemPageResponseOfOemAuditLogResponse

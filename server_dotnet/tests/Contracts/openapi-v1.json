@@ -7649,56 +7649,6 @@
         }
       }
     },
-    "/api/v1/oem/approvals/{taskId}/reassign": {
-      "post": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "parameters": [
-          {
-            "name": "taskId",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReassignTaskRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OemTransferDetailResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/oem/files/{id}/content": {
       "get": {
         "tags": [
@@ -11043,8 +10993,6 @@
           "decidedAt",
           "id",
           "reason",
-          "reassignReason",
-          "replacesTaskId",
           "status",
           "version"
         ],
@@ -11076,15 +11024,6 @@
           "decidedAt": {
             "type": "string",
             "format": "date-time",
-            "nullable": true
-          },
-          "replacesTaskId": {
-            "type": "integer",
-            "format": "int64",
-            "nullable": true
-          },
-          "reassignReason": {
-            "type": "string",
             "nullable": true
           },
           "version": {
@@ -15488,29 +15427,6 @@
           "expectedUpdatedAt": {
             "type": "string",
             "format": "date-time",
-            "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "ReassignTaskRequest": {
-        "required": [
-          "newApproverUserId",
-          "reason",
-          "version"
-        ],
-        "type": "object",
-        "properties": {
-          "newApproverUserId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "version": {
-            "type": "integer",
-            "format": "int64",
             "nullable": true
           }
         },

@@ -7,12 +7,11 @@ using Yf.Api.Modules.Oem.Transfers;
 namespace Yf.Api.Modules.Oem.Approval;
 
 public sealed record ApprovalDecisionRequest(ulong? Version, string? Reason);
-public sealed record ReassignTaskRequest(ulong NewApproverUserId, string Reason, ulong? Version);
 public sealed record CancelTransferRequest(string Reason, ulong? Version);
 
 /// <summary>
 /// Approver and recovery operations. Rows are locked transfer → instance → task (the global
-/// order on <see cref="OemLocks"/>), matching the transfer progression, so concurrent approvals, reassignments and validation
+/// order on <see cref="OemLocks"/>), matching the transfer progression, so concurrent approvals and validation
 /// completions serialise without deadlocks; the task version rejects stale decisions.
 /// </summary>
 public sealed class OemApprovalService(
@@ -79,42 +78,6 @@ public sealed class OemApprovalService(
         await progression.CloseAsync(uow, transfer, TransferLifecycle.Rejected, reason, current, PurgeReasons.Rejected, ct);
         await dispatcher.CommitAsync(uow, ct);
         return await reader.DetailAsync(current, transfer.Id, ct);
-    }
-
-    /// <summary>Recovery: replace the approver of an unfinished task (never approve on someone's behalf).</summary>
-    public async Task<OemTransferDetailResponse> ReassignAsync(OemActor actor, ulong taskId, ReassignTaskRequest request, CancellationToken ct)
-    {
-        var version = OemValidation.ExpectedVersion(request.Version);
-        var reason = OemValidation.RequiredText(request.Reason, "改派原因", 512);
-        await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
-        var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.ApprovalRecover, ct);
-        var (transfer, instance, task) = await LockAsync(uow, taskId, ct);
-        OemValidation.MatchVersion(task.ConcurrencyVersion, version);
-        var canAdministerTransfers = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct)
-            && await OemAuthorizer.IsSystemAdminAsync(uow, current, ct);
-        if (canAdministerTransfers)
-        {
-            if (transfer.LifecycleStatus != TransferLifecycle.Sealed || !FlowInstanceStatuses.IsOpen(instance.Status))
-                throw ApiException.Conflict("审批流程已结束，不能改派");
-        }
-        else
-        {
-            EnsureRestrictedRecoveryScope(transfer, instance);
-        }
-        if (!FlowTaskStatuses.IsOpen(task.Status)) throw ApiException.Conflict("任务已处理或已改派，请刷新后重试");
-        var previous = task.ApproverUserId;
-        var replacement = await engine.ReassignAsync(uow, instance, task, request.NewApproverUserId, reason, current.Id, ct);
-        await audit.WriteAsync(uow, current, "OEM_APPROVAL_REASSIGN", "oem_transfer", transfer.Id, new
-        {
-            targetName = transfer.Title, taskId, newTaskId = replacement.Id, reason,
-            changes = AuditChange.OnlyChanged(new AuditChange("approver", "审批人", previous, request.NewApproverUserId)),
-        }, ct);
-        if (replacement.Status == FlowTaskStatuses.Pending) uow.Raise(new ApprovalTasksActivatedEvent(transfer.Id, [replacement.Id]));
-        if (instance.Status == FlowInstanceStatuses.ApprovalBlocked
-            && (await TransferFilesState.LoadAsync(uow.Db, transfer.Id, ct)).AllReady)
-            await progression.ContinueApprovalAsync(uow, transfer, instance, current, ct);
-        await dispatcher.CommitAsync(uow, ct);
-        return await reader.RecoveryResultAsync(current, transfer.Id, ct);
     }
 
     /// <summary>Recovery: terminate a transfer that has not been released yet.</summary>
