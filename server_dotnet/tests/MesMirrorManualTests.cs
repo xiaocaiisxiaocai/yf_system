@@ -106,6 +106,39 @@ public sealed class MesMirrorManualTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task ThePreviewListsRowsInTheOrderMesReturnedThem()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_manual_order", 0, ct);
+        await using var _ = f.Database;
+        f.Source.WorkOrders.AddRange(["21074672", "21058021", "22001223", "21067365"]);
+
+        await f.Service.StartAsync(f.Admin, new("PAGE", 1, 4), ct);
+        var pending = await WaitAsync(f, s => s.Phase == "AWAITING_CONFIRM", ct);
+
+        Assert.Equal(["21074672", "21058021", "22001223", "21067365"], pending.Preview.Select(x => x.WorkOrderNo));
+        await f.Service.ConfirmAsync(f.Admin, new(false), ct);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task ALeaseLeftByAPreviousProcessIsReleasedAtStartup()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_manual_restart", 2, ct);
+        await using var _ = f.Database;
+        await f.Database.ExecuteAsync("INSERT INTO mes_mirror_state(id,lease_until) VALUES(1, UTC_TIMESTAMP(3) + INTERVAL 30 MINUTE)", ct);
+        await f.Database.ExecuteAsync("INSERT INTO mes_work_orders_staging(work_order_no,batch_id,fetched_at,raw_json,seq) VALUES('X1','b',UTC_TIMESTAMP(3),'{}',0)", ct);
+
+        await f.Service.StartAsync(ct);
+        await f.Service.StopAsync(ct);
+
+        Assert.Equal(0, await StagingAsync(f, ct));
+        var started = await f.Service.StartAsync(f.Admin, new("ALL", null, 2), ct);
+        Assert.Contains(started.Phase, new[] { "RUNNING", "IDLE" });
+        await WaitAsync(f, s => s.Phase == "IDLE", ct);
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task PageRunWaitsForConfirmationAndMergeKeepsOtherRows()
     {
         var ct = TestContext.Current.CancellationToken;

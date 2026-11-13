@@ -705,6 +705,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("longtext")
                         .HasColumnName("raw_json");
 
+                    b.Property<int>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("seq");
+
                     b.HasKey("WorkOrderNo");
 
                     b.ToTable("mes_work_orders_staging", (string)null);

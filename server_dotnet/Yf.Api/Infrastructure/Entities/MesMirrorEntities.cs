@@ -26,6 +26,8 @@ public sealed class MesWorkOrderStaging
     public string? CustomerName { get; set; }
     public string? DeviceModels { get; set; }
     public string RawJson { get; set; } = null!;
+    /// <summary>Position in the MES answer ((page - 1) × page size + row index), so a preview lists rows as MES does.</summary>
+    public int Seq { get; set; }
 }
 
 /// <summary>Single-row (<c>id=1</c>) state of the MES mirror: a database-clock lease and the outcome of the last run.</summary>
@@ -77,6 +79,7 @@ public sealed class MesWorkOrderStagingConfig : IEntityTypeConfiguration<MesWork
         b.ToTable("mes_work_orders_staging");
         b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.WorkOrderNo);
+        b.Property(x => x.Seq).HasColumnName("seq").HasDefaultValue(0);
         b.Property(x => x.WorkOrderNo).HasColumnName("work_order_no").HasMaxLength(64);
         b.Property(x => x.BatchId).HasColumnName("batch_id").HasMaxLength(36).IsRequired();
         b.Property(x => x.FetchedAt).HasColumnName("fetched_at").HasColumnType("datetime(3)");

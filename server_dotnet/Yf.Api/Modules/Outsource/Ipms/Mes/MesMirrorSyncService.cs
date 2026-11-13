@@ -23,7 +23,8 @@ public sealed class MesMirrorSyncService(
 {
     private const int LeaseMinutes = 60;
     private const int Retries = 2;
-    private const int PreviewRows = 50;
+    /// <summary>One whole page at the largest page size; a stopped full run shows its first rows in MES order.</summary>
+    private const int PreviewRows = 200;
     private const string Generic = "同步失败，请稍后重试";
     private static readonly TimeSpan ScanInterval = TimeSpan.FromMinutes(1);
 
@@ -117,10 +118,12 @@ public sealed class MesMirrorSyncService(
             crawl.Pages++;
             crawl.Received += result.Rows.Count;
             var fetchedAt = await DbClock.UtcNowAsync(context, CancellationToken.None, 3);
-            foreach (var row in result.Rows)
+            for (var index = 0; index < result.Rows.Count; index++)
             {
+                var row = result.Rows[index];
                 if (!crawl.Seen.Add(row.WorkOrderNo)) { crawl.Duplicates++; continue; }
-                context.MesWorkOrdersStaging.Add(Stage(row, crawl.BatchId, fetchedAt));
+                var seq = (int)Math.Min(int.MaxValue, (long)(page - 1) * pageSize + index);
+                context.MesWorkOrdersStaging.Add(Stage(row, crawl.BatchId, fetchedAt, seq));
             }
             await context.SaveChangesAsync(CancellationToken.None);
             context.ChangeTracker.Clear();
@@ -186,13 +189,13 @@ public sealed class MesMirrorSyncService(
         }
     }
 
-    private static MesWorkOrderStaging Stage(MesRow row, string batchId, DateTime fetchedAt)
+    private static MesWorkOrderStaging Stage(MesRow row, string batchId, DateTime fetchedAt, int seq)
     {
         string? customer = null, models = null;
         using var json = JsonDocument.Parse(row.RawJson);
         if (json.RootElement.TryGetProperty("customerName", out var c) && c.ValueKind == JsonValueKind.String) customer = Cut(c.GetString());
         if (json.RootElement.TryGetProperty("deviceModels", out var m) && m.ValueKind == JsonValueKind.String) models = Cut(m.GetString());
-        return new() { WorkOrderNo = Cut(row.WorkOrderNo, 64)!, BatchId = batchId, FetchedAt = fetchedAt, CustomerName = customer, DeviceModels = models, RawJson = row.RawJson };
+        return new() { WorkOrderNo = Cut(row.WorkOrderNo, 64)!, BatchId = batchId, FetchedAt = fetchedAt, CustomerName = customer, DeviceModels = models, RawJson = row.RawJson, Seq = seq };
     }
 
     private static string? Cut(string? value, int length = 256) =>
@@ -575,7 +578,7 @@ public sealed class MesMirrorSyncService(
             }
         }
         var preview = phase == AwaitingConfirm
-            ? (await context.MesWorkOrdersStaging.AsNoTracking().OrderBy(x => x.WorkOrderNo).Take(PreviewRows)
+            ? (await context.MesWorkOrdersStaging.AsNoTracking().OrderBy(x => x.Seq).ThenBy(x => x.WorkOrderNo).Take(PreviewRows)
                 .Select(x => new MesMirrorPreviewRow(x.WorkOrderNo, x.CustomerName, x.DeviceModels)).ToArrayAsync(ct))
             : [];
         return new(phase, run is null ? null : runMode, page, size, fetched, pages, total, phase == AwaitingConfirm ? reason : null,
@@ -598,6 +601,27 @@ public sealed class MesMirrorSyncService(
     }
 
     // ---- schedule ----
+
+    /// <summary>
+    /// A fetch or a result waiting for confirmation only lives in this process (the app is single-instance), so whatever a
+    /// previous process left behind can never finish: release its lease and staged rows, or new fetches stay blocked.
+    /// </summary>
+    public override async Task StartAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var context = await dbFactory.CreateDbContextAsync(cancellationToken);
+            var released = await context.Database.ExecuteSqlRawAsync(
+                "UPDATE mes_mirror_state SET lease_until=NULL WHERE id=1 AND lease_until IS NOT NULL", cancellationToken);
+            await context.Database.ExecuteSqlRawAsync("DELETE FROM mes_work_orders_staging", cancellationToken);
+            if (released > 0) logger.LogInformation("Released an IPMS fetch lease left by a previous process.");
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            logger.LogWarning(error, "Could not release a leftover IPMS fetch lease at startup.");
+        }
+        await base.StartAsync(cancellationToken);
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

@@ -66,6 +66,7 @@ public sealed class SchemaShapeTests
         "20261113083946_RemoveOemArchiveLimitSettings",
         "20261113091750_AddIpmsConnectionSettings",
         "20261113095243_AddIpmsScheduleSwitches",
+        "20261113102738_AddMesStagingOrder",
     ];
 
     [Fact]
