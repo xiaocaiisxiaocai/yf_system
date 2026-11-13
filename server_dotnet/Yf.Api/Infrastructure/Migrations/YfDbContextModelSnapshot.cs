@@ -565,6 +565,11 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("tinyint unsigned")
                         .HasColumnName("id");
 
+                    b.Property<string>("Account")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("account");
+
                     b.Property<string>("BaseUrl")
                         .HasMaxLength(256)
                         .HasColumnType("varchar(256)")
@@ -602,9 +607,19 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("datetime(3)")
                         .HasColumnName("lease_until");
 
+                    b.Property<string>("ProtectedPassword")
+                        .HasMaxLength(1024)
+                        .HasColumnType("varchar(1024)")
+                        .HasColumnName("protected_password");
+
                     b.Property<DateOnly?>("ScheduledFor")
                         .HasColumnType("date")
                         .HasColumnName("scheduled_for");
+
+                    b.Property<string>("SyncTime")
+                        .HasMaxLength(5)
+                        .HasColumnType("varchar(5)")
+                        .HasColumnName("sync_time");
 
                     b.HasKey("Id");
 

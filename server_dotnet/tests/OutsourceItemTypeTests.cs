@@ -11,7 +11,7 @@ public sealed class OutsourceItemTypeTests
     private sealed class StubIpms : IIpmsClient
     {
         public Dictionary<string, IpmsWorkOrder> Orders { get; } = new(StringComparer.Ordinal);
-        public bool IsConfigured => true;
+        public Task<bool> IsConfiguredAsync(CancellationToken ct) => Task.FromResult(true);
 
         public Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct)
         {

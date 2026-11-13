@@ -7,7 +7,7 @@ using Yf.Api.Infrastructure.Entities;
 namespace Yf.Api.Modules.Outsource.Ipms.Mes;
 
 /// <summary>
-/// Copies the whole MES monitoring list into <c>mes_work_orders</c>, once a day and on demand. Pages are collected in a staging
+/// Copies the whole IPMS MES monitoring list into <c>mes_work_orders</c>, once a day and on demand. Pages are collected in a staging
 /// table and swapped in, in one transaction, only after the fetch is complete (distinct work orders equal MES's total) and has
 /// not collapsed against the previous success. Any failure keeps yesterday's mirror. A manual run can fetch one page or be
 /// stopped; what it fetched then waits in staging until a person discards it or merges it (never deleting rows).
@@ -17,6 +17,7 @@ public sealed class MesMirrorSyncService(
     IDbContextFactory<YfDbContext> dbFactory,
     AuditService audit,
     IMesSource source,
+    DbMesSettings settings,
     AppOptions options,
     ILogger<MesMirrorSyncService> logger) : BackgroundService
 {
@@ -63,7 +64,7 @@ public sealed class MesMirrorSyncService(
         }
         catch (IpmsUnavailableException unavailable)
         {
-            error = Sanitize(unavailable.Message);
+            error = await SanitizeAsync(unavailable.Message);
         }
         catch (Exception unexpected) when (unexpected is not OperationCanceledException)
         {
@@ -75,7 +76,7 @@ public sealed class MesMirrorSyncService(
             // Release even when cancelled so the next run is not blocked for the lease period.
             await FinishAsync(context, error, error is null ? crawl.Seen.Count : null);
         }
-        await WriteAuditAsync(context, null, new { targetName = "MES 数据镜像", trigger, fetched = crawl.Seen.Count, pages = crawl.Pages, error }, ct);
+        await WriteAuditAsync(context, null, new { targetName = "IPMS 资料抓取", trigger, fetched = crawl.Seen.Count, pages = crawl.Pages, error }, ct);
         return new(crawl.Seen.Count, crawl.Pages, error);
     }
 
@@ -104,7 +105,6 @@ public sealed class MesMirrorSyncService(
     /// </summary>
     private async Task CrawlAsync(YfDbContext context, Crawl crawl, int pageSize, int? onlyPage, Action<Crawl>? report, CancellationToken ct)
     {
-        var settings = options.Ipms;
         var maxPages = int.MaxValue;
         for (var page = onlyPage ?? 1; ; page++)
         {
@@ -128,7 +128,7 @@ public sealed class MesMirrorSyncService(
                 $"UPDATE mes_mirror_state SET lease_until=UTC_TIMESTAMP(3) + INTERVAL {LeaseMinutes} MINUTE WHERE id=1", CancellationToken.None);
             report?.Invoke(crawl);
             if (onlyPage is not null || result.Rows.Count == 0 || crawl.Received >= crawl.Total || crawl.Pages >= maxPages) break;
-            if (settings.MesPageDelaySeconds > 0) await Task.Delay(TimeSpan.FromSeconds(settings.MesPageDelaySeconds), ct);
+            if (options.Ipms.MesPageDelaySeconds > 0) await Task.Delay(TimeSpan.FromSeconds(options.Ipms.MesPageDelaySeconds), ct);
         }
     }
 
@@ -136,7 +136,7 @@ public sealed class MesMirrorSyncService(
     private string? Validate(Crawl crawl, int previous)
     {
         if (crawl.Seen.Count != crawl.Total)
-            return $"抓取到 {crawl.Seen.Count} 笔，与 MES 总数 {crawl.Total} 不一致" + (crawl.Duplicates > 0 ? $"（含 {crawl.Duplicates} 笔重复工令）" : "");
+            return $"抓取到 {crawl.Seen.Count} 笔，与 IPMS 总数 {crawl.Total} 不一致" + (crawl.Duplicates > 0 ? $"（含 {crawl.Duplicates} 笔重复工令）" : "");
         if (previous > 0 && (long)crawl.Seen.Count * 100 < (long)previous * options.Ipms.MesMinRatioPercent)
             return $"笔数骤降：本次 {crawl.Seen.Count} 笔，上次 {previous} 笔，已保留上次数据";
         return null;
@@ -198,10 +198,11 @@ public sealed class MesMirrorSyncService(
     private static string? Cut(string? value, int length = 256) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim() is { } text && text.Length > length ? text[..length] : value.Trim();
 
-    /// <summary>Last line of defence: no stored or logged text may carry the dedicated account's credentials.</summary>
-    private string Sanitize(string text)
+    /// <summary>Last line of defence: no stored or logged text may carry the IPMS account or password (saved or configured).</summary>
+    private async Task<string> SanitizeAsync(string text)
     {
-        foreach (var secret in new[] { options.Ipms.MesPassword, options.Ipms.MesAccount })
+        var current = await settings.ConnectionAsync(CancellationToken.None);
+        foreach (var secret in new[] { current.Password, current.Account, options.Ipms.MesPassword, options.Ipms.MesAccount })
             if (!string.IsNullOrEmpty(secret)) text = text.Replace(secret, "***", StringComparison.Ordinal);
         return text.Length > 500 ? text[..500] : text;
     }
@@ -316,7 +317,7 @@ public sealed class MesMirrorSyncService(
         run.Cts.Dispose();
         await WriteAuditAsync(context, actorId, new
         {
-            targetName = "MES 数据镜像", trigger = "MANUAL", mode = run.Mode, action = request.Apply ? "MERGE" : "DISCARD", fetched = run.Fetched, merged,
+            targetName = "IPMS 资料抓取", trigger = "MANUAL", mode = run.Mode, action = request.Apply ? "MERGE" : "DISCARD", fetched = run.Fetched, merged,
         }, ct);
         return await BuildStatusAsync(ct);
     }
@@ -369,7 +370,7 @@ public sealed class MesMirrorSyncService(
         }
         catch (IpmsUnavailableException unavailable)
         {
-            error = Sanitize(unavailable.Message);
+            error = await SanitizeAsync(unavailable.Message);
         }
         catch (Exception unexpected)
         {
@@ -394,7 +395,7 @@ public sealed class MesMirrorSyncService(
             await FinishAsync(context, error, replaced);
             await WriteAuditAsync(context, actorId, new
             {
-                targetName = "MES 数据镜像", trigger = "MANUAL", mode = run.Mode, fetched = crawl.Seen.Count, pages = crawl.Pages, error,
+                targetName = "IPMS 资料抓取", trigger = "MANUAL", mode = run.Mode, fetched = crawl.Seen.Count, pages = crawl.Pages, error,
             }, CancellationToken.None);
         }
         catch (Exception finishing)
@@ -417,7 +418,7 @@ public sealed class MesMirrorSyncService(
         lock (gate) { if (manual is { Phase: AwaitingConfirm }) manual = null; }
     }
 
-    // ---- address and connection test ----
+    // ---- connection settings and test ----
 
     public async Task<MesMirrorSettingsResponse> SettingsAsync(CurrentUser actor, CancellationToken ct)
     {
@@ -428,26 +429,45 @@ public sealed class MesMirrorSyncService(
     public async Task<MesMirrorSettingsResponse> SaveSettingsAsync(CurrentUser actor, MesMirrorSettingsRequest request, CancellationToken ct)
     {
         var url = NormalizeBaseUrl(request.BaseUrl);
+        var account = NormalizeAccount(request.Account);
+        var password = string.IsNullOrEmpty(request.Password) ? null : NormalizePassword(request.Password);
+        var syncTime = string.IsNullOrWhiteSpace(request.SyncTime) ? null : NormalizeSyncTime(request.SyncTime);
+        if (account is null && password is not null) throw ApiException.BadRequest("请先填写 IPMS 账号");
         var actorId = await AuthorizeAsync(actor, ct);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.OpenConnectionAsync(ct);
         await context.Database.ExecuteSqlRawAsync("INSERT IGNORE INTO mes_mirror_state(id) VALUES(1)", ct);
-        if (await LeaseHeldAsync(context, ct)) throw ApiException.Conflict("抓取任务进行中或等待确认时不能更改地址");
-        var before = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1).Select(x => x.BaseUrl).SingleAsync(ct);
-        if ((before ?? "") != (url ?? ""))
+        var before = await context.MesMirrorState.AsNoTracking().SingleAsync(x => x.Id == 1, ct);
+        var connectionChanged = (before.BaseUrl ?? "") != (url ?? "") || (before.Account ?? "") != (account ?? "") || password is not null;
+        // A running fetch keeps its session; changing where or how it logs in underneath it is refused.
+        if (connectionChanged && await LeaseHeldAsync(context, ct)) throw ApiException.Conflict("抓取任务进行中或等待确认时不能更改连接设定");
+        // Clearing the account also clears the saved password; otherwise a new password replaces it and a blank one keeps it.
+        var storedPassword = account is null ? null : password is not null ? settings.Protect(password) : before.ProtectedPassword;
+        var nextSyncTime = syncTime ?? before.SyncTime;
+        await context.MesMirrorState.Where(x => x.Id == 1).ExecuteUpdateAsync(x => x
+            .SetProperty(r => r.BaseUrl, url).SetProperty(r => r.Account, account)
+            .SetProperty(r => r.ProtectedPassword, storedPassword).SetProperty(r => r.SyncTime, nextSyncTime), ct);
+        var passwordChange = storedPassword == before.ProtectedPassword ? "" : storedPassword is null ? "已清除" : "已更改";
+        var changes = new List<object>();
+        void Track(string field, string label, string? from, string? to)
         {
-            await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE mes_mirror_state SET base_url={url} WHERE id=1", ct);
-            await audit.WriteAsync(context.Database.Connection(), null, actorId, "OUTSOURCE_MES_MIRROR_SETTINGS", "mes_mirror_state", null, new
-            {
-                targetName = "MES 地址", before = before ?? "", after = url ?? "",
-            }, null, ct);
+            if ((from ?? "") != (to ?? "")) changes.Add(new { field, label, before = from ?? "", after = to ?? "" });
         }
+        Track("baseUrl", "IPMS 地址", before.BaseUrl, url);
+        Track("account", "IPMS 账号", before.Account, account);
+        Track("password", "IPMS 密码", "", passwordChange); // the password itself is never recorded
+        Track("syncTime", "每日抓取时间", before.SyncTime, nextSyncTime);
+        if (changes.Count > 0)
+            await audit.WriteAsync(context.Database.Connection(), null, actorId, "OUTSOURCE_MES_MIRROR_SETTINGS", "mes_mirror_state", null,
+                new { targetName = "IPMS 连接设定", changes }, null, ct);
         return await BuildSettingsAsync(ct);
     }
 
     public async Task<MesTestResult> TestAsync(CurrentUser actor, MesMirrorTestRequest request, CancellationToken ct)
     {
         var url = NormalizeBaseUrl(request.BaseUrl);
+        var account = NormalizeAccount(request.Account);
+        var password = string.IsNullOrEmpty(request.Password) ? null : NormalizePassword(request.Password);
         await AuthorizeAsync(actor, ct);
         await using (var context = await dbFactory.CreateDbContextAsync(ct))
         {
@@ -455,7 +475,11 @@ public sealed class MesMirrorSyncService(
             // A login from here must not knock a running fetch out of its session.
             if (await LeaseHeldAsync(context, ct)) throw ApiException.Conflict("抓取任务进行中或等待确认时不能测试连接");
         }
-        return await source.TestAsync(url, ct);
+        var current = await settings.ConnectionAsync(ct);
+        // A typed account brings its own password; the saved password only goes with the saved account.
+        var testAccount = account ?? current.Account;
+        var testPassword = password ?? (testAccount == current.Account ? current.Password : "");
+        return await source.TestAsync(new MesConnection(url ?? current.BaseUrl, testAccount, testPassword), ct);
     }
 
     /// <summary>Blank clears the address; otherwise a complete http or https address without credentials, query or fragment.</summary>
@@ -466,21 +490,40 @@ public sealed class MesMirrorSyncService(
         if (text.Length > 256 || !Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https")
             || uri.Host.Length == 0 || uri.UserInfo.Length > 0 || uri.Query.Length > 0 || uri.Fragment.Length > 0
             || text.Contains('#', StringComparison.Ordinal))
-            throw ApiException.BadRequest("MES 地址需为 http 或 https 开头的完整地址，不含账号密码");
+            throw ApiException.BadRequest("IPMS 地址需为 http 或 https 开头的完整地址，不含账号密码");
         var normalized = uri.GetLeftPart(UriPartial.Path).TrimEnd('/');
-        return normalized.Length > 256 ? throw ApiException.BadRequest("MES 地址过长") : normalized;
+        return normalized.Length > 256 ? throw ApiException.BadRequest("IPMS 地址过长") : normalized;
+    }
+
+    private static string? NormalizeAccount(string? raw)
+    {
+        var text = raw?.Trim();
+        if (string.IsNullOrEmpty(text)) return null;
+        return text.Length > 128 || text.Any(char.IsControl) ? throw ApiException.BadRequest("IPMS 账号最多 128 个字符") : text;
+    }
+
+    private static string NormalizePassword(string raw) =>
+        raw.Length > 256 || raw.Any(char.IsControl) ? throw ApiException.BadRequest("IPMS 密码最多 256 个字符") : raw;
+
+    private static string NormalizeSyncTime(string raw)
+    {
+        var text = raw.Trim();
+        return TimeOnly.TryParseExact(text, "HH:mm", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out _) ? text : throw ApiException.BadRequest("每日抓取时间格式应为 HH:mm");
     }
 
     private async Task<MesMirrorSettingsResponse> BuildSettingsAsync(CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.ExecuteSqlRawAsync("INSERT IGNORE INTO mes_mirror_state(id) VALUES(1)", ct);
-        var saved = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1).Select(x => x.BaseUrl).SingleAsync(ct);
+        var saved = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1).Select(x => new { x.BaseUrl, x.SyncTime }).SingleAsync(ct);
         var configured = string.IsNullOrWhiteSpace(options.Ipms.MesBaseUrl) ? null : options.Ipms.MesBaseUrl;
-        var isSaved = !string.IsNullOrWhiteSpace(saved);
-        return new(isSaved ? saved! : configured ?? "", configured, isSaved,
-            !string.IsNullOrWhiteSpace(options.Ipms.MesAccount) && !string.IsNullOrEmpty(options.Ipms.MesPassword));
+        var current = await settings.ConnectionAsync(ct);
+        return new(current.BaseUrl ?? "", configured, !string.IsNullOrWhiteSpace(saved.BaseUrl), current.Account,
+            !string.IsNullOrEmpty(current.Password), current.Complete, SyncTimeOf(saved.SyncTime));
     }
+
+    private string SyncTimeOf(string? saved) => string.IsNullOrWhiteSpace(saved) ? options.Ipms.MesSyncTime : saved;
 
     private async Task<MesMirrorStatusResponse> BuildStatusAsync(CancellationToken ct)
     {
@@ -537,20 +580,23 @@ public sealed class MesMirrorSyncService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.WorkerEnabled || options.Ipms.Mode != IpmsOptions.MesMirrorMode) return;
+        if (!options.WorkerEnabled || options.Ipms.Mode == IpmsOptions.FakeMode) return;
         using var timer = new PeriodicTimer(ScanInterval);
         do
         {
             try
             {
                 await using var context = await dbFactory.CreateDbContextAsync(stoppingToken);
+                // Nothing runs until the IPMS connection is set up on the settings page (or in configuration).
+                if (!(await settings.ConnectionAsync(stoppingToken)).Complete) continue;
                 await context.Database.ExecuteSqlRawAsync("INSERT IGNORE INTO mes_mirror_state(id) VALUES(1)", stoppingToken);
-                var scheduledFor = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1).Select(x => x.ScheduledFor).SingleAsync(stoppingToken);
+                var state = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1)
+                    .Select(x => new { x.ScheduledFor, x.SyncTime }).SingleAsync(stoppingToken);
                 var now = await DbClock.UtcNowAsync(context, stoppingToken, 3);
-                if (!OutsourceIpmsSyncService.IsDue(options.Ipms.MesSyncTime, scheduledFor, now, out var day)) continue;
+                if (!OutsourceIpmsSyncService.IsDue(SyncTimeOf(state.SyncTime), state.ScheduledFor, now, out var day)) continue;
                 var outcome = await RunAsync("SCHEDULED", day, stoppingToken);
                 if (outcome is not null)
-                    logger.LogInformation("MES mirror: {Fetched} work orders in {Pages} pages, error {Error}.", outcome.Fetched, outcome.Pages, outcome.Error);
+                    logger.LogInformation("IPMS fetch: {Fetched} work orders in {Pages} pages, error {Error}.", outcome.Fetched, outcome.Pages, outcome.Error);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (Exception error) { logger.LogWarning(error, "MES mirror scheduler failed; retrying next cycle."); }

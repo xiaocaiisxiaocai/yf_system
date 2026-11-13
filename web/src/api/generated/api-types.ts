@@ -370,13 +370,19 @@ export interface MesMirrorRunRequest {
 
 export interface MesMirrorSettingsRequest {
   baseUrl?: string | null
+  account?: string | null
+  password?: string | null
+  syncTime?: string | null
 }
 
 export interface MesMirrorSettingsResponse {
   baseUrl: string
   configBaseUrl: string | null
   saved: boolean
+  account: string
+  passwordSet: boolean
   accountConfigured: boolean
+  syncTime: string
 }
 
 export interface MesMirrorStatusResponse {
@@ -400,6 +406,8 @@ export interface MesMirrorStatusResponse {
 
 export interface MesMirrorTestRequest {
   baseUrl?: string | null
+  account?: string | null
+  password?: string | null
 }
 
 export interface MesTestResult {

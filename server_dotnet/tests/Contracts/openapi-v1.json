@@ -10755,11 +10755,26 @@
       },
       "MesMirrorSettingsRequest": {
         "required": [
-          "baseUrl"
+          "account",
+          "baseUrl",
+          "password",
+          "syncTime"
         ],
         "type": "object",
         "properties": {
           "baseUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "account": {
+            "type": "string",
+            "nullable": true
+          },
+          "password": {
+            "type": "string",
+            "nullable": true
+          },
+          "syncTime": {
             "type": "string",
             "nullable": true
           }
@@ -10768,10 +10783,13 @@
       },
       "MesMirrorSettingsResponse": {
         "required": [
+          "account",
           "accountConfigured",
           "baseUrl",
           "configBaseUrl",
-          "saved"
+          "passwordSet",
+          "saved",
+          "syncTime"
         ],
         "type": "object",
         "properties": {
@@ -10785,8 +10803,17 @@
           "saved": {
             "type": "boolean"
           },
+          "account": {
+            "type": "string"
+          },
+          "passwordSet": {
+            "type": "boolean"
+          },
           "accountConfigured": {
             "type": "boolean"
+          },
+          "syncTime": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -10887,11 +10914,21 @@
       },
       "MesMirrorTestRequest": {
         "required": [
-          "baseUrl"
+          "account",
+          "baseUrl",
+          "password"
         ],
         "type": "object",
         "properties": {
           "baseUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "account": {
+            "type": "string",
+            "nullable": true
+          },
+          "password": {
             "type": "string",
             "nullable": true
           }

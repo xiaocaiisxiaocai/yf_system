@@ -6,7 +6,7 @@ using Yf.Api.Modules.Outsource.Ipms.Mes;
 
 namespace Yf.Api.Tests;
 
-/// <summary>MES monitoring HTTP source: login, token reuse, re-login and response handling (设计 → 抓取流程、会话保持).</summary>
+/// <summary>IPMS MES monitoring HTTP source: login with the page-set account, token reuse, re-login and response handling.</summary>
 public sealed class MesHttpSourceTests
 {
     private const string Account = "acct-1";
@@ -52,10 +52,14 @@ public sealed class MesHttpSourceTests
     private sealed class StubSettings(string? url) : IMesSettings
     {
         public string? Url { get; set; } = url;
-        public Task<string?> BaseUrlAsync(CancellationToken ct) => Task.FromResult(Url);
+        public string Account { get; set; } = MesHttpSourceTests.Account;
+        public string Password { get; set; } = MesHttpSourceTests.Password;
+        public Task<MesConnection> ConnectionAsync(CancellationToken ct) => Task.FromResult(new MesConnection(Url, Account, Password));
     }
 
-    private static IpmsOptions Options() => new() { Mode = "MesMirror", MesAccount = Account, MesPassword = Password };
+    private static IpmsOptions Options() => new();
+
+    private static MesConnection Connection(string? url = "http://127.0.0.1:6001") => new(url, Account, Password);
 
     private static (MesHttpSource Source, StubHandler Handler, StubSettings Settings) CreateWithSettings(
         Func<Seen, int, HttpResponseMessage> respond, TimeSpan? timeout = null)
@@ -204,7 +208,7 @@ public sealed class MesHttpSourceTests
         var (source, handler, settings) = CreateWithSettings((_, _) => Page(1, "A"));
         settings.Url = null;
         var error = await Assert.ThrowsAsync<IpmsUnavailableException>(() => source.FetchPageAsync(1, 2, ct));
-        Assert.Equal("MES 地址尚未设定", error.Message);
+        Assert.Equal("IPMS 地址尚未设定", error.Message);
         Assert.Empty(handler.Requests);
     }
 
@@ -215,7 +219,7 @@ public sealed class MesHttpSourceTests
         var (source, handler, _) = CreateWithSettings((seen, nth) => seen.Path == LoginPath ? LoginOk("T" + nth) : Page(1778, "A"));
         await source.FetchPageAsync(1, 2, ct);
 
-        var result = await source.TestAsync("http://10.0.0.9:6001", ct);
+        var result = await source.TestAsync(Connection("http://10.0.0.9:6001"), ct);
 
         Assert.True(result.Ok);
         Assert.Equal(1778, result.Total);
@@ -232,12 +236,40 @@ public sealed class MesHttpSourceTests
     }
 
     [Fact]
-    public async Task TestUsesTheCurrentAddressWhenNoneIsGiven()
+    public async Task TestLogsInWithTheGivenAccountAndPassword()
     {
         var ct = TestContext.Current.CancellationToken;
         var (source, handler, _) = CreateWithSettings((seen, _) => seen.Path == LoginPath ? LoginOk("T1") : Page(5, "A"));
-        Assert.True((await source.TestAsync(null, ct)).Ok);
-        Assert.All(handler.Requests, x => Assert.Equal("127.0.0.1:6001", x.Host));
+        Assert.True((await source.TestAsync(new MesConnection("http://127.0.0.1:6001", "typed", "typed-pw"), ct)).Ok);
+        var login = JsonDocument.Parse(handler.Requests.First(x => x.Path == LoginPath).Body).RootElement;
+        Assert.Equal(("typed", "typed-pw"), (login.GetProperty("account").GetString(), login.GetProperty("password").GetString()));
+    }
+
+    [Fact]
+    public async Task LogsInWithThePageSetAccountAndAgainWhenItChanges()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, handler, settings) = CreateWithSettings((seen, nth) => seen.Path == LoginPath ? LoginOk("T" + nth) : Page(2, "A", "B"));
+        await source.FetchPageAsync(1, 2, ct);
+        settings.Password = "changed-pw";
+        await source.FetchPageAsync(2, 2, ct);
+
+        Assert.Equal(2, handler.Logins);
+        var second = JsonDocument.Parse(handler.Requests.Where(x => x.Path == LoginPath).Last().Body).RootElement;
+        Assert.Equal((Account, "changed-pw"), (second.GetProperty("account").GetString(), second.GetProperty("password").GetString()));
+        Assert.Equal("T2", handler.Requests.Last().Token);
+    }
+
+    [Fact]
+    public async Task FailsClearlyWithoutAnAccountOrPassword()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, handler, settings) = CreateWithSettings((_, _) => Page(1, "A"));
+        settings.Password = "";
+        var error = await Assert.ThrowsAsync<IpmsUnavailableException>(() => source.FetchPageAsync(1, 2, ct));
+        Assert.Equal("IPMS 账号或密码尚未设定", error.Message);
+        Assert.Equal((false, "IPMS 账号或密码尚未设定"), ((await source.TestAsync(Connection() with { Password = "" }, ct)) is var r ? (r.Ok, r.Message) : default));
+        Assert.Empty(handler.Requests);
     }
 
     [Theory]
@@ -254,7 +286,7 @@ public sealed class MesHttpSourceTests
             return Json("<html>502</html>");
         });
 
-        var result = await source.TestAsync(null, ct);
+        var result = await source.TestAsync(Connection(), ct);
 
         Assert.False(result.Ok);
         Assert.Null(result.Total);
@@ -266,8 +298,8 @@ public sealed class MesHttpSourceTests
     {
         var (source, _, settings) = CreateWithSettings((_, _) => Page(1, "A"));
         settings.Url = null;
-        var result = await source.TestAsync(null, TestContext.Current.CancellationToken);
-        Assert.Equal((false, "MES 地址尚未设定"), (result.Ok, result.Message));
+        var result = await source.TestAsync(Connection(null), TestContext.Current.CancellationToken);
+        Assert.Equal((false, "IPMS 地址尚未设定"), (result.Ok, result.Message));
     }
 
     private sealed class HangingHandler : HttpMessageHandler

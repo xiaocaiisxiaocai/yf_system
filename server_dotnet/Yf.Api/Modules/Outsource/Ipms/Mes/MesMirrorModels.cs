@@ -17,14 +17,23 @@ public sealed record MesMirrorStatusResponse(
     DateTime? StartedAt, DateTime? LastFinishedAt, DateTime? LastSuccessAt, string? LastError, string? LastTrigger,
     int LastCount, int MirrorCount, MesMirrorPreviewRow[] Preview);
 
-/// <summary>An empty or blank address clears the saved one so the configured address applies again.</summary>
-public sealed record MesMirrorSettingsRequest(string? BaseUrl);
+/// <summary>
+/// IPMS connection and daily fetch time set on the settings page. A blank address or account clears the saved value (the
+/// configured one applies again; clearing the account also clears the saved password). A null or empty
+/// <paramref name="Password"/> keeps the saved password. A blank <paramref name="SyncTime"/> keeps the current time.
+/// </summary>
+public sealed record MesMirrorSettingsRequest(string? BaseUrl, string? Account, string? Password, string? SyncTime);
 
 /// <summary>
-/// <paramref name="BaseUrl"/> is the address in effect (saved, else configured; empty when neither is set).
-/// The account and password only live in the external configuration file, so only whether they are set is reported.
+/// Values in effect: saved on the page, else configured (empty when neither is set). The password itself is never returned:
+/// <paramref name="PasswordSet"/> says whether one is in effect, <paramref name="AccountConfigured"/> whether address,
+/// account and password are all set. <paramref name="SyncTime"/> is the daily fetch time ("HH:mm", UTC+8).
 /// </summary>
-public sealed record MesMirrorSettingsResponse(string BaseUrl, string? ConfigBaseUrl, bool Saved, bool AccountConfigured);
+public sealed record MesMirrorSettingsResponse(
+    string BaseUrl, string? ConfigBaseUrl, bool Saved, string Account, bool PasswordSet, bool AccountConfigured, string SyncTime);
 
-/// <summary>Address to test; null tests the one in effect. Nothing is saved or written.</summary>
-public sealed record MesMirrorTestRequest(string? BaseUrl);
+/// <summary>
+/// Connection to test, nothing is saved or written. Blank fields fall back to the values in effect, so a saved password
+/// can be tested without typing it again.
+/// </summary>
+public sealed record MesMirrorTestRequest(string? BaseUrl, string? Account, string? Password);

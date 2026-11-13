@@ -110,27 +110,8 @@ public sealed class SmtpSettingsService(AppDb db, AppOptions options, AuditServi
         return new() { Host = host, Port = request.Port, Username = username, From = from, Security = request.Security, Password = password };
     }
 
-    // Derive a purpose-specific encryption key from the private application key, which is backed up with the application configuration.
-    private byte[] EncryptionKey => SHA256.HashData(Encoding.UTF8.GetBytes("yf.smtp.settings.v1\0" + options.JwtSecret));
-    internal string Protect(string value)
-    {
-        var nonce = RandomNumberGenerator.GetBytes(12);
-        var plaintext = Encoding.UTF8.GetBytes(value);
-        var cipher = new byte[plaintext.Length];
-        var tag = new byte[16];
-        using var aes = new AesGcm(EncryptionKey, 16);
-        aes.Encrypt(nonce, plaintext, cipher, tag);
-        return "v1." + Convert.ToBase64String([.. nonce, .. tag, .. cipher]);
-    }
-
-    internal string Unprotect(string value)
-    {
-        if (!value.StartsWith("v1.", StringComparison.Ordinal)) throw new CryptographicException("Invalid SMTP credential envelope.");
-        var data = Convert.FromBase64String(value[3..]);
-        if (data.Length < 28) throw new CryptographicException("Invalid SMTP credential envelope.");
-        var plain = new byte[data.Length - 28];
-        using var aes = new AesGcm(EncryptionKey, 16);
-        aes.Decrypt(data.AsSpan(0, 12), data.AsSpan(28), data.AsSpan(12, 16), plain);
-        return Encoding.UTF8.GetString(plain);
-    }
+    // Purpose-specific key derived from the private application key (see SecretBox), backed up with the application configuration.
+    private const string Purpose = "yf.smtp.settings.v1";
+    internal string Protect(string value) => SecretBox.Protect(Purpose, options.JwtSecret, value);
+    internal string Unprotect(string value) => SecretBox.Unprotect(Purpose, options.JwtSecret, value);
 }

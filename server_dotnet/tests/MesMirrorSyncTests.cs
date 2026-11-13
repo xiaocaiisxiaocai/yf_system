@@ -26,7 +26,7 @@ public sealed class MesMirrorSyncTests
         public int Calls { get; private set; }
         private readonly Dictionary<int, int> failed = [];
 
-        public Task<MesTestResult> TestAsync(string? baseUrl, CancellationToken ct) => Task.FromResult(new MesTestResult(true, "ok", Rows(), 0));
+        public Task<MesTestResult> TestAsync(MesConnection connection, CancellationToken ct) => Task.FromResult(new MesTestResult(true, "ok", Rows(), 0));
 
         private int Rows() => WorkOrders.Count;
 
@@ -48,7 +48,7 @@ public sealed class MesMirrorSyncTests
         }
     }
 
-    private static AppOptions Options(bool worker = true, string mode = "MesMirror") => new()
+    private static AppOptions Options(bool worker = true, string mode = "") => new()
     {
         WorkerEnabled = worker,
         Ipms = new IpmsOptions
@@ -58,9 +58,14 @@ public sealed class MesMirrorSyncTests
         },
     };
 
-    private static MesMirrorSyncService Service(SchemaShapeTests.SchemaDatabaseScope database, FakeMes source, AppOptions? options = null) =>
-        new(EfTestSupport.DbContextFactory(database.Options), new AuditService([]), source, options ?? Options(),
-            NullLogger<MesMirrorSyncService>.Instance);
+    private static MesMirrorSyncService Service(SchemaShapeTests.SchemaDatabaseScope database, FakeMes source, AppOptions? options = null)
+    {
+        // A run keeps its connection open while reading the IPMS settings, so one pooled connection is not enough.
+        database.Options.ConnectionString = new MySqlConnector.MySqlConnectionStringBuilder(database.Options.ConnectionString) { MaximumPoolSize = 8 }.ConnectionString;
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        options ??= Options();
+        return new(factory, new AuditService([]), source, new DbMesSettings(factory, options), options, NullLogger<MesMirrorSyncService>.Instance);
+    }
 
     private static async Task<string[]> MirrorAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct)
     {
@@ -266,10 +271,10 @@ public sealed class MesMirrorSyncTests
     }
 
     [Theory(Timeout = 60_000)]
+    [InlineData(false, "")]
     [InlineData(false, "MesMirror")]
-    [InlineData(true, "")]
     [InlineData(true, "Fake")]
-    public async Task DoesNotStartWhenWorkerIsDisabledOrTheModeIsNotMesMirror(bool worker, string mode)
+    public async Task DoesNotStartWhenWorkerIsDisabledOrTestDataIsUsed(bool worker, string mode)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("mes_mirror_off", ct);

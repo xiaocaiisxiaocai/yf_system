@@ -33,10 +33,9 @@ public sealed class MesMirrorIpmsClientTests
     }
 
     [Fact]
-    public void FactoryKeepsUnconfiguredAndFakeModes()
+    public void FactoryKeepsTheFakeMode()
     {
         var provider = new ServiceCollection().BuildServiceProvider();
-        Assert.IsType<UnconfiguredIpmsClient>(IpmsClientFactory.Create(new AppOptions(), provider));
         var fake = new AppOptions { Ipms = new IpmsOptions { Mode = "Fake", FakeDataPath = Path.Combine(Path.GetTempPath(), "fake.json") } };
         Assert.IsType<FakeIpmsClient>(IpmsClientFactory.Create(fake, provider));
     }
@@ -48,17 +47,20 @@ public sealed class MesMirrorIpmsClientTests
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("mes_mirror_client", ct);
         await database.InitializeAsync(ct);
         var factory = EfTestSupport.DbContextFactory(database.Options);
-        var services = new ServiceCollection().AddSingleton<IDbContextFactory<YfDbContext>>(factory).BuildServiceProvider();
-        var options = new AppOptions
-        {
-            Ipms = new IpmsOptions { Mode = "MesMirror", MesBaseUrl = "http://127.0.0.1:6001", MesAccount = "a", MesPassword = "p" },
-        };
+        var options = new AppOptions { JwtSecret = "test-secret-for-the-ipms-password-0123456789" };
+        var settings = new DbMesSettings(factory, options);
+        var services = new ServiceCollection().AddSingleton<IDbContextFactory<YfDbContext>>(factory)
+            .AddSingleton<IMesSettings>(settings).BuildServiceProvider();
+        // With no mode configured, IPMS data comes from the MES module once the page has set the connection.
         var client = IpmsClientFactory.Create(options, services);
-        Assert.True(client.IsConfigured);
         Assert.IsType<MesMirrorIpmsClient>(client);
+        Assert.False(await client.IsConfiguredAsync(ct));
+        await database.ExecuteAsync($"INSERT INTO mes_mirror_state(id,base_url,account,protected_password) VALUES(1,'http://127.0.0.1:6001','a','{settings.Protect("p")}')", ct);
+        Assert.True(await client.IsConfiguredAsync(ct));
 
-        // An empty mirror answers with nothing instead of failing.
-        Assert.Empty(await client.LookupAsync(["A1"], ct));
+        // Before anything was fetched, lookups fail instead of reporting every work order missing.
+        var notYet = await Assert.ThrowsAsync<IpmsUnavailableException>(() => client.LookupAsync(["A1"], ct));
+        Assert.Equal("尚未从 IPMS 抓取资料，请先在设定页抓取", notYet.Message);
 
         foreach (var no in new[] { "A1", "A2", "A3" })
             await database.ExecuteAsync($$"""

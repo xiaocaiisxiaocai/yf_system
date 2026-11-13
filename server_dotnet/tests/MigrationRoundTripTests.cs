@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261113083946_RemoveOemArchiveLimitSettings";
+    private const string Latest = "20261113091750_AddIpmsConnectionSettings";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -89,6 +89,7 @@ public sealed class MigrationRoundTripTests
         // + AddOemTransferSigner (Down drops the vendor signer columns on oem_transfers).
         // + DropOemCompanyRecipientExclusions (one notification list for every vendor; the per-vendor table is gone again).
         // + RemoveOemArchiveLimitSettings (Down restores nothing; the older version reads the missing archive limits as defaults).
+        // + AddIpmsConnectionSettings (Down drops the page-set IPMS account, encrypted password and fetch time).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -122,6 +123,7 @@ public sealed class MigrationRoundTripTests
         Assert.Contains(latestSchema, line => line.StartsWith("table|outsource_vendors", StringComparison.Ordinal));
         // AddMesMirror (Down drops the MES mirror tables) + AddMesMirrorBaseUrl (Down drops mes_mirror_state.base_url).
         Assert.Contains(latestSchema, line => line.StartsWith("column|mes_mirror_state|base_url|", StringComparison.Ordinal));
+        Assert.Contains(latestSchema, line => line.StartsWith("column|mes_mirror_state|protected_password|", StringComparison.Ordinal));
         foreach (var table in new[] { "mes_work_orders", "mes_work_orders_staging", "mes_mirror_state" })
         {
             Assert.Contains(latestSchema, line => line.StartsWith("table|" + table, StringComparison.Ordinal));

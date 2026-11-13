@@ -2,14 +2,13 @@ using Yf.Api.Modules.Outsource.Ipms;
 
 namespace Yf.Api.Tests;
 
-/// <summary>App:Ipms settings for the MES monitoring mirror (设计 → 配置).</summary>
+/// <summary>App:Ipms defaults for the IPMS MES module (the settings page overrides address, account, password and time).</summary>
 public sealed class MesMirrorOptionsTests
 {
     private const string Password = "s3cret-PW";
 
     private static IpmsOptions Valid() => new()
     {
-        Mode = "MesMirror",
         MesBaseUrl = "http://127.0.0.1:6001",
         MesAccount = "acct-1",
         MesPassword = Password,
@@ -26,12 +25,17 @@ public sealed class MesMirrorOptionsTests
     [Fact]
     public void AcceptsACompleteMesMirrorConfiguration() => Valid().Validate();
 
+    [Fact]
+    public void AccountAndPasswordAreOptionalBecauseThePageCanSetThem()
+    {
+        new IpmsOptions().Validate();
+        new IpmsOptions { Mode = "MesMirror" }.Validate();
+    }
+
     public static TheoryData<string, string> InvalidSettings => new()
     {
         { nameof(IpmsOptions.MesBaseUrl), "not a url" },
         { nameof(IpmsOptions.MesBaseUrl), "ftp://127.0.0.1" },
-        { nameof(IpmsOptions.MesAccount), "" },
-        { nameof(IpmsOptions.MesPassword), "" },
         { nameof(IpmsOptions.MesSyncTime), "3am" },
         { nameof(IpmsOptions.MesSyncTime), "25:00" },
         { nameof(IpmsOptions.MesPageSize), "0" },
@@ -66,9 +70,9 @@ public sealed class MesMirrorOptionsTests
     }
 
     [Fact]
-    public void MesSettingsAreNotCheckedUnlessMesMirrorIsSelected()
+    public void MesSettingsAreNotCheckedWhenTestDataIsUsed()
     {
-        new IpmsOptions { Mode = "", MesPageSize = 0, MesBaseUrl = "junk" }.Validate();
+        new IpmsOptions { Mode = "Fake", FakeDataPath = Path.Combine(Path.GetTempPath(), "fake.json"), MesPageSize = 0, MesBaseUrl = "junk" }.Validate();
     }
 
     [Fact]

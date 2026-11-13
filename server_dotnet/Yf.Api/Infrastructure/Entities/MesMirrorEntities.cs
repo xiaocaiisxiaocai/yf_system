@@ -44,6 +44,12 @@ public sealed class MesMirrorState
     public int LastCount { get; set; }
     /// <summary>MES address set on the settings page; empty means the configured <c>App:Ipms:MesBaseUrl</c> applies.</summary>
     public string? BaseUrl { get; set; }
+    /// <summary>IPMS login account set on the settings page; empty means the configured <c>App:Ipms:MesAccount</c> applies.</summary>
+    public string? Account { get; set; }
+    /// <summary>IPMS password, encrypted with <see cref="SecretBox"/> (purpose <c>yf.ipms.mes.v1</c>); never returned or logged.</summary>
+    public string? ProtectedPassword { get; set; }
+    /// <summary>Daily fetch time ("HH:mm", UTC+8) set on the page; empty means the configured <c>App:Ipms:MesSyncTime</c>.</summary>
+    public string? SyncTime { get; set; }
 }
 
 public sealed class MesWorkOrderConfig : IEntityTypeConfiguration<MesWorkOrder>
@@ -95,5 +101,8 @@ public sealed class MesMirrorStateConfig : IEntityTypeConfiguration<MesMirrorSta
         b.Property(x => x.LastTrigger).HasColumnName("last_trigger").HasMaxLength(16);
         b.Property(x => x.LastCount).HasColumnName("last_count").HasDefaultValue(0);
         b.Property(x => x.BaseUrl).HasColumnName("base_url").HasMaxLength(256);
+        b.Property(x => x.Account).HasColumnName("account").HasMaxLength(128);
+        b.Property(x => x.ProtectedPassword).HasColumnName("protected_password").HasMaxLength(1024);
+        b.Property(x => x.SyncTime).HasColumnName("sync_time").HasMaxLength(5);
     }
 }

@@ -395,19 +395,21 @@ function SyncTab() {
   if (!status) return null
   const trigger = status.lastTrigger === 'SCHEDULED' ? '定时' : status.lastTrigger === 'MANUAL' ? '手动' : '—'
   return <div className="outsource-sync-tab">
+    <MesMirrorPanel />
+    <section className="outsource-sync-section">
+    <h2 className="outsource-sync-section__title">更新外协清单</h2>
     <Space wrap>
       <span>每日同步时间</span>
       <TimePicker aria-label="每日同步时间" format="HH:mm" value={time} allowClear={false} onChange={(value) => setTime(value)} style={{ width: 120 }} />
       <Button type="primary" loading={saving} disabled={!time || time === status.syncTime} onClick={() => void save()}>保存</Button>
     </Space>
     <Descriptions column={1} border className="outsource-sync-descriptions" data={[
-      { label: 'IPMS', value: status.ipmsConfigured ? <Tag color="green">已设定</Tag> : <Tag color="gray">未设定</Tag> },
       { label: '最近成功', value: syncTime(status.lastSuccessAt) },
       { label: '最近一次', value: `${syncTime(status.lastFinishedAt)}（${trigger}）` },
       { label: '结果', value: status.lastError
         ? <span className="outsource-sync-error">{status.lastError}</span>
         : `处理 ${status.lastProcessed}，变更 ${status.lastChanged}，结案 ${status.lastClosed}，IPMS 查无 ${status.lastMissing}` },
     ]} />
-    <MesMirrorPanel />
+    </section>
   </div>
 }

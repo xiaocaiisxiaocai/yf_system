@@ -25,13 +25,13 @@ public sealed record IpmsWorkOrder(
 public sealed class IpmsUnavailableException(string message, Exception? inner = null) : Exception(message, inner);
 
 /// <summary>
-/// Read-only work-order lookup. The real IPMS adapter is not built yet (interface unknown); until then
-/// <see cref="UnconfiguredIpmsClient"/> refuses and <see cref="FakeIpmsClient"/> serves development data.
+/// Read-only work-order lookup: <see cref="Mes.MesMirrorIpmsClient"/> serves the copy of the IPMS MES monitoring list;
+/// <see cref="FakeIpmsClient"/> serves development data.
 /// </summary>
 public interface IIpmsClient
 {
     /// <summary>Whether a data source is configured. Unconfigured lookups always throw.</summary>
-    bool IsConfigured { get; }
+    Task<bool> IsConfiguredAsync(CancellationToken ct);
 
     /// <summary>
     /// Looks up a batch of work orders. Work orders IPMS does not know are absent from the result.
@@ -42,19 +42,22 @@ public interface IIpmsClient
 
 public sealed class IpmsOptions
 {
-    /// <summary>Empty: not configured. <c>Fake</c>: development data from <see cref="FakeDataPath"/>.</summary>
+    /// <summary>
+    /// Empty (or the former <c>MesMirror</c>): IPMS data comes from the IPMS MES module, set up on the outsourcing settings page.
+    /// <c>Fake</c>: development data from <see cref="FakeDataPath"/>.
+    /// </summary>
     public string Mode { get; set; } = "";
     /// <summary>Absolute path to the fake JSON file; read on every lookup so testers can edit it live.</summary>
     public string FakeDataPath { get; set; } = "";
     public int TimeoutSeconds { get; set; } = 30;
 
-    /// <summary>MES monitoring service root, including the port (e.g. <c>http://host:6001</c>). Optional: the settings page can override it.</summary>
+    /// <summary>Optional default IPMS service root including the port (e.g. <c>http://host:6001</c>); the settings page overrides it.</summary>
     public string MesBaseUrl { get; set; } = "";
-    /// <summary>Dedicated read-only MES account. Secret: external configuration only, never logged.</summary>
+    /// <summary>Optional default IPMS account; the settings page overrides it. Never logged.</summary>
     public string MesAccount { get; set; } = "";
-    /// <summary>Password of <see cref="MesAccount"/>. Secret: external configuration only, never logged.</summary>
+    /// <summary>Optional default password of <see cref="MesAccount"/>; the settings page overrides it (stored encrypted). Never logged.</summary>
     public string MesPassword { get; set; } = "";
-    /// <summary>Daily mirror time in business time (UTC+8), "HH:mm".</summary>
+    /// <summary>Default daily fetch time in business time (UTC+8), "HH:mm"; the settings page overrides it.</summary>
     public string MesSyncTime { get; set; } = "03:00";
     public int MesPageSize { get; set; } = 100;
     public int MesPageDelaySeconds { get; set; } = 2;
@@ -71,12 +74,10 @@ public sealed class IpmsOptions
         if (TimeoutSeconds is < 1 or > 600) throw new InvalidOperationException("App:Ipms:TimeoutSeconds must be between 1 and 600.");
         if (Mode == FakeMode && (FakeDataPath.Length == 0 || !Path.IsPathFullyQualified(FakeDataPath)))
             throw new InvalidOperationException("App:Ipms:FakeDataPath must be an absolute path when App:Ipms:Mode is Fake.");
-        if (Mode != MesMirrorMode) return;
+        if (Mode == FakeMode) return;
         // Messages name the setting only; values (the password above all) never appear in them.
         if (!string.IsNullOrWhiteSpace(MesBaseUrl) && (!Uri.TryCreate(MesBaseUrl, UriKind.Absolute, out var url) || url.Scheme is not ("http" or "https")))
             throw new InvalidOperationException("App:Ipms:MesBaseUrl must be an absolute http or https URL when set (it can also be set on the settings page).");
-        if (string.IsNullOrWhiteSpace(MesAccount)) throw new InvalidOperationException("App:Ipms:MesAccount is required when App:Ipms:Mode is MesMirror.");
-        if (string.IsNullOrEmpty(MesPassword)) throw new InvalidOperationException("App:Ipms:MesPassword is required when App:Ipms:Mode is MesMirror.");
         if (!TimeOnly.TryParseExact(MesSyncTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
             throw new InvalidOperationException("App:Ipms:MesSyncTime must be HH:mm.");
         if (MesPageSize is < 1 or > 200) throw new InvalidOperationException("App:Ipms:MesPageSize must be between 1 and 200.");
@@ -84,14 +85,6 @@ public sealed class IpmsOptions
         if (MesPageTimeoutSeconds is < 10 or > 600) throw new InvalidOperationException("App:Ipms:MesPageTimeoutSeconds must be between 10 and 600.");
         if (MesMinRatioPercent is < 1 or > 100) throw new InvalidOperationException("App:Ipms:MesMinRatioPercent must be between 1 and 100.");
     }
-}
-
-public sealed class UnconfiguredIpmsClient : IIpmsClient
-{
-    public bool IsConfigured => false;
-
-    public Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct) =>
-        throw new IpmsUnavailableException("IPMS 尚未设定，请联系系统管理员");
 }
 
 /// <summary>
@@ -104,7 +97,7 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
     private const long MaximumBytes = 16 * 1024 * 1024;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public bool IsConfigured => true;
+    public Task<bool> IsConfiguredAsync(CancellationToken ct) => Task.FromResult(true);
 
     public async Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct)
     {
@@ -159,11 +152,9 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
 
 internal static class IpmsClientFactory
 {
-    internal static IIpmsClient Create(AppOptions options, IServiceProvider services) => options.Ipms.Mode switch
-    {
-        IpmsOptions.FakeMode => new FakeIpmsClient(options.Ipms.FakeDataPath),
-        IpmsOptions.MesMirrorMode => new Mes.MesMirrorIpmsClient(
-            services.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<YfDbContext>>()),
-        _ => new UnconfiguredIpmsClient(),
-    };
+    internal static IIpmsClient Create(AppOptions options, IServiceProvider services) => options.Ipms.Mode == IpmsOptions.FakeMode
+        ? new FakeIpmsClient(options.Ipms.FakeDataPath)
+        : new Mes.MesMirrorIpmsClient(
+            services.GetRequiredService<Microsoft.EntityFrameworkCore.IDbContextFactory<YfDbContext>>(),
+            services.GetRequiredService<Mes.IMesSettings>());
 }

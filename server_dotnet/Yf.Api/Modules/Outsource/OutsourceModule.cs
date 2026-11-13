@@ -9,6 +9,8 @@ namespace Yf.Api.Modules.Outsource;
 public static class OutsourceModule
 {
     public static IServiceCollection AddOutsourceModule(this IServiceCollection services) => services
+        .AddSingleton<DbMesSettings>()
+        .AddSingleton<IMesSettings>(provider => provider.GetRequiredService<DbMesSettings>())
         .AddSingleton<IIpmsClient>(provider => IpmsClientFactory.Create(provider.GetRequiredService<AppOptions>(), provider))
         .AddSingleton<IMesSource>(provider => MesSourceFactory.Create(provider.GetRequiredService<AppOptions>(), provider))
         .AddSingleton<MesMirrorSyncService>()

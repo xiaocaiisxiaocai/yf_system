@@ -135,9 +135,6 @@ public sealed class OutsourceSettingsTests
         }
         finally { directory.Delete(recursive: true); }
 
-        var unconfigured = new UnconfiguredIpmsClient();
-        Assert.False(unconfigured.IsConfigured);
-        await Assert.ThrowsAsync<IpmsUnavailableException>(() => unconfigured.LookupAsync(["21089901"], ct));
         Assert.Throws<InvalidOperationException>(() => new IpmsOptions { Mode = "Fake", FakeDataPath = "relative.json" }.Validate());
         Assert.Throws<InvalidOperationException>(() => new IpmsOptions { Mode = "Real" }.Validate());
         new IpmsOptions().Validate();

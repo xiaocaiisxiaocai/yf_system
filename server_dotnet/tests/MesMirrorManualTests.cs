@@ -15,12 +15,13 @@ public sealed class MesMirrorManualTests
         public List<string> WorkOrders { get; } = [];
         public int HangOnPage { get; set; }
         public int FailPage { get; set; }
-        public string? TestedUrl { get; private set; }
+        public MesConnection? Tested { get; private set; }
+        public string? TestedUrl => Tested?.BaseUrl;
         public int TestCalls { get; private set; }
 
-        public Task<MesTestResult> TestAsync(string? baseUrl, CancellationToken ct)
+        public Task<MesTestResult> TestAsync(MesConnection connection, CancellationToken ct)
         {
-            TestedUrl = baseUrl;
+            Tested = connection;
             TestCalls++;
             return Task.FromResult(new MesTestResult(true, "连接成功，MES 共 5 笔", 5, 12));
         }
@@ -62,14 +63,18 @@ public sealed class MesMirrorManualTests
         {
             Ipms = new IpmsOptions
             {
-                Mode = "MesMirror", MesBaseUrl = "http://127.0.0.1:6001", MesAccount = "acct-1", MesPassword = "s3cret-PW",
+                MesBaseUrl = "http://127.0.0.1:6001", MesAccount = "acct-1", MesPassword = "s3cret-PW",
                 MesPageSize = 2, MesPageDelaySeconds = 0,
             },
+            JwtSecret = "test-secret-for-the-ipms-password-0123456789",
         };
-        var service = new MesMirrorSyncService(EfTestSupport.DbContextFactory(database.Options), new AuditService([]), source, options,
-            NullLogger<MesMirrorSyncService>.Instance);
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var settings = new DbMesSettings(factory, options);
+        var service = new MesMirrorSyncService(factory, new AuditService([]), source, settings, options, NullLogger<MesMirrorSyncService>.Instance);
         return new(database, source, service, new CurrentUser(9821, "mes_admin", "INTERNAL", null), new CurrentUser(9822, "mes_viewer", "INTERNAL", null));
     }
+
+    private static MesMirrorSettingsRequest Address(string? url) => new(url, null, null, null);
 
     private static async Task<MesMirrorStatusResponse> WaitAsync(Fixture f, Func<MesMirrorStatusResponse, bool> done, CancellationToken ct)
     {
@@ -307,11 +312,11 @@ public sealed class MesMirrorManualTests
         var initial = await f.Service.SettingsAsync(f.Admin, ct);
         Assert.Equal(("http://127.0.0.1:6001", "http://127.0.0.1:6001", false, true), (initial.BaseUrl, initial.ConfigBaseUrl, initial.Saved, initial.AccountConfigured));
 
-        var saved = await f.Service.SaveSettingsAsync(f.Admin, new("  http://10.0.0.5:6001/ "), ct);
+        var saved = await f.Service.SaveSettingsAsync(f.Admin, Address("  http://10.0.0.5:6001/ "), ct);
         Assert.Equal(("http://10.0.0.5:6001", true), (saved.BaseUrl, saved.Saved));
         Assert.Equal("http://10.0.0.5:6001", (await f.Service.SettingsAsync(f.Admin, ct)).BaseUrl);
 
-        var cleared = await f.Service.SaveSettingsAsync(f.Admin, new(" "), ct);
+        var cleared = await f.Service.SaveSettingsAsync(f.Admin, Address(" "), ct);
         Assert.Equal(("http://127.0.0.1:6001", false), (cleared.BaseUrl, cleared.Saved));
     }
 
@@ -326,9 +331,9 @@ public sealed class MesMirrorManualTests
         var ct = TestContext.Current.CancellationToken;
         var f = await CreateAsync("mes_settings_invalid", 2, ct);
         await using var _ = f.Database;
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, new(url), ct))).Status);
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.TestAsync(f.Admin, new(url), ct))).Status);
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, new("http://x/" + new string('a', 300)), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, Address(url), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.TestAsync(f.Admin, new(url, null, null), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, Address("http://x/" + new string('a', 300)), ct))).Status);
     }
 
     [Fact(Timeout = 180_000)]
@@ -339,12 +344,12 @@ public sealed class MesMirrorManualTests
         await using var _ = f.Database;
         await SeedAsync(f, ct, ("OLD1", "旧"));
 
-        var result = await f.Service.TestAsync(f.Admin, new("http://10.0.0.5:6001/"), ct);
+        var result = await f.Service.TestAsync(f.Admin, new("http://10.0.0.5:6001/", null, null), ct);
         Assert.Equal((true, 5), (result.Ok, result.Total));
         Assert.Equal("http://10.0.0.5:6001", f.Source.TestedUrl);
 
-        await f.Service.TestAsync(f.Admin, new(null), ct);
-        Assert.Null(f.Source.TestedUrl);
+        await f.Service.TestAsync(f.Admin, new(null, null, null), ct);
+        Assert.Equal(("http://127.0.0.1:6001", "acct-1", "s3cret-PW"), (f.Source.Tested!.BaseUrl, f.Source.Tested.Account, f.Source.Tested.Password));
         Assert.Equal(["OLD1"], await MirrorAsync(f, ct));
         Assert.Equal(0, await StagingAsync(f, ct));
         Assert.False((await f.Service.SettingsAsync(f.Admin, ct)).Saved); // testing never saves the address
@@ -360,17 +365,17 @@ public sealed class MesMirrorManualTests
         await f.Service.StartAsync(f.Admin, new("ALL", null, 2), ct);
         await WaitAsync(f, s => s.Phase == "RUNNING", ct);
 
-        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, new("http://10.0.0.5:6001"), ct))).Status);
-        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => f.Service.TestAsync(f.Admin, new(null), ct))).Status);
+        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, Address("http://10.0.0.5:6001"), ct))).Status);
+        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => f.Service.TestAsync(f.Admin, new(null, null, null), ct))).Status);
         Assert.Equal(0, f.Source.TestCalls);
         await f.Service.StopAsync(f.Admin, ct);
 
         f.Source.HangOnPage = 0;
         await f.Service.StartAsync(f.Admin, new("PAGE", 1, 2), ct);
         await WaitAsync(f, s => s.Phase == "AWAITING_CONFIRM", ct);
-        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, new("http://10.0.0.5:6001"), ct))).Status);
+        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, Address("http://10.0.0.5:6001"), ct))).Status);
         await f.Service.ConfirmAsync(f.Admin, new(false), ct);
-        Assert.True((await f.Service.TestAsync(f.Admin, new(null), ct)).Ok);
+        Assert.True((await f.Service.TestAsync(f.Admin, new(null, null, null), ct)).Ok);
     }
 
     [Fact(Timeout = 180_000)]
@@ -380,8 +385,8 @@ public sealed class MesMirrorManualTests
         var f = await CreateAsync("mes_settings_perm", 2, ct);
         await using var _ = f.Database;
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SettingsAsync(f.Viewer, ct))).Status);
-        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Viewer, new("http://10.0.0.5:6001"), ct))).Status);
-        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.TestAsync(f.Viewer, new(null), ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Viewer, Address("http://10.0.0.5:6001"), ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.TestAsync(f.Viewer, new(null, null, null), ct))).Status);
     }
 
     [Fact(Timeout = 180_000)]
@@ -390,14 +395,66 @@ public sealed class MesMirrorManualTests
         var ct = TestContext.Current.CancellationToken;
         var f = await CreateAsync("mes_settings_audit", 2, ct);
         await using var _ = f.Database;
-        await f.Service.SaveSettingsAsync(f.Admin, new("http://10.0.0.5:6001"), ct);
-        await f.Service.SaveSettingsAsync(f.Admin, new("http://10.0.0.5:6001"), ct); // unchanged: no second entry
+        await f.Service.SaveSettingsAsync(f.Admin, Address("http://10.0.0.5:6001"), ct);
+        await f.Service.SaveSettingsAsync(f.Admin, Address("http://10.0.0.5:6001"), ct); // unchanged: no second entry
         await using var connection = await f.Database.Database.OpenAsync(ct);
         var details = (await connection.QueryAsync<string>("SELECT CAST(detail AS CHAR) FROM audit_logs WHERE action='OUTSOURCE_MES_MIRROR_SETTINGS'")).ToArray();
         var detail = Assert.Single(details);
         Assert.Contains("http://10.0.0.5:6001", detail);
         Assert.DoesNotContain("s3cret-PW", detail);
         Assert.DoesNotContain("acct-1", detail);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AccountAndPasswordAreSetOnThePageAndThePasswordIsStoredEncrypted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_settings_account", 2, ct);
+        await using var _ = f.Database;
+
+        var saved = await f.Service.SaveSettingsAsync(f.Admin, new("http://10.0.0.5:6001", "page-user", "page-PW-123", "04:15"), ct);
+        Assert.Equal(("page-user", true, true, "04:15"), (saved.Account, saved.PasswordSet, saved.AccountConfigured, saved.SyncTime));
+        await using (var connection = await f.Database.Database.OpenAsync(ct))
+        {
+            var stored = await connection.QuerySingleAsync<(string Account, string Password)>("SELECT account, protected_password FROM mes_mirror_state WHERE id=1");
+            Assert.Equal("page-user", stored.Account);
+            Assert.StartsWith("v1.", stored.Password);
+            Assert.DoesNotContain("page-PW-123", stored.Password);
+        }
+
+        // Testing with blank fields uses what is saved, password included.
+        await f.Service.TestAsync(f.Admin, new(null, null, null), ct);
+        Assert.Equal(("http://10.0.0.5:6001", "page-user", "page-PW-123"), (f.Source.Tested!.BaseUrl, f.Source.Tested.Account, f.Source.Tested.Password));
+
+        // A blank password keeps the saved one; another typed account does not borrow it.
+        await f.Service.SaveSettingsAsync(f.Admin, new("http://10.0.0.5:6001", "page-user", null, null), ct);
+        await f.Service.TestAsync(f.Admin, new(null, "someone-else", null), ct);
+        Assert.Equal(("someone-else", ""), (f.Source.Tested!.Account, f.Source.Tested.Password));
+        await f.Service.TestAsync(f.Admin, new(null, null, null), ct);
+        Assert.Equal("page-PW-123", f.Source.Tested!.Password);
+
+        // A password needs an account; clearing the account clears the saved password and the configured ones apply again.
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, new(null, null, "x", null), ct))).Status);
+        var cleared = await f.Service.SaveSettingsAsync(f.Admin, new(null, null, null, null), ct);
+        Assert.Equal(("http://127.0.0.1:6001", "acct-1", "04:15"), (cleared.BaseUrl, cleared.Account, cleared.SyncTime));
+        await using (var connection = await f.Database.Database.OpenAsync(ct))
+            Assert.Null(await connection.ExecuteScalarAsync<string?>("SELECT protected_password FROM mes_mirror_state WHERE id=1"));
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.SaveSettingsAsync(f.Admin, new(null, null, null, "25:00"), ct))).Status);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task ConnectionChangesAreAuditedWithoutThePassword()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_settings_account_audit", 2, ct);
+        await using var _ = f.Database;
+        await f.Service.SaveSettingsAsync(f.Admin, new("http://10.0.0.5:6001", "page-user", "page-PW-123", null), ct);
+        await using var connection = await f.Database.Database.OpenAsync(ct);
+        var detail = Assert.Single(await connection.QueryAsync<string>("SELECT CAST(detail AS CHAR) FROM audit_logs WHERE action='OUTSOURCE_MES_MIRROR_SETTINGS'"));
+        Assert.Contains("page-user", detail);
+        Assert.Contains("已更改", detail);
+        Assert.DoesNotContain("page-PW-123", detail);
+        Assert.DoesNotContain("v1.", detail);
     }
 
     [Fact(Timeout = 180_000)]

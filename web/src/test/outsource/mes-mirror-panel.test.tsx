@@ -21,7 +21,10 @@ const preview = [
 ]
 const stopped: Status = { ...idle, phase: 'AWAITING_CONFIRM', runMode: 'ALL', fetched: 200, pages: 2, total: 1778, pendingReason: 'STOPPED', preview }
 const pageFetched: Status = { ...idle, phase: 'AWAITING_CONFIRM', runMode: 'PAGE', page: 3, pageSize: 50, fetched: 50, pages: 1, total: 1778, pendingReason: 'PAGE_FETCHED', preview }
-const settings: Settings = { baseUrl: 'http://183.238.37.108:6001', configBaseUrl: 'http://183.238.37.108:6001', saved: false, accountConfigured: true }
+const settings: Settings = {
+  baseUrl: 'http://183.238.37.108:6001', configBaseUrl: 'http://183.238.37.108:6001', saved: false,
+  account: 'reader', passwordSet: true, accountConfigured: true, syncTime: '03:00',
+}
 
 function mock(status: Status, current: Settings = settings) {
   const get = vi.spyOn(http, 'get').mockImplementation((url: string) =>
@@ -31,7 +34,7 @@ function mock(status: Status, current: Settings = settings) {
   return { get, post, put }
 }
 
-describe('MES 数据镜像手动抓取', () => {
+describe('IPMS 连接与手动抓取', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
@@ -73,7 +76,8 @@ describe('MES 数据镜像手动抓取', () => {
     expect(screen.getByRole('button', { name: '抓取全部' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '抓取指定页' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '保存地址' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(screen.getByRole('textbox', { name: 'IPMS 账号' })).toBeDisabled()
   })
 
   it('停止后要二次确认：合并已抓部分', async () => {
@@ -128,51 +132,63 @@ describe('MES 数据镜像手动抓取', () => {
     expect(await screen.findByRole('dialog', { name: '确认抓取结果' })).toBeInTheDocument()
   })
 
-  it('MES 地址可在页面修改并保存，留空保存即恢复配置值', async () => {
+  it('地址、账号、密码和每日抓取时间都在页面设定；密码留空不修改', async () => {
     const user = userEvent.setup()
     const { put } = mock(idle)
     render(<MesMirrorPanel />)
-    const address = await screen.findByRole('textbox', { name: 'MES 地址' })
+    const address = await screen.findByRole('textbox', { name: 'IPMS 地址' })
+    const account = screen.getByRole('textbox', { name: 'IPMS 账号' })
+    const password = screen.getByLabelText('IPMS 密码')
     expect(address).toHaveValue('http://183.238.37.108:6001')
-    expect(screen.getByRole('button', { name: '保存地址' })).toBeDisabled()
+    expect(account).toHaveValue('reader')
+    expect(password).toHaveValue('')
+    expect(password).toHaveAttribute('placeholder', '已设定，留空不修改')
+    expect(screen.getByText('已设定')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
 
-    put.mockResolvedValueOnce({ data: { ...settings, baseUrl: 'http://10.0.0.5:6001', saved: true } } as never)
+    put.mockResolvedValueOnce({ data: { ...settings, baseUrl: 'http://10.0.0.5:6001', saved: true, account: 'ops' } } as never)
     await user.clear(address)
     await user.type(address, '  http://10.0.0.5:6001/ ')
-    await user.click(screen.getByRole('button', { name: '保存地址' }))
-    expect(put).toHaveBeenCalledWith('/outsource/mes-mirror/settings', { baseUrl: 'http://10.0.0.5:6001/' })
+    await user.clear(account)
+    await user.type(account, 'ops')
+    await user.type(password, 'new-PW')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    expect(put).toHaveBeenCalledWith('/outsource/mes-mirror/settings',
+      { baseUrl: 'http://10.0.0.5:6001/', account: 'ops', password: 'new-PW', syncTime: '03:00' })
     await waitFor(() => expect(address).toHaveValue('http://10.0.0.5:6001'))
+    expect(password).toHaveValue('')
 
+    // Only the address changes: the password field stays empty and is sent as null (keep the saved one).
     put.mockResolvedValueOnce({ data: settings } as never)
     await user.clear(address)
-    await user.click(screen.getByRole('button', { name: '保存地址' }))
-    expect(put).toHaveBeenLastCalledWith('/outsource/mes-mirror/settings', { baseUrl: '' })
-    await waitFor(() => expect(address).toHaveValue('http://183.238.37.108:6001'))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    expect(put).toHaveBeenLastCalledWith('/outsource/mes-mirror/settings', { baseUrl: '', account: 'ops', password: null, syncTime: '03:00' })
   })
 
-  it('测试连接用输入框里的地址，显示成功的笔数与耗时或失败原因，不保存地址', async () => {
+  it('测试连接用输入框里的值，显示成功的笔数与耗时或失败原因，不保存设定', async () => {
     const user = userEvent.setup()
     const { post, put } = mock(idle)
     render(<MesMirrorPanel />)
-    const address = await screen.findByRole('textbox', { name: 'MES 地址' })
+    const address = await screen.findByRole('textbox', { name: 'IPMS 地址' })
     await user.clear(address)
     await user.type(address, 'http://10.0.0.5:6001')
 
-    post.mockResolvedValueOnce({ data: { ok: true, message: '连接成功，MES 共 1778 笔', total: 1778, elapsedMs: 820 } } as never)
+    post.mockResolvedValueOnce({ data: { ok: true, message: '连接成功，IPMS MES 监控共 1778 笔', total: 1778, elapsedMs: 820 } } as never)
     await user.click(screen.getByRole('button', { name: '测试连接' }))
-    expect(post).toHaveBeenCalledWith('/outsource/mes-mirror/test', { baseUrl: 'http://10.0.0.5:6001' }, { timeout: 200_000 })
-    expect(await screen.findByText(/连接成功，MES 共 1778 笔/)).toBeInTheDocument()
+    expect(post).toHaveBeenCalledWith('/outsource/mes-mirror/test', { baseUrl: 'http://10.0.0.5:6001', account: 'reader', password: null }, { timeout: 200_000 })
+    expect(await screen.findByText(/连接成功，IPMS MES 监控共 1778 笔/)).toBeInTheDocument()
     expect(screen.getByText(/0\.8 秒/)).toBeInTheDocument()
 
-    post.mockResolvedValueOnce({ data: { ok: false, message: 'MES 登录失败，请检查专用账号配置', total: null, elapsedMs: 300 } } as never)
+    post.mockResolvedValueOnce({ data: { ok: false, message: 'IPMS 登录失败，请检查账号和密码', total: null, elapsedMs: 300 } } as never)
     await user.click(screen.getByRole('button', { name: '测试连接' }))
-    expect(await screen.findByText(/MES 登录失败，请检查专用账号配置/)).toBeInTheDocument()
+    expect(await screen.findByText(/IPMS 登录失败，请检查账号和密码/)).toBeInTheDocument()
     expect(put).not.toHaveBeenCalled()
   })
 
-  it('专用账号未配置时给出提示', async () => {
-    mock(idle, { ...settings, accountConfigured: false })
+  it('账号或密码没设好时显示未设定', async () => {
+    mock(idle, { ...settings, account: '', passwordSet: false, accountConfigured: false })
     render(<MesMirrorPanel />)
-    expect(await screen.findByText('专用账号未配置')).toBeInTheDocument()
+    expect(await screen.findByText('未设定')).toBeInTheDocument()
+    expect(screen.getByLabelText('IPMS 密码')).toHaveAttribute('placeholder', '请输入密码')
   })
 })

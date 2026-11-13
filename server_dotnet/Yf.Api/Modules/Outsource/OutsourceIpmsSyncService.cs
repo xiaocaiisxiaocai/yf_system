@@ -242,7 +242,7 @@ public sealed class OutsourceIpmsSyncService(
         {
             try
             {
-                if (!ipms.IsConfigured) continue;
+                if (!await ipms.IsConfiguredAsync(stoppingToken)) continue;
                 await using var context = await dbFactory.CreateDbContextAsync(stoppingToken);
                 await EnsureRowAsync(context, stoppingToken);
                 var state = await context.OutsourceSyncState.AsNoTracking().SingleAsync(x => x.Id == 1, stoppingToken);
@@ -268,7 +268,7 @@ public sealed class OutsourceIpmsSyncService(
         await EnsureRowAsync(context, ct);
         var state = await context.OutsourceSyncState.AsNoTracking().SingleAsync(x => x.Id == 1, ct);
         var now = await DbClock.UtcNowAsync(context, ct, 3);
-        return new(state.SyncTime, ipms.IsConfigured, state.LeaseUntil is { } lease && lease > now,
+        return new(state.SyncTime, await ipms.IsConfiguredAsync(ct), state.LeaseUntil is { } lease && lease > now,
             Utc(state.LastStartedAt), Utc(state.LastFinishedAt), Utc(state.LastSuccessAt), state.LastError, state.LastTrigger,
             state.LastProcessed, state.LastChanged, state.LastClosed, state.LastMissing);
     }
