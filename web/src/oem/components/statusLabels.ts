@@ -4,7 +4,7 @@ import type { ApprovalStatus, Direction, Lifecycle, PayloadStatus, ValidationSta
 export type TagColor = 'gray' | 'green' | 'orange' | 'red' | 'arcoblue' | 'purple'
 
 export const LIFECYCLE: Record<Lifecycle, [string, TagColor]> = {
-  DRAFT: ['草稿', 'gray'],
+  DRAFT: ['未发送', 'gray'],
   SEALED: ['处理中', 'arcoblue'],
   RELEASED: ['已发送', 'green'],
   REJECTED: ['已驳回', 'red'],
@@ -70,6 +70,6 @@ export function transferClosedNotice(summary: { lifecycleStatus: Lifecycle; dire
     case 'CANCELLED':
       return '传递单已终止'
     case 'ABANDONED':
-      return '草稿已删除'
+      return '传递单已删除'
   }
 }

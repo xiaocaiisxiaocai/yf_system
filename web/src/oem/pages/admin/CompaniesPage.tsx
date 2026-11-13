@@ -411,7 +411,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
   const confirmDeleteAccount = (account: VendorAccount) => {
     Modal.confirm({
       title: `删除账号“${account.employeeNo}”`,
-      content: `确认永久删除账号“${account.employeeNo}”？该账号创建或废弃的未发送空草稿也会删除。已有文件、上传或其他业务记录时，请停用账号。`,
+      content: `确认永久删除账号“${account.employeeNo}”？该账号创建的未发送记录也会一并删除。已有文件、上传或其他业务记录时，请停用账号。`,
       okText: '确认删除',
       cancelText: '取消',
       okButtonProps: { status: 'danger' },
@@ -881,7 +881,7 @@ export default function CompaniesPage() {
   const confirmDeleteCompany = (company: Company) => {
     Modal.confirm({
       title: `删除厂商“${company.name}”`,
-      content: `确认永久删除“${company.name}”？请先删除关联账号。该厂商剩余的未发送空草稿也会删除，包括已废弃的空草稿。已有业务记录时，请停用厂商。`,
+      content: `确认永久删除“${company.name}”？请先删除关联账号。该厂商剩余的未发送记录也会一并删除。已有业务记录时，请停用厂商。`,
       okText: '确认删除',
       cancelText: '取消',
       okButtonProps: { status: 'danger' },

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type DragEvent as ReactDragEvent } from 'r
 import { Alert, Button, Input, Modal, Progress, Typography, Message, Space } from '@arco-design/web-react'
 import { IconUpload, IconClose } from '@arco-design/web-react/icon'
 import { fmtSize } from '../api/types'
-import { splitSupported, unsupportedMessage } from '../utils/uploadExtensions'
+import { acceptAttribute, splitSupported, unsupportedMessage } from '../utils/uploadExtensions'
 import { createChunkHasher, fileMd5, uploadFingerprint } from '../api/file-hash'
 import {
   abortUpload,
@@ -192,6 +192,8 @@ const UPLOAD_DONE_MESSAGE_ID = 'chunk-upload-done'
 export default function ChunkUploader({ projectId, visible, onClose, onDone, onAllUploaded, requireSignature, direction }: Props) {
   const [signerName, setSignerName] = useState('')
   // 初始化在异步流程里读取签名，用 ref 取到点击上传时的最新值。
+  // 共用账号每次打开对话框都要重新签名，不沿用上一次的姓名。
+  useEffect(() => { if (visible) setSignerName('') }, [visible])
   const signerRef = useRef(signerName)
   useEffect(() => { signerRef.current = signerName }, [signerName])
   const [entries, setEntries] = useState<Entry[]>([])
@@ -657,6 +659,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         ref={fileInputRef}
         type="file"
         multiple
+        accept={acceptAttribute(allowedExtensions)}
         className="upload-file-input"
         aria-label="选择上传文件"
         hidden

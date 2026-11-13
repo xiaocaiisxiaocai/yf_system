@@ -135,7 +135,10 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         signerName = values.signerName
       }
       if (realm === 'internal') {
-        oemCompanyId = (await form.validate() as { oemCompanyId: number }).oemCompanyId
+        // 校验未通过时由表单自己标红，不当作失败提示。
+        const values = await form.validate().catch(() => null) as { oemCompanyId: number } | null
+        if (!values) return
+        oemCompanyId = values.oemCompanyId
         // A draft can stay open while its recipient account is disabled. Refresh
         // the options before resuming uploads so an invalid recipient never gets
         // another upload attempt; the server still checks again when sending.
@@ -242,9 +245,10 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
     >
       <Form onSubmit={() => void submit()} form={form} layout="vertical">
         {realm === 'internal' && (
-          <Form.Item field="oemCompanyId" label="目标 ODM/OEMA 厂商" extra="至少需要一个启用的 ODM/OEMA 登录账号才能发送。" rules={[{ required: true, message: '请选择厂商' }]}>
+          <Form.Item field="oemCompanyId" label="目标 ODM/OEMA 厂商" rules={[{ required: true, message: '请选择厂商' }]}>
             <Select
               showSearch
+              loading={companyOptionsLoading}
               disabled={busy || draftId !== null || companyOptionsLoading || !!companyOptionsError}
               placeholder="选择厂商"
               options={companies.map((company) => ({
@@ -255,9 +259,6 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
               filterOption={(input, option) => String(option?.props?.children ?? '').includes(input)}
             />
           </Form.Item>
-        )}
-        {realm === 'internal' && companyOptionsLoading && (
-          <Alert type="info" style={{ marginBottom: 12 }} content="正在加载可发送的 ODM/OEMA 厂商…" />
         )}
         {realm === 'internal' && companyOptionsError && (
           <Alert type="error" style={{ marginBottom: 12 }} content={(
@@ -385,6 +386,10 @@ function hasDepartment(nodes: DepartmentNode[], id: number): boolean {
   return nodes.some(node => node.id === id || hasDepartment(node.children, id))
 }
 
+const EMPTY_SELECTION: (string | number)[] = []
+// Arco 自动加在最左边的勾选列宽度，要计入表格总宽，否则中等屏幕会多出横向滚动条。
+const SELECTION_COLUMN_WIDTH = 40
+
 export default function TransferListPage() {
   const { api, realm, base, queryScope, userId } = useOem()
   const can = useCan()
@@ -422,7 +427,13 @@ export default function TransferListPage() {
   const [sentRange, setSentRange] = useState<[string, string] | undefined>()
   const [creating, setCreating] = useState(false)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
-  const [selectedIds, setSelectedIds] = useState<(string | number)[]>([])
+  const [busyAction, setBusyAction] = useState<'download' | 'preview'>('download')
+  // 勾选只跨页保留；换了筛选条件后，上一个视图里的行不再可见，也不该被批量下载带上，
+  // 所以勾选记着它属于哪一组筛选条件，条件变了就视为空。
+  const filterKey = JSON.stringify([scope, direction, status, keyword, mine, companyId, sender, sentRange, departmentId])
+  const [selection, setSelection] = useState<{ key: string; ids: (string | number)[] }>({ key: '', ids: [] })
+  const selectedIds = selection.key === filterKey ? selection.ids : EMPTY_SELECTION
+  const setSelectedIds = (ids: (string | number)[]) => setSelection({ key: filterKey, ids })
   const [batching, setBatching] = useState(false)
   const [picking, setPicking] = useState<{ title: string; files: TransferFile[] } | null>(null)
   const [previewing, setPreviewing] = useState<TransferFile | null>(null)
@@ -468,6 +479,7 @@ export default function TransferListPage() {
   // The row count can be stale; the detail's per-file flags decide what is offered. One file acts at once;
   // several open a picker with preview and download per file.
   const openRow = useCallback(async (row: TransferSummary, action: 'download' | 'preview') => {
+    setBusyAction(action)
     setDownloadingId(row.id)
     try {
       const detail = await api.transfer(row.id)
@@ -508,7 +520,7 @@ export default function TransferListPage() {
         await downloadOemFile(api, file.id)
       }
       Message.success(`已开始下载 ${files.length} 个文件`)
-      setSelectedIds([])
+      setSelection({ key: '', ids: [] })
     } catch {
       // The HTTP client already shows the reason.
     } finally {
@@ -535,7 +547,8 @@ export default function TransferListPage() {
       filterDropdown: ({ confirm }: { confirm?: Function }) => (
         <div className="oem-sender-filter" style={{ padding: 8 }}>
           <Input.Search allowClear autoFocus aria-label="筛选发送人" placeholder="输入发送人姓名或账号" defaultValue={sender} style={{ width: 200 }}
-            onSearch={(value) => { setSender(value.trim()); setPage(1); confirm?.() }} />
+            onSearch={(value) => { setSender(value.trim()); setPage(1); confirm?.() }}
+            onClear={() => { setSender(''); setPage(1); confirm?.() }} />
         </div>
       ),
     },
@@ -555,24 +568,24 @@ export default function TransferListPage() {
     {
       key: 'actions', title: '操作',
       render: (_: unknown, row: TransferSummary) => row.downloadableCount > 0 && (
-        <span className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}>
+        <div className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}>
           {/* Fixed slots: a row without a preview keeps its empty slot, so the download buttons line up down the column. */}
           {actionSlots([
             row.previewableCount > 0 && (
-              <Button key="preview" size="small" icon={<IconEye />} aria-label={`预览 ${row.title}`}
-                disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
+              <Button key="preview" size="mini" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+                loading={downloadingId === row.id && busyAction === 'preview'} disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
             ),
-            <Button key="download" size="small" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
-              loading={downloadingId === row.id} disabled={downloadingId !== null && downloadingId !== row.id}
+            <Button key="download" size="mini" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
+              loading={downloadingId === row.id && busyAction === 'download'} disabled={downloadingId !== null && downloadingId !== row.id}
               onClick={() => void openRow(row, 'download')}>下载</Button>,
           ], 'oem-file')}
-        </span>
+        </div>
       ),
     },
-  ], [base, realm, downloadingId, openRow, sender])
+  ], [base, realm, downloadingId, busyAction, openRow, sender])
   const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
   const columnSpecs = realm === 'internal' ? OEM_TRANSFER_COLUMNS : PORTAL_TRANSFER_COLUMNS
-  const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef)
+  const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef, true, false, SELECTION_COLUMN_WIDTH)
 
   return (
     <Card
@@ -644,12 +657,15 @@ export default function TransferListPage() {
           <Table
             className={`page-table ${table.tableClassName}`}
             rowKey="id"
-            scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
+            scroll={{ x: table.scrollX + SELECTION_COLUMN_WIDTH, y: 'var(--page-table-scroll-y)' }}
             loading={transfers.isPending || transfers.isFetching}
             data={rows}
             columns={table.columns}
             components={table.components}
-            rowSelection={{ type: 'checkbox', selectedRowKeys: selectedIds, preserveSelectedRowKeys: true, onChange: (keys) => setSelectedIds(keys) }}
+            rowSelection={{
+              type: 'checkbox', selectedRowKeys: selectedIds, preserveSelectedRowKeys: true, onChange: (keys) => setSelectedIds(keys),
+              checkboxProps: (row) => ({ disabled: row.downloadableCount === 0 }),
+            }}
             onRow={(row) => ({
               onClick: (event) => {
                 // Ticking a row's checkbox must not open its detail page.

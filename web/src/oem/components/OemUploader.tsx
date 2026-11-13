@@ -6,7 +6,7 @@ import { fmtSize } from '../../api/types'
 import { oemRequestError } from '../api/requestError'
 import { isQuietRequestError } from '../../api/quietRequest'
 import { useOem } from '../OemContext'
-import { splitSupported, unsupportedMessage } from '../../utils/uploadExtensions'
+import { acceptAttribute, splitSupported, unsupportedMessage } from '../../utils/uploadExtensions'
 
 type Phase = 'queued' | 'hashing' | 'uploading' | 'merging' | 'cancelling' | 'done' | 'failed'
 
@@ -263,7 +263,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   }
 
   const uploadAll = async (draftId = transferId): Promise<boolean> => {
-    if (!draftId) throw new Error('请先创建草稿')
+    if (!draftId) throw new Error('请重新提交')
     if (entriesRef.current.some((entry) => ['hashing', 'uploading', 'merging', 'cancelling'].includes(entry.phase))) return false
     const pending = entriesRef.current.filter((entry) => entry.phase === 'queued' || entry.phase === 'failed')
     let ok = true
@@ -352,6 +352,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   return (
     <div className="oem-uploader">
       <input ref={input} aria-label="选择文件" type="file" multiple hidden disabled={!canChoose}
+        accept={acceptAttribute(allowedExtensions)}
         onChange={(event) => void choose(event.target.files)} />
       <div
         role="button"
@@ -389,7 +390,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
         {entries.map((entry) => (
           <div key={entry.key}>
             <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-              <span>
+              <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
                 <Typography.Text>{entry.file.name}</Typography.Text>
                 <Typography.Text type="secondary" style={{ marginLeft: 8 }}>{fmtSize(entry.file.size)}</Typography.Text>
               </span>
@@ -410,7 +411,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
               formatText={() => label(entry)}
             />
             {entry.phase === 'failed' && entry.session?.mergeReady && (
-              <Typography.Text type="secondary">合并结果尚未确认，请重试；关闭窗口后也可从草稿详情继续。移除前请确认附件列表中没有该文件。</Typography.Text>
+              <Typography.Text type="secondary">合并结果尚未确认，请重试。移除前请确认附件列表中没有该文件。</Typography.Text>
             )}
           </div>
         ))}

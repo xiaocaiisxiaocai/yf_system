@@ -21,3 +21,9 @@ export function unsupportedMessage(rejected: readonly File[]): string {
   const names = rejected.slice(0, 3).map((file) => file.name).join('、')
   return `不支持的文件格式，已拒绝：${names}${rejected.length > 3 ? ` 等 ${rejected.length} 个文件` : ''}`
 }
+
+/** 系统文件选择框的格式过滤；白名单未知或为空时不限制（服务端仍会校验）。 */
+export function acceptAttribute(allowed: readonly string[] | null | undefined): string | undefined {
+  if (!allowed || allowed.length === 0) return undefined
+  return allowed.map((ext) => `.${ext.replace(/^\./, '').toLowerCase()}`).join(',')
+}

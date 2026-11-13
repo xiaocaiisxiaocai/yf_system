@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extensionOf, splitSupported, unsupportedMessage } from '../utils/uploadExtensions'
+import { acceptAttribute, extensionOf, splitSupported, unsupportedMessage } from '../utils/uploadExtensions'
 
 const file = (name: string) => new File(['x'], name)
 
@@ -18,5 +18,13 @@ describe('上传格式预检', () => {
 
   it('提示最多列出三个文件名', () => {
     expect(unsupportedMessage([file('1.x'), file('2.x'), file('3.x'), file('4.x')])).toContain('等 4 个文件')
+  })
+})
+
+describe('acceptAttribute', () => {
+  it('白名单已知时生成系统选择框的格式过滤，未知或为空时不限制', () => {
+    expect(acceptAttribute(['pdf', 'STEP', '.xlsx'])).toBe('.pdf,.step,.xlsx')
+    expect(acceptAttribute(null)).toBeUndefined()
+    expect(acceptAttribute([])).toBeUndefined()
   })
 })

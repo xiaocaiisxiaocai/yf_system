@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Badge, Button, Card, Checkbox, Input, Message, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
@@ -6,9 +6,9 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
-import { ColumnResizeProvider, ColumnVisibilityPicker, ResizableHeaderCell } from '../../components/columnResize'
-import { columnLayoutStorageKey, measureTableWidth, withFlexibleColumn, type ColumnLayoutSpec } from '../../components/tableColumnLayout'
-import { useColumnLayout } from '../../components/useColumnLayout'
+import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
+import type { ColumnLayoutSpec } from '../../components/tableColumnLayout'
+import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import { useAuth } from '../../store/auth'
 import { type PageResp, type ProjectSummary, MATERIAL_REVIEW, PROJECT_STATUS } from '../../api/types'
 import { useCollaboration } from '../../store/collaboration'
@@ -111,31 +111,7 @@ export default function ProjectList() {
   const [supplierOptionsError, setSupplierOptionsError] = useState(false)
   const supplierOptionsSeq = useRef(0)
   const { hasPerm, user } = useAuth()
-  const columnLayout = useColumnLayout(columnLayoutStorageKey('projects', user?.id), PROJECT_LIST_COLUMNS)
-  const tableComponents = useMemo(() => ({ header: { cell: ResizableHeaderCell } }), [])
   const tableHostRef = useRef<HTMLDivElement>(null)
-  const [tableWidth, setTableWidth] = useState(0)
-  useLayoutEffect(() => {
-    const host = tableHostRef.current
-    if (!host) return
-    let frame = 0
-    const measure = () => {
-      const next = measureTableWidth(host)
-      setTableWidth((current) => (current === next ? current : next))
-    }
-    measure()
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(measure)
-    })
-    observer.observe(host)
-    const container = host.querySelector('.arco-table-container')
-    if (container) observer.observe(container)
-    return () => {
-      cancelAnimationFrame(frame)
-      observer.disconnect()
-    }
-  }, [loadError])
   const isInternal = user?.userType === 'INTERNAL'
   // 供应商账号看不到厂商筛选，地址栏里的 supplier 参数对其无效。
   const supplierId = isInternal ? supplierParam : undefined
@@ -213,7 +189,7 @@ export default function ProjectList() {
     await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('项目已删除'); load()
   }
 
-  const columns = withFlexibleColumn(columnLayout.apply([
+  const baseColumns = [
     { key: 'name', title: '项目名称', dataIndex: 'name', fixed: 'left' as const, ellipsis: true, render: (value: string, row: ProjectSummary) => <Link className="table-link" to={`/projects/${row.id}`} title={value}>{value}</Link> },
     { key: 'workOrderNos', title: '工令号', dataIndex: 'workOrderNos', ellipsis: true, render: (values?: string[]) => cellText(values?.join('、')) },
     { key: 'machineModel', title: '机型', dataIndex: 'machineModel', ellipsis: true, render: cellText },
@@ -241,7 +217,10 @@ export default function ProjectList() {
           <Button size="mini" type="text" status="danger">删除</Button>
         </Popconfirm>),
     ], 'project-group') },
-  ]), tableWidth, 'name')
+  ]
+  // 与全站其他表格共用列宽逻辑：第一次手动拖动某列时，其余列固定在当前宽度，不再跟着晃动。
+  const columnLayout = useAdjustableColumns('projects', user?.id, PROJECT_LIST_COLUMNS, baseColumns, 'name', tableHostRef, !loadError)
+  const columns = columnLayout.columns
 
   return (
     <Card className="page-card page-card--table">
@@ -282,7 +261,7 @@ export default function ProjectList() {
         </div>}
         <ColumnResizeProvider actions={columnLayout.actions}>
           <div ref={tableHostRef} className="page-table-host">
-            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={tableComponents} data={data.list} scroll={{ x: columns.reduce((sum, column) => sum + column.width, 0), y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
+            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={columnLayout.components} data={data.list} scroll={{ x: columnLayout.scrollX, y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
           </div>
         </ColumnResizeProvider>
         </>}

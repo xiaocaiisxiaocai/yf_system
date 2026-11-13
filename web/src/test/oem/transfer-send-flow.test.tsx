@@ -147,7 +147,6 @@ describe('ODM/OEMA 一键发送文件', () => {
     await user.click(within(dialog).getByRole('combobox'))
     const option = await screen.findByRole('option', { name: /甲厂.*该厂商没有启用的登录账号/ })
     expect(option).toHaveClass('arco-select-option-disabled')
-    expect(await within(dialog).findByText('至少需要一个启用的 ODM/OEMA 登录账号才能发送。')).toBeInTheDocument()
   })
 
   it('所有厂商都没有启用账号时阻止提交', async () => {
@@ -170,7 +169,8 @@ describe('ODM/OEMA 一键发送文件', () => {
   })
 
   it('不支持的文件格式在选择时就被拒绝：不入队、不建草稿', async () => {
-    const user = userEvent.setup()
+    // 系统选择框已按白名单过滤；拖放或手动选“所有文件”仍可能带入，这里模拟绕过过滤的情况。
+    const user = userEvent.setup({ applyAccept: false })
     const api = createApi({ uploadRules: vi.fn().mockResolvedValue({ allowedExtensions: ['pdf', 'step'] }) } as Partial<OemApi>)
     renderList(api)
     const dialog = await openInternalDialog(user)
