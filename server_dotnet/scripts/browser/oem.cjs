@@ -494,6 +494,8 @@ async function openReleasedFile(page, url, fileName) {
       const names = (await options.allInnerTexts()).map(text => text.trim());
       assert(!names.some(name => name.includes(users.leader.realName)),
         'the section leader has no download permission, so the vendor cannot pick them: ' + names.join('|'));
+      assert(!names.some(name => name.includes('系统管理员')),
+        'system administrators see every transfer and are not on the notification list: ' + names.join('|'));
       await options.filter({ hasText: users.sender.realName }).first().click();
       await page.keyboard.press('Escape');
       if (screenshot) await page.screenshot({ path: OUT + '/' + screenshot, fullPage: true });

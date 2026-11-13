@@ -61,9 +61,20 @@ internal static class OemRecipients
             .Select(user => new MailRecipient(OemRealms.Internal, user.Id, user.Email, user.RealName, null)).ToArrayAsync(ct);
     }
 
-    /// <summary>Internal staff who can view and download ODM/OEMA files: by default on every vendor's notification list.</summary>
-    public static Task<MailRecipient[]> InboundCandidatesAsync(YfDbContext db, CancellationToken ct) =>
-        InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload);
+    /// <summary>
+    /// Internal staff who can view and download ODM/OEMA files: by default on every vendor's notification list. System
+    /// administrators are never on it: they already see every transfer and are not mailed about vendor files (leaders
+    /// see their people's transfers without mail as well).
+    /// </summary>
+    public static async Task<MailRecipient[]> InboundCandidatesAsync(YfDbContext db, CancellationToken ct)
+    {
+        var admins = (await db.UserRoles.AsNoTracking()
+            .Where(userRole => db.Roles.Any(role => role.Id == userRole.RoleId && role.Status == OemStatus.Active
+                && role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator))
+            .Select(userRole => userRole.UserId).ToArrayAsync(ct)).ToHashSet();
+        return (await InternalWithAllAsync(db, ct, OemPermissions.TransferView, OemPermissions.FileDownload))
+            .Where(holder => !admins.Contains(holder.Id)).ToArray();
+    }
 
     /// <summary>
     /// The list a vendor can choose from (one list for every vendor): every internal staff member with ODM/OEMA view + download,

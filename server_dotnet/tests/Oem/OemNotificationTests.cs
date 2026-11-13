@@ -231,9 +231,12 @@ public sealed class OemNotificationTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
         var receiver = await host.CreateInternalUserAsync("zp_receiver", "Receiver#2026x", ["oem:transfer_view", "oem:file_download"], world.Org.Section, ct);
-        ulong viewer;
+        ulong viewer, admin;
         await using (var conn = await host.OpenAsync(ct))
+        {
             viewer = await conn.ExecuteScalarAsync<ulong>("SELECT id FROM users WHERE employee_no='zp_viewer'");
+            admin = await conn.ExecuteScalarAsync<ulong>("SELECT id FROM users WHERE employee_no='admin'");
+        }
         const string url = "/api/v1/oem/internal-recipients";
 
         async Task<(ulong Id, ulong Version)> DraftAsync(string title)
@@ -255,8 +258,11 @@ public sealed class OemNotificationTests
         Assert.Contains(receiver, Listed(list, false));
         Assert.Contains(viewer, Listed(list, false));
         Assert.DoesNotContain(world.LeaderId, Listed(list, false));
+        // System administrators see every transfer anyway and are never mailed about vendor files: not on the list at all.
+        Assert.DoesNotContain(admin, Listed(list, false).Concat(Listed(list, true)));
         var choices = (await world.Vendor.GetAsync("/api/v1/oem/transfer-recipient-choices", ct).Ok()).AsArray();
         Assert.Contains(receiver, choices.Select(item => item!["userId"]!.GetValue<ulong>()));
+        Assert.DoesNotContain(admin, choices.Select(item => item!["userId"]!.GetValue<ulong>()));
         Assert.All(choices, item => Assert.Null(item!["employeeNo"]));
         await world.Admin.GetAsync("/api/v1/oem/transfer-recipient-choices", ct).Status(HttpStatusCode.Forbidden);
         await world.Vendor.GetAsync(url, ct).Status(HttpStatusCode.Forbidden);
