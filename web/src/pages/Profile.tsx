@@ -1,6 +1,6 @@
 import { textLengthRule } from '../utils/textRules'
 import { useRef, useState } from 'react'
-import { Button, Card, Form, Input, Message, Typography } from '@arco-design/web-react'
+import { Avatar, Button, Card, Form, Input, Message, Tag } from '@arco-design/web-react'
 import { IconEmail, IconLock, IconSave } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import http, { withAuthLock } from '../api/client'
@@ -9,7 +9,6 @@ import { confirmPasswordRule, passwordRule } from '../utils/password'
 import PasswordInput from '../components/PasswordInput'
 import type { ApiResponses } from '../api/types'
 
-const { Text } = Typography
 
 export default function Profile() {
   const [profileForm] = Form.useForm()
@@ -20,6 +19,10 @@ export default function Profile() {
   const busy = profileLoading || passwordLoading
   const { user, setUser, logout } = useAuth()
   const nav = useNavigate()
+  const isSupplier = user?.userType === 'SUPPLIER'
+  // 只有邮箱真的改了才能保存。
+  const [emailDraft, setEmailDraft] = useState(user?.email ?? '')
+  const emailChanged = emailDraft.trim() !== (user?.email ?? '')
 
   const saveProfile = async (values: { email: string }) => {
     if (submitting.current) return
@@ -29,6 +32,7 @@ export default function Profile() {
       const response = await http.put<ApiResponses['PUT /auth/profile']>('/auth/profile', { email: values.email })
       setUser(response.data.user as UserBrief)
       profileForm.setFieldsValue({ email: response.data.user.email })
+      setEmailDraft(response.data.user.email)
       Message.success('个人资料已保存')
     } catch {
       /* 拦截器已提示 */
@@ -64,40 +68,36 @@ export default function Profile() {
     }
   }
 
+  const displayName = (isSupplier ? user?.employeeNo : user?.realName) || user?.employeeNo || '-'
   return (
     <Card className="page-card profile-page">
       <h1 className="visually-hidden">个人资料</h1>
 
       <div className="profile-content">
-        <div className="profile-readonly-grid" aria-label="账号信息">
-          <div className="profile-readonly-item">
-            <span>账号</span>
-            <strong>{user?.employeeNo || '-'}</strong>
+        <section className="profile-identity" aria-label="账号信息">
+          <Avatar className="profile-identity-avatar" size={56}>{displayName.slice(0, 1)}</Avatar>
+          <div className="profile-identity-text">
+            <div className="profile-identity-name">{displayName}</div>
+            <div className="profile-identity-meta">
+              {!isSupplier && <span>账号 {user?.employeeNo || '-'}</span>}
+              <Tag size="small">{isSupplier ? '供应商人员' : '企业内部人员'}</Tag>
+              {user?.isSystemAdmin && <Tag size="small" color="arcoblue">系统管理员</Tag>}
+            </div>
           </div>
-          {user?.userType !== 'SUPPLIER' && <div className="profile-readonly-item">
-            <span>姓名</span>
-            <strong>{user?.realName || '-'}</strong>
-          </div>}
-          <div className="profile-readonly-item">
-            <span>账号类型</span>
-            <strong>{user?.userType === 'SUPPLIER' ? '供应商人员' : '企业内部人员'}</strong>
-          </div>
-        </div>
-        {user?.userType === 'SUPPLIER' && (
+        </section>
+        {isSupplier && (
           <div className="profile-boundary-note" role="note">
             供应商账号为共用登录账号；姓名和邮箱由供应商联络人资料维护
           </div>
         )}
-        <div className="profile-grid">
-          {user?.userType !== 'SUPPLIER' && <section className="profile-section" aria-labelledby="profile-contact-title">
-            <div className="profile-section-heading">
-              <h2 id="profile-contact-title">联系方式</h2>
-              <Text type="secondary">用于接收项目协作通知</Text>
-            </div>
+        <div className={`profile-grid${isSupplier ? ' profile-grid--single' : ''}`}>
+          {!isSupplier && <section className="profile-section" aria-labelledby="profile-contact-title">
+            <h2 id="profile-contact-title" className="profile-section-title">联系方式</h2>
             <Form
               form={profileForm}
               layout="vertical"
               initialValues={{ email: user?.email }}
+              onValuesChange={(_, values: { email?: string }) => setEmailDraft(values.email ?? '')}
               onSubmit={saveProfile}
             >
               <Form.Item
@@ -111,17 +111,15 @@ export default function Profile() {
               >
                 <Input prefix={<IconEmail />} placeholder="请输入联系邮箱" autoComplete="email" disabled={busy} />
               </Form.Item>
-              <Button className="profile-submit" type="primary" htmlType="submit" icon={<IconSave />} loading={profileLoading} disabled={busy}>
+              <Button className="profile-submit" type="primary" htmlType="submit" icon={<IconSave />} loading={profileLoading}
+                disabled={busy || !emailChanged}>
                 保存资料
               </Button>
             </Form>
           </section>}
 
           <section className="profile-section" aria-labelledby="profile-password-title">
-            <div className="profile-section-heading">
-              <h2 id="profile-password-title">登录密码</h2>
-              <Text type="secondary">修改后需重新登录</Text>
-            </div>
+            <h2 id="profile-password-title" className="profile-section-title">登录密码</h2>
             <Form form={passwordForm} layout="vertical" onSubmit={changePassword}>
               <Form.Item label="当前密码" field="oldPassword" rules={[{ required: true, message: '请输入当前密码' }]}>
                 <PasswordInput prefix={<IconLock />} placeholder="请输入当前密码" autoComplete="current-password" disabled={busy} />

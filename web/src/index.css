@@ -197,33 +197,27 @@ html, body, #root {
 .page-card > .arco-card-body { padding: 0; }
 /* 个人资料沿用页面容器；账号概览与两项维护操作分层呈现。 */
 .profile-page { box-sizing: border-box; height: calc(100dvh - 88px); margin: 0; overflow: auto; }
-.profile-content { max-width: 1120px; }
-.profile-readonly-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 28px; padding: 16px 0; border: 1px solid var(--app-border); border-radius: 6px; background: var(--color-fill-1); }
-.profile-readonly-item { min-width: 0; padding: 0 20px; }
-.profile-readonly-item + .profile-readonly-item { border-left: 1px solid var(--app-border); }
-.profile-readonly-item span { display: block; margin-bottom: 6px; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
-.profile-readonly-item strong { display: block; color: var(--color-text-1); font-size: 14px; line-height: 22px; font-weight: 500; overflow-wrap: anywhere; }
-.profile-boundary-note { margin: -12px 0 24px; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
-.profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 48px; align-items: start; }
-.profile-section { position: relative; min-width: 0; }
-.profile-section + .profile-section::before { content: ""; position: absolute; top: 0; bottom: 0; left: -24px; width: 1px; background: var(--app-border); }
-.profile-section-heading { margin-bottom: 20px; }
-.profile-section-heading h2 { margin: 0 0 6px; font-size: 14px; line-height: 22px; font-weight: 600; color: var(--color-text-1); }
-.profile-section-heading .arco-typography { margin: 0; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
-.profile-section .arco-form-item { margin-bottom: 20px; }
+.profile-content { max-width: 960px; margin: 0 auto; padding-top: 8px; }
+.profile-identity { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; padding-bottom: 24px; border-bottom: 1px solid var(--app-border); }
+.profile-identity-avatar.arco-avatar { flex: 0 0 auto; background: rgb(var(--primary-6)); font-size: 22px; }
+.profile-identity-text { min-width: 0; }
+.profile-identity-name { overflow: hidden; color: var(--color-text-1); font-size: 18px; font-weight: 600; line-height: 26px; text-overflow: ellipsis; white-space: nowrap; }
+.profile-identity-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
+.profile-boundary-note { margin: -8px 0 20px; color: var(--app-text-muted); font-size: 13px; line-height: 20px; }
+.profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; align-items: start; }
+.profile-grid--single { grid-template-columns: minmax(0, 468px); }
+.profile-section { min-width: 0; padding: 20px 24px 24px; border: 1px solid var(--app-border); border-radius: 8px; background: var(--color-bg-2); }
+.profile-section-title { margin: 0 0 16px; color: var(--color-text-1); font-size: 15px; font-weight: 600; line-height: 22px; }
+.profile-section .arco-form-item { margin-bottom: 18px; }
 .profile-section .profile-submit { align-self: flex-start; width: fit-content; min-width: 112px; margin-top: 4px; }
 @media (max-width: 900px) {
-  .profile-grid { grid-template-columns: minmax(0, 1fr); gap: 28px; }
-  .profile-section + .profile-section { padding-top: 24px; border-top: 1px solid var(--app-border); }
-  .profile-section + .profile-section::before { display: none; }
-  .profile-section .arco-form { max-width: 520px; }
+  .profile-grid, .profile-grid--single { grid-template-columns: minmax(0, 1fr); gap: 16px; }
 }
 @media (max-width: 520px) {
   .profile-page { height: calc(100dvh - 76px); }
-  .profile-readonly-grid { grid-template-columns: minmax(0, 1fr); padding: 0 16px; margin-bottom: 24px; }
-  .profile-readonly-item { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; padding: 12px 0; }
-  .profile-readonly-item span { margin: 0; }
-  .profile-readonly-item + .profile-readonly-item { border-left: 0; border-top: 1px solid var(--app-border); }
+  .profile-identity { gap: 12px; margin-bottom: 16px; padding-bottom: 16px; }
+  .profile-identity-avatar.arco-avatar { width: 44px !important; height: 44px !important; font-size: 18px; }
+  .profile-section { padding: 16px; }
 }
 /* OEM 页面直接使用 Arco Card：最外层卡片套用协作端页面卡片外观，首张卡片标题作为页面标题。 */
 .oem-shell .layout-content > .arco-card,
