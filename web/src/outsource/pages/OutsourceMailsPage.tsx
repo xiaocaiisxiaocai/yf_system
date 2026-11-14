@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Message, Popover, Select, Space, Table, Tag, Tooltip } from '@arco-design/web-react'
+import { Button, Card, Empty, Message, Popover, Select, Space, Tag, Tooltip } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
@@ -7,6 +7,7 @@ import LoadError from '../../components/LoadError'
 import { useAuth } from '../../store/auth'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import './OutsourceMailsPage.css'
+import ResizableTable from '../../components/ResizableTable'
 
 type Mail = ApiResponses['GET /outsource/mails']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
@@ -151,7 +152,7 @@ export default function OutsourceMailsPage() {
       </Space>
     </div>
     {error ? <LoadError message="发送记录加载失败" onRetry={() => void load()} />
-      : <Table<Mail> className="page-table" rowKey="id" loading={loading} data={mails} columns={columns}
+      : <ResizableTable<Mail> tableId="outsource-mails" className="page-table" rowKey="id" loading={loading} data={mails} columns={columns}
         noDataElement={loading ? <span /> : <Empty description="暂无发送记录" />} scroll={{ x: 1630, y: 'var(--page-table-scroll-y)' }}
         pagination={{ current: page, pageSize: 20, total, showTotal: true, onChange: setPage }} />}
   </Card>

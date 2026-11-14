@@ -22,6 +22,7 @@ import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/c
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import EnterSubmit from '../../components/EnterSubmit'
+import ResizableTable from '../../components/ResizableTable'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
@@ -338,7 +339,9 @@ function DownloadPicker({ title, files, onPreview, onClose }: {
   }
   return (
     <Modal title={title} visible footer={null} onCancel={onClose} unmountOnExit style={{ width: 640 }}>
-      <Table
+      <ResizableTable<TransferFile>
+        tableId="oem-download-picker"
+        growKey="name"
         rowKey="id"
         size="small"
         pagination={false}

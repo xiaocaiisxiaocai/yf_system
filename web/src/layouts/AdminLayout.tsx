@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Layout, Menu, Button, Drawer } from '@arco-design/web-react'
+import { Layout, Button, Drawer } from '@arco-design/web-react'
 import {
   IconHome,
   IconFile,
@@ -11,8 +11,6 @@ import {
   IconSettings,
   IconBook,
   IconMenu,
-  IconMenuFold,
-  IconMenuUnfold,
 } from '@arco-design/web-react/icon'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
@@ -21,9 +19,10 @@ import CollaborationNotifications from '../components/CollaborationNotifications
 import RouteErrorBoundary from '../components/RouteErrorBoundary'
 import AccountMenu from '../components/AccountMenu'
 import AppRail from './AppRail'
+import NavSider, { NavMenu } from './NavSider'
 import { businessHomes, collaborationPages } from './navigation'
 
-const { Sider, Header, Content } = Layout
+const { Header, Content } = Layout
 
 const MENU_ICONS = {
   dashboard: <IconHome />, 'project:list': <IconFile />, 'supplier:list': <IconUserGroup />,
@@ -42,13 +41,6 @@ export default function AdminLayout() {
   const nav = useNavigate()
   const loc = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [siderCollapsed, setSiderCollapsed] = useState(() => {
-    try {
-      return window.localStorage.getItem('yf:sider-collapsed') === 'true'
-    } catch {
-      return false
-    }
-  })
 
   const items = collaborationPages({ menus, permissions, user })
   const hasMenus = items.length > 0
@@ -67,41 +59,7 @@ export default function AdminLayout() {
       .map((m) => m.path)
       .slice(0, 1) || []
 
-  const toggleSider = () => {
-    setSiderCollapsed((current) => {
-      const next = !current
-      try {
-        window.localStorage.setItem('yf:sider-collapsed', String(next))
-      } catch {
-        /* 本地存储不可用时仍保留当前会话状态 */
-      }
-      return next
-    })
-  }
-
-  const menu = (closeAfterNavigate = false, collapsed = false) => (
-    <Menu
-      theme="dark"
-      collapse={collapsed}
-      selectedKeys={selected}
-      onClickMenuItem={(key) => {
-        nav(key)
-        if (closeAfterNavigate) setMobileMenuOpen(false)
-      }}
-      style={{ width: '100%' }}
-    >
-      {items.map((m) => (
-        <Menu.Item
-          key={m.path}
-          aria-label={collapsed ? m.label : undefined}
-          renderItemInTooltip={() => m.label}
-        >
-          {MENU_ICONS[m.code]}
-          {!collapsed && m.label}
-        </Menu.Item>
-      ))}
-    </Menu>
-  )
+  const navItems = items.map((m) => ({ key: m.path, label: m.label, icon: MENU_ICONS[m.code] }))
 
   return (
     <Layout className="layout-shell">
@@ -124,25 +82,7 @@ export default function AdminLayout() {
       </Header>
       <Layout className="layout-main">
         <AppRail active="collaboration" />
-        {hasMenus && <Sider
-          className={`layout-sider${siderCollapsed ? ' layout-sider--collapsed' : ''}`}
-          width={200}
-          collapsedWidth={64}
-          collapsed={siderCollapsed}
-          collapsible
-          trigger={null}
-          theme="dark"
-        >
-          {menu(false, siderCollapsed)}
-          <button
-            className="layout-sider-toggle"
-            type="button"
-            aria-label={siderCollapsed ? '展开侧边栏' : '折叠侧边栏'}
-            onClick={toggleSider}
-          >
-            {siderCollapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}
-          </button>
-        </Sider>}
+        {hasMenus && <NavSider items={navItems} selectedKey={selected[0]} onSelect={(key) => nav(key)} />}
         <Content className="layout-content">
           <RouteErrorBoundary>
             <Outlet />
@@ -165,7 +105,7 @@ export default function AdminLayout() {
         onCancel={() => setMobileMenuOpen(false)}
       >
         <AppRail active="collaboration" variant="drawer" onNavigate={() => setMobileMenuOpen(false)} />
-        {hasMenus && menu(true)}
+        {hasMenus && <NavMenu items={navItems} selectedKey={selected[0]} onSelect={(key) => { nav(key); setMobileMenuOpen(false) }} />}
       </Drawer>}
     </Layout>
   )

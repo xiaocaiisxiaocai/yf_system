@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Table, Tabs, Tag,
-  TimePicker,
+  Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Tabs, Tag, TimePicker,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -12,6 +11,7 @@ import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
 import MesMirrorPanel from './MesMirrorPanel'
 import './OutsourceSettingsPage.css'
+import ResizableTable from '../../components/ResizableTable'
 
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type Contact = Vendor['contacts'][number]
@@ -148,7 +148,7 @@ function VendorsTab({ vendors, loading, reload }: { vendors: Vendor[]; loading: 
       <span />
       <Button type="primary" icon={<IconPlus />} disabled={loading} onClick={() => startEdit()}>新增厂商</Button>
     </div>
-    <Table<Vendor> className="page-table" rowKey="id" loading={loading} data={vendors} pagination={false}
+    <ResizableTable<Vendor> tableId="outsource-vendors" className="page-table" rowKey="id" loading={loading} data={vendors} pagination={false}
       noDataElement={loading ? <span /> : <Empty description="暂无外协厂商" />} scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
       columns={columns as TableColumnProps<Vendor>[]} />
     <Modal className="form-dialog" title={editing ? '编辑外协厂商' : '新增外协厂商'} visible={open} onOk={save}
@@ -209,7 +209,7 @@ function ContactsDrawer({ vendor, onClose, reload }: { vendor: Vendor | null; on
     <div className="outsource-drawer-toolbar">
       <Button type="primary" icon={<IconPlus />} onClick={() => startEdit()}>新增邮箱</Button>
     </div>
-    <Table<Contact> rowKey="id" data={contacts} pagination={false} columns={columns as TableColumnProps<Contact>[]}
+    <ResizableTable<Contact> tableId="outsource-vendor-contacts" rowKey="id" data={contacts} pagination={false} columns={columns as TableColumnProps<Contact>[]}
       noDataElement={<Empty description="暂无联络邮箱" />} scroll={{ x: 570 }} />
     <Modal className="form-dialog" title={editing ? '编辑联络邮箱' : '新增联络邮箱'} visible={open} onOk={save}
       onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
@@ -284,7 +284,7 @@ function TypesTab({ types, vendors, loading, reload }: {
       <span />
       <Button type="primary" icon={<IconPlus />} disabled={loading} onClick={() => startEdit()}>新增外发类型</Button>
     </div>
-    <Table<OutsourceType> className="page-table" rowKey="id" loading={loading} data={types} pagination={false}
+    <ResizableTable<OutsourceType> tableId="outsource-types" className="page-table" rowKey="id" loading={loading} data={types} pagination={false}
       noDataElement={loading ? <span /> : <Empty description="暂无外发类型" />} scroll={{ x: 910, y: 'var(--page-table-scroll-y)' }}
       columns={columns as TableColumnProps<OutsourceType>[]} />
     <Modal className="form-dialog" title={editing ? '编辑外发类型' : '新增外发类型'} visible={open} onOk={save}
@@ -367,7 +367,7 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
         <Button type="primary" icon={<IconPlus />} disabled={picked === undefined || saving} onClick={() => void add()}>加入</Button>
       </Space>
     </div>
-    <Table<CcUser> className="page-table" rowKey="userId" loading={loading} data={cc} pagination={false}
+    <ResizableTable<CcUser> tableId="outsource-default-cc" className="page-table" rowKey="userId" loading={loading} data={cc} pagination={false}
       noDataElement={loading ? <span /> : <Empty description="暂无默认抄送人员" />} scroll={{ x: 730, y: 'var(--page-table-scroll-y)' }}
       columns={columns as TableColumnProps<CcUser>[]} />
   </>

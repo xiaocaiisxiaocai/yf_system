@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip,
+  Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
@@ -16,6 +16,7 @@ import { normalizeImportDate } from '../importDate'
 import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
 import SendMailDialog from './SendMailDialog'
 import './OutsourceListPage.css'
+import ResizableTable from '../../components/ResizableTable'
 
 type Item = ApiResponses['GET /outsource/items']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
@@ -331,7 +332,7 @@ export default function OutsourceListPage() {
       </Space>
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
-      : <Table<Item> className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
+      : <ResizableTable<Item> tableId="outsource-items" className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
         rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : '',
           item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
         rowSelection={canManage ? {

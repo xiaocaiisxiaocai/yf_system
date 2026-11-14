@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Drawer, Empty, Popover, Spin, Table, Tag } from '@arco-design/web-react'
+import { Drawer, Empty, Popover, Spin, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
+import ResizableTable from '../../components/ResizableTable'
 
 type Change = ApiResponses['GET /outsource/items/{id}/changes'][number]
 
@@ -49,7 +50,7 @@ export function ItemHistoryDrawer({ item, onClose }: { item: { id: number; workO
   ]
   return <Drawer width={820} title={item ? `工令 ${item.workOrderNo} · 变更履历` : '变更履历'} visible={item !== null}
     footer={null} onCancel={onClose} unmountOnExit>
-    {error ? <Empty description="履历加载失败" /> : <Table<Change> rowKey="id" loading={changes === null} data={changes ?? []}
+    {error ? <Empty description="履历加载失败" /> : <ResizableTable<Change> tableId="outsource-item-history" rowKey="id" loading={changes === null} data={changes ?? []}
       columns={columns} pagination={false} scroll={{ x: 760 }} noDataElement={<Empty description="暂无变更" />} />}
   </Drawer>
 }
