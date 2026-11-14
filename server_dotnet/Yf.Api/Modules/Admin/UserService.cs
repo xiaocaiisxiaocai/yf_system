@@ -171,7 +171,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await ManagementAsync(context, actor, "user:manage", ct);
-        if (id == actor.Id) throw ApiException.BadRequest("不能禁用自己的账号");
+        if (id == actor.Id) throw ApiException.BadRequest("不能停用自己的账号");
         var user = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块维护");
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
@@ -273,7 +273,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (await context.Projects.AnyAsync(x => x.ResponsibleUserId == id, ct))
             throw ApiException.BadRequest("该账号仍是项目负责人，请先结束相关项目");
         if (await context.Projects.AnyAsync(x => x.CreatedBy == id, ct) || await context.ProjectStatusLogs.AnyAsync(x => x.OperatorId == id, ct))
-            throw ApiException.BadRequest("该账号仍被项目创建记录或状态历史引用，请禁用账号并保留历史记录");
+            throw ApiException.BadRequest("该账号仍被项目创建记录或状态历史引用，请停用账号并保留历史记录");
         var hasHistory = await context.Files.AnyAsync(x => x.UploaderId == id, ct)
             || await context.Messages.AnyAsync(x => x.SenderId == id || x.DeletedBy == id, ct)
             || await context.UploadSessions.AnyAsync(x => x.UploaderId == id, ct)
@@ -302,7 +302,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             || await context.OemFlowTasks.AnyAsync(x => x.ApproverUserId == id || x.ReassignedBy == id, ct)
             || await context.OemUploadSessions.AnyAsync(x => x.UploaderRealm == "internal" && x.UploaderId == id, ct)
             || await context.OemDownloadSessions.AnyAsync(x => x.ActorRealm == "internal" && x.ActorId == id, ct);
-        if (hasHistory) throw ApiException.BadRequest("该账号仍有业务或历史记录，请禁用账号，不要删除");
+        if (hasHistory) throw ApiException.BadRequest("该账号仍有业务或历史记录，请停用账号，不要删除");
     }
 
     internal static async Task RemoveAsync(YfDbContext context, ulong id, CancellationToken ct)
@@ -356,7 +356,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     private static async Task EnsureRoleAssignableAsync(YfDbContext context, ulong roleId, CancellationToken ct)
     {
         var role = await FindRoleAsync(context, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
-        if (role.Status != AccountStatuses.Active) throw ApiException.BadRequest("不能绑定已禁用的角色");
+        if (role.Status != AccountStatuses.Active) throw ApiException.BadRequest("不能绑定已停用的角色");
         if (role.IsBuiltIn && role.Name == AdminBuiltIns.SupplierRoleName) throw ApiException.BadRequest("供应商角色只能由供应商账号使用");
     }
 

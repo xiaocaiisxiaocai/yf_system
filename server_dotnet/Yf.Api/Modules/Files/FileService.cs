@@ -765,7 +765,7 @@ public sealed class FileService(
             throw ApiException.Unauthorized("账号状态已变化，请重新登录");
         if (row.UserType == UserTypes.Supplier && (row.SupplierId is not ulong supplierId
             || !await ef.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct)))
-            throw ApiException.Unauthorized("所属供应商已被禁用");
+            throw ApiException.Unauthorized("所属供应商已被停用");
         return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
     }
 

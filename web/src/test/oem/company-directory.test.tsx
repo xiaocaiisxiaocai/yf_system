@@ -102,12 +102,12 @@ async function openAccounts(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('ODM/OEMA 厂商与账号目录', () => {
-  it('厂商列表和编辑资料与 Robot 一致，仅显示名称、状态、创建时间和操作', async () => {
+  it('厂商列表和编辑资料与 Robot 一致，默认显示名称、状态、创建时间和操作', async () => {
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
     const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
     expect(screen.getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['名称', '状态', '创建时间', '操作'])
-    expect(screen.queryByRole('button', { name: '显示列' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '显示列' })).toBeInTheDocument()
     await user.click(within(row).getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog', { name: '编辑厂商' })
     expect(within(dialog).getByLabelText('厂商名称')).toBeVisible()
@@ -306,11 +306,11 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     const drawer = await openAccounts(user)
     const accountRow = within(drawer).getByText('OEM_0031').closest('tr')!
 
-    await user.click(within(accountRow).getByRole('button', { name: '禁用' }))
+    await user.click(within(accountRow).getByRole('button', { name: '停用' }))
     expect(setAccountStatus).toHaveBeenCalledWith(31, 'DISABLED')
     expect(await within(drawer).findByRole('alert')).toHaveTextContent(`停用失败：${backendReason}`)
     expect(accounts).toHaveBeenCalledTimes(1)
-    expect(within(accountRow).getByRole('button', { name: '禁用' })).toBeVisible()
+    expect(within(accountRow).getByRole('button', { name: '停用' })).toBeVisible()
   })
 
   it('厂商停用被拒绝时显示进行中传递单的原因，成功后刷新列表', async () => {
@@ -325,7 +325,7 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     renderDirectory(baseApi({ companies, setCompanyStatus }), ['oem:company_manage', 'oem:account_manage'])
     const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
 
-    await user.click(within(row).getByRole('button', { name: '禁用' }))
+    await user.click(within(row).getByRole('button', { name: '停用' }))
     // The popconfirm is still animating in (pointer-events: none), so click it directly.
     fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
     expect(await screen.findByText(`停用失败：${backendReason}`)).toHaveAttribute('role', 'alert')
@@ -333,7 +333,7 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     expect(companies).toHaveBeenCalledTimes(1)
 
     shouldFail = false
-    await user.click(within(row).getByRole('button', { name: '禁用' }))
+    await user.click(within(row).getByRole('button', { name: '停用' }))
     const confirms = await screen.findAllByRole('button', { name: /确\s*定/ })
     fireEvent.click(confirms.at(-1)!)
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(2))

@@ -12,6 +12,7 @@ import LoadError from '../../components/LoadError'
 import MesMirrorPanel from './MesMirrorPanel'
 import './OutsourceSettingsPage.css'
 import ResizableTable from '../../components/ResizableTable'
+import StatusTag from '../../components/StatusTag'
 
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type Contact = Vendor['contacts'][number]
@@ -22,11 +23,8 @@ type TabKey = 'vendors' | 'types' | 'cc' | 'sync'
 
 const ACTIVE = 'ACTIVE'
 const DISABLED = 'DISABLED'
-const statusTag = (status: string) => <Tag color={status === ACTIVE ? 'green' : 'gray'}>{status === ACTIVE ? '启用' : '停用'}</Tag>
 const nextSortNo = (rows: { sortNo: number }[]) => Math.min(9999, Math.max(0, ...rows.map((row) => row.sortNo)) + 10)
 const typeLabel = (type: OutsourceType) => `${type.code}【${type.name}】`
-const columnHeaderProps = () => ({ scope: 'col' }) as unknown as ReturnType<NonNullable<TableColumnProps['onHeaderCell']>>
-const withColumnHeaders = <T extends TableColumnProps>(columns: T[]) => columns.map((column) => ({ ...column, onHeaderCell: columnHeaderProps }))
 const lengthRule = (label: string, max: number, required = true) => ({
   validator: (value: string | undefined, callback: (error?: string) => void) => {
     const length = Array.from(value?.trim() ?? '').length
@@ -122,7 +120,7 @@ function VendorsTab({ vendors, loading, reload }: { vendors: Vendor[]; loading: 
     await reload()
   })
 
-  const columns = withColumnHeaders([
+  const columns = [
     { title: '厂商', dataIndex: 'name', width: 160, ellipsis: true },
     {
       title: '联络邮箱', width: 360, render: (_: unknown, vendor: Vendor) => {
@@ -132,7 +130,7 @@ function VendorsTab({ vendors, loading, reload }: { vendors: Vendor[]; loading: 
       },
     },
     { title: '备注', dataIndex: 'remark', width: 200, ellipsis: true },
-    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, vendor: Vendor) => statusTag(vendor.status) },
+    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, vendor: Vendor) => <StatusTag status={vendor.status} /> },
     {
       title: '操作', width: 200, align: 'center' as const, render: (_: unknown, vendor: Vendor) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(vendor)}>编辑</Button>,
@@ -141,7 +139,7 @@ function VendorsTab({ vendors, loading, reload }: { vendors: Vendor[]; loading: 
           onClick={() => void toggle(vendor)}>{vendor.status === ACTIVE ? '停用' : '启用'}</Button>,
       ], 'outsource'),
     },
-  ])
+  ]
 
   return <>
     <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">
@@ -191,10 +189,10 @@ function ContactsDrawer({ vendor, onClose, reload }: { vendor: Vendor | null; on
     await reload()
   })
 
-  const columns = withColumnHeaders([
+  const columns = [
     { title: '邮箱', dataIndex: 'email', width: 240, ellipsis: true },
     { title: '姓名', dataIndex: 'name', width: 120, ellipsis: true },
-    { title: '状态', width: 80, align: 'center' as const, render: (_: unknown, contact: Contact) => statusTag(contact.status) },
+    { title: '状态', width: 80, align: 'center' as const, render: (_: unknown, contact: Contact) => <StatusTag status={contact.status} /> },
     {
       title: '操作', width: 130, align: 'center' as const, render: (_: unknown, contact: Contact) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(contact)}>编辑</Button>,
@@ -202,7 +200,7 @@ function ContactsDrawer({ vendor, onClose, reload }: { vendor: Vendor | null; on
           onClick={() => void toggle(contact)}>{contact.status === ACTIVE ? '停用' : '启用'}</Button>,
       ], 'single'),
     },
-  ])
+  ]
 
   return <Drawer width={640} title={vendor ? `${vendor.name} · 联络邮箱` : '联络邮箱'} visible={vendor !== null} footer={null}
     onCancel={onClose} unmountOnExit>
@@ -260,14 +258,14 @@ function TypesTab({ types, vendors, loading, reload }: {
     await reload()
   })
 
-  const columns = withColumnHeaders([
+  const columns = [
     { title: '外发类型', width: 260, ellipsis: true, render: (_: unknown, type: OutsourceType) => typeLabel(type) },
     {
       title: '可用厂商', width: 360, render: (_: unknown, type: OutsourceType) => type.vendorIds.length
         ? <Space wrap size={4}>{type.vendorIds.map((id) => <Tag key={id}>{vendorName.get(id) ?? id}</Tag>)}</Space>
         : <span className="outsource-muted">未设置，任何厂商都无法匹配</span>,
     },
-    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, type: OutsourceType) => statusTag(type.status) },
+    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, type: OutsourceType) => <StatusTag status={type.status} /> },
     {
       title: '操作', width: 200, align: 'center' as const, render: (_: unknown, type: OutsourceType) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(type)}>编辑</Button>,
@@ -276,7 +274,7 @@ function TypesTab({ types, vendors, loading, reload }: {
           onClick={() => void toggle(type)}>{type.status === ACTIVE ? '停用' : '启用'}</Button>,
       ], 'outsource'),
     },
-  ])
+  ]
   const mappingOptions = vendors.filter((vendor) => vendor.status === ACTIVE || mapping?.vendorIds.includes(vendor.id))
 
   return <>
@@ -337,11 +335,11 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
     setPicked(undefined)
   }
 
-  const columns = withColumnHeaders([
+  const columns = [
     { title: '姓名', dataIndex: 'realName', width: 140, ellipsis: true },
     { title: '账号', dataIndex: 'employeeNo', width: 140, ellipsis: true },
     { title: '邮箱', dataIndex: 'email', width: 260, ellipsis: true },
-    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, row: CcUser) => statusTag(row.status) },
+    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, row: CcUser) => <StatusTag status={row.status} /> },
     {
       title: '操作', width: 100, align: 'center' as const, render: (_: unknown, row: CcUser) => actionSlots([
         <Popconfirm key="remove" title={`将“${row.realName}”移出默认抄送？`}
@@ -350,7 +348,7 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
         </Popconfirm>,
       ], 'single'),
     },
-  ])
+  ]
 
   return <>
     <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">

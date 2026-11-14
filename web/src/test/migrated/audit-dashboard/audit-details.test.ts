@@ -77,8 +77,8 @@ describe('审计详情生产契约', () => {
       detail: { changes: [{ field: 'status', label: '状态', before: 'ACTIVE', after: 'DISABLED' }] },
     }
     expect(formatAuditValue('ACTIVE')).toBe('启用')
-    expect(formatAuditValue('DISABLED')).toBe('禁用')
-    expect(detailSummary(row)).toBe('状态：启用 → 禁用')
+    expect(formatAuditValue('DISABLED')).toBe('停用')
+    expect(detailSummary(row)).toBe('状态：启用 → 停用')
   })
 
   it('robot part audit metadata and completion dates use business labels', () => {

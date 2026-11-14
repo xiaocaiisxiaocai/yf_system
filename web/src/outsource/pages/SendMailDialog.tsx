@@ -3,6 +3,7 @@ import { Alert, Button, Collapse, Input, Message, Modal, Select, Space, Spin, Ta
 import http, { type QuietRequestConfig } from '../../api/client'
 import type { ApiResponses } from '../../api/types'
 import './OutsourceMailsPage.css'
+import { requestErrorMessage } from '../../api/requestError'
 
 type Preview = ApiResponses['POST /outsource/mails/preview']
 type Draft = Preview['mails'][number]
@@ -11,8 +12,6 @@ type CcUser = ApiResponses['GET /outsource/settings/cc-user-options'][number]
 interface Extra { users: CcUser[]; emails: string[] }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const serverMessage = (error: unknown) =>
-  (error as { response?: { data?: { message?: string } } })?.response?.data?.message
 
 function newRequestKey() {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -43,7 +42,7 @@ export default function SendMailDialog({ itemIds, onClose, onSent }: {
       const response = await http.post<ApiResponses['POST /outsource/mails/preview']>('/outsource/mails/preview', { itemIds: ids }, { quietClientError: true } as QuietRequestConfig)
       setPreview(response.data)
     } catch (failure) {
-      setError(serverMessage(failure) ?? '预览失败，请稍后重试')
+      setError(requestErrorMessage(failure, '预览失败，请稍后重试'))
     }
   }, [])
 

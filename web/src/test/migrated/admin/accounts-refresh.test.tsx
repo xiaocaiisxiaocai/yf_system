@@ -80,7 +80,7 @@ async function closeAccounts(user: ReturnType<typeof userEvent.setup>) {
 function accountStatusButton(employeeNo: string) {
   const row = screen.getByText(employeeNo).closest('tr')
   expect(row).not.toBeNull()
-  return within(row!).getByRole('button', { name: '禁用' })
+  return within(row!).getByRole('button', { name: '停用' })
 }
 
 async function confirmAccountDisable(user: ReturnType<typeof userEvent.setup>, employeeNo: string) {
@@ -195,8 +195,8 @@ describe('供应商账号刷新竞态', () => {
         const rowB = screen.getByText('b12').closest('tr')
         expect(rowA).not.toBeNull()
         expect(rowB).not.toBeNull()
-        expect(within(rowA!).getByText('禁用')).toBeVisible()
-        expect(within(rowB!).getByText('禁用')).toBeVisible()
+        expect(within(rowA!).getByText('停用')).toBeVisible()
+        expect(within(rowB!).getByText('停用')).toBeVisible()
         expect(within(rowA!).getByRole('button', { name: '启用' })).toBeVisible()
         expect(within(rowB!).getByRole('button', { name: '启用' })).toBeVisible()
       })

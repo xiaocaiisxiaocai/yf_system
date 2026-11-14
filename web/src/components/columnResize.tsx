@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import { Button, Checkbox, Popover } from '@arco-design/web-react'
-import { IconList } from '@arco-design/web-react/icon'
+import { IconSettings } from '@arco-design/web-react/icon'
 import type { ColumnLayoutSpec } from './tableColumnLayout'
 
 interface ColumnResizeActions {
@@ -11,7 +11,19 @@ interface ColumnResizeActions {
   limitsOf?: (key: string) => { min: number }
 }
 
+/** Column visibility state of one table; the picker sits in the header of its last shown column. */
+export interface ColumnPickerState {
+  specs: readonly ColumnLayoutSpec[]
+  hidden: readonly string[]
+  lastKey?: string
+  toggle: (key: string, shown: boolean) => void
+  showAll: () => void
+  hideOptional: () => void
+  reset: () => void
+}
+
 const ColumnResizeContext = createContext<ColumnResizeActions | null>(null)
+const ColumnPickerContext = createContext<ColumnPickerState | null>(null)
 
 export function ResizableHeaderCell({ className, column, children }: {
   className?: string
@@ -19,11 +31,15 @@ export function ResizableHeaderCell({ className, column, children }: {
   children?: ReactNode
 }) {
   const actions = useContext(ColumnResizeContext)
+  const picker = useContext(ColumnPickerContext)
   const columnKey = typeof column?.key === 'string' ? column.key : undefined
   const label = typeof column?.title === 'string' ? column.title : columnKey
+  const withPicker = Boolean(picker && columnKey && columnKey === picker.lastKey && picker.specs.some((spec) => !spec.locked))
   return (
-    <div className={className}>
+    <div className={withPicker ? `${className ?? ''} table-th-with-picker` : className}>
       {children}
+      {withPicker && picker && <ColumnVisibilityPicker specs={picker.specs} hidden={picker.hidden} onToggle={picker.toggle}
+        onShowAll={picker.showAll} onHideOptional={picker.hideOptional} onReset={picker.reset} />}
       {actions && columnKey && label && (
         <div
           role="separator"
@@ -60,11 +76,16 @@ export function ResizableHeaderCell({ className, column, children }: {
   )
 }
 
-export function ColumnResizeProvider({ actions, children }: { actions: ColumnResizeActions; children: ReactNode }) {
-  return <ColumnResizeContext.Provider value={actions}>{children}</ColumnResizeContext.Provider>
+/** Every resizable table goes through here: column widths, plus the "显示列" picker in the header when given. */
+export function ColumnResizeProvider({ actions, picker, children }: {
+  actions: ColumnResizeActions; picker?: ColumnPickerState; children: ReactNode
+}) {
+  return <ColumnResizeContext.Provider value={actions}>
+    <ColumnPickerContext.Provider value={picker ?? null}>{children}</ColumnPickerContext.Provider>
+  </ColumnResizeContext.Provider>
 }
 
-export function ColumnVisibilityPicker({ specs, hidden, onToggle, onShowAll, onHideOptional, onReset }: {
+function ColumnVisibilityPicker({ specs, hidden, onToggle, onShowAll, onHideOptional, onReset }: {
   specs: readonly ColumnLayoutSpec[]
   hidden: readonly string[]
   onToggle: (key: string, shown: boolean) => void
@@ -103,7 +124,8 @@ export function ColumnVisibilityPicker({ specs, hidden, onToggle, onShowAll, onH
         </div>
       )}
     >
-      <Button icon={<IconList />}>显示列</Button>
+      <Button className="table-column-picker-trigger" type="text" size="mini" icon={<IconSettings />} aria-label="显示列" title="显示列"
+        onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} />
     </Popover>
   )
 }

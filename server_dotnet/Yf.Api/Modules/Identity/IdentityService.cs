@@ -136,8 +136,8 @@ public sealed class IdentityService(
             }
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         }
-        if (user.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被禁用");
-        if (!await IsSupplierActiveAsync(context, user, ct)) throw ApiException.Unauthorized("所属供应商已被禁用");
+        if (user.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被停用");
+        if (!await IsSupplierActiveAsync(context, user, ct)) throw ApiException.Unauthorized("所属供应商已被停用");
         // Already exclusively locked by the FOR UPDATE read above, so nothing else
         // could have raced this revoke between that read and this write.
         row.Revoked = true;

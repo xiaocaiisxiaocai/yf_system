@@ -186,7 +186,7 @@ describe('ODM/OEMA 列表加载失败', () => {
     await user.click(within(drawer).getByRole('button', { name: '重试' }))
     expect(await within(drawer).findByText('OEM_0031')).toBeVisible()
 
-    await user.click(within(drawer).getByRole('button', { name: '禁用' }))
+    await user.click(within(drawer).getByRole('button', { name: '停用' }))
     expect(await within(drawer).findByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
     expect(within(drawer).getByText('OEM_0031')).toBeVisible()
   })

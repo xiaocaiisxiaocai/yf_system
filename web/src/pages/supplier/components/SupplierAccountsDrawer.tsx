@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag, Typography,
+  Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -13,6 +13,7 @@ import { passwordRule } from '../../../utils/password'
 import type { Account, RoleOption, Supplier } from './supplierTypes'
 import EnterSubmit from '../../../components/EnterSubmit'
 import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER } from '../../../utils/accountName'
+import StatusTag from '../../../components/StatusTag'
 
 const builtInSupplierRoleName = '供应商人员'
 
@@ -120,7 +121,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
     saveInFlight.current = true
     try {
       if (supplier?.status === 'DISABLED') {
-        Message.warning('供应商已禁用，不能新增账号')
+        Message.warning('供应商已停用，不能新增账号')
         return
       }
       const values = await form.validate().catch(() => null)
@@ -143,7 +144,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
     setTogglingAccountIds(activeIds)
     try {
       await http.put<ApiResponses['PUT /admin/supplier-accounts/{id}/status']>(`/admin/supplier-accounts/${account.id}/status`, { status: account.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
-      Message.success(account.status === 'ACTIVE' ? '账号已禁用' : '账号已启用')
+      Message.success(account.status === 'ACTIVE' ? '账号已停用' : '账号已启用')
       load()
     } catch {
       // 请求层已展示错误；保留当前账号快照并恢复按钮供用户重试。
@@ -245,7 +246,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
             dataIndex: 'status',
             width: 64,
             align: 'center' as const,
-            render: (value: string) => (value === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
+            render: (value: string) => <StatusTag status={value} />,
           },
           { title: '最近登录', dataIndex: 'lastLoginAt', width: 140, align: 'center' as const, render: fmtTime },
           {
@@ -257,7 +258,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
                 重置密码
               </Button>,
               account.status === 'ACTIVE' ? (
-                <Popconfirm key="status" title="禁用后该账号立即无法登录，确认禁用？" onOk={() => toggle(account)}>
+                <Popconfirm key="status" title="停用后该账号立即无法登录，确认停用？" onOk={() => toggle(account)}>
                   <Button
                     size="mini"
                     type="text"
@@ -265,7 +266,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
                     loading={togglingAccountIds.has(account.id)}
                     disabled={togglingAccountIds.has(account.id)}
                   >
-                    禁用
+                    停用
                   </Button>
                 </Popconfirm>
               ) : (

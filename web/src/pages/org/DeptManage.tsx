@@ -8,6 +8,7 @@ import './DeptManage.css'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
+import StatusTag from '../../components/StatusTag'
 
 type OrgKind = 'DIVISION' | 'DEPARTMENT' | 'SECTION'
 
@@ -103,7 +104,7 @@ function toTreeData(nodes: DeptNode[], flagMissingLeader: boolean): DeptTreeData
         <span className="org-view-tree-node">
           <span className="org-view-tree-name" title={n.name}>{n.name}</span>
           <span className="org-view-tree-kind">{ORG_KIND[kind].label}</span>
-          {n.status === 'DISABLED' && <Tag color="red" size="small">禁用</Tag>}
+          {n.status === 'DISABLED' && <Tag color="red" size="small">停用</Tag>}
           {flagMissingLeader && n.status === 'ACTIVE' && !n.leader && <Tag color="gold" size="small">未设负责人</Tag>}
         </span>
       ),
@@ -346,7 +347,7 @@ export default function DeptManage() {
   const toggle = async (d: DeptNode) => {
     const disabling = d.status === 'ACTIVE'
     await http.put<ApiResponses['PUT /admin/departments/{id}/status']>(`/admin/departments/${d.id}/status`, { status: disabling ? 'DISABLED' : 'ACTIVE' })
-    Message.success(`${ORG_KIND[nodeKind(d)].label}已${disabling ? '禁用' : '启用'}`)
+    Message.success(`${ORG_KIND[nodeKind(d)].label}已${disabling ? '停用' : '启用'}`)
     load()
   }
 
@@ -445,7 +446,7 @@ export default function DeptManage() {
                   <div className="org-view-identity-text">
                     <span className="org-view-detail-kind">{selectedMeta.label}</span>
                     <h2 className="org-view-name">{selected.name}</h2>
-                    <div className="org-view-detail-meta"><Tag color={selected.status === 'ACTIVE' ? 'green' : 'gray'}>{selected.status === 'ACTIVE' ? '启用' : '禁用'}</Tag><span>排序号 {selected.sortNo}</span></div>
+                    <div className="org-view-detail-meta"><StatusTag status={selected.status} /><span>排序号 {selected.sortNo}</span></div>
                   </div>
                 </div>
                 {canManage && (
@@ -482,7 +483,7 @@ export default function DeptManage() {
                             onOk: () => remove(target),
                           })
                         } else if (action === 'status') {
-                          const verb = target.status === 'ACTIVE' ? '禁用' : '启用'
+                          const verb = target.status === 'ACTIVE' ? '停用' : '启用'
                           Modal.confirm({
                             title: `${verb}${label}`,
                             content: `确认${verb}“${target.name}”？`,
@@ -491,7 +492,7 @@ export default function DeptManage() {
                           })
                         }
                       }}>
-                        <Menu.Item key="status">{selected.status === 'ACTIVE' ? `禁用${selectedMeta.label}` : `启用${selectedMeta.label}`}</Menu.Item>
+                        <Menu.Item key="status">{selected.status === 'ACTIVE' ? `停用${selectedMeta.label}` : `启用${selectedMeta.label}`}</Menu.Item>
                         {canDelete && <Menu.Item key="delete">{`删除${selectedMeta.label}`}</Menu.Item>}
                       </Menu>}
                     >
@@ -549,7 +550,7 @@ export default function DeptManage() {
             {loading ? <Spin /> : loadError ? <div className="org-view-tree-empty">组织加载失败<Button type="text" onClick={load}>重试</Button></div> : childNodes.length ? <div className="org-view-child-list">
               {childNodes.map((node) => <button type="button" className="org-view-child" key={node.id} onClick={() => navigateTo(node)}>
                 <span className="org-view-child-main"><strong>{node.name}</strong><small>{ORG_KIND[nodeKind(node)].label}{ORG_KIND[nodeKind(node)].childLabel ? ` · ${node.children?.length || 0} 个${ORG_KIND[nodeKind(node)].childLabel}` : ''}</small>{node.leader && <small className="org-view-child-leader">主管：{node.leader.realName}（{node.leader.employeeNo}）</small>}</span>
-                <span className={`org-view-child-status${node.status === 'DISABLED' ? ' is-disabled' : ''}`}>{node.status === 'ACTIVE' ? '启用' : '禁用'}</span><IconRight />
+                <span className={`org-view-child-status${node.status === 'DISABLED' ? ' is-disabled' : ''}`}>{node.status === 'ACTIVE' ? '启用' : '停用'}</span><IconRight />
               </button>)}
             </div> : <div className="org-view-tree-empty">{selected ? `暂无直属${selectedMeta?.childLabel}` : '暂无事业部'}</div>}
           </div>}

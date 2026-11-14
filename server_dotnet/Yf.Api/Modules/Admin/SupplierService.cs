@@ -188,7 +188,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
         await GateAsync(context, actor, "supplier:account", ct);
         var supplier = await FindAsync(context, supplierId, ct) ?? throw ApiException.NotFound();
-        if (supplier.Status != AccountStatuses.Active) throw ApiException.BadRequest("供应商已被禁用");
+        if (supplier.Status != AccountStatuses.Active) throw ApiException.BadRequest("供应商已被停用");
         var employeeNo = request.EmployeeNo.Trim();
         if (await context.Users.AnyAsync(x => x.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("账号已存在");
         var roleId = request.RoleId ?? await FallbackSupplierRoleIdAsync(context, ct);
@@ -300,7 +300,7 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
         if (roleId == 0) throw ApiException.BadRequest("请选择供应商角色");
         var role = await context.Roles.AsNoTracking().SingleOrDefaultAsync(x => x.Id == roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
         if (role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator) throw ApiException.BadRequest("系统管理员角色不能绑定供应商账号");
-        if (role.Status != AccountStatuses.Active) throw ApiException.BadRequest("不能绑定已禁用的角色");
+        if (role.Status != AccountStatuses.Active) throw ApiException.BadRequest("不能绑定已停用的角色");
         // A supplier binding confines the role to supplier permissions; a role internal staff hold must not be frozen that way.
         if (await context.UserRoles.AnyAsync(x => x.RoleId == roleId
                 && context.Users.Any(user => user.Id == x.UserId && user.UserType == UserTypes.Internal), ct))

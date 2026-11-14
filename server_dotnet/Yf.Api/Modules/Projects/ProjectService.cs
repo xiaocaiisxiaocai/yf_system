@@ -649,7 +649,7 @@ internal sealed partial class ProjectService(
         var status = await db.Suppliers.Where(supplier => supplier.Id == supplierId)
             .Select(supplier => supplier.Status).SingleOrDefaultAsync(ct);
         if (status is null) throw ApiException.BadRequest("供应商不存在");
-        if (status != AccountStatuses.Active) throw ApiException.BadRequest("供应商已被禁用");
+        if (status != AccountStatuses.Active) throw ApiException.BadRequest("供应商已被停用");
     }
 
     internal static async Task EnsureNameUniqueAsync(
@@ -782,7 +782,7 @@ internal sealed partial class ProjectService(
         {
             var supplierActive = await db.Suppliers.AnyAsync(supplier => supplier.Id == supplierId
                 && supplier.Status == AccountStatuses.Active, ct);
-            if (!supplierActive) throw ApiException.BadRequest("供应商已被禁用");
+            if (!supplierActive) throw ApiException.BadRequest("供应商已被停用");
             if (part.Status != AccountStatuses.Active) throw ApiException.BadRequest("Robot 料号已停用");
         }
         return input;

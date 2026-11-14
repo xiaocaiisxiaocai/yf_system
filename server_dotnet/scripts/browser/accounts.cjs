@@ -294,7 +294,7 @@ function flattenDepartments(nodes, result = []) {
       saved = await readUser(user.id);
       assert.equal(saved.employeeNo, userNo, 'user remains readable after password reset');
 
-      await userRow().getByRole('button', { name: '禁用', exact: true }).click();
+      await userRow().getByRole('button', { name: '停用', exact: true }).click();
       const disabled = await action(page, '/admin/users/' + user.id + '/status', 'PUT', confirmPop);
       assert.equal(disabled.status, 'DISABLED');
       await userRow().getByRole('button', { name: '启用', exact: true }).waitFor();
@@ -304,7 +304,7 @@ function flattenDepartments(nodes, result = []) {
       await userRow().getByRole('button', { name: '启用', exact: true }).click();
       const enabled = await action(page, '/admin/users/' + user.id + '/status', 'PUT', confirmPop);
       assert.equal(enabled.status, 'ACTIVE');
-      await userRow().getByRole('button', { name: '禁用', exact: true }).waitFor();
+      await userRow().getByRole('button', { name: '停用', exact: true }).waitFor();
       saved = await readUser(user.id);
       assert.equal(saved.status, 'ACTIVE');
     });
@@ -429,8 +429,8 @@ function flattenDepartments(nodes, result = []) {
 
     await record('供应商及账号启停边界持久化', async () => {
       let drawer = currentDrawer();
-      // 禁用账号需要先在确认框里确认；启用不需要确认。
-      await accountRow().getByRole('button', { name: '禁用', exact: true }).click();
+      // 停用账号需要先在确认框里确认；启用不需要确认。
+      await accountRow().getByRole('button', { name: '停用', exact: true }).click();
       let updated = await action(page, '/admin/supplier-accounts/' + account.id + '/status', 'PUT', confirmPop);
       assert.equal(updated.status, 'DISABLED');
       await accountRow().getByRole('button', { name: '启用', exact: true }).waitFor();
@@ -441,12 +441,12 @@ function flattenDepartments(nodes, result = []) {
         accountRow().getByRole('button', { name: '启用', exact: true }).click()
       ));
       assert.equal(updated.status, 'ACTIVE');
-      await accountRow().getByRole('button', { name: '禁用', exact: true }).waitFor();
+      await accountRow().getByRole('button', { name: '停用', exact: true }).waitFor();
       savedAccount = (await readAccounts(supplier.id)).find((item) => item.id === account.id);
       assert.equal(savedAccount.status, 'ACTIVE');
 
       await closeDrawer(drawer);
-      await supplierRow().getByRole('button', { name: '禁用', exact: true }).click();
+      await supplierRow().getByRole('button', { name: '停用', exact: true }).click();
       let savedSupplier = await action(page, '/admin/suppliers/' + supplier.id + '/status', 'PUT', confirmPop);
       assert.equal(savedSupplier.status, 'DISABLED');
       await supplierRow().getByRole('button', { name: '启用', exact: true }).waitFor();
@@ -462,7 +462,7 @@ function flattenDepartments(nodes, result = []) {
       await supplierRow().getByRole('button', { name: '启用', exact: true }).click();
       savedSupplier = await action(page, '/admin/suppliers/' + supplier.id + '/status', 'PUT', confirmPop);
       assert.equal(savedSupplier.status, 'ACTIVE');
-      await supplierRow().getByRole('button', { name: '禁用', exact: true }).waitFor();
+      await supplierRow().getByRole('button', { name: '停用', exact: true }).waitFor();
       savedSupplier = await readSupplier(supplier.id);
       assert.equal(savedSupplier.status, 'ACTIVE');
     });

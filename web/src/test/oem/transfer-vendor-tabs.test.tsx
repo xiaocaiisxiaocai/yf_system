@@ -129,7 +129,7 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
     await vi.waitFor(() => expect(lastQuery(api)).toMatchObject({ page: 1, departmentId: 1 }))
   })
 
-  it('停用的组织仍可选，但带“已禁用”标记', async () => {
+  it('停用的组织仍可选，但带“已停用”标记', async () => {
     const user = userEvent.setup()
     renderList('internal', '/oem/transfers', {
       departments: vi.fn().mockResolvedValue([
@@ -137,7 +137,7 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
       ]),
     })
     await user.click(await screen.findByLabelText('发送人组织'))
-    expect(await screen.findByText('旧研发部（已禁用）')).toBeInTheDocument()
+    expect(await screen.findByText('旧研发部（已停用）')).toBeInTheDocument()
     expect(screen.getByText('工程事业部')).toBeInTheDocument()
   })
 

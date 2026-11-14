@@ -17,6 +17,8 @@ import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
 import SendMailDialog from './SendMailDialog'
 import './OutsourceListPage.css'
 import ResizableTable from '../../components/ResizableTable'
+import { requestErrorMessage } from '../../api/requestError'
+import { saveBlob } from '../../utils/saveBlob'
 
 type Item = ApiResponses['GET /outsource/items']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
@@ -60,13 +62,10 @@ interface Filters {
   includeClosed: boolean
 }
 
-const columnHeaderProps = () => ({ scope: 'col' }) as unknown as ReturnType<NonNullable<TableColumnProps['onHeaderCell']>>
 const today = () => {
   const now = new Date(Date.now() + 8 * 3600_000)
   return now.toISOString().slice(0, 10).replaceAll('-', '')
 }
-const serverMessage = (error: unknown) =>
-  (error as { response?: { data?: { message?: string } } })?.response?.data?.message
 
 /** The outsourcing list (外协清单契约 → 页面). */
 export default function OutsourceListPage() {
@@ -182,11 +181,7 @@ export default function OutsourceListPage() {
         params, responseType: 'blob', timeout: 0,
       })
       const vendorName = filters.vendorId === undefined ? '' : `_${vendors.find((vendor) => vendor.id === filters.vendorId)?.name ?? ''}`
-      const url = URL.createObjectURL(response.data as Blob)
-      const anchor = document.createElement('a')
-      anchor.href = url; anchor.download = `外协清单${vendorName}_${today()}.xlsx`
-      document.body.appendChild(anchor); anchor.click(); anchor.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      saveBlob(response.data as Blob, `外协清单${vendorName}_${today()}.xlsx`)
     } catch {
       // 统一请求层提示
     } finally {
@@ -238,7 +233,7 @@ export default function OutsourceListPage() {
       })
       return { payload, preview }
     } catch (error) {
-      throw new Error(serverMessage(error) ?? '预览失败，请稍后重试')
+      throw new Error(requestErrorMessage(error, '预览失败，请稍后重试'))
     }
   }
   const commitImport = async (rows: ImportRow[]): Promise<ImportBatchOutcome> => {
@@ -289,7 +284,7 @@ export default function OutsourceListPage() {
       </Space>,
     },
   ]
-  const columns = rawColumns.map((column) => ({ ...column, onHeaderCell: columnHeaderProps }))
+  const columns = rawColumns
 
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外协清单</h1>
@@ -341,8 +336,7 @@ export default function OutsourceListPage() {
         noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}
         scroll={{ x: 2350, y: 'var(--page-table-scroll-y)' }}
         pagination={{
-          current: page, pageSize, total, showTotal: true, sizeCanChange: true, sizeOptions: [20, 50, 100],
-          onChange: (next, size) => { setPage(next); setPageSize(size) },
+          current: page, pageSize, total, onChange: (next, size) => { setPage(next); setPageSize(size) },
         }} />}
     <ItemHistoryDrawer item={history} onClose={() => setHistory(null)} />
     <EditDialog item={editing} vendors={vendors} types={types} onClose={() => setEditing(null)}

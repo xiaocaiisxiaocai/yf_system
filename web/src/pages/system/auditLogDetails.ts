@@ -180,7 +180,7 @@ const FIELD_LABELS: Record<string, string> = {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  ACTIVE: '启用', DISABLED: '禁用', DRAFT: '草稿', IN_PROGRESS: '进行中',
+  ACTIVE: '启用', DISABLED: '停用', DRAFT: '草稿', IN_PROGRESS: '进行中',
   PENDING_CONFIRMATION: '待验收', COMPLETED: '已完成', TERMINATED: '已终止',
   PENDING: '待处理', SUCCESS: '成功', FAILED: '失败', CANCELLED: '已取消',
 }
@@ -215,7 +215,7 @@ const SESSION_REVOKE_REASONS: Record<string, (detail: Record<string, unknown>) =
   ROTATED: () => '登录凭据已轮换',
   LOGOUT: () => '用户主动退出登录',
   PASSWORD_CHANGED: () => '修改密码后注销全部会话',
-  ADMIN: () => '管理员操作（禁用账号或重置密码）注销了会话',
+  ADMIN: () => '管理员操作（停用账号或重置密码）注销了会话',
   REPLAY: () => '检测到已作废的登录凭据被再次使用，已注销整组会话',
 }
 

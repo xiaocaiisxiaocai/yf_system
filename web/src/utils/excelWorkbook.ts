@@ -1,3 +1,5 @@
+import { saveBlob } from './saveBlob'
+
 export interface ExcelImportRow {
   rowNumber: number
   values: Record<string, string>
@@ -99,14 +101,5 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
 /** Build a simple macro-free workbook with text cells only. */
 export async function downloadExcelWorkbook(fileName: string, sheets: readonly ExcelWorkbookSheet[]): Promise<void> {
   const buffer = await createExcelWorkbook(sheets)
-  const url = URL.createObjectURL(new Blob([buffer], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  }))
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = fileName
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+  saveBlob(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName)
 }

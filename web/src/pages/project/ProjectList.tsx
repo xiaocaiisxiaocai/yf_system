@@ -6,7 +6,8 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
-import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
+import { ColumnResizeProvider } from '../../components/columnResize'
+import { TABLE_PAGINATION } from '../../components/tablePagination'
 import type { ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import { useAuth } from '../../store/auth'
@@ -241,14 +242,6 @@ export default function ProjectList() {
           <Checkbox checked={overdue} onChange={(checked) => applyQuery({ overdue: checked ? 1 : undefined, page: 1 })}>仅看逾期</Checkbox>
         </Space>
         <Space>
-          <ColumnVisibilityPicker
-            specs={PROJECT_LIST_COLUMNS}
-            hidden={columnLayout.hidden}
-            onToggle={columnLayout.toggle}
-            onShowAll={columnLayout.showAll}
-            onHideOptional={columnLayout.hideOptional}
-            onReset={columnLayout.reset}
-          />
           {supplierOptionsError && <Button size="small" onClick={loadSupplierOptions}>重试加载供应商</Button>}
           {isInternal && hasPerm('project:create') && <Button type="primary" icon={<IconPlus />} onClick={openCreate}>新建项目</Button>}
         </Space>
@@ -259,9 +252,9 @@ export default function ProjectList() {
           <Typography.Text type="warning">列表更新失败，当前显示上次获取的数据。</Typography.Text>
           <Button type="text" size="small" onClick={load}>重新获取</Button>
         </div>}
-        <ColumnResizeProvider actions={columnLayout.actions}>
+        <ColumnResizeProvider actions={columnLayout.actions} picker={columnLayout.picker}>
           <div ref={tableHostRef} className="page-table-host">
-            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={columnLayout.components} data={data.list} scroll={{ x: columnLayout.scrollX, y: 'var(--page-table-scroll-y)' }} pagination={{ total: data.total, current: page, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
+            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={columnLayout.components} data={data.list} scroll={{ x: columnLayout.scrollX, y: 'var(--page-table-scroll-y)' }} pagination={{ ...TABLE_PAGINATION, total: data.total, current: page, pageSize, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
           </div>
         </ColumnResizeProvider>
         </>}

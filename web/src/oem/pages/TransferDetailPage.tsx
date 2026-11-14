@@ -20,7 +20,7 @@ import { ApprovalTag, FileStatusTag, LifecycleTag } from '../components/StatusTa
 import { transferClosedNotice } from '../components/statusLabels'
 import Counterpart from '../components/Counterpart'
 import { useCan, useOem } from '../OemContext'
-import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
+import { ColumnResizeProvider } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 
@@ -141,14 +141,12 @@ function ApprovalProgress({ approval, status }: { approval: ApprovalInfo; status
   )
 }
 
-function TransferFilesTable({ files, approval, approvalStatus, canEdit, toolbarHost, onDownload, onPreview, onRemove }: {
+function TransferFilesTable({ files, approval, approvalStatus, canEdit, onDownload, onPreview, onRemove }: {
   files: TransferFile[]
   /** 内部账号看得到：审批进度放在附件表的最后一列（整张传递单一份，合并成一格）。 */
   approval?: ApprovalInfo | null
   approvalStatus?: ApprovalStatus | null
   canEdit: boolean
-  /** 附件卡标题右侧的挂载点：“显示列”放在那里，不再单占一行。 */
-  toolbarHost: HTMLElement | null
   onDownload: (file: TransferFile) => void
   onPreview: (file: TransferFile) => void
   onRemove: (file: TransferFile) => Promise<void>
@@ -206,18 +204,7 @@ function TransferFilesTable({ files, approval, approvalStatus, canEdit, toolbarH
   const table = useAdjustableColumns(fileTableId, userId, fileColumnSpecs, columns, 'name', tableHostRef, true, true)
   return (
     <>
-      {toolbarHost && createPortal(
-        <ColumnVisibilityPicker
-          specs={fileColumnSpecs}
-          hidden={table.hidden}
-          onToggle={table.toggle}
-          onShowAll={table.showAll}
-          onHideOptional={table.hideOptional}
-          onReset={table.reset}
-        />,
-        toolbarHost,
-      )}
-      <ColumnResizeProvider actions={table.actions}>
+      <ColumnResizeProvider actions={table.actions} picker={table.picker}>
         <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
             className={`page-table ${table.tableClassName}`}
@@ -468,7 +455,6 @@ export default function TransferDetailPage() {
             approval={realm === 'internal' ? detail.approval : null}
             approvalStatus={summary.approvalStatus}
             canEdit={caps.canEdit}
-            toolbarHost={filesToolbar}
             onDownload={(file) => void download(file).catch(() => undefined)}
             onPreview={(file) => void preview(file)}
             onRemove={removeFile}

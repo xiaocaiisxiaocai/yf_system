@@ -51,8 +51,8 @@ public sealed partial class OemIdentityExtension(IDbContextFactory<YfDbContext> 
                 account.OemCompanyId, CompanyStatus = company.Status,
             })
             .SingleOrDefaultAsync(ct) ?? throw ApiException.Unauthorized("账号不存在");
-        if (row.Status != OemStatus.Active) throw ApiException.Unauthorized("账号已被禁用");
-        if (row.CompanyStatus != OemStatus.Active) throw ApiException.Unauthorized("所属厂商已被禁用");
+        if (row.Status != OemStatus.Active) throw ApiException.Unauthorized("账号已被停用");
+        if (row.CompanyStatus != OemStatus.Active) throw ApiException.Unauthorized("所属厂商已被停用");
         if (row.MustChangePassword && !PasswordPendingPaths.Contains(NormalizedPath(context.Request)))
             throw new ApiException(403, 40303, "请先修改初始密码");
         context.Items[typeof(OemAccountActor)] = new OemAccountActor(row.Id, row.EmployeeNo, row.OemCompanyId, claims.SessionId);

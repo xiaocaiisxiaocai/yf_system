@@ -117,7 +117,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await EnsureProjectListRemovalSafeAsync(context, id, ct);
             var count = await context.Users.Join(context.UserRoles, u => u.Id, ur => ur.UserId, (u, ur) => new { u, ur })
                 .CountAsync(x => x.ur.RoleId == id && x.u.Status == AccountStatuses.Active, ct);
-            if (count > 0) throw ApiException.BadRequest($"该角色仍绑定 {count} 个启用用户，请先为这些用户更换角色或禁用账号");
+            if (count > 0) throw ApiException.BadRequest($"该角色仍绑定 {count} 个启用用户，请先为这些用户更换角色或停用账号");
         }
         await context.Roles.Where(r => r.Id == id).ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, status), ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.Transaction(), actor.Id, "ROLE_STATUS", "role", id, new

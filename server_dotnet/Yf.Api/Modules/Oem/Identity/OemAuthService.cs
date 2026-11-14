@@ -143,9 +143,9 @@ public sealed class OemAuthService(
             }
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         }
-        if (account.Status != OemStatus.Active) throw ApiException.Unauthorized("账号已被禁用");
+        if (account.Status != OemStatus.Active) throw ApiException.Unauthorized("账号已被停用");
         if (!await context.OemCompanies.AnyAsync(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active, ct))
-            throw ApiException.Unauthorized("所属厂商已被禁用");
+            throw ApiException.Unauthorized("所属厂商已被停用");
         row.Revoked = true;
         row.RevokeReason = RefreshRevokeReasons.Rotated;
         await context.SaveChangesAsync(ct);

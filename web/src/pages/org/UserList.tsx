@@ -21,6 +21,7 @@ import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../components/ExcelImportDialog'
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../utils/excelWorkbook'
 import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../utils/accountName'
+import StatusTag from '../../components/StatusTag'
 
 interface UserRow {
   id: number
@@ -379,7 +380,7 @@ export default function UserList() {
 
   const toggle = async (u: UserRow) => {
     await statusMutation.mutateAsync(u)
-    Message.success(u.status === 'ACTIVE' ? '用户已禁用' : '用户已启用')
+    Message.success(u.status === 'ACTIVE' ? '用户已停用' : '用户已启用')
   }
 
   const remove = async (u: UserRow) => {
@@ -475,7 +476,7 @@ export default function UserList() {
             }}
           >
             <Select.Option value="ACTIVE">启用</Select.Option>
-            <Select.Option value="DISABLED">禁用</Select.Option>
+            <Select.Option value="DISABLED">停用</Select.Option>
           </Select>
         </Space>
         <Space>
@@ -538,7 +539,7 @@ export default function UserList() {
             dataIndex: 'status',
             width: 72,
             align: 'center' as const,
-            render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
+            render: (v: string) => <StatusTag status={v} />,
           },
           { title: '最近登录', dataIndex: 'lastLoginAt', width: 160, render: fmtTime },
           {
@@ -567,14 +568,14 @@ export default function UserList() {
                   重置密码
                 </Button>,
                 r.employeeNo !== 'admin' && r.id !== me?.id && (
-                  <Popconfirm key="status" title={r.status === 'ACTIVE' ? '禁用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
+                  <Popconfirm key="status" title={r.status === 'ACTIVE' ? '停用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
                     <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
-                      {r.status === 'ACTIVE' ? '禁用' : '启用'}
+                      {r.status === 'ACTIVE' ? '停用' : '启用'}
                     </Button>
                   </Popconfirm>
                 ),
                 canDelete && r.employeeNo !== 'admin' && r.id !== me?.id && (
-                  <Popconfirm key="delete" title="删除后不可恢复；存在历史业务记录时请改为禁用。确认删除该用户？" onOk={() => remove(r)}>
+                  <Popconfirm key="delete" title="删除后不可恢复；存在历史业务记录时请改为停用。确认删除该用户？" onOk={() => remove(r)}>
                     <Button size="mini" type="text" status="danger">删除</Button>
                   </Popconfirm>
                 ),
@@ -585,8 +586,6 @@ export default function UserList() {
             total: data.total,
             current: page,
             pageSize,
-            showTotal: true,
-            sizeCanChange: true,
             onChange: (p, ps) => {
               const sameQuery = page === p && pageSize === ps
               setPage(p)
@@ -654,7 +653,7 @@ export default function UserList() {
               <Select showSearch placeholder="选择角色" loading={optionsLoading} disabled={optionsError}>
                 {editingRoleUnavailable && (
                   <Select.Option key={editingRoleId} value={editingRoleId} disabled>
-                    {editing?.roleName || `角色 #${editingRoleId}`}（已禁用）
+                    {editing?.roleName || `角色 #${editingRoleId}`}（已停用）
                   </Select.Option>
                 )}
                 {roles.map((r) => (

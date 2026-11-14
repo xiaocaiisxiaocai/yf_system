@@ -43,6 +43,7 @@ import './CompaniesPage.css'
 import EnterSubmit from '../../../components/EnterSubmit'
 import ToolbarMenuButton from '../../../components/ToolbarMenuButton'
 import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../../utils/accountName'
+import StatusTag from '../../../components/StatusTag'
 
 function EllipsisText({ value }: { value: string | null | undefined }) {
   const text = value || '-'
@@ -177,7 +178,7 @@ function InternalRecipientsDrawer({ open, onClose }: InternalRecipientsDrawerPro
       </Modal>
       <ResizableTable tableId="oem-internal-recipients" rowKey="userId" size="small" loading={loading} data={shown}
         scroll={{ y: 'calc(100vh - 330px)' }}
-        pagination={{ total: shown.length, current: page, pageSize, showTotal: true, sizeCanChange: true, sizeOptions: [20, 50, 100],
+        pagination={{ total: shown.length, current: page, pageSize, 
           onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
         noDataElement={<Empty description="没有具备 ODM/OEMA 查看和下载权限的人员" />}
         columns={[
@@ -274,7 +275,7 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
           { title: '姓名', dataIndex: 'name', width: 150 },
           { title: '邮箱', dataIndex: 'email', width: 220, render: (value: string | null) => value || '-' },
           { title: '排序', dataIndex: 'sortNo', width: 64, align: 'center' as const },
-          { title: '状态', width: 64, align: 'center' as const, render: (_: unknown, row: CompanyContact) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
+          { title: '状态', width: 64, align: 'center' as const, render: (_: unknown, row: CompanyContact) => <StatusTag status={row.status} /> },
           { title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: CompanyContact) => <Space size={4}>
             <Button size="mini" type="text" onClick={() => { setEditingContact(row); form.setFieldsValue(row); setAdding(true) }}>编辑</Button>
             <Popconfirm title={row.status === 'ACTIVE' ? '确认停用该联络人？' : '确认启用该联络人？'} onOk={async () => { await api.setContactStatus(row.id, row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'); await load(); onChanged() }}>
@@ -425,7 +426,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       key: 'status', title: '状态',
       render: (_: unknown, row: VendorAccount) => (
         <Space size={4}>
-          <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'} size="small">{row.status === 'ACTIVE' ? '启用' : '禁用'}</Tag>
+          <StatusTag status={row.status} size="small" />
         </Space>
       ),
     },
@@ -437,7 +438,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
           <Button size="mini" type="text" onClick={() => reset(row)}>重置密码</Button>
           <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}
             onClick={() => void toggleAccountStatus(row)}>
-            {row.status === 'ACTIVE' ? '禁用' : '启用'}
+            {row.status === 'ACTIVE' ? '停用' : '启用'}
           </Button>
           {can.deleteAccounts && (
             <Button
@@ -900,7 +901,7 @@ export default function CompaniesPage() {
 
   const companyColumns = [
     { key: 'name', title: '名称', dataIndex: 'name', width: 240, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
-    { key: 'status', title: '状态', width: 70, align: 'center' as const, render: (_: unknown, row: Company) => <Tag color={row.status === 'ACTIVE' ? 'green' : 'gray'}>{row.status === 'ACTIVE' ? '启用' : '停用'}</Tag> },
+    { key: 'status', title: '状态', width: 70, align: 'center' as const, render: (_: unknown, row: Company) => <StatusTag status={row.status} /> },
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
     {
       key: 'actions', title: '操作', width: 450, fixed: 'right' as const,
@@ -912,7 +913,7 @@ export default function CompaniesPage() {
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
           {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
             onOk={() => toggleCompanyStatus(row)}>
-            <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}>{row.status === 'ACTIVE' ? '禁用' : '启用'}</Button>
+            <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
           </Popconfirm>}
           {can.manageCompanies && can.deleteCompanies && (
             <Button
@@ -938,7 +939,7 @@ export default function CompaniesPage() {
         <Space>
           <Input.Search allowClear placeholder="厂商名称" style={{ width: 260 }} onSearch={(value) => { setKeyword(value); setPage(1) }} onClear={() => { setKeyword(''); setPage(1) }} />
           <Select allowClear placeholder="全部状态" style={{ width: 110 }} value={status} onChange={(value) => { setStatus(value); setPage(1) }}>
-            <Select.Option value="ACTIVE">启用</Select.Option><Select.Option value="DISABLED">禁用</Select.Option>
+            <Select.Option value="ACTIVE">启用</Select.Option><Select.Option value="DISABLED">停用</Select.Option>
           </Select>
         </Space>
         <Space wrap>
@@ -970,7 +971,7 @@ export default function CompaniesPage() {
             data={rows}
             columns={companyColumns}
             scroll={{ x: 790, y: 'var(--page-table-scroll-y)' }}
-            pagination={{ current: page, total, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
+            pagination={{ current: page, total, pageSize, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
 
       <ExcelImportDialog<OemCompanyImportPayload>

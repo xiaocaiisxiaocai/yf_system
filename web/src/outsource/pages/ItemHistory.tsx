@@ -3,6 +3,7 @@ import { Drawer, Empty, Popover, Spin, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
+import LoadError from '../../components/LoadError'
 import ResizableTable from '../../components/ResizableTable'
 
 type Change = ApiResponses['GET /outsource/items/{id}/changes'][number]
@@ -16,6 +17,7 @@ const SOURCE: Record<string, { label: string; color: string }> = {
 function useChanges(itemId: number | null) {
   const [changes, setChanges] = useState<Change[] | null>(null)
   const [error, setError] = useState(false)
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     if (itemId === null) return
     let active = true
@@ -30,13 +32,13 @@ function useChanges(itemId: number | null) {
       }
     })
     return () => { active = false }
-  }, [itemId])
-  return { changes, error }
+  }, [itemId, attempt])
+  return { changes, error, retry: () => setAttempt((value) => value + 1) }
 }
 
 /** Every recorded change of one item: IPMS syncs and purchasing edits, newest first. */
 export function ItemHistoryDrawer({ item, onClose }: { item: { id: number; workOrderNo: string } | null; onClose: () => void }) {
-  const { changes, error } = useChanges(item?.id ?? null)
+  const { changes, error, retry } = useChanges(item?.id ?? null)
   const columns: TableColumnProps<Change>[] = [
     { title: '时间', width: 160, render: (_, change) => fmtTime(change.changedAt) },
     { title: '字段', dataIndex: 'label', width: 100 },
@@ -50,7 +52,7 @@ export function ItemHistoryDrawer({ item, onClose }: { item: { id: number; workO
   ]
   return <Drawer width={820} title={item ? `工令 ${item.workOrderNo} · 变更履历` : '变更履历'} visible={item !== null}
     footer={null} onCancel={onClose} unmountOnExit>
-    {error ? <Empty description="履历加载失败" /> : <ResizableTable<Change> tableId="outsource-item-history" rowKey="id" loading={changes === null} data={changes ?? []}
+    {error ? <LoadError message="履历加载失败" onRetry={retry} /> : <ResizableTable<Change> tableId="outsource-item-history" rowKey="id" loading={changes === null} data={changes ?? []}
       columns={columns} pagination={false} scroll={{ x: 760 }} noDataElement={<Empty description="暂无变更" />} />}
   </Drawer>
 }

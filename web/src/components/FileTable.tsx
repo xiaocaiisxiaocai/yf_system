@@ -390,7 +390,6 @@ export default function FileTable({
             current: page,
             pageSize,
             size: compact ? 'small' : 'default',
-            showTotal: true,
             onChange: (p, ps) => {
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(p)

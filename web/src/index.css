@@ -436,6 +436,9 @@ html, body, #root {
 .table-col-resize:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: -2px; }
 body.table-col-resizing,
 body.table-col-resizing * { cursor: col-resize !important; user-select: none !important; }
+.table-th-with-picker { position: relative; padding-right: 30px !important; }
+.table-column-picker-trigger.arco-btn { position: absolute; top: 50%; right: 8px; z-index: 4; transform: translateY(-50%); color: var(--color-text-3); }
+.table-column-picker-trigger.arco-btn:hover { color: rgb(var(--primary-6)); }
 .table-column-picker { display: flex; flex-direction: column; gap: 8px; width: 220px; }
 .table-column-picker-list {
   display: flex;

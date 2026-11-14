@@ -8,6 +8,7 @@ import { useAuth } from '../../store/auth'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import './OutsourceMailsPage.css'
 import ResizableTable from '../../components/ResizableTable'
+import { saveBlob } from '../../utils/saveBlob'
 
 type Mail = ApiResponses['GET /outsource/mails']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
@@ -42,6 +43,7 @@ export default function OutsourceMailsPage() {
   const [mails, setMails] = useState<Mail[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [vendorId, setVendorId] = useState<number>()
   const [status, setStatus] = useState<string>()
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -55,7 +57,7 @@ export default function OutsourceMailsPage() {
     if (!quiet) { setLoading(true); setError(false) }
     try {
       const response = await http.get<ApiResponses['GET /outsource/mails']>('/outsource/mails', {
-        params: { page, pageSize: 20, vendorId, status }, quietNetworkError: quiet,
+        params: { page, pageSize, vendorId, status }, quietNetworkError: quiet,
       } as QuietRequestConfig)
       if (seq !== sequence.current) return
       setMails(response.data.list); setTotal(Number(response.data.total))
@@ -64,7 +66,7 @@ export default function OutsourceMailsPage() {
     } finally {
       if (seq === sequence.current && !quiet) setLoading(false)
     }
-  }, [page, vendorId, status])
+  }, [page, pageSize, vendorId, status])
 
   useEffect(() => {
     let active = true
@@ -104,11 +106,7 @@ export default function OutsourceMailsPage() {
     setBusy(mail.id)
     try {
       const response = await http.get<ApiResponses['GET /outsource/mails/{id}/attachment']>(`/outsource/mails/${mail.id}/attachment`, { responseType: 'blob' })
-      const url = URL.createObjectURL(response.data as Blob)
-      const anchor = document.createElement('a')
-      anchor.href = url; anchor.download = mail.attachmentName ?? '外发清单.xlsx'
-      document.body.appendChild(anchor); anchor.click(); anchor.remove()
-      window.setTimeout(() => URL.revokeObjectURL(url), 0)
+      saveBlob(response.data as Blob, mail.attachmentName ?? '外发清单.xlsx')
     } catch { /* 统一请求层提示 */ } finally { setBusy(null) }
   }
 
@@ -154,6 +152,6 @@ export default function OutsourceMailsPage() {
     {error ? <LoadError message="发送记录加载失败" onRetry={() => void load()} />
       : <ResizableTable<Mail> tableId="outsource-mails" className="page-table" rowKey="id" loading={loading} data={mails} columns={columns}
         noDataElement={loading ? <span /> : <Empty description="暂无发送记录" />} scroll={{ x: 1630, y: 'var(--page-table-scroll-y)' }}
-        pagination={{ current: page, pageSize: 20, total, showTotal: true, onChange: setPage }} />}
+        pagination={{ current: page, pageSize, total, onChange: (next, size) => { setPage(size === pageSize ? next : 1); setPageSize(size) } }} />}
   </Card>
 }

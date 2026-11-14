@@ -267,7 +267,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         await AccessService.RequirePermissionAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, "dept:delete", ct);
         var row = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (await context.Departments.AnyAsync(d => d.ParentId == id, ct)) throw ApiException.BadRequest("请先删除下级组织节点");
-        if (await context.Users.AnyAsync(u => u.DepartmentId == id, ct)) throw ApiException.BadRequest("该组织仍有用户，请先调整用户归属或禁用组织");
+        if (await context.Users.AnyAsync(u => u.DepartmentId == id, ct)) throw ApiException.BadRequest("该组织仍有用户，请先调整用户归属或停用组织");
         // oem_flow_template_scopes.department_id has no FK, so check it explicitly instead of orphaning the binding.
         if (await context.OemFlowTemplateScopes.AnyAsync(scope => scope.DepartmentId == id, ct))
             throw ApiException.BadRequest("该组织仍绑定 ODM/OEMA 审批模板，请先在审批模板中解除绑定");
@@ -286,7 +286,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             var row = await context.Departments.AsNoTracking().Where(d => d.Id == currentId)
                 .Select(d => new { d.ParentId, d.Status }).SingleOrDefaultAsync(ct);
             if (row is null) throw ApiException.BadRequest(currentId == id ? "组织不存在" : "组织层级无效");
-            if (row.Status != AccountStatuses.Active) throw ApiException.BadRequest("组织已被禁用");
+            if (row.Status != AccountStatuses.Active) throw ApiException.BadRequest("组织已被停用");
             current = row.ParentId;
         }
     }

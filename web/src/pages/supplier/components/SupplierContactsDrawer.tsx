@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Space, Tag, Typography,
+  Button, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Space, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -10,6 +10,7 @@ import { type ApiResponses, type SupplierContact } from '../../../api/types'
 import { textLengthRule } from '../../../utils/textRules'
 import type { Supplier } from './supplierTypes'
 import EnterSubmit from '../../../components/EnterSubmit'
+import StatusTag from '../../../components/StatusTag'
 
 interface SupplierContactsDrawerProps {
   supplier: Supplier | null
@@ -147,7 +148,7 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
             dataIndex: 'status',
             width: 64,
             align: 'center' as const,
-            render: (value: string) => (value === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">停用</Tag>),
+            render: (value: string) => <StatusTag status={value} />,
           },
           {
             title: '操作',

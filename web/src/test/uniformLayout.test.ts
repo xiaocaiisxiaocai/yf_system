@@ -25,6 +25,21 @@ describe('全站统一的表格与侧边栏', () => {
     expect(offenders).toEqual([])
   })
 
+  it('自己接 useAdjustableColumns 的表格同样有表头「显示列」和统一分页', () => {
+    const offenders = files.filter(({ path, text }) => path !== 'components/ResizableTable.tsx' && (
+      /<ColumnResizeProvider(?![^>]*\bpicker=)[^>]*>/.test(text)
+      || (/useAdjustableColumns\(/.test(text) && /pagination=\{\{/.test(text) && !/pagination=\{\{ \.\.\.TABLE_PAGINATION/.test(text))
+    )).map(({ path }) => path)
+    expect(offenders).toEqual([])
+  })
+
+  it('状态措辞统一为「启用 / 停用」，界面文字不再出现「禁用」', () => {
+    const offenders = files.flatMap(({ path, text }) => text.split('\n')
+      .filter((line) => line.includes('禁用') && !/^\s*(\/\/|\/\*|\*)/.test(line))
+      .map((line) => `${path}: ${line.trim()}`))
+    expect(offenders).toEqual([])
+  })
+
   it('二级侧边栏都用可折叠的 NavSider，不另写 Sider', () => {
     const offenders = files.filter(({ path, text }) => path !== 'layouts/NavSider.tsx' && /<Sider\b|Layout\.Sider/.test(text))
       .map(({ path }) => path)

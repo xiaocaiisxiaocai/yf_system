@@ -412,7 +412,7 @@ describe('组织、角色与权限行为', () => {
     const row = (await screen.findByText('供应商')).closest('tr')!
     expect(within(row).getByRole('button', { name: '账号管理' })).toBeVisible()
     expect(within(row).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
-    expect(within(row).queryByRole('button', { name: '禁用' })).not.toBeInTheDocument()
+    expect(within(row).queryByRole('button', { name: '停用' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新增供应商' })).not.toBeInTheDocument()
   })
 
@@ -484,9 +484,9 @@ describe('组织、角色与权限行为', () => {
     const roleLabel = screen.getAllByText('角色').find((element) => element.tagName === 'LABEL')!
     const roleSelect = roleLabel.closest('.arco-form-item')!.querySelector('[role="combobox"]')!
     fireEvent.click(roleSelect)
-    const retired = (await screen.findAllByText(/历史角色（已禁用）/)).find((element) => element.closest('li'))!
+    const retired = (await screen.findAllByText(/历史角色（已停用）/)).find((element) => element.closest('li'))!
     expect(retired.closest('li')).toHaveClass('arco-select-option-disabled')
-    expect(screen.queryByText(/另一个已禁用角色/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/另一个已停用角色/)).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '保存用户' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/users/9', expect.objectContaining({ roleId: 41 })))
@@ -509,11 +509,11 @@ describe('组织、角色与权限行为', () => {
       if (url === '/departments' || url === '/admin/user-role-options') return { data: [] }
       return { data: page() }
     })
-    fireEvent.click(within(row).getByRole('button', { name: '禁用' }))
+    fireEvent.click(within(row).getByRole('button', { name: '停用' }))
     fireEvent.click(await screen.findByRole('button', { name: '确定' }))
 
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/users/9/status', { status: 'DISABLED' }))
-    expect(await screen.findByText('用户已禁用')).toBeInTheDocument()
+    expect(await screen.findByText('用户已停用')).toBeInTheDocument()
     await waitFor(() => expect(userListCalls).toBeGreaterThan(0))
     expect(await screen.findByText('当前显示上次加载的数据')).toBeVisible()
     expect(screen.getByText('在职用户')).toBeInTheDocument()
@@ -548,8 +548,8 @@ describe('组织、角色与权限行为', () => {
     render(<UserList />)
     const self = (await screen.findByText('在职用户')).closest('tr')!
     const other = screen.getByText('其他用户').closest('tr')!
-    expect(within(self).queryByRole('button', { name: '禁用' })).not.toBeInTheDocument()
-    expect(within(other).getByRole('button', { name: '禁用' })).toBeVisible()
+    expect(within(self).queryByRole('button', { name: '停用' })).not.toBeInTheDocument()
+    expect(within(other).getByRole('button', { name: '停用' })).toBeVisible()
   })
 
   it('confirms disabling a division and reports which kind changed', async () => {
@@ -559,11 +559,11 @@ describe('组织、角色与权限行为', () => {
     render(<DeptManage />)
     await user.click((await screen.findAllByText('事业一部'))[0])
     fireEvent.click(moreTrigger())
-    const disableItem = await screen.findByText('禁用事业部')
+    const disableItem = await screen.findByText('停用事业部')
     fireEvent.click(disableItem.closest('.arco-dropdown-menu-item') ?? disableItem)
-    fireEvent.click(await screen.findByRole('button', { name: '确认禁用' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确认停用' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/departments/1/status', { status: 'DISABLED' }))
-    expect(await screen.findByText('事业部已禁用')).toBeInTheDocument()
+    expect(await screen.findByText('事业部已停用')).toBeInTheDocument()
   })
 
   it('blocks disabling a role that still has users and confirms one that does not', async () => {
@@ -571,18 +571,18 @@ describe('组织、角色与权限行为', () => {
     mocks.roles = [{ id: 3, name: '在用角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [], assignedUserCount: 2, canManage: true }]
     render(<RoleList />)
     const blocked = (await screen.findByText('在用角色')).closest('tr')!
-    const blockedButton = within(blocked).getByRole('button', { name: '禁用' })
+    const blockedButton = within(blocked).getByRole('button', { name: '停用' })
     expect(blockedButton).toBeDisabled()
     fireEvent.mouseEnter(blockedButton.parentElement!)
-    expect(await screen.findByText('该角色绑定 2 个用户；启用用户未更换角色前不能禁用。')).toBeInTheDocument()
+    expect(await screen.findByText('该角色绑定 2 个用户；启用用户未更换角色前不能停用。')).toBeInTheDocument()
     expect(mocks.put).not.toHaveBeenCalled()
 
     mocks.roles = [{ id: 4, name: '空角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [], assignedUserCount: 0, canManage: true }]
     render(<RoleList />)
     const empty = (await screen.findByText('空角色')).closest('tr')!
-    fireEvent.click(within(empty).getByRole('button', { name: '禁用' }))
+    fireEvent.click(within(empty).getByRole('button', { name: '停用' }))
     fireEvent.click(await screen.findByRole('button', { name: '确定' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/roles/4/status', { status: 'DISABLED' }))
-    expect(await screen.findByText('角色已禁用')).toBeInTheDocument()
+    expect(await screen.findByText('角色已停用')).toBeInTheDocument()
   })
 })

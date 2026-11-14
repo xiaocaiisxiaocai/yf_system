@@ -9,6 +9,7 @@ import type { DepartmentNode, FlowNode, FlowNodeInput, FlowTemplate, RoutingPrev
 import { useOem } from '../../OemContext'
 import { useHubSwitcher } from '../hubSwitcherContext'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
+import StatusTag from '../../../components/StatusTag'
 
 const SOURCES = [
   { value: 'DIRECT_LEADER', label: '上级主管' },
@@ -266,7 +267,7 @@ export default function FlowTemplatesPage() {
           {templates.map((template) => (
             <Card key={template.id} size="small" hoverable onClick={() => setEditing(template)} title={
               <Space>{template.name}{template.isDefault && <Tag color="arcoblue">默认</Tag>}
-                {template.status === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag>已停用</Tag>}</Space>
+                <StatusTag status={template.status} /></Space>
             }>
               <div className="oem-flow-nodes">
                 <span>节点：</span>

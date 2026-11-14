@@ -33,7 +33,7 @@ public sealed class AdminLifecycleTests
         var users = new UserService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), audit);
         var departmentError = await Assert.ThrowsAsync<ApiException>(
             () => users.SetStatusAsync(actor, 7002, "ACTIVE", ct));
-        Assert.Equal("组织已被禁用", departmentError.Message);
+        Assert.Equal("组织已被停用", departmentError.Message);
         // Resetting one's own password would skip the old-password check of self-service change.
         var selfReset = await Assert.ThrowsAsync<ApiException>(() => users.ResetPasswordAsync(actor, actor.Id, "New#2026pass", ct));
         Assert.Equal(400, selfReset.Status);
@@ -117,7 +117,7 @@ public sealed class AdminLifecycleTests
         var conn = context.Database.Connection();
         var inactiveAncestor = await Assert.ThrowsAsync<ApiException>(() =>
             DepartmentService.EnsureActiveAsync(context, 7202, ct));
-        Assert.Equal("组织已被禁用", inactiveAncestor.Message);
+        Assert.Equal("组织已被停用", inactiveAncestor.Message);
         await tx.RollbackAsync(ct);
 
         var persisted = await conn.QuerySingleAsync<DepartmentState>(

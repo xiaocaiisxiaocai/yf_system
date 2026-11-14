@@ -14,6 +14,7 @@ import type { ApiResponses } from '../../api/types'
 import type { PermissionResponse } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
+import StatusTag from '../../components/StatusTag'
 
 interface Role {
   id: number
@@ -218,7 +219,7 @@ export default function RoleList() {
 
   const toggle = async (r: Role) => {
     await http.put<ApiResponses['PUT /admin/roles/{id}/status']>(`/admin/roles/${r.id}/status`, { status: r.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
-    Message.success(r.status === 'ACTIVE' ? '角色已禁用' : '角色已启用')
+    Message.success(r.status === 'ACTIVE' ? '角色已停用' : '角色已启用')
     load()
   }
 
@@ -281,7 +282,7 @@ export default function RoleList() {
             dataIndex: 'status',
             width: 70,
             align: 'center' as const,
-            render: (v: string) => (v === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
+            render: (v: string) => <StatusTag status={v} />,
           },
           {
             title: '操作',
@@ -312,19 +313,19 @@ export default function RoleList() {
                 编辑
               </Button>,
               r.canManage !== false && r.status === 'ACTIVE' && r.assignedUserCount > 0 ? (
-                <Tooltip key="status" content={`该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能禁用。`}>
+                <Tooltip key="status" content={`该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能停用。`}>
                   <span>
-                    <Button size="mini" type="text" status="danger" disabled>禁用</Button>
+                    <Button size="mini" type="text" status="danger" disabled>停用</Button>
                   </span>
                 </Tooltip>
               ) : r.canManage !== false && (
                 <Popconfirm
                   key="status"
-                  title={r.status === 'ACTIVE' ? '确认禁用该角色？' : '确认启用该角色？'}
+                  title={r.status === 'ACTIVE' ? '确认停用该角色？' : '确认启用该角色？'}
                   onOk={() => toggle(r)}
                 >
                   <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
-                    {r.status === 'ACTIVE' ? '禁用' : '启用'}
+                    {r.status === 'ACTIVE' ? '停用' : '启用'}
                   </Button>
                 </Popconfirm>
               ),
@@ -340,8 +341,6 @@ export default function RoleList() {
             total: data.total,
             current: page,
             pageSize,
-            showTotal: true,
-            sizeCanChange: true,
             onChange: (nextPage, nextSize) => {
               setLoading(true)
               setLoadError(false)

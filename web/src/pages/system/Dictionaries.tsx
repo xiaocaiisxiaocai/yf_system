@@ -21,8 +21,6 @@ const TYPES: { key: TabType; name: string }[] = [
   { key: 'PRIORITY', name: '优先级' },
 ]
 const EMPTY_DICTIONARIES: Record<DictionaryType, ProjectDictionaryOption[]> = { ROBOT_TYPE: [], PRIORITY: [] }
-const columnHeaderProps = () => ({ scope: 'col' }) as unknown as ReturnType<NonNullable<TableColumnProps['onHeaderCell']>>
-const withColumnHeaders = <T extends TableColumnProps>(columns: T[]) => columns.map((column) => ({ ...column, onHeaderCell: columnHeaderProps }))
 const isRobotPart = (item: ManagedItem): item is RobotPart => 'partNumber' in item
 
 function expectArray<T>(value: unknown, label: string): T[] {
@@ -143,7 +141,7 @@ export default function Dictionaries() {
   </div>
 
   const columns = type === 'ROBOT_PART'
-    ? withColumnHeaders([
+    ? [
       { title: 'Robot 厂商', dataIndex: 'supplierName', width: 110, ellipsis: true },
       { title: 'Robot 料号', dataIndex: 'partNumber', width: 170, ellipsis: true },
       { title: 'Robot 型号', dataIndex: 'model', width: 400, ellipsis: true, render: (value: string) => <Tooltip content={value}><span>{value}</span></Tooltip> },
@@ -153,8 +151,8 @@ export default function Dictionaries() {
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
         item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <Popconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
       ], 'single') },
-    ])
-    : withColumnHeaders([
+    ]
+    : [
       { title: '名称', dataIndex: 'name', width: 280, ellipsis: true },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
@@ -162,7 +160,7 @@ export default function Dictionaries() {
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
         <Popconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
       ], 'single') },
-    ])
+    ]
 
   const editingPart = editing && isRobotPart(editing) ? editing : null
   return <Card className="page-card page-card--table dictionary-page">
@@ -175,7 +173,7 @@ export default function Dictionaries() {
       </Space>
       <Button className="dictionary-add" aria-label={`新增 ${label}`} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增 {label}</Button>
     </div>
-    {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <ResizableTable<ManagedItem> tableId="dictionaries" className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20, showTotal: true, sizeCanChange: true }} noDataElement={loading ? <span /> : emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
+    {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <ResizableTable<ManagedItem> tableId="dictionaries" className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20 }} noDataElement={loading ? <span /> : emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
     <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={`${editing ? '保存' : '创建'}${label}`} cancelText="取消">
       <Form onSubmit={() => void save()} form={form} layout="vertical" disabled={saving}>
         {type === 'ROBOT_PART' ? <>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Form, Input, Message, Popconfirm, Select, Space, Tag,
+  Button, Card, Form, Input, Message, Popconfirm, Select, Space,
 } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -21,6 +21,7 @@ import LoadError from '../../components/LoadError'
 import { validateInitialPassword } from '../../utils/password'
 import ToolbarMenuButton from '../../components/ToolbarMenuButton'
 import { ACCOUNT_NAME_MESSAGE, isValidAccountName } from '../../utils/accountName'
+import StatusTag from '../../components/StatusTag'
 
 const SUPPLIER_ACCOUNT_HEADERS = ['供应商名称', '账号', '角色', '初始密码'] as const
 const SUPPLIER_ACCOUNT_EXPORT_HEADERS = ['供应商名称', '账号', '角色', '状态', '最近登录'] as const
@@ -329,7 +330,7 @@ export default function SupplierList() {
     setTogglingSupplierIds(activeIds)
     try {
       await http.put<ApiResponses['PUT /admin/suppliers/{id}/status']>(`/admin/suppliers/${supplier.id}/status`, { status: supplier.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE' })
-      Message.success(supplier.status === 'ACTIVE' ? '已禁用（其账号将全部无法登录）' : '已启用')
+      Message.success(supplier.status === 'ACTIVE' ? '已停用（其账号将全部无法登录）' : '已启用')
       load()
     } finally {
       const remainingIds = new Set(togglingSupplierIdsRef.current)
@@ -366,7 +367,7 @@ export default function SupplierList() {
             onChange={(value) => changeStatus(value as string | undefined)}
           >
             <Select.Option value="ACTIVE">启用</Select.Option>
-            <Select.Option value="DISABLED">禁用</Select.Option>
+            <Select.Option value="DISABLED">停用</Select.Option>
           </Select>
         </Space>
         <Space wrap>
@@ -407,7 +408,7 @@ export default function SupplierList() {
               dataIndex: 'status',
               width: 70,
               align: 'center' as const,
-              render: (value: string) => (value === 'ACTIVE' ? <Tag color="green">启用</Tag> : <Tag color="gray">禁用</Tag>),
+              render: (value: string) => <StatusTag status={value} />,
             },
             { title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
             {
@@ -438,7 +439,7 @@ export default function SupplierList() {
                 </Button>,
                 canManageSuppliers && <Popconfirm
                   key="status"
-                  title={supplier.status === 'ACTIVE' ? '禁用后其所有账号无法登录，确认？' : '确认启用？'}
+                  title={supplier.status === 'ACTIVE' ? '停用后其所有账号无法登录，确认？' : '确认启用？'}
                   onOk={() => toggleStatus(supplier)}
                 >
                   <Button
@@ -448,7 +449,7 @@ export default function SupplierList() {
                     loading={togglingSupplierIds.has(supplier.id)}
                     disabled={togglingSupplierIds.has(supplier.id)}
                   >
-                    {supplier.status === 'ACTIVE' ? '禁用' : '启用'}
+                    {supplier.status === 'ACTIVE' ? '停用' : '启用'}
                   </Button>
                 </Popconfirm>,
                 canManageSuppliers && canDelete && (
@@ -467,8 +468,6 @@ export default function SupplierList() {
             total: data.total,
             current: page,
             pageSize,
-            showTotal: true,
-            sizeCanChange: true,
             onChange: changePage,
           }}
         />

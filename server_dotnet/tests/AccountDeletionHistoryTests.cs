@@ -79,6 +79,6 @@ public sealed class AccountDeletionHistoryTests
                 """, cancellationToken: ct));
         }
         var blocked = await Assert.ThrowsAsync<ApiException>(() => suppliers.DeleteAccountAsync(admin, 9603, ct));
-        Assert.Equal("该账号仍有业务或历史记录，请禁用账号，不要删除", blocked.Message);
+        Assert.Equal("该账号仍有业务或历史记录，请停用账号，不要删除", blocked.Message);
     }
 }

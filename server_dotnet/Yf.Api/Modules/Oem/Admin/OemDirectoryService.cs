@@ -322,7 +322,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
         var company = await LockCompanyAsync(uow, companyId, ct);
-        if (company.Status != OemStatus.Active) throw ApiException.BadRequest("厂商已被禁用，不能新增联络人");
+        if (company.Status != OemStatus.Active) throw ApiException.BadRequest("厂商已被停用，不能新增联络人");
         if (await uow.Db.OemCompanyContacts.LongCountAsync(contact => contact.OemCompanyId == companyId, ct) >= MaximumContactsPerCompany)
             throw ApiException.BadRequest($"每个厂商最多维护 {MaximumContactsPerCompany} 位联络人");
         if (await uow.Db.OemCompanyContacts.AnyAsync(contact => contact.OemCompanyId == companyId && contact.Name == input.Name, ct))
@@ -560,7 +560,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await using var uow = await OemUnitOfWork.BeginManagementAsync(dbFactory, ct);
         var current = await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
         var company = await LockCompanyAsync(uow, companyId, ct);
-        if (company.Status != OemStatus.Active) throw ApiException.BadRequest("厂商已被禁用");
+        if (company.Status != OemStatus.Active) throw ApiException.BadRequest("厂商已被停用");
         if (await uow.Db.OemAccounts.AnyAsync(account => account.EmployeeNo == employeeNo, ct)) throw ApiException.Conflict("登录账号已存在");
         var created = new OemAccount
         {
@@ -587,7 +587,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         if (target == OemStatus.Disabled && account.Status == OemStatus.Active) await EnsureNotLastActiveAccountAsync(uow, account, ct);
         if (target == OemStatus.Active
             && !await uow.Db.OemCompanies.AnyAsync(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active, ct))
-            throw ApiException.BadRequest("所属厂商已被禁用，不能启用账号");
+            throw ApiException.BadRequest("所属厂商已被停用，不能启用账号");
         if (account.Status != target)
         {
             var previous = account.Status;

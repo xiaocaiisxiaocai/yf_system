@@ -18,11 +18,12 @@ import { LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLab
 import Counterpart from '../components/Counterpart'
 import { useCan, useOem } from '../OemContext'
 import { useLatestRequest, useLoadEffect } from '../useLoadEffect'
-import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
+import { ColumnResizeProvider } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import EnterSubmit from '../../components/EnterSubmit'
 import ResizableTable from '../../components/ResizableTable'
+import { TABLE_PAGINATION } from '../../components/tablePagination'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
@@ -375,12 +376,12 @@ function dayStart(day: string, offsetDays = 0) {
   return date.toISOString()
 }
 
-// 停用的组织仍可选（用于查历史），但要标出来，和组织架构页的“禁用”一致。
+// 停用的组织仍可选（用于查历史），但要标出来，和组织架构页的“停用”一致。
 function organizationTree(nodes: DepartmentNode[]): { key: string; value: string; title: string; children: ReturnType<typeof organizationTree> }[] {
   return nodes.map(node => ({
     key: String(node.id),
     value: String(node.id),
-    title: node.status === 'DISABLED' ? `${node.name}（已禁用）` : node.name,
+    title: node.status === 'DISABLED' ? `${node.name}（已停用）` : node.name,
     children: organizationTree(node.children),
   }))
 }
@@ -636,14 +637,6 @@ export default function TransferListPage() {
           <Button icon={<IconDownload />} disabled={selectedIds.length === 0} loading={batching} onClick={() => void downloadSelected()}>
             批量下载{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
           </Button>
-          <ColumnVisibilityPicker
-            specs={columnSpecs}
-            hidden={table.hidden}
-            onToggle={table.toggle}
-            onShowAll={table.showAll}
-            onHideOptional={table.hideOptional}
-            onReset={table.reset}
-          />
         </Space>
       </div>
       {realm === 'internal' && departments.isError && (
@@ -655,7 +648,7 @@ export default function TransferListPage() {
           content={oemRequestError(transfers.error, '传递单列表加载失败，请重试')}
           action={<Button size="small" loading={transfers.isFetching} onClick={() => void transfers.refetch()}>重试</Button>} />
       )}
-      <ColumnResizeProvider actions={table.actions}>
+      <ColumnResizeProvider actions={table.actions} picker={table.picker}>
         <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
             className={`page-table ${table.tableClassName}`}
@@ -677,7 +670,7 @@ export default function TransferListPage() {
               },
               style: { cursor: 'pointer' },
             })}
-            pagination={{ current: page, total, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
+            pagination={{ ...TABLE_PAGINATION, current: page, total, pageSize, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
         </div>
       </ColumnResizeProvider>

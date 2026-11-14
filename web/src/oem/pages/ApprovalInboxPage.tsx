@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { Alert, Button, Card, Space, Table, Tag } from '@arco-design/web-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmtTime } from '../../api/types'
-import { ColumnResizeProvider, ColumnVisibilityPicker } from '../../components/columnResize'
+import { ColumnResizeProvider } from '../../components/columnResize'
+import { TABLE_PAGINATION } from '../../components/tablePagination'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import { oemRequestError } from '../api/requestError'
@@ -57,14 +58,6 @@ export default function ApprovalInboxPage() {
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
           {switcher}
-          <ColumnVisibilityPicker
-            specs={OEM_APPROVAL_COLUMNS}
-            hidden={table.hidden}
-            onToggle={table.toggle}
-            onShowAll={table.showAll}
-            onHideOptional={table.hideOptional}
-            onReset={table.reset}
-          />
         </Space>
       </div>
       {approvals.isError && (
@@ -72,7 +65,7 @@ export default function ApprovalInboxPage() {
           content={oemRequestError(approvals.error, '待审批列表加载失败，请重试')}
           action={<Button size="small" loading={approvals.isFetching} onClick={() => void approvals.refetch()}>重试</Button>} />
       )}
-      <ColumnResizeProvider actions={table.actions}>
+      <ColumnResizeProvider actions={table.actions} picker={table.picker}>
         <div ref={tableHostRef} className={`${table.hostClassName} page-table-host`}>
           <Table
             className={`page-table ${table.tableClassName}`}
@@ -82,7 +75,7 @@ export default function ApprovalInboxPage() {
             columns={table.columns}
             components={table.components}
             scroll={{ x: table.scrollX, y: 'var(--page-table-scroll-y)' }}
-            pagination={{ current: page, total: approvals.data?.total ?? 0, pageSize, showTotal: true, sizeCanChange: true, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
+            pagination={{ ...TABLE_PAGINATION, current: page, total: approvals.data?.total ?? 0, pageSize, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
             onRow={(row) => ({ onClick: () => navigate(`${base}/transfers/${row.transferId}`), style: { cursor: 'pointer' } })}
           />
         </div>

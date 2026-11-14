@@ -282,7 +282,7 @@ describe('供应商与分页列表行为', () => {
     await waitFor(() => expect(requests).toHaveLength(1))
     requests.shift()!.resolve({ data: page([supplierRow({ id: 1, name: '旧供应商' })]) })
     const oldRow = (await screen.findByText('旧供应商')).closest('tr')!
-    await user.click(within(oldRow).getByRole('button', { name: '禁用' }))
+    await user.click(within(oldRow).getByRole('button', { name: '停用' }))
     fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)
     await waitFor(() => expect(requests).toHaveLength(1))
     const stale = requests.shift()!
@@ -369,7 +369,7 @@ describe('供应商与分页列表行为', () => {
     const user = userEvent.setup()
     render(<SupplierList />)
     const row = (await screen.findByText('fixture')).closest('tr')!
-    const disableSupplier = within(row).getByRole('button', { name: '禁用' })
+    const disableSupplier = within(row).getByRole('button', { name: '停用' })
     await user.click(disableSupplier)
     const confirm = await screen.findByRole('button', { name: '确定' })
     fireEvent.click(confirm); fireEvent.click(confirm)
@@ -378,14 +378,14 @@ describe('供应商与分页列表行为', () => {
 
     await openAccounts(user)
     const accountRow = (await screen.findByText('supplier-12')).closest('tr')!
-    const disableAccount = within(accountRow).getByRole('button', { name: '禁用' })
+    const disableAccount = within(accountRow).getByRole('button', { name: '停用' })
     fireEvent.click(disableAccount)
     const confirmAccount = await screen.findByRole('button', { name: '确定' })
     fireEvent.click(confirmAccount)
     fireEvent.click(confirmAccount)
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
     accountPending.resolve({ data: {} })
-    expect(await screen.findByText('账号已禁用')).toBeInTheDocument()
+    expect(await screen.findByText('账号已停用')).toBeInTheDocument()
   })
 
   it('deleting the only row on a controlled last page reloads the last page allowed by the response total', async () => {

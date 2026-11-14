@@ -69,7 +69,7 @@ public sealed class ProjectStartPrerequisiteTests
         await SqlAsync(conn, "UPDATE suppliers SET status='DISABLED' WHERE id=9701", ct);
         var disabled = await Assert.ThrowsAsync<ApiException>(() =>
             projects.CreateAsync(conn, actor, Request("被停用厂商的项目"), null, ct));
-        Assert.Equal((400, "供应商已被禁用"), (disabled.Status, disabled.Message));
+        Assert.Equal((400, "供应商已被停用"), (disabled.Status, disabled.Message));
         await SqlAsync(conn, "UPDATE suppliers SET status='ACTIVE' WHERE id=9701", ct);
 
         var first = await projects.CreateAsync(conn, actor, Request("开始条件项目"), null, ct);

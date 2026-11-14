@@ -193,7 +193,7 @@ describe('UI 事件失败保护', () => {
     expect(await screen.findByText('账号管理 · 供应商')).toBeVisible()
     expect(screen.getByText('s12')).toBeVisible()
 
-    const disableButton = () => screen.getByRole('button', { name: '禁用' })
+    const disableButton = () => screen.getByRole('button', { name: '停用' })
     await user.click(disableButton())
     fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)
     await waitFor(() => expect(disableButton()).toBeDisabled())
