@@ -431,7 +431,7 @@ describe('组织、角色与权限行为', () => {
     render(<RoleList />)
     const protectedRow = (await screen.findByText('系统管理员')).closest('tr')!
     expect(within(protectedRow).getByRole('button', { name: '查看权限' })).toBeVisible()
-    expect(within(protectedRow).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
+    expect(within(protectedRow).getByRole('button', { name: '编辑' })).toBeDisabled()
 
     await openRolePermissions(user, '供应商人员')
     expect(treeCheckbox('确认验收')).toBeDisabled()
@@ -528,11 +528,11 @@ describe('组织、角色与权限行为', () => {
     render(<RoleList />)
     const builtIn = (await screen.findByText('供应商人员')).closest('tr')!
     const custom = screen.getByText('自定义角色').closest('tr')!
-    expect(within(builtIn).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+    expect(within(builtIn).getByRole('button', { name: '删除' })).toBeDisabled()
     expect(within(custom).getByRole('button', { name: '删除' })).toBeVisible()
   })
 
-  it('hides the current user status action and still offers it for another account', async () => {
+  it('disables the current user status action and still offers it for another account', async () => {
     mocks.permissions = ['user:manage']
     mocks.user = { id: 9, employeeNo: 'e9', realName: '在职用户', userType: 'INTERNAL', isSystemAdmin: false }
     mocks.users = [
@@ -548,7 +548,7 @@ describe('组织、角色与权限行为', () => {
     render(<UserList />)
     const self = (await screen.findByText('在职用户')).closest('tr')!
     const other = screen.getByText('其他用户').closest('tr')!
-    expect(within(self).queryByRole('button', { name: '停用' })).not.toBeInTheDocument()
+    expect(within(self).getByRole('button', { name: '停用' })).toBeDisabled()
     expect(within(other).getByRole('button', { name: '停用' })).toBeVisible()
   })
 

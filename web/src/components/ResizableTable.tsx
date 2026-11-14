@@ -86,6 +86,8 @@ export default function ResizableTable<T extends object>({ tableId, columns, gro
           columns={sized as TableColumnProps<T>[]}
           components={table.components}
           pagination={pagination && typeof pagination === 'object' ? { ...TABLE_PAGINATION, ...pagination } : pagination}
+          // A column pinned to the left takes the checkbox column with it, or the two overlap while scrolling sideways.
+          rowSelection={rest.rowSelection && sized.some((column) => column.fixed === 'left') ? { ...rest.rowSelection, fixed: true } : rest.rowSelection}
           // A page's own minimum table width stays the floor, so narrow screens still scroll instead of squeezing.
           scroll={{ ...scroll, x: Math.max(table.scrollX + reservedWidth, typeof scroll?.x === 'number' ? scroll.x : 0) }}
         />

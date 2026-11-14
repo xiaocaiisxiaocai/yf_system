@@ -214,12 +214,12 @@ describe('FileTable DOM contracts', () => {
         row(3, '已撤回.pdf', 'pdf', 1, { direction: 'S2C', withdrawn: true, canRestore: true }),
       ])
       expect(tableRow('快到期.pdf').getByRole('button', { name: '撤回文件' })).toBeInTheDocument()
-      await waitFor(() => expect(tableRow('快到期.pdf').queryByRole('button', { name: '撤回文件' })).not.toBeInTheDocument(),
+      await waitFor(() => expect(tableRow('快到期.pdf').getByRole('button', { name: '撤回文件' })).toBeDisabled(),
         { timeout: 3000 })
 
       const withdrawn = tableRow('已撤回.pdf')
       expect(withdrawn.getByText('已撤回')).toBeInTheDocument()
-      expect(withdrawn.queryByRole('button', { name: '下载文件' })).not.toBeInTheDocument()
+      expect(withdrawn.getByRole('button', { name: '下载文件' })).toBeDisabled()
       expect(withdrawn.queryByRole('button', { name: '预览文件' })).not.toBeInTheDocument()
       expect(withdrawn.getByRole('checkbox')).toBeDisabled()
 

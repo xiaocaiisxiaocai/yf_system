@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ResizableHeaderCell } from './columnResize'
-import { columnLayoutStorageKey, measureTableWidth, withFlexibleColumn, withTrailingFill, type ColumnLayoutSpec } from './tableColumnLayout'
+import { arrangeColumns, columnLayoutStorageKey, measureTableWidth, withFlexibleColumn, withTrailingFill, type ColumnLayoutSpec } from './tableColumnLayout'
 import { useColumnLayout } from './useColumnLayout'
 
 /**
@@ -10,7 +10,7 @@ import { useColumnLayout } from './useColumnLayout'
  * 它右边的列整体位移（总宽超出时出现横向滚动，没有最大宽度限制）；合计比容器窄时多出的宽度给最后一列，右侧不留空白；
  * 恢复默认后重新铺满。
  */
-export function useAdjustableColumns<T extends { key: string; title?: ReactNode }>(
+export function useAdjustableColumns<T extends { key: string; title?: ReactNode; fixed?: unknown }>(
   tableId: string,
   userId: number | null | undefined,
   specs: readonly ColumnLayoutSpec[],
@@ -65,7 +65,9 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
   // 有了手动宽度之后不再自动分配多余宽度，否则拖一列会带动别的列变宽或变窄。
   // 铺满只给指定的那一列（growFixed）时，它被固定后才停止；否则任何手动宽度都会停止铺满。
   const filling = growFixed ? !(fixedKey in layout.widths) : Object.keys(layout.widths).length === 0
-  const applied = layout.apply([...columns])
+  // 用户排过的顺序和固定列先生效，再隐藏列、算宽度。
+  const arranged = arrangeColumns(columns, layout.layout)
+  const applied = layout.apply(arranged)
   const sized = filling ? withFlexibleColumn(applied, tableWidth, fixedKey, growFixed) : withTrailingFill(applied, tableWidth, resizedKey)
   const scrollX = sized.reduce((sum, column) => sum + column.width, 0)
   const sizedRef = useRef(sized)
@@ -109,9 +111,20 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode 
       specs,
       hidden: layout.hidden,
       lastKey: sized.at(-1)?.key,
+      entries: arranged.flatMap((column) => {
+        const spec = specs.find((item) => item.key === column.key)
+        return spec ? [{
+          key: column.key, title: spec.title, locked: Boolean(spec.locked),
+          pinned: column.fixed === 'left', movable: column.fixed !== 'right',
+        }] : []
+      }),
       toggle: layout.toggle,
       showAll: layout.showAll,
       hideOptional: layout.hideOptional,
+      move: (key: string, target: string) => layout.move(key, target,
+        arranged.filter((column) => column.fixed !== 'right').map((column) => column.key)),
+      pin: (key: string, pinned: boolean) => layout.pin(key, pinned,
+        arranged.filter((column) => column.fixed === 'left').map((column) => column.key)),
       reset: layout.reset,
     },
     hidden: layout.hidden,

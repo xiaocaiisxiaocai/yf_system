@@ -571,16 +571,16 @@ export default function TransferListPage() {
     { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
     {
       key: 'actions', title: '操作',
-      render: (_: unknown, row: TransferSummary) => row.downloadableCount > 0 && (
+      render: (_: unknown, row: TransferSummary) => (
         <div className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}>
-          {/* Fixed slots: a row without a preview keeps its empty slot, so the download buttons line up down the column. */}
+          {/* Every row shows both buttons; one that cannot be used is greyed out, so the column lines up. */}
           {actionSlots([
-            row.previewableCount > 0 && (
-              <Button key="preview" size="mini" icon={<IconEye />} aria-label={`预览 ${row.title}`}
-                loading={downloadingId === row.id && busyAction === 'preview'} disabled={downloadingId !== null} onClick={() => void openRow(row, 'preview')}>预览</Button>
-            ),
+            <Button key="preview" size="mini" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+              loading={downloadingId === row.id && busyAction === 'preview'} disabled={row.previewableCount === 0 || downloadingId !== null}
+              onClick={() => void openRow(row, 'preview')}>预览</Button>,
             <Button key="download" size="mini" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
-              loading={downloadingId === row.id && busyAction === 'download'} disabled={downloadingId !== null && downloadingId !== row.id}
+              loading={downloadingId === row.id && busyAction === 'download'}
+              disabled={row.downloadableCount === 0 || (downloadingId !== null && downloadingId !== row.id)}
               onClick={() => void openRow(row, 'download')}>下载</Button>,
           ], 'oem-file')}
         </div>
@@ -659,6 +659,7 @@ export default function TransferListPage() {
             columns={table.columns}
             components={table.components}
             rowSelection={{
+              fixed: table.picker.entries.some((entry) => entry.pinned),
               type: 'checkbox', selectedRowKeys: selectedIds, preserveSelectedRowKeys: true, onChange: (keys) => setSelectedIds(keys),
               checkboxProps: (row) => ({ disabled: row.downloadableCount === 0 }),
             }}

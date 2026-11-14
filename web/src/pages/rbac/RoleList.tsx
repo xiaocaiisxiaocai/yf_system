@@ -300,10 +300,11 @@ export default function RoleList() {
               >
                 {r.canManage === false ? '查看权限' : '分配权限'}
               </Button>,
-              r.canManage !== false && <Button
+              <Button
                 key="edit"
                 size="mini"
                 type="text"
+                disabled={r.canManage === false}
                 onClick={() => {
                   setEditing(r)
                   form.setFieldsValue({ name: r.name, description: r.description })
@@ -318,20 +319,22 @@ export default function RoleList() {
                     <Button size="mini" type="text" status="danger" disabled>停用</Button>
                   </span>
                 </Tooltip>
-              ) : r.canManage !== false && (
+              ) : (
                 <Popconfirm
                   key="status"
+                  disabled={r.canManage === false}
                   title={r.status === 'ACTIVE' ? '确认停用该角色？' : '确认启用该角色？'}
                   onOk={() => toggle(r)}
                 >
-                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
+                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled={r.canManage === false}>
                     {r.status === 'ACTIVE' ? '停用' : '启用'}
                   </Button>
                 </Popconfirm>
               ),
-              canDelete && r.canManage !== false && !r.isBuiltIn && (
-                <Popconfirm key="delete" title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
-                  <Button size="mini" type="text" status="danger">删除</Button>
+              canDelete && (
+                <Popconfirm key="delete" disabled={r.canManage === false || r.isBuiltIn}
+                  title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
+                  <Button size="mini" type="text" status="danger" disabled={r.canManage === false || r.isBuiltIn}>删除</Button>
                 </Popconfirm>
               ),
             ], 'role'),

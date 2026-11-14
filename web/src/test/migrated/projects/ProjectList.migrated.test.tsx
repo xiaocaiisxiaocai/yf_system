@@ -135,9 +135,9 @@ describe('ProjectList migrated behavior', () => {
     expect(await screen.findByText('主管辖区已终止项目')).toBeInTheDocument()
     const terminatedRow = screen.getByText('主管辖区已终止项目').closest('tr')!
     const otherRow = screen.getByText('他人进行中项目').closest('tr')!
-    // Someone else's project is read-only: no edit, no delete.
-    expect(within(otherRow).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
-    expect(within(otherRow).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
+    // Someone else's project is read-only: edit and delete stay in place but are disabled.
+    expect(within(otherRow).getByRole('button', { name: '删除' })).toBeDisabled()
+    expect(within(otherRow).getByRole('button', { name: '编辑' })).toBeDisabled()
     await user.click(within(terminatedRow).getByRole('button', { name: '删除' }))
     expect(await screen.findByText(/确认删除项目“主管辖区已终止项目”/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '确定' }))

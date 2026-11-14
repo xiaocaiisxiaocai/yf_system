@@ -439,20 +439,18 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .table-th-with-picker { position: relative; padding-right: 30px !important; }
 .table-column-picker-trigger.arco-btn { position: absolute; top: 50%; right: 8px; z-index: 4; transform: translateY(-50%); color: var(--color-text-3); }
 .table-column-picker-trigger.arco-btn:hover { color: rgb(var(--primary-6)); }
-.table-column-picker { display: flex; flex-direction: column; gap: 8px; width: 220px; }
-.table-column-picker-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: min(320px, 50vh);
-  margin: 0;
-  padding: 4px 0;
-  overflow: auto;
-  border-top: 1px solid var(--app-border);
-  border-bottom: 1px solid var(--app-border);
-}
+.table-column-picker { display: flex; flex-direction: column; gap: 8px; width: 240px; }
+.table-column-picker-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.table-column-picker-item { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 2px; border-radius: 4px; }
+.table-column-picker-item:hover { background: var(--color-fill-2); }
+.table-column-picker-item.is-dragging { opacity: 0.4; }
+.table-column-picker-item > .arco-checkbox { flex: 1 1 auto; min-width: 0; }
+.table-column-picker-handle { display: inline-flex; flex: 0 0 18px; align-items: center; justify-content: center; height: 24px; padding: 0; border: 0; background: transparent; color: var(--color-text-3); cursor: grab; }
+.table-column-picker-handle.is-static { cursor: default; }
+.table-column-picker-handle:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 1px; border-radius: 2px; }
+.table-column-picker-pin.arco-btn { flex: 0 0 auto; color: var(--color-text-4); }
+.table-column-picker-item.is-pinned .table-column-picker-pin.arco-btn { color: rgb(var(--primary-6)); }
 .table-column-picker-list .arco-checkbox { display: flex; align-items: center; height: 28px; margin: 0; padding: 0 2px; }
-.table-column-picker-note { margin: 0; color: var(--app-text-muted); font-size: 12px; line-height: 18px; }
 .table-column-picker-actions { display: flex; justify-content: flex-end; }
 
 /* 工具栏与控件节奏统一 */
@@ -789,6 +787,9 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .action-slots--oem-file > .action-slot { --action-slot-width: 56px; }
 /* 外协设定：第二个操作是四个字（联络邮箱、可用厂商）。 */
 .action-slots--outsource > .action-slot:nth-child(2) { --action-slot-width: 60px; }
+.action-slots--outsource-mail > .action-slot:nth-child(2) { --action-slot-width: 60px; }
+.action-slots--storage > .action-slot:nth-child(1),
+.action-slots--storage > .action-slot:nth-child(3) { --action-slot-width: 64px; }
 
 /* 带预览按钮的文件名单元格：文本占据剩余空间，按钮始终不被长文件名挤走。 */
 .file-name-cell {

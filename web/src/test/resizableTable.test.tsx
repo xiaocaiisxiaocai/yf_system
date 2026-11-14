@@ -94,8 +94,42 @@ describe('ResizableTable', () => {
     expect(screen.queryByRole('columnheader', { name: /邮箱/ })).not.toBeInTheDocument()
   })
 
-  it('没有可隐藏的列时不显示选择按钮', () => {
-    renderTable()
-    expect(screen.queryByRole('button', { name: '显示列' })).not.toBeInTheDocument()
+  it('在「显示列」里拖动或用方向键调整列顺序、把列固定在左侧，操作列始终在最右，设置记在浏览器', async () => {
+    type Person = { id: number; name: string; dept: string; email: string }
+    const people: Person[] = [{ id: 1, name: '甲', dept: '采购', email: 'a@example.test' }]
+    const view = () => render(<ResizableTable<Person> tableId="ordered" rowKey="id" data={people} pagination={false}
+      columns={[
+        { title: '姓名', dataIndex: 'name', width: 120 },
+        { title: '部门', dataIndex: 'dept', width: 120 },
+        { title: '邮箱', dataIndex: 'email', width: 200 },
+        { title: '操作', width: 80, fixed: 'right', render: () => null },
+      ]} />)
+    const headers = () => screen.getAllByRole('columnheader').map((cell) => cell.textContent)
+    const first = view()
+    await userEvent.setup().click(screen.getByRole('button', { name: '显示列' }))
+    const picker = await screen.findByRole('group', { name: '显示列' })
+    expect(within(picker).queryByRole('button', { name: '移动操作列' })).not.toBeInTheDocument()
+
+    // Drag 邮箱 onto 姓名: it moves to the front.
+    const items = () => within(picker).getAllByRole('listitem')
+    const transfer = { data: '', setData(_: string, value: string) { this.data = value }, getData() { return this.data }, effectAllowed: '' }
+    fireEvent.dragStart(items()[2], { dataTransfer: transfer })
+    fireEvent.dragOver(items()[0], { dataTransfer: transfer })
+    fireEvent.drop(items()[0], { dataTransfer: transfer })
+    await waitFor(() => expect(headers()).toEqual(['邮箱', '姓名', '部门', '操作']))
+
+    // Keyboard: 部门 one step up.
+    fireEvent.keyDown(within(picker).getByRole('button', { name: '移动部门列' }), { key: 'ArrowUp' })
+    await waitFor(() => expect(headers()).toEqual(['邮箱', '部门', '姓名', '操作']))
+
+    // Pinning 姓名 brings it to the left edge as a fixed column.
+    fireEvent.click(within(picker).getByRole('button', { name: '固定姓名列' }))
+    await waitFor(() => expect(headers()).toEqual(['姓名', '邮箱', '部门', '操作']))
+    expect(within(picker).getByRole('button', { name: '取消固定姓名列' })).toHaveAttribute('aria-pressed', 'true')
+    first.unmount()
+
+    view()
+    expect(headers()).toEqual(['姓名', '邮箱', '部门', '操作'])
+    expect(screen.getByRole('columnheader', { name: /姓名/ })).toHaveClass('arco-table-col-fixed-left')
   })
 })

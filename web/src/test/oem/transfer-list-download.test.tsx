@@ -71,14 +71,14 @@ describe('ODM/OEMA 传递单列表直接下载', () => {
     for (const frame of frames()) frame.remove()
   })
 
-  it('只有可下载的行在最后一列显示下载；单个文件直接下载且不进入详情', async () => {
+  it('不可下载的行下载按钮置灰；单个文件直接下载且不进入详情', async () => {
     const user = userEvent.setup()
     const single = summary(41, '测试文件.xlsx', 1)
     const locked = summary(42, '未发布.xlsx', 0)
     const { api, startDownload } = renderList([single, locked], { 41: detail(single, [file(301, '测试文件.xlsx'), file(302, '已清理.xlsx', false)]) })
 
     const button = await screen.findByRole('button', { name: '下载 测试文件.xlsx' })
-    expect(screen.queryByRole('button', { name: '下载 未发布.xlsx' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '下载 未发布.xlsx' })).toBeDisabled()
     expect(screen.getByRole('columnheader', { name: /操作/ })).toBeVisible()
 
     await user.click(button)
@@ -103,12 +103,12 @@ describe('ODM/OEMA 传递单列表直接下载', () => {
     expect(screen.getByTestId('location')).toHaveTextContent('/oem-portal/transfers')
   })
 
-  it('不支持在线预览的格式不显示预览按钮，只保留下载', async () => {
+  it('不支持在线预览的格式预览按钮置灰，只能下载', async () => {
     const row = summary(46, '底座.step', 1, 0)
     renderList([row], { 46: detail(row, [file(341, '底座.step')]) })
 
     expect(await screen.findByRole('button', { name: '下载 底座.step' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '预览 底座.step' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '预览 底座.step' })).toBeDisabled()
   })
 
   it('多个文件时弹窗逐个预览或下载', async () => {

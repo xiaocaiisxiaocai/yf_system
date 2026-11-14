@@ -13,6 +13,8 @@ export type ActionSlotsVariant =
   | 'file'
   | 'oem-file'
   | 'outsource'
+  | 'outsource-mail'
+  | 'storage'
   | 'single'
 
 export function actionSlots(slots: ActionSlot[], variant: ActionSlotsVariant) {

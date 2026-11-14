@@ -14,9 +14,15 @@ export interface ColumnLayoutSpec {
 export interface ColumnLayout {
   hidden: string[]
   widths: Record<string, number>
+  /** 用户排过的列顺序（列 key）；空数组表示按页面定义的顺序。 */
+  order?: string[]
+  /** 用户固定在左侧的列；不存在表示按页面定义（`fixed: 'left'` 的列）。 */
+  pinned?: string[]
 }
 
 const EMPTY_LAYOUT: ColumnLayout = { hidden: [], widths: {} }
+
+const isDefaultArrangement = (layout: ColumnLayout) => !layout.order?.length && layout.pinned === undefined
 
 export function columnLayoutStorageKey(tableId: string, userId: number | undefined) {
   return `yf:table-columns:${tableId}:${userId ?? 0}`
@@ -31,7 +37,7 @@ export function clampColumnWidth(width: number, spec: ColumnLayoutSpec) {
 
 export function normalizeColumnLayout(value: unknown, specs: readonly ColumnLayoutSpec[]): ColumnLayout {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return EMPTY_LAYOUT
-  const raw = value as { hidden?: unknown; widths?: unknown }
+  const raw = value as { hidden?: unknown; widths?: unknown; order?: unknown; pinned?: unknown }
   const locked = new Set(specs.filter((spec) => spec.locked).map((spec) => spec.key))
   const hiddenKeys = new Set(Array.isArray(raw.hidden)
     ? raw.hidden.filter((key): key is string => typeof key === 'string' && !locked.has(key))
@@ -46,7 +52,13 @@ export function normalizeColumnLayout(value: unknown, specs: readonly ColumnLayo
       if (next !== spec.defaultWidth) widths[spec.key] = next
     }
   }
-  return { hidden, widths }
+  const known = new Set(specs.map((spec) => spec.key))
+  const keys = (list: unknown) => Array.isArray(list)
+    ? [...new Set(list.filter((key): key is string => typeof key === 'string' && known.has(key)))]
+    : undefined
+  const order = keys(raw.order)
+  const pinned = keys(raw.pinned)
+  return { hidden, widths, ...(order?.length ? { order } : {}), ...(pinned ? { pinned } : {}) }
 }
 
 function storage(): Storage | undefined {
@@ -67,8 +79,12 @@ export function writeColumnLayout(storageKey: string, layout: ColumnLayout) {
   const store = storage()
   if (!store) return
   try {
-    if (!layout.hidden.length && !Object.keys(layout.widths).length) store.removeItem(storageKey)
-    else store.setItem(storageKey, JSON.stringify({ hidden: layout.hidden, widths: layout.widths }))
+    if (!layout.hidden.length && !Object.keys(layout.widths).length && isDefaultArrangement(layout)) store.removeItem(storageKey)
+    else store.setItem(storageKey, JSON.stringify({
+      hidden: layout.hidden, widths: layout.widths,
+      ...(layout.order?.length ? { order: layout.order } : {}),
+      ...(layout.pinned !== undefined ? { pinned: layout.pinned } : {}),
+    }))
   } catch { /* 隐私模式或配额不足时只保留当前页的调整。 */ }
 }
 
@@ -84,7 +100,7 @@ export function withColumnWidth(layout: ColumnLayout, specs: readonly ColumnLayo
     if (widths[key] === next) return layout
     widths[key] = next
   }
-  return { hidden: layout.hidden, widths }
+  return { ...layout, widths }
 }
 
 /** 表格外框的可用宽度。表体在列总宽较小时会跟着列缩回去，不能拿它当容器宽度。 */
@@ -198,5 +214,46 @@ export function applyColumnLayout<T extends { key: string; title?: ReactNode }>(
 export function withHiddenColumns(layout: ColumnLayout, specs: readonly ColumnLayoutSpec[], hiddenKeys: ReadonlySet<string>) {
   const hidden = specs.filter((spec) => !spec.locked && hiddenKeys.has(spec.key)).map((spec) => spec.key)
   if (hidden.length === layout.hidden.length && hidden.every((key, index) => key === layout.hidden[index])) return layout
-  return { hidden, widths: layout.widths }
+  return { ...layout, hidden }
+}
+
+type Arrangeable = { key: string; fixed?: unknown }
+
+/**
+ * 按用户的顺序和固定设置排列列：固定在左侧的列排在最前（彼此保持顺序），固定在右侧的列（如操作）始终在最后、不参与排序。
+ * 页面没给顺序的列（新增的列）按页面定义的位置排在已排序的列之后。
+ */
+export function arrangeColumns<T extends Arrangeable>(columns: readonly T[], layout: ColumnLayout): T[] {
+  const right = columns.filter((column) => column.fixed === 'right')
+  const movable = columns.filter((column) => column.fixed !== 'right')
+  const order = layout.order ?? []
+  const rank = (column: T, index: number) => {
+    const position = order.indexOf(column.key)
+    return position >= 0 ? position : order.length + index
+  }
+  const sorted = movable.map((column, index) => ({ column, rank: rank(column, index) }))
+    .sort((a, b) => a.rank - b.rank).map(({ column }) => column)
+  const pinned = new Set(layout.pinned ?? movable.filter((column) => column.fixed === 'left').map((column) => column.key))
+  const withFix = sorted.map((column) => {
+    const fixed = pinned.has(column.key) ? 'left' : undefined
+    return column.fixed === fixed ? column : Object.assign({}, column, { fixed })
+  })
+  return [...withFix.filter((column) => column.fixed === 'left'), ...withFix.filter((column) => column.fixed !== 'left'), ...right]
+}
+
+/** 把 `key` 移到 `target` 的位置（`arranged` 是当前显示顺序的全部可移动列）。 */
+export function withMovedColumn(layout: ColumnLayout, arranged: readonly string[], key: string, target: string) {
+  const from = arranged.indexOf(key)
+  const to = arranged.indexOf(target)
+  if (from < 0 || to < 0 || from === to) return layout
+  const order = [...arranged]
+  order.splice(from, 1)
+  order.splice(to, 0, key)
+  return { ...layout, order }
+}
+
+/** 固定或取消固定某列；`current` 是当前固定在左侧的列。 */
+export function withPinnedColumn(layout: ColumnLayout, current: readonly string[], key: string, pinned: boolean) {
+  const next = pinned ? [...new Set([...current, key])] : current.filter((item) => item !== key)
+  return { ...layout, pinned: next }
 }

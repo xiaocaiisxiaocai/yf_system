@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  applyColumnLayout, readColumnLayout, withColumnWidth, withHiddenColumns, writeColumnLayout,
+  applyColumnLayout, readColumnLayout, withColumnWidth, withHiddenColumns, withMovedColumn, withPinnedColumn, writeColumnLayout,
   type ColumnLayout, type ColumnLayoutSpec,
 } from './tableColumnLayout'
 
@@ -94,6 +94,15 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
     commit(withHiddenColumns(layoutRef.current, specsRef.current, new Set(specsRef.current.map((spec) => spec.key))))
   }, [commit])
 
+  /** `arranged`：当前显示顺序里全部可移动列的 key。 */
+  const move = useCallback((key: string, target: string, arranged: readonly string[]) => {
+    commit(withMovedColumn(layoutRef.current, arranged, key, target))
+  }, [commit])
+
+  const pin = useCallback((key: string, pinned: boolean, current: readonly string[]) => {
+    commit(withPinnedColumn(layoutRef.current, current, key, pinned))
+  }, [commit])
+
   const reset = useCallback(() => {
     commit({ hidden: [], widths: {} })
   }, [commit])
@@ -110,5 +119,5 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
   ): Array<T & { width: number }> =>
     applyColumnLayout(columns, specs, layout, import.meta.env.DEV)
 
-  return { apply, actions, widths: layout.widths, hidden: layout.hidden, toggle, showAll, hideOptional, reset }
+  return { apply, actions, layout, widths: layout.widths, hidden: layout.hidden, toggle, showAll, hideOptional, move, pin, reset }
 }

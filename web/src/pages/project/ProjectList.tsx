@@ -211,12 +211,11 @@ export default function ProjectList() {
     { key: 'unreadMessages', title: '未读留言', dataIndex: 'unreadMessages', align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
     { key: 'actions', title: '操作', fixed: 'right' as const, render: (_: unknown, row: ProjectSummary) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/projects/${row.id}`)}>进入</Button>,
-      row.canManage && hasPerm('project:update') && row.status === 'IN_PROGRESS'
-        && <Button key="edit" size="mini" type="text" onClick={() => openEdit(row)}>编辑</Button>,
-      row.canDelete && (
-        <Popconfirm key="delete" title={`确认删除项目“${row.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={() => remove(row)}>
-          <Button size="mini" type="text" status="danger">删除</Button>
-        </Popconfirm>),
+      hasPerm('project:update') && <Button key="edit" size="mini" type="text"
+        disabled={!row.canManage || row.status !== 'IN_PROGRESS'} onClick={() => openEdit(row)}>编辑</Button>,
+      <Popconfirm key="delete" disabled={!row.canDelete} title={`确认删除项目“${row.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={() => remove(row)}>
+        <Button size="mini" type="text" status="danger" disabled={!row.canDelete}>删除</Button>
+      </Popconfirm>,
     ], 'project-group') },
   ]
   // 与全站其他表格共用列宽逻辑：第一次手动拖动某列时，其余列固定在当前宽度，不再跟着晃动。

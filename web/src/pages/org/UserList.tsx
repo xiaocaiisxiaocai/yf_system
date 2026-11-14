@@ -567,16 +567,17 @@ export default function UserList() {
                 <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(r)}>
                   重置密码
                 </Button>,
-                r.employeeNo !== 'admin' && r.id !== me?.id && (
-                  <Popconfirm key="status" title={r.status === 'ACTIVE' ? '停用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
-                    <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'}>
-                      {r.status === 'ACTIVE' ? '停用' : '启用'}
-                    </Button>
-                  </Popconfirm>
-                ),
-                canDelete && r.employeeNo !== 'admin' && r.id !== me?.id && (
-                  <Popconfirm key="delete" title="删除后不可恢复；存在历史业务记录时请改为停用。确认删除该用户？" onOk={() => remove(r)}>
-                    <Button size="mini" type="text" status="danger">删除</Button>
+                // 内置管理员和自己的账号不能停用或删除：按钮保留但不可用，各行操作上下对齐。
+                <Popconfirm key="status" disabled={r.employeeNo === 'admin' || r.id === me?.id}
+                  title={r.status === 'ACTIVE' ? '停用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
+                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled={r.employeeNo === 'admin' || r.id === me?.id}>
+                    {r.status === 'ACTIVE' ? '停用' : '启用'}
+                  </Button>
+                </Popconfirm>,
+                canDelete && (
+                  <Popconfirm key="delete" disabled={r.employeeNo === 'admin' || r.id === me?.id}
+                    title="删除后不可恢复；存在历史业务记录时请改为停用。确认删除该用户？" onOk={() => remove(r)}>
+                    <Button size="mini" type="text" status="danger" disabled={r.employeeNo === 'admin' || r.id === me?.id}>删除</Button>
                   </Popconfirm>
                 ),
               ], 'user'),

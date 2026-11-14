@@ -9,6 +9,7 @@ import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import './OutsourceMailsPage.css'
 import ResizableTable from '../../components/ResizableTable'
 import { saveBlob } from '../../utils/saveBlob'
+import { actionSlots } from '../../components/ActionSlots'
 
 type Mail = ApiResponses['GET /outsource/mails']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
@@ -132,10 +133,12 @@ export default function OutsourceMailsPage() {
     { title: '发送人', dataIndex: 'createdByName', width: 100, ellipsis: true },
     {
       title: '操作', width: 150, align: 'center', fixed: 'right',
-      render: (_, mail) => <Space size={4}>
-        {mail.attachmentName && <Button type="text" size="mini" loading={busy === mail.id} onClick={() => void download(mail)}>附件</Button>}
-        {canManage && mail.status === 'FAILED' && <Button type="text" size="mini" disabled={busy === mail.id} onClick={() => void retry(mail)}>重新发送</Button>}
-      </Space>,
+      render: (_, mail) => actionSlots([
+        <Button key="attachment" type="text" size="mini" loading={busy === mail.id} disabled={!mail.attachmentName}
+          onClick={() => void download(mail)}>附件</Button>,
+        canManage && <Button key="retry" type="text" size="mini" disabled={mail.status !== 'FAILED' || busy === mail.id}
+          onClick={() => void retry(mail)}>重新发送</Button>,
+      ], 'outsource-mail'),
     },
   ]
 

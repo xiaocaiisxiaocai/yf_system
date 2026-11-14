@@ -5,6 +5,7 @@ import http, { type QuietRequestConfig } from '../../../api/client'
 import type { ApiResponses } from '../../../api/types'
 import { fmtSize } from '../../../api/types'
 import LoadError from '../../../components/LoadError'
+import { actionSlots } from '../../../components/ActionSlots'
 
 type StorageLocation = ApiResponses['GET /admin/storage-locations']['items'][number]
 
@@ -148,23 +149,19 @@ export default function StorageLocationsPanel() {
     {
       title: '操作',
       width: 200,
-      render: (_: unknown, row: StorageLocation) => (
-        <Space size={4}>
-          {row.status === 'IDLE' && !row.previousPath && (
-            <Button type="text" size="small" disabled={busy} onClick={() => openEdit(row)}>
-              {row.path || row.pendingPath ? '更换路径' : '设置路径'}
-            </Button>
-          )}
-          {row.status === 'FAILED' && (
-            <Button type="text" size="small" loading={acting === row.kind} onClick={() => act(row, 'retry')}>重试</Button>
-          )}
-          {row.previousPath && row.kind !== 'LOG' && row.phase !== 'DELETING' && (
-            <Popconfirm title="取消迁移？已写入新目录的内容将迁回原目录" onOk={() => act(row, 'cancel')}>
-              <Button type="text" size="small" status="danger" loading={acting === row.kind}>取消迁移</Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
+      // 三个操作始终在固定位置；当前状态下不能用的置灰，不隐藏。
+      render: (_: unknown, row: StorageLocation) => actionSlots([
+        <Button key="edit" type="text" size="small" disabled={busy || row.status !== 'IDLE' || Boolean(row.previousPath)} onClick={() => openEdit(row)}>
+          {row.path || row.pendingPath ? '更换路径' : '设置路径'}
+        </Button>,
+        <Button key="retry" type="text" size="small" disabled={row.status !== 'FAILED'} loading={acting === row.kind} onClick={() => act(row, 'retry')}>重试</Button>,
+        row.kind !== 'LOG' && (
+          <Popconfirm key="cancel" disabled={!row.previousPath || row.phase === 'DELETING'}
+            title="取消迁移？已写入新目录的内容将迁回原目录" onOk={() => act(row, 'cancel')}>
+            <Button type="text" size="small" status="danger" disabled={!row.previousPath || row.phase === 'DELETING'} loading={acting === row.kind}>取消迁移</Button>
+          </Popconfirm>
+        ),
+      ], 'storage'),
     },
   ]
 

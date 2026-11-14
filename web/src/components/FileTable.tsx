@@ -279,9 +279,9 @@ export default function FileTable({
     {
       title: '操作', width: compactNarrow ? COMPACT_NARROW_ACTIONS_WIDTH : COLUMN_WIDTHS.actions[w], fixed: compactMedium ? undefined : 'right' as const,
       render: (_: unknown, r: FileItem) => actionSlots([
-        hasPerm('file:download') && readable(r) && (
+        hasPerm('file:download') && (
           <Tooltip key="download" content="下载" disabled={!compactNarrow}>
-            <Button size="mini" type="text" icon={<IconDownload />} aria-label="下载文件"
+            <Button size="mini" type="text" icon={<IconDownload />} aria-label="下载文件" disabled={!readable(r)}
               onClick={() => { void downloadFile(r.id).catch(() => undefined) }}>{compactNarrow ? null : '下载'}</Button>
           </Tooltip>
         ),
@@ -294,9 +294,15 @@ export default function FileTable({
           <Popconfirm key="restore" title={`恢复文件「${r.originalName}」？`} onOk={() => restore(r)}>
             <Button size="mini" type="text" icon={<IconRedo />} aria-label="恢复文件">{compactNarrow ? null : '恢复'}</Button>
           </Popconfirm>
-        ) : canWithdraw(r.withdrawableUntil, withdrawNow) && (
-          <Popconfirm key="withdraw" title={`撤回文件「${r.originalName}」？`} onOk={() => withdraw(r)}>
-            <Button size="mini" type="text" status="warning" icon={<IconUndo />} aria-label="撤回文件">{compactNarrow ? null : '撤回'}</Button>
+        ) : user?.userType === 'SUPPLIER' ? (
+          // 厂商只能在撤回时限内撤回自己的文件；过了时限或不是自己的文件，撤回按钮保留但不可用。
+          <Popconfirm key="withdraw" disabled={!canWithdraw(r.withdrawableUntil, withdrawNow)} title={`撤回文件「${r.originalName}」？`} onOk={() => withdraw(r)}>
+            <Button size="mini" type="text" status="warning" icon={<IconUndo />} aria-label="撤回文件"
+              disabled={!canWithdraw(r.withdrawableUntil, withdrawNow)}>{compactNarrow ? null : '撤回'}</Button>
+          </Popconfirm>
+        ) : (
+          <Popconfirm key="delete" disabled title={`删除文件「${r.originalName}」？`}>
+            <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件" disabled>{compactNarrow ? null : '删除'}</Button>
           </Popconfirm>
         ),
       ], 'file'),
@@ -304,7 +310,7 @@ export default function FileTable({
   ].filter((column) => !(
     (compactMedium && (column.dataIndex === 'uploaderName' || column.dataIndex === 'createdAt'))
     || (compactNarrow && column.dataIndex === 'sizeBytes')
-  )), [compactMedium, compactNarrow, hasPerm, onOpenCopyHistory, projectStatus, readable, remove, restore, w, withdraw, withdrawNow])
+  )), [compactMedium, compactNarrow, hasPerm, onOpenCopyHistory, projectStatus, readable, remove, restore, user?.userType, w, withdraw, withdrawNow])
   const selectionWidth = hasPerm('file:download') ? 40 : 0
   const compactContentWidth = columns.reduce((sum, column) => sum + (column.width ?? COMPACT_NAME_MIN_WIDTH), 0) + selectionWidth
   // 放得下时不设横向滚动宽度，文件名列自然吃满；放不下才按内容宽度滚动。

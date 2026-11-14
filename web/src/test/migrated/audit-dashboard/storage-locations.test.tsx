@@ -75,7 +75,9 @@ describe('StorageLocationsPanel', () => {
     render(<StorageLocationsPanel />)
 
     expect(await screen.findByText('协作文件存储：目标磁盘空间不足')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '重试' }))
+    const failed = screen.getByText('协作文件存储').closest('tr')!
+    expect(within(screen.getByText('日志目录').closest('tr')!).getByRole('button', { name: '重试' })).toBeDisabled()
+    await user.click(within(failed).getByRole('button', { name: '重试' }))
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/admin/storage-locations/COLLAB/retry'))
   })
 

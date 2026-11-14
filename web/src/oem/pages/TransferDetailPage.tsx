@@ -181,12 +181,11 @@ function TransferFilesTable({ files, approval, approvalStatus, canEdit, onDownlo
     },
     {
       key: 'actions', title: '操作',
-      // 只有可编辑时才有“移除”位：没有这个位就不占宽度，否则隐藏的空位会把可见按钮挤偏、和列头对不齐。
+      // 只有可编辑时才有“移除”位。下载、预览不可用时按钮保留但置灰，各行上下对齐。
       render: (_: unknown, file: TransferFile) => actionSlots([
-        file.downloadable && <Button key="download" size="small" icon={<IconDownload />} onClick={() => onDownload(file)}>下载</Button>,
-        file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES && (
-          <Button key="preview" size="small" icon={<IconEye />} onClick={() => onPreview(file)}>预览</Button>
-        ),
+        <Button key="download" size="small" icon={<IconDownload />} disabled={!file.downloadable} onClick={() => onDownload(file)}>下载</Button>,
+        <Button key="preview" size="small" icon={<IconEye />}
+          disabled={!(file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES)} onClick={() => onPreview(file)}>预览</Button>,
         ...(canEdit ? [
           <Popconfirm key="remove" title="移除该附件？" onOk={() => onRemove(file)}><Button size="small" status="danger">移除</Button></Popconfirm>,
         ] : []),
