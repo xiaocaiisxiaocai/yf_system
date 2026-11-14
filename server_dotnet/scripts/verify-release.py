@@ -252,7 +252,7 @@ with tempfile.TemporaryDirectory(prefix="yf_dotnet_release_", dir=test_temp_root
         if path.is_file() and (path.name.lower() in ("appsettings.local.json", "secrets.json", ".env") or path.suffix.lower() in (".pfx", ".p12", ".key")):
             raise RuntimeError("Unexpected private file")
     print("PASS deployment payload hashes, .NET 8 runtime and bundled IIS configuration", flush=True)
-    first_start = verify_first_start(package, test_temp_root)
+    first_start = verify_first_start(package, test_temp_root, configuration_mode == "external-template")
     env = os.environ.copy()
     env["ASPNETCORE_ENVIRONMENT"] = env["DOTNET_ENVIRONMENT"] = "Production"
     env["YF_TEST_API_DIR"] = str(package)

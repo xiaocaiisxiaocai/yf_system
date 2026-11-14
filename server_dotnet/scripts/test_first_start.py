@@ -134,7 +134,7 @@ def verify_precompressed_static_http(base, package):
             "identityRange206": True, "healthUncompressed": True, "rootIndexRewrite": True}
 
 
-def verify_first_start(package: Path, temp_root: Path):
+def verify_first_start(package: Path, temp_root: Path, external_template: bool = False):
     url = urllib.parse.urlsplit(os.environ.get("YF_TEST_DATABASE_URL", ""))
     if url.scheme != "mysql" or url.hostname not in ("localhost", "127.0.0.1", "::1"):
         raise RuntimeError("First-start testing requires an explicit local MySQL administration URL")
@@ -184,7 +184,11 @@ def verify_first_start(package: Path, temp_root: Path):
                 "WebBaseUrl": base, "CookieSecure": False, "WorkerEnabled": False,
                 "BootstrapPassword": initial, "Smtp": {"Host": ""},
             })
-            if settings["App"].get("AutoInitializeDatabase") is not True:
+            if external_template:
+                # The external template ships with silent initialization off; the operator turns it on in the
+                # external configuration for the first start, which this disposable copy stands in for.
+                settings["App"]["AutoInitializeDatabase"] = True
+            elif settings["App"].get("AutoInitializeDatabase") is not True:
                 raise RuntimeError("Published configuration does not enable first-start initialization")
             # Only the disposable content root is changed. Original package hashes remain intact.
             (content / "appsettings.json").write_bytes((package / "appsettings.json").read_bytes())

@@ -292,6 +292,15 @@ if (!$ExternalConfigurationTemplate) {
     Assert-PrivatePublishDefaults $publishDefaults -AllowInsecure:$AllowInsecurePrivateConfiguration
 }
 
+# npm ci deletes web\node_modules first. A running dev server (Vite) keeps files there open, so the delete
+# stops half way and leaves both this package and the local install broken. Refuse before touching anything.
+$webModules = [IO.Path]::GetFullPath((Join-Path $webRoot 'node_modules'))
+$moduleHolders = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($webModules, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+if ($moduleHolders.Count -gt 0) {
+    throw "web\node_modules is in use by Node process $(($moduleHolders | ForEach-Object ProcessId) -join ', ') (for example the Vite dev server). Stop it before publishing; restart-dev.ps1 starts it again afterwards."
+}
+
 if (!(Test-Path -LiteralPath $outputParent -PathType Container)) {
     New-Item -ItemType Directory -Path $outputParent | Out-Null
 }
