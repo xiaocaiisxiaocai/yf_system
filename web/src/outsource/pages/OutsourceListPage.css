@@ -1,18 +1,5 @@
 .outsource-list-page {
-  --page-table-scroll-y: max(280px, calc(100dvh - 372px));
-}
-
-.outsource-list-tabs {
-  flex: 0 0 auto;
-  margin-bottom: 12px;
-}
-
-.outsource-list-tabs .arco-tabs-header {
-  margin: 0;
-}
-
-.outsource-list-tabs .arco-tabs-content {
-  display: none;
+  --page-table-scroll-y: max(280px, calc(100dvh - 320px));
 }
 
 .outsource-list-toolbar {

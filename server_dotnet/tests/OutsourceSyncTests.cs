@@ -198,7 +198,6 @@ public sealed class OutsourceSyncTests
         Assert.All(done, x => Assert.True(x.Closed));
         Assert.Equal("SENT", done.Single(x => x.Id == b.Id).SendStatus);
         Assert.Empty((await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List);
-        Assert.Equal(0, (await items.SummaryAsync(viewer, false, ct)).Total);
         var history = Assert.Single(await items.ChangesAsync(viewer, a.Id, ct));
         Assert.Equal(("completed", "完成状态", "未完成", "已完成", "EDIT", "采购"),
             (history.Field, history.Label, history.OldValue, history.NewValue, history.Source, history.ActorName));

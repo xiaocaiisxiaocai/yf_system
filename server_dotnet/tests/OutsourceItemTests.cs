@@ -122,9 +122,6 @@ public sealed class OutsourceItemTests
         Assert.Equal(["21089902"], (await service.ListAsync(viewer, Query(vendorId: yuankong.Id), 1, 20, 0, ct)).List.Select(x => x.WorkOrderNo));
         Assert.Equal(["21089901"], (await service.ListAsync(viewer, Query(typeId: oema.Id), 1, 20, 0, ct)).List.Select(x => x.WorkOrderNo));
         Assert.Equal(["21089902"], (await service.ListAsync(viewer, Query(keyword: "089902"), 1, 20, 0, ct)).List.Select(x => x.WorkOrderNo));
-        var summary = await service.SummaryAsync(viewer, false, ct);
-        Assert.Equal(2, summary.Total);
-        Assert.Equal(1, summary.Vendors.Single(x => x.VendorId == dingya.Id).Count);
 
         // Purchasing edits: version check, type/vendor guard, and a sent row becomes "pending notice".
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>

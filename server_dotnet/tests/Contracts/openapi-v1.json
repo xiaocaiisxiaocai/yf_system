@@ -8543,35 +8543,6 @@
         }
       }
     },
-    "/api/v1/outsource/items/summary": {
-      "get": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OutsourceItemSummaryResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/outsource/items/export": {
       "get": {
         "tags": [
@@ -14115,26 +14086,6 @@
         },
         "additionalProperties": false
       },
-      "OutsourceItemSummaryResponse": {
-        "required": [
-          "total",
-          "vendors"
-        ],
-        "type": "object",
-        "properties": {
-          "total": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "vendors": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OutsourceVendorCount"
-            }
-          }
-        },
-        "additionalProperties": false
-      },
       "OutsourceItemUpdate": {
         "required": [
           "expectedUpdatedAt",
@@ -14653,24 +14604,6 @@
               "format": "int64"
             },
             "nullable": true
-          }
-        },
-        "additionalProperties": false
-      },
-      "OutsourceVendorCount": {
-        "required": [
-          "count",
-          "vendorId"
-        ],
-        "type": "object",
-        "properties": {
-          "vendorId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "count": {
-            "type": "integer",
-            "format": "int32"
           }
         },
         "additionalProperties": false

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip,
+  Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Table, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
@@ -20,11 +20,9 @@ import './OutsourceListPage.css'
 type Item = ApiResponses['GET /outsource/items']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
-type Summary = ApiResponses['GET /outsource/items/summary']
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
 type ImportRow = { rowNumber: number; outsourceDate: string; workOrderNo: string; vendorName: string; typeName: string }
 
-const ALL = 'all'
 const STATUS_OPTIONS = [
   { label: '正常', value: 'NORMAL' },
   { label: '暂停', value: 'PAUSED' },
@@ -53,6 +51,7 @@ const IMPORT_HEADERS = ['外发日期', '工令', '外发厂商', '外发类型'
 
 interface Filters {
   keyword: string
+  vendorId?: number
   typeId?: number
   status?: string
   sendStatus?: string
@@ -68,19 +67,17 @@ const today = () => {
 const serverMessage = (error: unknown) =>
   (error as { response?: { data?: { message?: string } } })?.response?.data?.message
 
-/** The outsourcing list: overall table plus one tab per vendor (外协清单契约 → 页面). */
+/** The outsourcing list (外协清单契约 → 页面). */
 export default function OutsourceListPage() {
   const permissions = useAuth((state) => state.permissions)
   const canImport = permissions.includes(OUTSOURCE_PERMISSIONS.import)
   const canManage = permissions.includes(OUTSOURCE_PERMISSIONS.manage)
-  const [tab, setTab] = useState<string>(ALL)
   const [filters, setFilters] = useState<Filters>({ keyword: '', includeClosed: false })
   const [keywordDraft, setKeywordDraft] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [items, setItems] = useState<Item[]>([])
   const [total, setTotal] = useState(0)
-  const [summary, setSummary] = useState<Summary>({ total: 0, vendors: [] })
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [types, setTypes] = useState<OutsourceType[]>([])
   const [loading, setLoading] = useState(true)
@@ -97,7 +94,7 @@ export default function OutsourceListPage() {
   const sequence = useRef(0)
 
   const params = useMemo(() => ({
-    vendorId: tab === ALL ? undefined : Number(tab),
+    vendorId: filters.vendorId,
     typeId: filters.typeId,
     status: filters.status,
     sendStatus: filters.sendStatus,
@@ -105,7 +102,7 @@ export default function OutsourceListPage() {
     dateTo: filters.dateRange?.[1],
     keyword: filters.keyword || undefined,
     includeClosed: filters.includeClosed ? 'true' : undefined,
-  }), [tab, filters])
+  }), [filters])
 
   const loadReference = useCallback(async () => {
     const [vendorResponse, typeResponse] = await Promise.all([
@@ -119,13 +116,12 @@ export default function OutsourceListPage() {
     const seq = ++sequence.current
     setLoading(true); setError(false)
     try {
-      const [listResponse, summaryResponse, syncResponse] = await Promise.all([
+      const [listResponse, syncResponse] = await Promise.all([
         http.get<ApiResponses['GET /outsource/items']>('/outsource/items', { params: { ...params, page, pageSize } }),
-        http.get<ApiResponses['GET /outsource/items/summary']>('/outsource/items/summary', { params: { includeClosed: params.includeClosed } }),
         http.get<ApiResponses['GET /outsource/sync-status']>('/outsource/sync-status'),
       ])
       if (seq !== sequence.current) return
-      setItems(listResponse.data.list); setTotal(Number(listResponse.data.total)); setSummary(summaryResponse.data); setSyncStatus(syncResponse.data)
+      setItems(listResponse.data.list); setTotal(Number(listResponse.data.total)); setSyncStatus(syncResponse.data)
       setSelected((current) => current.filter((id) => listResponse.data.list.some((item) => item.id === id)))
     } catch {
       if (seq === sequence.current) setError(true)
@@ -147,8 +143,6 @@ export default function OutsourceListPage() {
   }, [load])
 
   const changeFilters = (next: Partial<Filters>) => { setFilters((current) => ({ ...current, ...next })); setPage(1) }
-  const counts = new Map(summary.vendors.map((row) => [row.vendorId, row.count]))
-  const tabVendors = vendors.filter((vendor) => vendor.status === 'ACTIVE' || (counts.get(vendor.id) ?? 0) > 0)
   const selectedItems = items.filter((item) => selected.includes(item.id))
 
   const syncNow = async () => {
@@ -186,7 +180,7 @@ export default function OutsourceListPage() {
       const response = await http.get<ApiResponses['GET /outsource/items/export']>('/outsource/items/export', {
         params, responseType: 'blob', timeout: 0,
       })
-      const vendorName = tab === ALL ? '' : `_${vendors.find((vendor) => vendor.id === Number(tab))?.name ?? ''}`
+      const vendorName = filters.vendorId === undefined ? '' : `_${vendors.find((vendor) => vendor.id === filters.vendorId)?.name ?? ''}`
       const url = URL.createObjectURL(response.data as Blob)
       const anchor = document.createElement('a')
       anchor.href = url; anchor.download = `外协清单${vendorName}_${today()}.xlsx`
@@ -298,15 +292,14 @@ export default function OutsourceListPage() {
 
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外协清单</h1>
-    <Tabs className="outsource-list-tabs" activeTab={tab} onChange={(value) => { setTab(value); setPage(1); setSelected([]) }}>
-      <Tabs.TabPane key={ALL} title={`总表 (${summary.total})`} />
-      {tabVendors.map((vendor) => <Tabs.TabPane key={String(vendor.id)} title={`${vendor.name} (${counts.get(vendor.id) ?? 0})`} />)}
-    </Tabs>
     <div className="page-toolbar responsive-toolbar outsource-list-toolbar">
       <Space wrap>
         <Input.Search aria-label="搜索工令、客户或机型" placeholder="工令、客户或机型" value={keywordDraft} allowClear style={{ width: 200 }}
           onChange={setKeywordDraft} onSearch={(value) => changeFilters({ keyword: value.trim() })}
           onClear={() => changeFilters({ keyword: '' })} />
+        <Select aria-label="外发厂商" placeholder="外发厂商" allowClear showSearch style={{ width: 180 }} value={filters.vendorId}
+          onChange={(value) => { changeFilters({ vendorId: value }); setSelected([]) }}
+          options={vendors.map((vendor) => ({ label: vendor.status === 'ACTIVE' ? vendor.name : `${vendor.name}（已停用）`, value: vendor.id }))} />
         <Select aria-label="外发类型" placeholder="外发类型" allowClear style={{ width: 200 }} value={filters.typeId}
           onChange={(value) => changeFilters({ typeId: value })}
           options={types.map((type) => ({ label: `${type.code}【${type.name}】`, value: type.id }))} />

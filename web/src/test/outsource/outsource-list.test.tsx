@@ -47,7 +47,6 @@ const syncStatus = {
 function mockApi() {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
     data: url === '/outsource/items' ? { list: items, total: 2, page: 1, pageSize: 20 }
-      : url === '/outsource/items/summary' ? { total: 2, vendors: [{ vendorId: 1, count: 1 }, { vendorId: 2, count: 1 }] }
         : url === '/outsource/sync-status' ? syncStatus
           : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
   } as never))
@@ -74,13 +73,11 @@ describe('外协清单页面', () => {
     expect(outsourceHome(['outsource:import'])).toBeNull()
   })
 
-  it('总表与厂商分页显示笔数，暂停整行标红，类型与厂商不符时提示', async () => {
+  it('不分厂商页签，可按厂商筛选，暂停整行标红，类型与厂商不符时提示', async () => {
     setSession(['outsource:view'])
     const get = mockApi()
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
-    expect(await screen.findByRole('tab', { name: '总表 (2)' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: '鼎亚 (1)' })).toBeInTheDocument()
     const paused = (await screen.findByText('21089901')).closest('tr')!
     expect(paused).toHaveClass('outsource-row--paused')
     const mismatch = screen.getByText('21089961').closest('tr')!
@@ -88,7 +85,11 @@ describe('外协清单页面', () => {
     expect(screen.queryByRole('button', { name: /汇入/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /编辑工令/ })).not.toBeInTheDocument()
 
-    await userEvent.setup().click(screen.getByRole('tab', { name: '元控 (1)' }))
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+    expect(get).not.toHaveBeenCalledWith('/outsource/items/summary', expect.anything())
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('combobox', { name: '外发厂商' }))
+    fireEvent.click(await screen.findByRole('option', { name: '元控' }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: 2, page: 1 }),
     })))
@@ -140,7 +141,6 @@ describe('外协清单页面', () => {
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items'
         ? { list: [{ ...items[0], typeId: null, typeLabel: 'XYZ', typeCode: 'XYZ', matchState: 'UNKNOWN_TYPE' }], total: 1, page: 1, pageSize: 20 }
-        : url === '/outsource/items/summary' ? { total: 1, vendors: [{ vendorId: 1, count: 1 }] }
           : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: items[0] } as never)
@@ -191,7 +191,6 @@ describe('外协清单页面', () => {
 
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [{ ...items[1], closed: true }], total: 1, page: 1, pageSize: 20 }
-        : url === '/outsource/items/summary' ? { total: 1, vendors: [{ vendorId: 2, count: 1 }] }
           : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     put.mockClear()

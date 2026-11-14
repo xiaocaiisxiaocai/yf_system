@@ -250,7 +250,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         return request.Rows;
     }
 
-    // ---- list, summary, export ----
+    // ---- list, export ----
 
     public async Task<PageResponse<OutsourceItemResponse>> ListAsync(
         CurrentUser actor, OutsourceItemQuery query, ulong page, uint size, ulong offset, CancellationToken ct)
@@ -263,17 +263,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var rows = await filtered.OrderByDescending(x => x.OutsourceDate).ThenByDescending(x => x.Id)
             .Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size).ToArrayAsync(ct);
         return new(rows.Select(reference.Json).ToArray(), total, page, size);
-    }
-
-    /// <summary>Counts for the overall tab and each vendor tab (closed rows only when asked for).</summary>
-    public async Task<OutsourceItemSummaryResponse> SummaryAsync(CurrentUser actor, bool includeClosed, CancellationToken ct)
-    {
-        await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.View, ct);
-        var items = context.OutsourceItems.AsNoTracking();
-        if (!includeClosed) items = items.Where(x => x.ClosedAt == null);
-        var counts = await items.GroupBy(x => x.VendorId).Select(g => new { VendorId = g.Key, Count = g.Count() }).ToArrayAsync(ct);
-        return new(counts.Sum(x => x.Count), counts.Select(x => new OutsourceVendorCount(x.VendorId, x.Count)).ToArray());
     }
 
     public async Task<OutsourceExport> ExportAsync(CurrentUser actor, OutsourceItemQuery query, CancellationToken ct)

@@ -1161,11 +1161,6 @@ export interface OutsourceItemResponse {
   updatedAt: string
 }
 
-export interface OutsourceItemSummaryResponse {
-  total: number
-  vendors: Array<OutsourceVendorCount>
-}
-
 export interface OutsourceItemUpdate {
   outsourceDate?: string | null
   vendorId?: number | null
@@ -1286,11 +1281,6 @@ export interface OutsourceTypeUpsert {
 
 export interface OutsourceTypeVendorsRequest {
   vendorIds?: Array<number> | null
-}
-
-export interface OutsourceVendorCount {
-  vendorId: number
-  count: number
 }
 
 export interface OutsourceVendorResponse {
@@ -2123,7 +2113,6 @@ export interface ApiResponses {
   "GET /outsource/items/export": Blob
   "POST /outsource/items/import": AdminImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse
-  "GET /outsource/items/summary": OutsourceItemSummaryResponse
   "POST /outsource/items/sync": OutsourceSyncStatusResponse
   "PUT /outsource/items/{id}": OutsourceItemResponse
   "GET /outsource/items/{id}/changes": Array<OutsourceItemChangeResponse>

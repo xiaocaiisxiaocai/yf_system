@@ -37,10 +37,6 @@ public sealed record OutsourceItemResponse(
     string? TypeCode, ulong? TypeId, string? TypeLabel, int? Quantity, DateOnly? OriginalDueDate, DateOnly? LatestDueDate,
     string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt);
 
-public sealed record OutsourceVendorCount(ulong VendorId, int Count);
-
-public sealed record OutsourceItemSummaryResponse(int Total, OutsourceVendorCount[] Vendors);
-
 /// <summary><paramref name="TypeId"/> is optional: null keeps the current type (a record whose type was disabled can still be edited).
 public sealed record OutsourceItemUpdate(string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateTime? ExpectedUpdatedAt);
 

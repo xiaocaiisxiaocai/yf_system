@@ -82,7 +82,6 @@
   "GET /api/v1/oem/uploads/{}",
   "GET /api/v1/outsource/items",
   "GET /api/v1/outsource/items/export",
-  "GET /api/v1/outsource/items/summary",
   "GET /api/v1/outsource/items/{}/changes",
   "GET /api/v1/outsource/mails",
   "GET /api/v1/outsource/mails/{}/attachment",

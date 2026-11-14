@@ -67,8 +67,6 @@ public static class OutsourceModule
             var p = QueryValues.Page(c.Request);
             return s.ListAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request), p.Page, p.Size, p.Offset, ct);
         });
-        items.MapGet("/summary", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
-            s.SummaryAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request).IncludeClosed, ct));
         items.MapGet("/export", async (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
         {
             var export = await s.ExportAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request), ct);
