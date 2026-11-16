@@ -263,7 +263,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var total = (ulong)await filtered.LongCountAsync(ct);
         var rows = await filtered.OrderByDescending(x => x.OutsourceDate).ThenByDescending(x => x.Id)
             .Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size).ToArrayAsync(ct);
-        return new(rows.Select(reference.Json).ToArray(), total, page, size);
+        return new(await reference.JsonMarkedAsync(context, rows, ct), total, page, size);
     }
 
     public async Task<OutsourceExport> ExportAsync(CurrentUser actor, OutsourceItemQuery query, CancellationToken ct)
@@ -401,7 +401,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var updated = await context.OutsourceItems.AsNoTracking().Where(x => ids.Contains(x.Id)).ToArrayAsync(ct);
         await transaction.CommitAsync(ct);
         var order = versions.Select((x, index) => (x.Id, index)).ToDictionary(x => x.Id, x => x.index);
-        return new(updated.OrderBy(x => order[x.Id]).Select(reference.Json).ToArray());
+        return new(await reference.JsonMarkedAsync(context, updated.OrderBy(x => order[x.Id]).ToArray(), ct));
     }
 
     internal static string CompletionLabel(bool completed) => completed ? "已完成" : "未完成";
@@ -507,7 +507,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var updated = await context.OutsourceItems.AsNoTracking().Where(x => ids.Contains(x.Id)).ToArrayAsync(ct);
         await transaction.CommitAsync(ct);
         var order = versions.Select((x, index) => (x.Id, index)).ToDictionary(x => x.Id, x => x.index);
-        return new(updated.OrderBy(x => order[x.Id]).Select(reference.Json).ToArray());
+        return new(await reference.JsonMarkedAsync(context, updated.OrderBy(x => order[x.Id]).ToArray(), ct));
     }
 
     /// <summary>Whether choosing <paramref name="newTypeCode"/> changes the item's type (the same dictionary type spelled differently is not a change).</summary>
@@ -612,6 +612,23 @@ internal sealed class OutsourceReference
         ? OutsourceSettingsService.Label(type.Code, type.Name) : rawType?.Trim();
 
     public string? CodeOf(ulong typeId) => types.Values.Where(x => x.Id == typeId).Select(x => x.Code).FirstOrDefault();
+
+    /// <summary>
+    /// Responses for the list screens. An item never mailed to its current vendor has nothing to compare with, so the
+    /// fields purchasing edited by hand are marked instead; once it is mailed, the comparison with that mail takes over.
+    /// </summary>
+    public async Task<OutsourceItemResponse[]> JsonMarkedAsync(YfDbContext context, IReadOnlyList<OutsourceItem> items, CancellationToken ct)
+    {
+        var responses = items.Select(Json).ToArray();
+        var unsent = items.Where(x => x.NotifiedVendorId != x.VendorId || x.LastSentSnapshot is null).Select(x => x.Id).ToArray();
+        if (unsent.Length == 0) return responses;
+        var edited = (await context.OutsourceItemChanges.AsNoTracking()
+            .Where(x => unsent.Contains(x.ItemId) && x.Source == OutsourceHistory.Edit)
+            .Select(x => new { x.ItemId, x.Field }).Distinct().ToArrayAsync(ct))
+            .ToLookup(x => x.ItemId, x => x.Field == "typeCode" ? "type" : x.Field);
+        return responses.Select(response => edited[response.Id].Any()
+            ? response with { ChangedFields = [.. edited[response.Id].Distinct()] } : response).ToArray();
+    }
 
     public OutsourceItemResponse Json(OutsourceItem item) => new OutsourceItemResponse(
         item.Id, item.SerialNo, item.WorkOrderNo, item.OutsourceDate, item.VendorId, VendorNames.GetValueOrDefault(item.VendorId) ?? "",

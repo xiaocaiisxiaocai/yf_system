@@ -163,6 +163,13 @@ public sealed class OutsourceItemTypeTests
         var item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
         Assert.Null(item.ChangedFields); // never mailed: nothing to compare with
 
+        // Never mailed, but edited by hand: the edited fields are marked until the first mail.
+        var edited = await f.Items.UpdateAsync(f.Buyer, item.Id,
+            new(item.OutsourceDate.ToString("yyyy-MM-dd"), item.VendorId, null, "手填备注", item.Status, item.UpdatedAt, null), ct);
+        Assert.Equal(["remark"], edited.ChangedFields!);
+        Assert.Equal(["remark"], Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List).ChangedFields!);
+        item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List) with { ChangedFields = null };
+
         var snapshot = OutsourceWorkbook.Snapshot(item);
         snapshot["quantity"] = "99";
         snapshot["remark"] = "旧备注";
