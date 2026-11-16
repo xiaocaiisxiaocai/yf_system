@@ -51,7 +51,7 @@ export default function MesOrdersPage() {
   }, [load])
 
   const columns: TableColumnProps<Order>[] = [
-    { title: '序号', key: 'seq', width: 60, fixed: 'left', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
+    { title: '序号', key: 'seq', width: 72, fixed: 'left', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
     ...MES_FIXED_COLUMNS.map((column) => leaf(column, 'left')),
     ...MES_LAYOUT.map((item): TableColumnProps<Order> => isGroup(item)
       ? { title: item.label, key: item.label, children: item.columns.map((column) => leaf(column)) }

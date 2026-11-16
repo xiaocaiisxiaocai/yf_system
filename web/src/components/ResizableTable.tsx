@@ -135,7 +135,8 @@ function GroupedTable<T extends object>({ tableId, columns, lockedKeys, classNam
     else tree.push({ ...group, key: `${groupKey}:${column.key}`, groupKey, children: [leaf] } as TableColumnProps<T>)
   }
   return (
-    <ColumnResizeProvider actions={table.actions} picker={table.picker}>
+    // A wide grouped table scrolls sideways for ages, so the picker sits on the first column, which the page pins in view.
+    <ColumnResizeProvider actions={table.actions} picker={{ ...table.picker, lastKey: table.columns[0]?.key }}>
       <div ref={hostRef} className={[table.hostClassName, classNames(className).includes('page-table') && 'page-table-host'].filter(Boolean).join(' ')}>
         <Table<T>
           {...rest}
