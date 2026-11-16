@@ -96,25 +96,57 @@ function FlatResizableTable<T extends object>({ tableId, columns, growKey, locke
   )
 }
 
-const leafWidth = (column: TableColumnProps<never>): number =>
-  column.children?.length ? column.children.reduce((sum, child) => sum + leafWidth(child as TableColumnProps<never>), 0)
-    : typeof column.width === 'number' ? column.width : RESIZABLE_DEFAULT_WIDTH
+type Leaf<T> = { column: TableColumnProps<T>; groupKey?: string; group?: TableColumnProps<T> }
+
+const flattenColumns = <T,>(columns: TableColumnProps<T>[]): Leaf<T>[] => columns.flatMap((column) => column.children?.length
+  ? column.children.map((child) => ({ column: child, groupKey: String(column.key ?? column.title), group: column }))
+  : [{ column }])
 
 /**
- * 带分组表头（`children`）的表格：列宽、顺序按页面写定，不提供拖动列宽和「显示列」，其余（统一分页、横向滚动）与其他表格一致。
+ * 带分组表头（`children`）的表格：叶子列和其他表格一样可拖动列宽、在「显示列」里隐藏、排序和固定；
+ * 表头分组按当前显示的相邻同组列重新合并（同组的列被拆开后，各段各有一个分组表头）。
  */
-function GroupedTable<T extends object>({ tableId: _tableId, columns, growKey: _growKey, lockedKeys: _lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
-  const width = columns.reduce((sum, column) => sum + leafWidth(column as TableColumnProps<never>), 0)
+function GroupedTable<T extends object>({ tableId, columns, lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
+  const userId = useAuth((state) => state.user?.id)
+  const hostRef = useRef<HTMLDivElement>(null)
+  const leaves = flattenColumns(columns)
+  const keyed: (KeyedColumn<T> & { locked: boolean; groupKey?: string; group?: TableColumnProps<T> })[] = leaves.map(({ column, groupKey, group }, index) => {
+    const key = keyOf(column, index)
+    const label = typeof column.title === 'string' ? column.title : key
+    return {
+      onHeaderCell: columnHeaderProps, ...column, key, groupKey, group,
+      locked: lockedKeys ? lockedKeys.includes(key) : lockedByDefault(column, index),
+      originalTitle: column.title,
+      // Leaf names repeat across groups (完成占比, 责任人), so the picker and the layout use "group-leaf".
+      title: group && typeof group.title === 'string' ? `${group.title}-${label}` : label,
+    }
+  })
+  const signature = JSON.stringify(keyed.map((column) => [column.key, String(column.title),
+    typeof column.width === 'number' && column.width > 0 ? column.width : RESIZABLE_DEFAULT_WIDTH, column.locked]))
+  const specs = useMemo<ColumnLayoutSpec[]>(() => (JSON.parse(signature) as Array<[string, string, number, boolean]>)
+    .map(([key, title, defaultWidth, locked]) => ({ key, title, defaultWidth, minWidth: Math.min(72, defaultWidth), locked })), [signature])
+  const table = useAdjustableColumns(tableId, userId, specs, keyed, '', hostRef, true, false, 0)
+  const tree: TableColumnProps<T>[] = []
+  for (const { originalTitle, locked: _locked, groupKey, group, ...column } of table.columns) {
+    const leaf = { ...column, title: originalTitle } as TableColumnProps<T>
+    const last = tree.at(-1)
+    if (!group) tree.push(leaf)
+    else if (last?.children && (last as { groupKey?: string }).groupKey === groupKey) last.children.push(leaf)
+    else tree.push({ ...group, key: `${groupKey}:${column.key}`, groupKey, children: [leaf] } as TableColumnProps<T>)
+  }
   return (
-    <div className={classNames(className).includes('page-table') ? 'page-table-host' : undefined}>
-      <Table<T>
-        {...rest}
-        className={classNames(className).join(' ')}
-        columns={columns}
-        pagination={pagination && typeof pagination === 'object' ? { ...TABLE_PAGINATION, ...pagination } : pagination}
-        scroll={{ ...scroll, x: Math.max(width, typeof scroll?.x === 'number' ? scroll.x : 0) }}
-      />
-    </div>
+    <ColumnResizeProvider actions={table.actions} picker={table.picker}>
+      <div ref={hostRef} className={[table.hostClassName, classNames(className).includes('page-table') && 'page-table-host'].filter(Boolean).join(' ')}>
+        <Table<T>
+          {...rest}
+          className={[...classNames(className), table.tableClassName].join(' ')}
+          columns={tree}
+          components={table.components}
+          pagination={pagination && typeof pagination === 'object' ? { ...TABLE_PAGINATION, ...pagination } : pagination}
+          scroll={{ ...scroll, x: Math.max(table.scrollX, typeof scroll?.x === 'number' ? scroll.x : 0) }}
+        />
+      </div>
+    </ColumnResizeProvider>
   )
 }
 

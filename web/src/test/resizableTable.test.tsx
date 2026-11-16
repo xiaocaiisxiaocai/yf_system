@@ -132,4 +132,26 @@ describe('ResizableTable', () => {
     expect(headers()).toEqual(['姓名', '邮箱', '部门', '操作'])
     expect(screen.getByRole('columnheader', { name: /姓名/ })).toHaveClass('arco-table-col-fixed-left')
   })
+  it('分组表头的叶子列同样可拖宽、在「显示列」里隐藏，分组表头随显示的列重新合并', async () => {
+    type Order = { id: number; a: string; b: string; c: string }
+    const data: Order[] = [{ id: 1, a: 'A1', b: 'B1', c: 'C1' }]
+    render(<ResizableTable<Order> tableId="grouped" rowKey="id" data={data} pagination={false}
+      columns={[
+        { title: '序号', key: 'seq', width: 60, render: () => 1 },
+        { title: '影响', key: 'g', children: [
+          { title: '甲', key: 'a', dataIndex: 'a', width: 80 },
+          { title: '乙', key: 'b', dataIndex: 'b', width: 80 },
+        ] },
+        { title: '丙', key: 'c', dataIndex: 'c', width: 90 },
+      ]} />)
+    expect(screen.getByText('影响')).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole('separator', { name: '调整甲列宽' }), { key: 'ArrowRight' })
+    expect(screen.getByRole('separator', { name: '调整甲列宽' })).toHaveAttribute('aria-valuenow', '96')
+    expect(screen.queryByRole('separator', { name: '调整影响列宽' })).toBeNull()
+    await userEvent.setup().click(screen.getByRole('button', { name: '显示列' }))
+    fireEvent.click(within(await screen.findByRole('group', { name: '显示列' })).getByRole('checkbox', { name: '影响-乙' }))
+    await waitFor(() => expect(screen.queryByText('B1')).toBeNull())
+    expect(screen.getByText('A1')).toBeInTheDocument()
+    expect(screen.getByText('影响')).toBeInTheDocument()
+  })
 })

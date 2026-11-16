@@ -43,7 +43,7 @@ const ColumnPickerContext = createContext<ColumnPickerState | null>(null)
 
 export function ResizableHeaderCell({ className, column, children }: {
   className?: string
-  column?: { key?: string | number; title?: ReactNode }
+  column?: { key?: string | number; title?: ReactNode; children?: unknown }
   children?: ReactNode
 }) {
   const actions = useContext(ColumnResizeContext)
@@ -56,7 +56,7 @@ export function ResizableHeaderCell({ className, column, children }: {
     <div className={withPicker ? `${className ?? ''} table-th-with-picker` : className}>
       {children}
       {withPicker && picker && <ColumnVisibilityPicker picker={picker} />}
-      {actions && columnKey && label && (
+      {actions && columnKey && label && !column?.children && (
         <div
           role="separator"
           tabIndex={0}
