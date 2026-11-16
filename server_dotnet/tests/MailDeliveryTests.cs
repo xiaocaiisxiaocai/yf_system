@@ -284,6 +284,100 @@ public sealed class MailDeliveryTests
         Assert.Equal(MailService.InterruptedSendError, state.LastError);
     }
 
+    /// <summary>Records whole envelopes and refuses the addresses it is told to (the rest of the message goes out).</summary>
+    private sealed class SharedMessageDelivery : ISmtpDelivery
+    {
+        public List<SmtpEnvelope> Envelopes { get; } = [];
+        public Dictionary<string, bool> Refuse { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct)
+        {
+            Envelopes.Add(envelope);
+            var all = new[] { envelope.Recipient }.Concat(envelope.MoreTo ?? []).Concat(envelope.Cc ?? []);
+            return Task.FromResult(new SmtpDeliveryResult(null,
+                all.Where(Refuse.ContainsKey).Select(address => new SmtpRejectedRecipient(address, Refuse[address])).ToArray()));
+        }
+    }
+
+    private static async Task SeedTransferMailAsync(MailDatabaseScope scope, string rows, CancellationToken ct)
+    {
+        await using var conn = await scope.Database.OpenAsync(ct);
+        await conn.ExecuteAsync(new CommandDefinition("DELETE FROM email_outbox; INSERT INTO email_outbox(id,event_type,recipient_realm,recipient_account_id,oem_transfer_id,recipient_email,subject,body,status,retry_count,copy_only) VALUES "
+            + rows, cancellationToken: ct));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task RecipientsOfOneEventShareAMessageWithTheCopyRowsInCc()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await SeedTransferMailAsync(scope, """
+            (11,'OEM_TEST','oem',1,73,'owner1@example.invalid','s','body','PENDING',0,0),
+            (12,'OEM_TEST','oem',2,73,'owner2@example.invalid','s','body','PENDING',0,0),
+            (13,'OEM_TEST','oem',3,73,'other@example.invalid','s','body','PENDING',0,1),
+            (14,'OEM_TEST','oem',4,74,'elsewhere@example.invalid','s','body','PENDING',0,0)
+            """, ct);
+        var delivery = new SharedMessageDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery,
+            policies: [new ExternalPolicy(_ => OutboxDecision.Allow)]);
+
+        await service.FlushAsync(ct);
+
+        Assert.Equal(2, delivery.Envelopes.Count);
+        var shared = delivery.Envelopes.Single(x => x.Recipient == "owner1@example.invalid");
+        Assert.Equal(["owner2@example.invalid"], shared.MoreTo!);
+        Assert.Equal(["other@example.invalid"], shared.Cc!);
+        Assert.Equal("elsewhere@example.invalid", delivery.Envelopes.Single(x => x.Recipient != "owner1@example.invalid").Recipient);
+        await using var check = await scope.Database.OpenAsync(ct);
+        Assert.Equal(4, await check.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM email_outbox WHERE status='SENT' AND sent_at IS NOT NULL"));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ARefusedAddressFailsOnlyItsOwnRowWhileTheRestOfTheSharedMessageIsSent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await SeedTransferMailAsync(scope, """
+            (21,'OEM_TEST','oem',1,73,'good@example.invalid','s','body','PENDING',0,0),
+            (22,'OEM_TEST','oem',2,73,'bad@example.invalid','s','body','PENDING',0,0),
+            (23,'OEM_TEST','oem',3,73,'later@example.invalid','s','body','PENDING',0,1)
+            """, ct);
+        var delivery = new SharedMessageDelivery { Refuse = { ["bad@example.invalid"] = true } };
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery,
+            policies: [new ExternalPolicy(_ => OutboxDecision.Allow)]);
+
+        await service.FlushAsync(ct);
+
+        Assert.Single(delivery.Envelopes);
+        await using var check = await scope.Database.OpenAsync(ct);
+        var states = (await check.QueryAsync<(ulong Id, string Status)>("SELECT id AS Id, status AS Status FROM email_outbox ORDER BY id")).ToArray();
+        Assert.Equal([(21UL, "SENT"), (22UL, "FAILED"), (23UL, "SENT")], states);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task DifferentTextOrNoProjectOrTransferIsNeverMerged()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var scope = await MailDatabaseScope.CreateOrSkipAsync(ct);
+        await using (var conn = await scope.Database.OpenAsync(ct))
+            await conn.ExecuteAsync(new CommandDefinition("""
+                DELETE FROM email_outbox;
+                INSERT INTO email_outbox(id,event_type,recipient_realm,recipient_account_id,oem_transfer_id,recipient_email,subject,body,status,retry_count,copy_only) VALUES
+                (31,'OEM_TEST','oem',1,73,'a@example.invalid','s','one','PENDING',0,0),
+                (32,'OEM_TEST','oem',2,73,'b@example.invalid','s','two','PENDING',0,0),
+                (33,'OEM_TEST','oem',3,NULL,'c@example.invalid','s','same','PENDING',0,0),
+                (34,'OEM_TEST','oem',4,NULL,'d@example.invalid','s','same','PENDING',0,0);
+                """, cancellationToken: ct));
+        var delivery = new SharedMessageDelivery();
+        var service = new MailService(scope.Database, scope.Options, new AuditService([]), NullLogger<MailService>.Instance, delivery,
+            policies: [new ExternalPolicy(_ => OutboxDecision.Allow)]);
+
+        await service.FlushAsync(ct);
+
+        Assert.Equal(4, delivery.Envelopes.Count);
+        Assert.All(delivery.Envelopes, x => Assert.Empty(x.MoreTo ?? []));
+    }
+
     private sealed class RecordingDelivery : ISmtpDelivery
     {
         public List<string> Recipients { get; } = [];

@@ -90,6 +90,10 @@ public sealed class SupplierContactTests
             projects.CreateAsync(conn, admin, Request("停用联络人", [li.Id]), null, ct));
         Assert.Equal("联络人「李四四」已停用，不能选为 Robot 负责人", disabledNew.Message);
 
+        // A contact who is not a Robot owner of the project only gets a copy.
+        await conn.CloseAsync();
+        await contacts.CreateAsync(admin, 9101, new SupplierContactUpsert("赵六", "zhao@example.test", 3), ct);
+        await conn.OpenAsync(ct);
         var messages = new MessageService(audit, database.Options);
         var unsigned = await Assert.ThrowsAsync<ApiException>(() => messages.CreateAsync(
             conn, supplier, projectId, new MessageCreateRequest { Content = "没有签名" }, null, ct));
@@ -105,11 +109,12 @@ public sealed class SupplierContactTests
                    new MessageCreateRequest { Content = "内部留言不签名", SignerName = "张三" }, null, ct)))
             Assert.Equal(JsonValueKind.Null, internalMessage.RootElement.GetProperty("signerName").ValueKind);
 
-        // Supplier-facing mail goes to every active contact of the supplier, not the shared account address.
-        var recipients = (await conn.QueryAsync<(ulong UserId, string Email)>(new CommandDefinition(
-            "SELECT recipient_user_id,recipient_email FROM email_outbox WHERE project_id=@ProjectId AND event_type='MESSAGE_CREATED' ORDER BY id",
-            new { ProjectId = projectId }, cancellationToken: ct))).Where(row => row.UserId == 9302).Select(row => row.Email).ToArray();
-        Assert.Equal(["zhang@example.test"], recipients);
+        // Supplier-facing mail goes to the active contacts, not the shared account address: the project's Robot owner is
+        // addressed and the supplier's other contacts are copied.
+        var recipients = (await conn.QueryAsync<(ulong UserId, string Email, bool Copy)>(new CommandDefinition(
+            "SELECT recipient_user_id,recipient_email,copy_only FROM email_outbox WHERE project_id=@ProjectId AND event_type='MESSAGE_CREATED' ORDER BY id",
+            new { ProjectId = projectId }, cancellationToken: ct))).Where(row => row.UserId == 9302).Select(row => (row.Email, row.Copy)).ToArray();
+        Assert.Equal([("zhang@example.test", false), ("zhao@example.test", true)], recipients);
     }
 
     private static JsonDocument Json(object value) => JsonDocument.Parse(JsonSerializer.Serialize(value, TestJson.Web));

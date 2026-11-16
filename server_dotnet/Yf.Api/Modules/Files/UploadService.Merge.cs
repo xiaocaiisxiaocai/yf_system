@@ -449,10 +449,11 @@ public sealed partial class UploadService
             // Supplier accounts are shared credentials; notify only the supplier's active contacts.
             var anchors = supplierRecipients.Where(recipient => policy.Allows("FILE_UPLOADED", recipient.UserType))
                 .Select(recipient => recipient.Id);
-            foreach (var target in ProjectNotificationService.ContactTargets(anchors, contacts))
+            var robotOwners = (await RobotOwners.LoadAsync(context, [projectId], ct)).GetValueOrDefault(projectId) ?? [];
+            foreach (var target in ProjectNotificationService.ContactTargets(anchors, contacts, robotOwners))
                 await EnqueueFileSummaryForRecipientAsync(
                     conn, tx, projectId, project.Name, fileId, fileName, direction, uploader.EmployeeNo,
-                    target.UserId, target.Email, options.WebBaseUrl, createdAt, ct, target.ContactId);
+                    target.UserId, target.Email, options.WebBaseUrl, createdAt, ct, target.ContactId, target.Cc);
             return;
         }
         foreach (var recipient in recipients)
@@ -486,7 +487,8 @@ public sealed partial class UploadService
         string webBaseUrl,
         DateTime createdAt,
         CancellationToken ct,
-        ulong? contactId = null)
+        ulong? contactId = null,
+        bool copyOnly = false)
     {
         if (direction is not ("C2S" or "S2C"))
             throw new InvalidOperationException("文件通知方向无效");
@@ -522,11 +524,13 @@ public sealed partial class UploadService
         await context.Database.ExecuteSqlInterpolatedAsync($$"""
             INSERT INTO email_outbox
                 (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
-                 subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
+                 subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at,copy_only)
             VALUES
                 ('FILE_UPLOADED',{{projectId}},{{dedupeKey}},{{recipientUserId}},{{recipientEmail}},
-                 {{subject}},{{body}},'PENDING',0,{{nextAttemptAt}},NULL,NULL,{{createdAt}})
+                 {{subject}},{{body}},'PENDING',0,{{nextAttemptAt}},NULL,NULL,{{createdAt}},{{copyOnly}})
             ON DUPLICATE KEY UPDATE
+                copy_only=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
+                             VALUES(copy_only),copy_only),
                 recipient_email=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
                                    VALUES(recipient_email),recipient_email),
                 body=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,

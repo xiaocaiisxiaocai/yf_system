@@ -398,22 +398,33 @@ public sealed class MailService
                     RecipientRealm = mail.RecipientRealm,
                     RecipientAccountId = mail.RecipientAccountId,
                     OemTransferId = mail.OemTransferId,
+                    CopyOnly = mail.CopyOnly,
                 }).Take(BatchSize).ToArrayAsync(ct);
+            pending = await WithMessageMatesAsync(context, pending, now, ct);
         }
         // One SMTP connection (connect + authenticate) serves the whole batch instead of every message.
         var batch = smtp.OpenBatch();
         var unavailable = false;
         try
         {
-            foreach (var mail in pending)
+            // Rows of one event with the same text are one message: its To recipients and Cc are sent together.
+            foreach (var related in pending.GroupBy(MessageKey).Select(group => group.ToArray()))
             {
-                // Connection, authentication, TLS, timeout and sender failures affect every message:
-                // stop the batch instead of burning each message's retry budget on the same outage.
-                if (await DeliverAsync(batch, resolved, mail, ct) == DeliveryOutcome.ServiceUnavailable)
+                var claimed = new List<(MailRow Mail, DateTime Lease)>();
+                foreach (var mail in related)
+                    if (await ClaimAsync(mail, ct) is { } lease) claimed.Add((mail, lease));
+                var messages = claimed.GroupBy(item => (item.Mail.Subject, item.Mail.Body)).Select(group => group.ToArray()).ToArray();
+                for (var index = 0; index < messages.Length; index++)
                 {
+                    // Connection, authentication, TLS, timeout and sender failures affect every message:
+                    // stop the batch instead of burning each message's retry budget on the same outage.
+                    if (await SendClaimedAsync(batch, resolved, messages[index], ct) != DeliveryOutcome.ServiceUnavailable) continue;
                     unavailable = true;
+                    foreach (var unsent in messages.Skip(index + 1).SelectMany(group => group))
+                        await ReleaseAsync(unsent.Mail, unsent.Lease, ct);
                     break;
                 }
+                if (unavailable) break;
             }
         }
         finally
@@ -426,9 +437,65 @@ public sealed class MailService
         return unavailable ? 0 : pending.Length;
     }
 
+    private const int MaximumMessageMates = 100;
+
+    /// <summary>Rows that go in one message share the event, its project or transfer, the subject and the kind of links.</summary>
+    /// Mail that belongs to neither a project nor a transfer (account notices and the like) is never merged.
+    private static (string, ulong?, ulong?, string, bool, ulong?) MessageKey(MailRow mail) => (mail.EventType, mail.ProjectId, mail.OemTransferId, mail.Subject,
+        MailLinks.IsInternalStaff(mail.RecipientUserType, mail.RecipientRealm, mail.OemTransferId),
+        mail.ProjectId is null && mail.OemTransferId is null ? mail.Id : null);
+
+    /// <summary>
+    /// A flush takes the oldest due rows; the other recipients of the same messages are added even beyond the batch size,
+    /// so a message is not split between two flushes.
+    /// </summary>
+    private static async Task<MailRow[]> WithMessageMatesAsync(YfDbContext context, MailRow[] pending, DateTime now, CancellationToken ct)
+    {
+        var projectIds = pending.Where(mail => mail.ProjectId is not null).Select(mail => mail.ProjectId!.Value).Distinct().ToArray();
+        var transferIds = pending.Where(mail => mail.OemTransferId is not null).Select(mail => mail.OemTransferId!.Value).Distinct().ToArray();
+        if (pending.Length == 0 || projectIds.Length + transferIds.Length == 0) return pending;
+        var have = pending.Select(mail => mail.Id).ToHashSet();
+        var keys = pending.Select(MessageKey).ToHashSet();
+        var candidates = await (
+            from mail in context.EmailOutbox
+            join recipient in context.Users on mail.RecipientUserId equals (ulong?)recipient.Id into recipients
+            from recipient in recipients.DefaultIfEmpty()
+            where mail.EventType != "STORAGE_WARNING"
+                  && mail.SentAt == null
+                  && ((mail.ProjectId != null && Enumerable.Contains(projectIds, mail.ProjectId.Value))
+                      || (mail.OemTransferId != null && Enumerable.Contains(transferIds, mail.OemTransferId.Value)))
+                  && ((mail.Status == MailStatuses.Pending && (mail.NextAttemptAt == null || mail.NextAttemptAt <= now))
+                      || (mail.Status == MailStatuses.Sending && mail.NextAttemptAt <= now))
+            orderby mail.Id
+            select new MailRow
+            {
+                Id = mail.Id,
+                EventType = mail.EventType,
+                ProjectId = mail.ProjectId,
+                DedupeKey = mail.DedupeKey,
+                RecipientUserId = mail.RecipientUserId,
+                RecipientUserType = recipient == null ? null : recipient.UserType,
+                RecipientEmail = mail.RecipientEmail,
+                Subject = mail.Subject,
+                Body = mail.Body,
+                Status = mail.Status,
+                RetryCount = mail.RetryCount,
+                NextAttemptAt = mail.NextAttemptAt,
+                RecipientRealm = mail.RecipientRealm,
+                RecipientAccountId = mail.RecipientAccountId,
+                OemTransferId = mail.OemTransferId,
+                CopyOnly = mail.CopyOnly,
+            }).Take(MaximumMessageMates + pending.Length).ToArrayAsync(ct);
+        return pending.Concat(candidates.Where(mail => !have.Contains(mail.Id) && keys.Contains(MessageKey(mail)))).ToArray();
+    }
+
     private enum DeliveryOutcome { Skipped, Completed, ServiceUnavailable }
 
-    private async Task<DeliveryOutcome> DeliverAsync(ISmtpBatch batch, ResolvedSmtpSettings resolved, MailRow mail, CancellationToken ct)
+    /// <summary>
+    /// Takes the durable lease on one outbox row and re-checks it (merged text, recipient, policy). Returns the lease, or
+    /// null when the row is not sent now (claimed elsewhere, cancelled or abandoned).
+    /// </summary>
+    private async Task<DateTime?> ClaimAsync(MailRow mail, CancellationToken ct)
     {
         DateTime lease;
         await using (var claimConnection = await db.OpenAsync(ct))
@@ -461,7 +528,7 @@ public sealed class MailService
                         "email_outbox", mail.Id, new { eventType = mail.EventType, recipient = mail.RecipientEmail,
                             status = MailStatuses.Failed, retryCount = mail.RetryCount + 1, error = InterruptedSendError }, null, ct);
                 await claimTransaction.CommitAsync(ct);
-                return DeliveryOutcome.Skipped;
+                return null;
             }
             var claimed = await claimQuery.ExecuteUpdateAsync(setters => setters
                 .SetProperty(item => item.Status, MailStatuses.Sending)
@@ -469,7 +536,7 @@ public sealed class MailService
                 .SetProperty(item => item.DedupeKey,
                     item => item.EventType == CoalescedFileEvent || item.EventType == CoalescedMessageEvent ? null : item.DedupeKey)
                 .SetProperty(item => item.NextAttemptAt, lease), ct);
-            if (claimed != 1) return DeliveryOutcome.Skipped;
+            if (claimed != 1) return null;
             if (interrupted) mail.RetryCount++;
             var claimedMail = await claimContext.EmailOutbox.AsNoTracking()
                 .Where(item => item.Id == mail.Id && item.Status == MailStatuses.Sending && item.NextAttemptAt == lease)
@@ -478,6 +545,7 @@ public sealed class MailService
                     item.RecipientEmail,
                     item.Subject,
                     item.Body,
+                    item.CopyOnly,
                 })
                 .SingleAsync(ct);
             // Enqueue and claim serialize on the outbox row. Reload after claiming so a file or
@@ -485,6 +553,7 @@ public sealed class MailService
             mail.RecipientEmail = claimedMail.RecipientEmail;
             mail.Subject = claimedMail.Subject;
             mail.Body = claimedMail.Body;
+            mail.CopyOnly = claimedMail.CopyOnly;
             var owner = PolicyFor(mail.EventType);
             if (owner is not null)
             {
@@ -492,7 +561,7 @@ public sealed class MailService
                         owner, mail, lease, claimConnection, claimTransaction, claimContext, ct))
                 {
                     await claimTransaction.CommitAsync(ct);
-                    return DeliveryOutcome.Skipped;
+                    return null;
                 }
             }
             else
@@ -577,26 +646,37 @@ public sealed class MailService
                             ct);
                     }
                     await claimTransaction.CommitAsync(ct);
-                    return DeliveryOutcome.Skipped;
+                    return null;
                 }
             }
             await claimTransaction.CommitAsync(ct);
         }
-        // SMTP may take a minute. The durable lease protects this message;
+        return lease;
+    }
+
+    /// <summary>
+    /// Sends the claimed rows of one message: rows with the same event and text go out as ONE message, the To rows as its
+    /// recipients and the copy-only rows as its Cc. Every row then gets its own outcome, retry budget and audit entry.
+    /// </summary>
+    private async Task<DeliveryOutcome> SendClaimedAsync(
+        ISmtpBatch batch, ResolvedSmtpSettings resolved, IReadOnlyList<(MailRow Mail, DateTime Lease)> group, CancellationToken ct)
+    {
+        var lead = group[0].Mail;
+        // A message needs an addressee: when every To row dropped out, the copies are addressed instead.
+        var toRows = group.Where(item => !item.Mail.CopyOnly).ToArray();
+        var addressees = toRows.Length > 0 ? toRows : group.ToArray();
+        var copies = toRows.Length > 0 ? group.Where(item => item.Mail.CopyOnly).ToArray() : [];
+        // SMTP may take a minute. The durable lease protects these messages;
         // no pooled database connection is needed while waiting on the network.
-        string status = MailStatuses.Sent;
-        string? error = null;
-        var retries = mail.RetryCount;
-        TimeSpan? retryDelay = null;
-        var serviceUnavailable = false;
-        string? auditReason = null;
-        string? failedStep = null;
-        string? diagnosis = null;
+        Exception? failure = null;
+        IReadOnlyList<SmtpRejectedRecipient> rejected = [];
         var reconnects = 0;
         try
         {
-            var envelope = new SmtpEnvelope(mail.RecipientEmail, mail.Subject, MailLinks.ForRecipient(mail.Body, options,
-                MailLinks.IsInternalStaff(mail.RecipientUserType, mail.RecipientRealm, mail.OemTransferId)));
+            var envelope = new SmtpEnvelope(addressees[0].Mail.RecipientEmail, lead.Subject, MailLinks.ForRecipient(lead.Body, options,
+                MailLinks.IsInternalStaff(lead.RecipientUserType, lead.RecipientRealm, lead.OemTransferId)),
+                addressees.Skip(1).Select(item => item.Mail.RecipientEmail).ToArray(),
+                copies.Select(item => item.Mail.RecipientEmail).ToArray());
             SmtpDeliveryResult delivery;
             while (true)
             {
@@ -613,61 +693,106 @@ public sealed class MailService
                     var wait = ConnectRetryDelays[reconnects++];
                     logger.LogWarning(
                         "SMTP connection for outbox {OutboxId} failed ({Diagnostic}); reconnecting in {Delay} (attempt {Attempt}/{Maximum}).",
-                        mail.Id, SmtpStage.Describe(ex), wait, reconnects, ConnectRetryDelays.Length);
+                        lead.Id, SmtpStage.Describe(ex), wait, reconnects, ConnectRetryDelays.Length);
                     await Task.Delay(wait, ct);
                 }
             }
             if (reconnects > 0)
-                logger.LogInformation("SMTP message {OutboxId} was delivered after {Reconnects} reconnect(s).", mail.Id, reconnects);
+                logger.LogInformation("SMTP message {OutboxId} was delivered after {Reconnects} reconnect(s).", lead.Id, reconnects);
             if (delivery.DisconnectFailureType is not null)
                 logger.LogWarning("SMTP message {OutboxId} was accepted, but connection cleanup failed ({ErrorType}).",
-                    mail.Id, delivery.DisconnectFailureType);
+                    lead.Id, delivery.DisconnectFailureType);
+            rejected = delivery.Rejected ?? [];
             ResetBreaker();
-            ForgetUnavailable(mail.Id);
+            foreach (var (mail, _) in group) ForgetUnavailable(mail.Id);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            error = ex is OperationCanceledException ? "SMTP 连接超时" : SanitizeError(ex.Message);
-            failedStep = SmtpStage.Of(ex);
-            diagnosis = DeliveryDiagnosis(ex, failedStep);
-            var kind = ClassifyFailure(ex);
+            failure = ex;
+        }
+
+        string? failedStep = null;
+        string? diagnosis = null;
+        string? safeError = null;
+        var kind = SmtpFailureKind.Transient;
+        if (failure is not null)
+        {
+            safeError = failure is OperationCanceledException ? "SMTP 连接超时" : SanitizeError(failure.Message);
+            failedStep = SmtpStage.Of(failure);
+            diagnosis = DeliveryDiagnosis(failure, failedStep);
+            kind = ClassifyFailure(failure);
             logger.LogWarning(
                 "SMTP delivery for outbox {OutboxId} failed ({ErrorType}, {FailureKind}, {SafeError}); sanitized stack: {SanitizedStack}",
-                mail.Id, ex.GetType().Name, kind, error, SanitizedExceptionTrace(ex));
-            if (kind == SmtpFailureKind.ServiceUnavailable)
+                lead.Id, failure.GetType().Name, kind, safeError, SanitizedExceptionTrace(failure));
+        }
+
+        TimeSpan? tripped = null; // the breaker opens once per failed message, not once per recipient
+        var outcome = DeliveryOutcome.Completed;
+        foreach (var (mail, lease) in group)
+        {
+            string status = MailStatuses.Sent;
+            string? error = null;
+            var retries = mail.RetryCount;
+            TimeSpan? retryDelay = null;
+            string? auditReason = null;
+            var refusal = rejected.FirstOrDefault(item => string.Equals(item.Address, mail.RecipientEmail, StringComparison.OrdinalIgnoreCase));
+            if (failure is null && refusal is not null)
             {
-                var streak = RecordUnavailableFailure(mail.Id);
-                if (streak.Poisoned)
-                {
-                    // SMTP worked for other messages in between, so this one keeps breaking the connection.
-                    // Count it against its retries and stop, instead of letting it hold the queue head forever.
-                    retries++;
-                    status = MailStatuses.Failed;
-                    error = PoisonedSendError;
-                    auditReason = PoisonedAuditReason;
-                    ForgetUnavailable(mail.Id);
-                }
-                else
-                {
-                    // Not this message's fault (as far as we can tell): keep its retry budget and wait for the circuit breaker.
-                    serviceUnavailable = true;
-                    auditReason = SmtpUnavailableAuditReason;
-                    status = MailStatuses.Pending;
-                    retryDelay = TripBreaker(resolved.Options);
-                    // A message that already failed this way is retried after the breaker closes and the messages
-                    // behind it have had their turn, so they can show whether SMTP itself works.
-                    if (streak.Repeated) retryDelay += BreakerInitialDelay;
-                }
-            }
-            else
-            {
+                // The server took the message for the others but refused this address.
                 retries++;
-                var terminal = retries >= MaximumSendAttempts || kind == SmtpFailureKind.PermanentForMessage;
+                error = "收件地址被邮件服务器拒收";
+                var terminal = refusal.Permanent || retries >= MaximumSendAttempts;
                 status = terminal ? MailStatuses.Failed : MailStatuses.Pending;
                 if (!terminal) retryDelay = TimeSpan.FromSeconds(30 * (1 << Math.Clamp(retries - 1, 0, 6)));
             }
+            else if (failure is not null)
+            {
+                error = safeError;
+                if (kind == SmtpFailureKind.ServiceUnavailable)
+                {
+                    var streak = RecordUnavailableFailure(mail.Id);
+                    if (streak.Poisoned)
+                    {
+                        // SMTP worked for other messages in between, so this one keeps breaking the connection.
+                        // Count it against its retries and stop, instead of letting it hold the queue head forever.
+                        retries++;
+                        status = MailStatuses.Failed;
+                        error = PoisonedSendError;
+                        auditReason = PoisonedAuditReason;
+                        ForgetUnavailable(mail.Id);
+                    }
+                    else
+                    {
+                        // Not this message's fault (as far as we can tell): keep its retry budget and wait for the circuit breaker.
+                        outcome = DeliveryOutcome.ServiceUnavailable;
+                        auditReason = SmtpUnavailableAuditReason;
+                        status = MailStatuses.Pending;
+                        tripped ??= TripBreaker(resolved.Options);
+                        retryDelay = tripped;
+                        // A message that already failed this way is retried after the breaker closes and the messages
+                        // behind it have had their turn, so they can show whether SMTP itself works.
+                        if (streak.Repeated) retryDelay += BreakerInitialDelay;
+                    }
+                }
+                else
+                {
+                    retries++;
+                    var terminal = retries >= MaximumSendAttempts || kind == SmtpFailureKind.PermanentForMessage;
+                    status = terminal ? MailStatuses.Failed : MailStatuses.Pending;
+                    if (!terminal) retryDelay = TimeSpan.FromSeconds(30 * (1 << Math.Clamp(retries - 1, 0, 6)));
+                }
+            }
+            await CompleteAsync(mail, lease, status, error, retries, retryDelay, auditReason, failedStep, diagnosis, reconnects, group.Count, ct);
         }
+        return outcome;
+    }
+
+    /// <summary>Writes one row's outcome and audit entry.</summary>
+    private async Task CompleteAsync(
+        MailRow mail, DateTime lease, string status, string? error, int retries, TimeSpan? retryDelay,
+        string? auditReason, string? failedStep, string? diagnosis, int reconnects, int messageSize, CancellationToken ct)
+    {
         // Once SendAsync has returned, the SMTP server accepted the message. Persist that
         // outcome during a short window independent of host shutdown; a QUIT failure must
         // not turn a known delivery into a retry and send a duplicate message.
@@ -706,6 +831,8 @@ public sealed class MailService
                 ["retryCount"] = retries,
                 ["error"] = error,
             };
+            if (messageSize > 1) detail["sharedMessageRecipients"] = messageSize;
+            if (mail.CopyOnly) detail["copy"] = true;
             if (auditReason is not null) detail["reason"] = auditReason;
             if (failedStep is not null) detail["failedStep"] = failedStep;
             if (diagnosis is not null) detail["diagnosis"] = diagnosis;
@@ -715,7 +842,17 @@ public sealed class MailService
             await audit.WriteAsync(conn, tx, null, action, "email_outbox", mail.Id, detail, null, completionToken);
         }
         await tx.CommitAsync(completionToken);
-        return serviceUnavailable ? DeliveryOutcome.ServiceUnavailable : DeliveryOutcome.Completed;
+    }
+
+    /// <summary>Gives a claimed row back to the queue unsent (the flush stopped before reaching it).</summary>
+    private async Task ReleaseAsync(MailRow mail, DateTime lease, CancellationToken ct)
+    {
+        await using var conn = await db.OpenAsync(ct);
+        await using var context = EfDb.Use(conn);
+        var now = await DatabaseUtcNowAsync(context, ct);
+        await context.EmailOutbox.Where(item => item.Id == mail.Id && item.Status == MailStatuses.Sending && item.NextAttemptAt == lease)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(item => item.Status, MailStatuses.Pending)
+                .SetProperty(item => item.NextAttemptAt, now), ct);
     }
 
     private const string CoalescedFileEvent = "FILE_UPLOADED";
@@ -1113,6 +1250,7 @@ public sealed class MailService
         public string? RecipientRealm { get; set; }
         public ulong? RecipientAccountId { get; set; }
         public ulong? OemTransferId { get; set; }
+        public bool CopyOnly { get; set; }
     }
     private sealed class CurrentRecipient
     {
@@ -1125,8 +1263,12 @@ public sealed class MailService
 /// <summary>The configured sender address is invalid: a configuration problem, not a problem of one message.</summary>
 internal sealed class SmtpSenderAddressException() : FormatException("发件地址无效");
 
-internal sealed record SmtpEnvelope(string Recipient, string Subject, string Body);
-internal sealed record SmtpDeliveryResult(string? DisconnectFailureType);
+/// <summary>One message: <see cref="Recipient"/> and <see cref="MoreTo"/> are its To, <see cref="Cc"/> its copies.</summary>
+internal sealed record SmtpEnvelope(
+    string Recipient, string Subject, string Body, IReadOnlyList<string>? MoreTo = null, IReadOnlyList<string>? Cc = null);
+/// <summary>An address the server refused while it took the message for the other recipients; 5xx refusals are permanent.</summary>
+internal sealed record SmtpRejectedRecipient(string Address, bool Permanent);
+internal sealed record SmtpDeliveryResult(string? DisconnectFailureType, IReadOnlyList<SmtpRejectedRecipient>? Rejected = null);
 
 internal interface ISmtpDelivery
 {
@@ -1184,6 +1326,10 @@ internal sealed class MailKitSmtpDelivery : ISmtpDelivery
         var message = new MimeMessage();
         message.From.Add(from);
         message.To.Add(to);
+        foreach (var address in envelope.MoreTo ?? [])
+            message.To.Add(MailboxAddress.TryParse(address, out var more) ? more : throw new FormatException("收件地址无效"));
+        foreach (var address in envelope.Cc ?? [])
+            message.Cc.Add(MailboxAddress.TryParse(address, out var copy) ? copy : throw new FormatException("收件地址无效"));
         message.Subject = envelope.Subject;
         // Plain text stays the source of truth; the HTML alternative is rendered from it for richer clients.
         message.Body = new BodyBuilder { TextBody = envelope.Body, HtmlBody = MailHtml.Render(envelope.Subject, envelope.Body) }.ToMessageBody();
@@ -1249,9 +1395,18 @@ internal static class SmtpStage
     }
 }
 
+/// <summary>Keeps sending when some recipients are refused (MailKit still fails when none is accepted).</summary>
+internal sealed class RecipientTrackingSmtpClient : SmtpClient
+{
+    public List<SmtpRejectedRecipient> Rejected { get; } = [];
+
+    protected override void OnRecipientNotAccepted(MimeMessage message, MailboxAddress mailbox, SmtpResponse response) =>
+        Rejected.Add(new(mailbox.Address, (int)response.StatusCode >= 500));
+}
+
 internal sealed class MailKitSmtpBatch : ISmtpBatch
 {
-    private SmtpClient? client;
+    private RecipientTrackingSmtpClient? client;
     private string? clientKey;
 
     public async Task<SmtpDeliveryResult> SendAsync(SmtpOptions options, SmtpEnvelope envelope, CancellationToken ct)
@@ -1264,7 +1419,7 @@ internal sealed class MailKitSmtpBatch : ISmtpBatch
             if (client is null || clientKey != key || !client.IsConnected)
             {
                 await CloseAsync();
-                var fresh = new SmtpClient { Timeout = 60000 };
+                var fresh = new RecipientTrackingSmtpClient { Timeout = 60000 };
                 try
                 {
                     stage = SmtpStage.Connect;
@@ -1281,8 +1436,9 @@ internal sealed class MailKitSmtpBatch : ISmtpBatch
                 clientKey = key;
             }
             stage = SmtpStage.Send;
+            client.Rejected.Clear();
             await client.SendAsync(message, ct);
-            return new(null);
+            return new(null, client.Rejected.ToArray());
         }
         // Only records which step failed on the exception; never catches.
         catch (Exception error) when (SmtpStage.Tag(error, stage)) { throw; }

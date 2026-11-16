@@ -69,6 +69,7 @@ public sealed class SchemaShapeTests
         "20261113102738_AddMesStagingOrder",
         "20261116061057_AddOutsourceSerialNo",
         "20261116062337_AddMesPlanEndSort",
+        "20261116103111_AddEmailOutboxCopyOnly",
     ];
 
     [Fact]

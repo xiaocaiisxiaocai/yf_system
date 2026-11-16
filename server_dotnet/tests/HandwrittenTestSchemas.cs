@@ -149,6 +149,7 @@ internal static class HandwrittenTestSchemas
             last_error VARCHAR(1024) NULL,
             sent_at DATETIME(6) NULL,
             created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+            copy_only TINYINT(1) NOT NULL DEFAULT 0,
             UNIQUE KEY uk_outbox_dedupe_key(dedupe_key)
         );
         CREATE TABLE audit_logs(

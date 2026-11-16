@@ -62,11 +62,13 @@ internal static class ProjectNotificationService
             await db.Database.ExecuteSqlInterpolatedAsync($$"""
                 INSERT INTO email_outbox
                     (event_type,project_id,dedupe_key,recipient_user_id,recipient_email,
-                     subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at)
+                     subject,body,status,retry_count,next_attempt_at,last_error,sent_at,created_at,copy_only)
                 VALUES
                     ('MESSAGE_CREATED',{{project.Id}},{{dedupeKey}},{{recipient.UserId}},{{recipient.Email}},
-                     {{subject}},{{body}},'PENDING',0,{{nextAttemptAt}},NULL,NULL,{{createdAt}})
+                     {{subject}},{{body}},'PENDING',0,{{nextAttemptAt}},NULL,NULL,{{createdAt}},{{recipient.Cc}})
                 ON DUPLICATE KEY UPDATE
+                    copy_only=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
+                                 VALUES(copy_only),copy_only),
                     recipient_email=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
                                        VALUES(recipient_email),recipient_email),
                     body=IF(status='PENDING' AND retry_count=0 AND sent_at IS NULL AND next_attempt_at IS NOT NULL,
@@ -254,6 +256,7 @@ internal static class ProjectNotificationService
             Status = MailStatuses.Pending,
             RetryCount = 0,
             CreatedAt = databaseNow,
+            CopyOnly = recipient.Cc,
         }));
         await db.SaveChangesAsync(ct);
     }
@@ -345,6 +348,7 @@ internal static class ProjectNotificationService
         var selected = new List<MailTarget>();
         await using var contactsDb = EfDb.Use(conn, tx);
         var contacts = await ActiveContactEmailsAsync(contactsDb, project.SupplierId, ct);
+        var robotOwners = (await RobotOwners.LoadAsync(contactsDb, [project.Id], ct)).GetValueOrDefault(project.Id) ?? [];
         var supplierAnchors = new List<UserRow>();
         foreach (var (recipient, needsSidePermissions) in candidates)
         {
@@ -372,12 +376,17 @@ internal static class ProjectNotificationService
             }
             selected.Add(new MailTarget(recipient.Id, recipient.Email, null));
         }
-        selected.AddRange(ContactTargets(supplierAnchors.Select(user => user.Id), contacts));
+        selected.AddRange(ContactTargets(supplierAnchors.Select(user => user.Id), contacts, robotOwners));
+        // Internal side: the project's responsible user is addressed, any other internal recipient is copied.
+        if (selected.Any(target => target.ContactId is null && target.UserId == project.ResponsibleUserId))
+            selected = selected.Select(target => target.ContactId is null && target.UserId != project.ResponsibleUserId
+                ? target with { Cc = true } : target).ToList();
         return selected;
     }
 
     /// <summary>One queued mail: the account it is checked against and the address it goes to.</summary>
-    internal sealed record MailTarget(ulong UserId, string Email, ulong? ContactId);
+    /// <param name="Cc">Sent as a copy on the message its To recipients share, not as one of them.</param>
+    internal sealed record MailTarget(ulong UserId, string Email, ulong? ContactId, bool Cc = false);
 
     /// <summary>Active contacts of a supplier, in display order; supplier mail goes to each of them.</summary>
     internal static Task<(ulong Id, string Email)[]> ActiveContactEmailsAsync(
@@ -395,13 +404,19 @@ internal static class ProjectNotificationService
     /// eligible account, nothing is queued.
     /// </summary>
     internal static IEnumerable<MailTarget> ContactTargets(
-        IEnumerable<ulong> eligibleSupplierAccountIds, IReadOnlyList<(ulong Id, string Email)> contacts)
+        IEnumerable<ulong> eligibleSupplierAccountIds, IReadOnlyList<(ulong Id, string Email)> contacts,
+        IReadOnlyCollection<ulong>? robotOwnerContactIds = null)
     {
         var anchor = eligibleSupplierAccountIds.Select(id => (ulong?)id).Min();
         if (anchor is null) yield break;
+        // The project's Robot owners are who the mail is addressed to; the supplier's other contacts are copied.
+        // With no active Robot owner among the contacts, everyone is addressed.
+        var owners = robotOwnerContactIds is { Count: > 0 }
+            ? contacts.Where(contact => robotOwnerContactIds.Contains(contact.Id)).Select(contact => contact.Id).ToHashSet()
+            : [];
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (id, email) in contacts)
-            if (seen.Add(email.Trim())) yield return new MailTarget(anchor.Value, email.Trim(), id);
+            if (seen.Add(email.Trim())) yield return new MailTarget(anchor.Value, email.Trim(), id, owners.Count > 0 && !owners.Contains(id));
     }
 
     internal static async Task<bool> IsCurrentProjectRecipientAsync(

@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261116062337_AddMesPlanEndSort";
+    private const string Latest = "20261116103111_AddEmailOutboxCopyOnly";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -92,6 +92,7 @@ public sealed class MigrationRoundTripTests
         // + AddIpmsConnectionSettings (Down drops the page-set IPMS account, encrypted password and fetch time).
         // + AddIpmsScheduleSwitches (Down drops the on/off switches of the daily fetch and the daily outsourcing update).
         // + AddMesStagingOrder (Down drops the MES row order of staged rows).
+        // + AddEmailOutboxCopyOnly (Down drops email_outbox.copy_only).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);

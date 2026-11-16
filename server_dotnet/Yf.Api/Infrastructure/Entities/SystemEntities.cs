@@ -42,6 +42,8 @@ public sealed class EmailOutbox
     public string? RecipientRealm { get; set; }
     public ulong? RecipientAccountId { get; set; }
     public ulong? OemTransferId { get; set; }
+    /// <summary>Delivered as a Cc of the message its To recipients (same event, same text) share; false = a To recipient.</summary>
+    public bool CopyOnly { get; set; }
 }
 
 public sealed class SystemConfig
@@ -107,6 +109,7 @@ public sealed class EmailOutboxConfig : IEntityTypeConfiguration<EmailOutbox>
         b.Property(x => x.RecipientRealm).HasColumnName("recipient_realm").HasMaxLength(16);
         b.Property(x => x.RecipientAccountId).HasColumnName("recipient_account_id");
         b.Property(x => x.OemTransferId).HasColumnName("oem_transfer_id");
+        b.Property(x => x.CopyOnly).HasColumnName("copy_only").HasDefaultValue(false);
         b.HasIndex(x => x.OemTransferId).HasDatabaseName("idx_outbox_oem_transfer");
         b.HasIndex(x => new { x.RecipientRealm, x.RecipientAccountId }).HasDatabaseName("idx_outbox_recipient_account");
         b.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).HasConstraintName("fk_outbox_project_v2").OnDelete(DeleteBehavior.Restrict);

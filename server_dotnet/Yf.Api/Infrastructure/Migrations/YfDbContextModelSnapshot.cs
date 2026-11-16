@@ -221,6 +221,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("text")
                         .HasColumnName("body");
 
+                    b.Property<bool>("CopyOnly")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("copy_only");
+
                     b.Property<DateTime>("CreatedAt")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("datetime(3)")
