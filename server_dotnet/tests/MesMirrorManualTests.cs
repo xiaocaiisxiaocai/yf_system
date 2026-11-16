@@ -132,14 +132,23 @@ public sealed class MesMirrorManualTests
         await WaitAsync(f, s => s.Phase == "AWAITING_CONFIRM", ct);
         await f.Service.ConfirmAsync(f.Admin, new(true), ct);
 
-        var all = await f.Service.OrdersAsync(f.Admin, 1, 20, 0, ct);
+        var all = await f.Service.OrdersAsync(f.Admin, 1, 20, 0, null, ct);
         Assert.Equal(4UL, all.Total);
         Assert.Equal(["A1", "A2", "A3", "B9"], all.List.Select(x => x.WorkOrderNo)); // no planned date anywhere: by work order number
         Assert.Equal("客户A1", all.List[0].Values["customerName"]);
         Assert.Equal("M-A1", all.List[0].Values["deviceModels"]);
         Assert.Empty(all.List[2].Values); // A3 and B9 were not part of the partial fetch and keep what they had
-        Assert.Equal(["A2"], (await f.Service.OrdersAsync(f.Admin, 2, 1, 1, ct)).List.Select(x => x.WorkOrderNo));
-        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Viewer, 1, 20, 0, ct))).Status);
+        Assert.Equal(["A2"], (await f.Service.OrdersAsync(f.Admin, 2, 1, 1, null, ct)).List.Select(x => x.WorkOrderNo));
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Viewer, 1, 20, 0, null, ct))).Status);
+
+        // A column filter is "contains", counts only the matches, and % _ in the text are not wildcards.
+        var byCustomer = await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"户A2"}""", ct);
+        Assert.Equal(1UL, byCustomer.Total);
+        Assert.Equal(["A2"], byCustomer.List.Select(x => x.WorkOrderNo));
+        Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"客户","deviceModels":"M-A"}""", ct)).Total);
+        Assert.Equal(0UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"%"}""", ct)).Total);
+        Assert.Equal(4UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":""}""", ct)).Total);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"x') OR 1=1 --":"a"}""", ct))).Status);
     }
 
     [Fact(Timeout = 180_000)]

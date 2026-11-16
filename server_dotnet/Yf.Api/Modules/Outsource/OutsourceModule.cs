@@ -128,7 +128,7 @@ public static class OutsourceModule
         mirror.MapGet("/orders", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
         {
             var p = QueryValues.Page(c.Request);
-            return s.OrdersAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, ct);
+            return s.OrdersAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, c.Request.Query["filters"].ToString(), ct);
         });
         mirror.MapGet("/settings", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.SettingsAsync(AccessService.GetCurrent(c), ct));

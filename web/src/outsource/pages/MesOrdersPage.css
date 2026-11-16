@@ -6,3 +6,6 @@
 .outsource-ipms-data-page .arco-table-td {
   white-space: nowrap;
 }
+
+.outsource-ipms-filter { display: flex; flex-direction: column; gap: 8px; width: 200px; padding: 8px; background: var(--color-bg-popup); border: 1px solid var(--color-neutral-3); border-radius: 4px; box-shadow: 0 4px 10px rgb(0 0 0 / 10%); }
+.outsource-ipms-filter-actions { display: flex; justify-content: flex-end; gap: 8px; }

@@ -425,22 +425,46 @@ public sealed class MesMirrorSyncService(
 
     private sealed record OrderRecord(string WorkOrderNo, DateTime FetchedAt, string RawJson);
 
+    private static readonly System.Text.RegularExpressions.Regex FieldName = new("^[A-Za-z][A-Za-z0-9]{0,40}$");
+
+    /// <summary>
+    /// Per-column "contains" filters sent as a JSON object of MES field name to text. Field names are checked
+    /// against a plain identifier pattern before being written into the JSON path; the text is always a parameter.
+    /// </summary>
+    private static (string Where, object[] Parameters) OrderFilter(string? filters)
+    {
+        if (string.IsNullOrWhiteSpace(filters)) return ("", []);
+        Dictionary<string, string?>? parsed;
+        try { parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(filters); }
+        catch (JsonException) { throw ApiException.BadRequest("筛选条件格式不正确"); }
+        var conditions = new List<string>();
+        var parameters = new List<object>();
+        foreach (var (field, text) in (parsed ?? []).Where(item => !string.IsNullOrEmpty(item.Value)).Take(60))
+        {
+            if (!FieldName.IsMatch(field)) throw ApiException.BadRequest("筛选条件格式不正确");
+            var path = $"JSON_EXTRACT(raw_json,'$.{field}')";
+            conditions.Add($"IF(JSON_TYPE({path})='NULL','',JSON_UNQUOTE({path})) LIKE {{{parameters.Count}}} ESCAPE '!'");
+            parameters.Add("%" + text!.Trim().Replace("!", "!!").Replace("%", "!%").Replace("_", "!_") + "%");
+        }
+        return (conditions.Count == 0 ? "" : "WHERE " + string.Join(" AND ", conditions), parameters.ToArray());
+    }
+
     /// <summary>Pages through the mirrored work orders in IPMS order, each with every field MES returned.</summary>
-    public async Task<PageResponse<MesOrderRow>> OrdersAsync(CurrentUser actor, ulong page, uint size, ulong offset, CancellationToken ct)
+    public async Task<PageResponse<MesOrderRow>> OrdersAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? filters, CancellationToken ct)
     {
         await AuthorizeAsync(actor, ct);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        var total = (ulong)await context.MesWorkOrders.CountAsync(ct);
+        var (where, parameters) = OrderFilter(filters);
+        var total = (ulong)(await context.Database.SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM mes_work_orders {where}", parameters).ToArrayAsync(ct)).Single();
         // IPMS lists by planned delivery date (empty first), then work order number.
-        var limit = (long)size;
-        var skip = (long)offset;
-        var rows = await context.Database.SqlQuery<OrderRecord>($"""
+        var rows = await context.Database.SqlQueryRaw<OrderRecord>($"""
             SELECT work_order_no AS WorkOrderNo, fetched_at AS FetchedAt, raw_json AS RawJson
             FROM mes_work_orders
+            {where}
             ORDER BY COALESCE(IF(JSON_TYPE(JSON_EXTRACT(raw_json,'$.planEndDate'))='NULL', '', JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.planEndDate'))), ''),
                      work_order_no
-            LIMIT {limit} OFFSET {skip}
-            """).ToArrayAsync(ct);
+            LIMIT {(long)size} OFFSET {(long)offset}
+            """, parameters).ToArrayAsync(ct);
         var list = rows.Select(row =>
         {
             using var json = JsonDocument.Parse(row.RawJson);

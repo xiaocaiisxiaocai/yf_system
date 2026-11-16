@@ -15,7 +15,8 @@ const charge = (label: string, prefix: string, width: number) => col(label, `${p
 
 export const isGroup = (item: MesLayoutItem): item is MesGroup => 'columns' in item
 
-/** Columns that stay in view on the left while the rest scrolls. */
+/** The columns right after the serial number; the first three stay in view on the left while the rest scrolls. */
+export const MES_PINNED_PROPS = ['customerName', 'workOrder', 'deviceModels']
 export const MES_FIXED_COLUMNS: MesColumn[] = [
   col('客户名称', 'customerName', 100), col('工单号', 'workOrder', 85), col('机型', 'deviceModels', 110),
   col('计划交期', 'planEndDate', 100), col('客户交期', 'customerEndDate', 100), col('生产批次', 'productionBatch', 100),
