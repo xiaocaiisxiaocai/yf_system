@@ -425,53 +425,79 @@ public sealed class MesMirrorSyncService(
 
     private sealed record OrderRecord(string WorkOrderNo, DateTime FetchedAt, string RawJson);
 
+    private static readonly System.Text.RegularExpressions.Regex TermSeparators = new(@"[\s,，;；、]+");
+
     private static readonly System.Text.RegularExpressions.Regex FieldName = new("^[A-Za-z][A-Za-z0-9]{0,40}$");
 
     /// <summary>
-    /// Per-column "contains" filters sent as a JSON object of MES field name to text. Field names are checked
-    /// against a plain identifier pattern before being written into the JSON path; the text is always a parameter.
+    /// Per-column "contains" filters sent as a JSON object of MES field name to text; several terms (separated by
+    /// spaces, commas, semicolons or line breaks) match any of them, different columns must all match.
+    /// Field names are checked against a plain identifier pattern.
     /// </summary>
-    private static (string Where, object[] Parameters) OrderFilter(string? filters)
+    private static List<(string Field, string[] Terms)> ParseOrderFilters(string? filters)
     {
-        if (string.IsNullOrWhiteSpace(filters)) return ("", []);
+        var result = new List<(string, string[])>();
+        if (string.IsNullOrWhiteSpace(filters)) return result;
         Dictionary<string, string?>? parsed;
         try { parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(filters); }
         catch (JsonException) { throw ApiException.BadRequest("筛选条件格式不正确"); }
-        var conditions = new List<string>();
-        var parameters = new List<object>();
         foreach (var (field, text) in (parsed ?? []).Where(item => !string.IsNullOrEmpty(item.Value)).Take(60))
         {
             if (!FieldName.IsMatch(field)) throw ApiException.BadRequest("筛选条件格式不正确");
-            var path = $"JSON_EXTRACT(raw_json,'$.{field}')";
-            conditions.Add($"IF(JSON_TYPE({path})='NULL','',JSON_UNQUOTE({path})) LIKE {{{parameters.Count}}} ESCAPE '!'");
-            parameters.Add("%" + text!.Trim().Replace("!", "!!").Replace("%", "!%").Replace("_", "!_") + "%");
+            var terms = TermSeparators.Split(text!).Where(term => term.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
+            if (terms.Length > 0) result.Add((field, terms));
         }
-        return (conditions.Count == 0 ? "" : "WHERE " + string.Join(" AND ", conditions), parameters.ToArray());
+        return result;
     }
+
+    private static Dictionary<string, string?> OrderValues(JsonElement root) => root.ValueKind == JsonValueKind.Object
+        ? root.EnumerateObject().ToDictionary(p => p.Name, p => FieldText(p.Value), StringComparer.Ordinal)
+        : new Dictionary<string, string?>();
 
     /// <summary>Pages through the mirrored work orders in IPMS order, each with every field MES returned.</summary>
     public async Task<PageResponse<MesOrderRow>> OrdersAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? filters, CancellationToken ct)
     {
         await AuthorizeAsync(actor, ct);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        var (where, parameters) = OrderFilter(filters);
-        var total = (ulong)(await context.Database.SqlQueryRaw<long>($"SELECT COUNT(*) AS Value FROM mes_work_orders {where}", parameters).ToArrayAsync(ct)).Single();
-        // IPMS lists by planned delivery date (empty first), then work order number.
-        var rows = await context.Database.SqlQueryRaw<OrderRecord>($"""
-            SELECT work_order_no AS WorkOrderNo, fetched_at AS FetchedAt, raw_json AS RawJson
-            FROM mes_work_orders
-            {where}
-            ORDER BY plan_end_sort, work_order_no
-            LIMIT {(long)size} OFFSET {(long)offset}
-            """, parameters).ToArrayAsync(ct);
-        var list = rows.Select(row =>
+        var conditions = ParseOrderFilters(filters);
+        MesOrderRow[] list;
+        ulong total;
+        if (conditions.Count == 0)
         {
-            using var json = JsonDocument.Parse(row.RawJson);
-            var values = json.RootElement.ValueKind == JsonValueKind.Object
-                ? json.RootElement.EnumerateObject().ToDictionary(p => p.Name, p => FieldText(p.Value), StringComparer.Ordinal)
-                : new Dictionary<string, string?>();
-            return new MesOrderRow(row.WorkOrderNo, DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc), values);
-        }).ToArray();
+            total = (ulong)(await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM mes_work_orders").ToArrayAsync(ct)).Single();
+            // IPMS lists by planned delivery date (empty first), then work order number.
+            var rows = await context.Database.SqlQueryRaw<OrderRecord>($"""
+                SELECT work_order_no AS WorkOrderNo, fetched_at AS FetchedAt, raw_json AS RawJson
+                FROM mes_work_orders
+                ORDER BY plan_end_sort, work_order_no
+                LIMIT {(long)size} OFFSET {(long)offset}
+                """).ToArrayAsync(ct);
+            list = rows.Select(row =>
+            {
+                using var json = JsonDocument.Parse(row.RawJson);
+                return new MesOrderRow(row.WorkOrderNo, DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc), OrderValues(json.RootElement));
+            }).ToArray();
+        }
+        else
+        {
+            // Matching the JSON inside MySQL re-parses every row's document once per term (seconds for a few
+            // thousand rows), so a filtered list reads the rows once and matches them here, on the text shown in the table.
+            var all = await context.Database.SqlQueryRaw<OrderRecord>("""
+                SELECT work_order_no AS WorkOrderNo, fetched_at AS FetchedAt, raw_json AS RawJson
+                FROM mes_work_orders
+                ORDER BY plan_end_sort, work_order_no
+                """).ToArrayAsync(ct);
+            var matched = new List<MesOrderRow>();
+            foreach (var row in all)
+            {
+                ct.ThrowIfCancellationRequested();
+                var values = OrderValues(JsonDocument.Parse(row.RawJson).RootElement);
+                if (conditions.All(c => values.TryGetValue(c.Field, out var text) && c.Terms.Any(term => (text ?? "").Contains(term, StringComparison.OrdinalIgnoreCase))))
+                    matched.Add(new MesOrderRow(row.WorkOrderNo, DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc), values));
+            }
+            total = (ulong)matched.Count;
+            list = matched.Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size).ToArray();
+        }
         return new(list, total, page, size);
     }
 

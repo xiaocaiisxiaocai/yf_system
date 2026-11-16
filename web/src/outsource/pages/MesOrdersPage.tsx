@@ -28,9 +28,10 @@ function FilterPanel({ column, value, onApply }: { column: MesColumn; value: str
   const words = MES_CODE_TEXT[column.prop]
   return <div className="outsource-ipms-filter">
     {words
-      ? <Select allowClear placeholder="全部" value={text || undefined} onChange={(next) => setText(next ?? '')}
+      ? <Select mode="multiple" allowClear placeholder="全部" value={text.split(/\s+/).filter(Boolean)} onChange={(next: string[]) => setText(next.join(' '))}
         options={Object.entries(words).map(([code, label]) => ({ value: code, label }))} />
-      : <Input allowClear autoFocus placeholder={`筛选${column.label}`} value={text} onChange={setText} onPressEnter={() => onApply(text)} />}
+      : <Input.TextArea autoFocus autoSize={{ minRows: 1, maxRows: 6 }} placeholder={`筛选${column.label}，可粘贴多个`} value={text} onChange={setText}
+        onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); onApply(text) } }} />}
     <div className="outsource-ipms-filter-actions">
       <Button size="mini" onClick={() => { setText(''); onApply('') }}>重置</Button>
       <Button size="mini" type="primary" onClick={() => onApply(text)}>筛选</Button>

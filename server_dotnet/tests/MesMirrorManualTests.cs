@@ -147,6 +147,7 @@ public sealed class MesMirrorManualTests
         Assert.Equal(["A2"], byCustomer.List.Select(x => x.WorkOrderNo));
         Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"客户","deviceModels":"M-A"}""", ct)).Total);
         Assert.Equal(0UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"%"}""", ct)).Total);
+        Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, "{\"customerName\":\"户A1\\n户A2\"}", ct)).Total);
         Assert.Equal(4UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":""}""", ct)).Total);
         Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"x') OR 1=1 --":"a"}""", ct))).Status);
     }
