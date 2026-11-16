@@ -154,4 +154,20 @@ describe('ResizableTable', () => {
     expect(screen.getByText('A1')).toBeInTheDocument()
     expect(screen.getByText('影响')).toBeInTheDocument()
   })
+  it('「显示列」里的「自适应列宽」按内容宽度一次调好所有显示列，记在浏览器', async () => {
+    const original = Range.prototype.getBoundingClientRect
+    // jsdom has no layout: report 100px of text for every measured piece.
+    Range.prototype.getBoundingClientRect = () => ({ width: 100 } as DOMRect)
+    try {
+      renderTable('fit')
+      await userEvent.setup().click(screen.getByRole('button', { name: '显示列' }))
+      fireEvent.click(await screen.findByRole('button', { name: '自适应列宽' }))
+      await waitFor(() => expect(Object.keys(stored('fit', 42)?.widths ?? {}).sort()).toEqual(['name', 'size']))
+      // 100px of text plus a little room, whatever the column was written with (200 and 100).
+      expect(Number(screen.getByRole('separator', { name: '调整文件名列宽' }).getAttribute('aria-valuenow'))).toBeLessThan(110)
+      expect(Number(screen.getByRole('separator', { name: '调整size列宽' }).getAttribute('aria-valuenow'))).toBeGreaterThan(100)
+    } finally {
+      Range.prototype.getBoundingClientRect = original
+    }
+  })
 })

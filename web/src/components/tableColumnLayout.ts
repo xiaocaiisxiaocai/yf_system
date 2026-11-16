@@ -257,3 +257,54 @@ export function withPinnedColumn(layout: ColumnLayout, current: readonly string[
   const next = pinned ? [...new Set([...current, key])] : current.filter((item) => item !== key)
   return { ...layout, pinned: next }
 }
+
+const FIT_MAX_WIDTH = 600
+const FIT_SAMPLE_ROWS = 200
+
+const boxExtra = (element: Element | null) => {
+  if (!element) return 0
+  const style = getComputedStyle(element)
+  return ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']
+    .reduce((sum, name) => sum + (parseFloat(style[name as 'paddingLeft']) || 0), 0)
+}
+
+function contentWidth(element: Element | null) {
+  if (!element) return 0
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  return range.getBoundingClientRect().width
+}
+
+/**
+ * 按表里正在显示的内容算每列刚好放得下的宽度：表头文字（含筛选/排序图标）和当前各行单元格里最宽的一个。
+ * `keys` 是显示中的列，顺序与表体的单元格一致（表格自己加的勾选/展开列排在前面，按个数差跳过）。
+ * 取不到测量（如测试环境）的列不返回。
+ */
+export function measureColumnWidths(host: HTMLElement, keys: readonly string[]): Record<string, number> {
+  const widths: Record<string, number> = {}
+  const grow = (key: string, width: number) => {
+    if (!(width > 0)) return
+    widths[key] = Math.min(FIT_MAX_WIDTH, Math.max(widths[key] ?? 0, Math.ceil(width) + 2))
+  }
+  try {
+    for (const key of keys) {
+      const head = host.querySelector(`[data-col-key="${CSS.escape(key)}"]`)
+      const item = head?.querySelector('.arco-table-th-item') ?? head
+      grow(key, contentWidth(item) + boxExtra(head ?? null) + boxExtra(item === head ? null : item))
+    }
+    const rows = [...host.querySelectorAll('.arco-table-body tbody tr, .arco-table-content-inner tbody tr')].slice(0, FIT_SAMPLE_ROWS)
+    for (const row of rows) {
+      const cells = [...row.children]
+      const offset = cells.length - keys.length
+      if (offset < 0) continue
+      keys.forEach((key, index) => {
+        const cell = cells[offset + index]
+        const inner = cell.querySelector('.arco-table-cell')
+        grow(key, contentWidth(inner ?? cell) + boxExtra(cell) + boxExtra(inner))
+      })
+    }
+  } catch {
+    return {}
+  }
+  return widths
+}

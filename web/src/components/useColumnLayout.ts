@@ -25,6 +25,11 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
     commit(withColumnWidth(layoutRef.current, specsRef.current, key, width))
   }, [commit])
 
+  /** Sets many widths at once (one render, one save). */
+  const setWidths = useCallback((widths: Record<string, number>) => {
+    commit(Object.entries(widths).reduce((next, [key, width]) => withColumnWidth(next, specsRef.current, key, width), layoutRef.current))
+  }, [commit])
+
   const endDrag = useCallback(() => {
     const listener = dragListenerRef.current
     dragListenerRef.current = null
@@ -112,7 +117,7 @@ export function useColumnLayout(storageKey: string, specs: readonly ColumnLayout
     return { min: spec?.minWidth ?? 72 }
   }, [])
 
-  const actions = useMemo(() => ({ beginResize, setWidth, widthOf, limitsOf }), [beginResize, setWidth, widthOf, limitsOf])
+  const actions = useMemo(() => ({ beginResize, setWidth, setWidths, widthOf, limitsOf }), [beginResize, setWidth, setWidths, widthOf, limitsOf])
 
   const apply = <T extends { key: string; title?: ReactNode }>(
     columns: readonly T[],

@@ -445,7 +445,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .table-column-picker-pin.arco-btn { flex: 0 0 auto; color: var(--color-text-4); }
 .table-column-picker-item.is-pinned .table-column-picker-pin.arco-btn { color: rgb(var(--primary-6)); }
 .table-column-picker-list .arco-checkbox { display: flex; align-items: center; height: 28px; margin: 0; padding: 0 2px; }
-.table-column-picker-actions { display: flex; justify-content: flex-end; }
+.table-column-picker-actions { display: flex; justify-content: flex-end; gap: 4px; }
 
 /* 工具栏与控件节奏统一 */
 .page-heading {

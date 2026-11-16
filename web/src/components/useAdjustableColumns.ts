@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ResizableHeaderCell } from './columnResize'
-import { arrangeColumns, columnLayoutStorageKey, measureTableWidth, withFlexibleColumn, withTrailingFill, type ColumnLayoutSpec } from './tableColumnLayout'
+import { arrangeColumns, columnLayoutStorageKey, measureColumnWidths, measureTableWidth, withFlexibleColumn, withTrailingFill, type ColumnLayoutSpec } from './tableColumnLayout'
 import { useColumnLayout } from './useColumnLayout'
 
 /**
@@ -92,6 +92,15 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode;
         }
         layoutActions.setWidth(key, width)
       },
+      /** Every shown column gets the width its content needs. */
+      fit: () => {
+        const host = hostRef.current
+        if (!host) return
+        const widths = measureColumnWidths(host, sizedRef.current.map((column) => column.key))
+        if (Object.keys(widths).length === 0) return
+        setResizedKey(undefined)
+        layoutActions.setWidths(widths)
+      },
       beginResize: (key: string, clientX: number) => {
         pinOthers(key)
         setResizedKey(key)
@@ -126,6 +135,7 @@ export function useAdjustableColumns<T extends { key: string; title?: ReactNode;
       pin: (key: string, pinned: boolean) => layout.pin(key, pinned,
         arranged.filter((column) => column.fixed === 'left').map((column) => column.key)),
       reset: layout.reset,
+      fit: actions.fit,
     },
     hidden: layout.hidden,
     toggle: layout.toggle,

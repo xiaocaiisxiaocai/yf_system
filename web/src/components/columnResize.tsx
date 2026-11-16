@@ -36,6 +36,8 @@ export interface ColumnPickerState {
   move: (key: string, target: string) => void
   pin: (key: string, pinned: boolean) => void
   reset: () => void
+  /** 按内容把显示中的每一列调到刚好放得下的宽度。 */
+  fit?: () => void
 }
 
 const ColumnResizeContext = createContext<ColumnResizeActions | null>(null)
@@ -53,7 +55,7 @@ export function ResizableHeaderCell({ className, column, children }: {
   const withPicker = Boolean(picker && columnKey && columnKey === picker.lastKey
     && (picker.entries.some((entry) => !entry.locked) || picker.entries.filter((entry) => entry.movable).length > 1))
   return (
-    <div className={withPicker ? `${className ?? ''} table-th-with-picker` : className}>
+    <div className={withPicker ? `${className ?? ''} table-th-with-picker` : className} data-col-key={columnKey}>
       {children}
       {withPicker && picker && <ColumnVisibilityPicker picker={picker} />}
       {actions && columnKey && label && !column?.children && (
@@ -175,6 +177,7 @@ function ColumnVisibilityPicker({ picker }: { picker: ColumnPickerState }) {
             ))}
           </ul>
           <div className="table-column-picker-actions">
+            {picker.fit && <Button type="text" size="mini" onClick={picker.fit}>自适应列宽</Button>}
             <Button type="text" size="mini" onClick={picker.reset}>恢复默认</Button>
           </div>
         </div>
