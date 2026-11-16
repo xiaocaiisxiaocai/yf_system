@@ -57,23 +57,31 @@ public sealed class MesMirrorIpmsClient(IDbContextFactory<YfDbContext> dbFactory
     }
 
     /// <summary>
-    /// 机构课别 of each owner name: the 课别 of the one active internal account with that real name. Several accounts with the
-    /// same name in different 课别, an owner that is a company or has no account, or an account placed above 课别 level have no section.
+    /// 机构课别 of each owner name: the 课别 of the one active internal account with that real name, comparing simplified and
+    /// traditional spellings as the same (IPMS 古才鸿, account 古才鴻). Several accounts with the same name in different 课别, an owner
+    /// that is a company or has no account, or an account placed above 课别 level have no section.
     /// </summary>
     internal static async Task<Dictionary<string, string>> SectionsOfAsync(YfDbContext context, IEnumerable<string?> owners, CancellationToken ct)
     {
         var names = owners.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct(StringComparer.Ordinal).ToArray();
         if (names.Length == 0) return [];
-        var accounts = await context.Users.AsNoTracking()
-            .Where(user => user.UserType == UserTypes.Internal && user.Status == AccountStatuses.Active && names.Contains(user.RealName))
-            .GroupJoin(context.Departments.AsNoTracking(), user => user.DepartmentId, department => (ulong?)department.Id,
-                (user, departments) => new { user.RealName, departments })
-            .SelectMany(x => x.departments.DefaultIfEmpty(), (x, department) => new { x.RealName, Section = department != null && department.Kind == "SECTION" ? department.Name : null })
-            .ToArrayAsync(ct);
-        return accounts.GroupBy(x => x.RealName, StringComparer.Ordinal)
-            .Select(group => (Name: group.Key, Sections: group.Select(x => x.Section).Distinct().ToArray()))
+        // The directory is small (internal accounts), and the spelling comparison cannot be done in SQL.
+        var wanted = names.Select(ChineseVariants.Simplify).ToHashSet(StringComparer.Ordinal);
+        var accounts = (await context.Users.AsNoTracking()
+            .Where(user => user.UserType == UserTypes.Internal && user.Status == AccountStatuses.Active)
+            .Select(user => new { user.RealName, user.DepartmentId }).ToArrayAsync(ct))
+            .Select(user => (Name: ChineseVariants.Simplify(user.RealName.Trim()), user.DepartmentId))
+            .Where(user => wanted.Contains(user.Name)).ToArray();
+        if (accounts.Length == 0) return [];
+        var departmentIds = accounts.Select(x => x.DepartmentId).OfType<ulong>().Distinct().ToArray();
+        var sectionNames = await context.Departments.AsNoTracking().Where(x => departmentIds.Contains(x.Id) && x.Kind == "SECTION")
+            .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var sectionOf = accounts.GroupBy(x => x.Name, StringComparer.Ordinal)
+            .Select(group => (group.Key, Sections: group.Select(x => x.DepartmentId is { } id ? sectionNames.GetValueOrDefault(id) : null).Distinct().ToArray()))
             .Where(x => x.Sections.Length == 1 && x.Sections[0] is not null)
-            .ToDictionary(x => x.Name, x => x.Sections[0]!, StringComparer.Ordinal);
+            .ToDictionary(x => x.Key, x => x.Sections[0]!, StringComparer.Ordinal);
+        return names.Where(name => sectionOf.ContainsKey(ChineseVariants.Simplify(name.Trim())))
+            .ToDictionary(name => name, name => sectionOf[ChineseVariants.Simplify(name.Trim())], StringComparer.Ordinal);
     }
 
     private static string? Text(JsonElement root, string name) =>

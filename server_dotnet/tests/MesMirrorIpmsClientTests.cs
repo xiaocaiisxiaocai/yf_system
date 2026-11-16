@@ -46,6 +46,14 @@ public sealed class MesMirrorIpmsClientTests
         Assert.IsType<FakeIpmsClient>(IpmsClientFactory.Create(fake, provider));
     }
 
+    [Theory]
+    [InlineData("古才鴻", "古才鸿")]
+    [InlineData("周曉淋", "周晓淋")]
+    [InlineData("王小萍", "王小萍")]
+    [InlineData("A-1 電控", "A-1 电控")]
+    public void SimplifiesTraditionalNamesAndKeepsEverythingElse(string input, string expected) =>
+        Assert.Equal(expected, ChineseVariants.Simplify(input));
+
     [Fact(Timeout = 180_000)]
     public async Task LooksUpOnlyTheRequestedWorkOrdersFromTheMirror()
     {
@@ -93,16 +101,17 @@ public sealed class MesMirrorIpmsClientTests
               (9902,'sec_b','unused','重名','b@example.invalid','INTERNAL',NULL,9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9903,'sec_c','unused','重名','c@example.invalid','INTERNAL',NULL,9004,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9904,'sec_d','unused','部门级','d@example.invalid','INTERNAL',NULL,9002,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9905,'sec_e','unused','已停用','e@example.invalid','INTERNAL',NULL,9003,'DISABLED',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+              (9905,'sec_e','unused','已停用','e@example.invalid','INTERNAL',NULL,9003,'DISABLED',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9906,'sec_f','unused','古才鴻','f@example.invalid','INTERNAL',NULL,9004,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             """, ct);
-        var owners = new[] { ("S1", "周晓淋"), ("S2", "重名"), ("S3", "部门级"), ("S4", "鼎亚研发"), ("S5", "已停用") };
+        var owners = new[] { ("S1", "周晓淋"), ("S2", "重名"), ("S3", "部门级"), ("S4", "鼎亚研发"), ("S5", "已停用"), ("S6", "古才鸿") };
         foreach (var (no, owner) in owners)
             await database.ExecuteAsync($$"""
                 INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,customer_name,device_models,raw_json)
                 VALUES('{{no}}','b',UTC_TIMESTAMP(3),'c','m','{"bomChargeUser":"{{owner}}"}')
                 """, ct);
         var owned = await client.LookupAsync(owners.Select(x => x.Item1).ToArray(), ct);
-        Assert.Equal(new (string, string?)[] { ("S1", "机构一课"), ("S2", null), ("S3", null), ("S4", null), ("S5", null) },
+        Assert.Equal(new (string, string?)[] { ("S1", "机构一课"), ("S2", null), ("S3", null), ("S4", null), ("S5", null), ("S6", "机构二课") }, // S6: IPMS writes 古才鸿, the account 古才鴻
             owners.Select(x => (x.Item1, owned[x.Item1].MechanicalSection)));
         Assert.Equal("周晓淋", owned["S1"].MechanicalOwner);
     }
