@@ -1292,3 +1292,65 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 /* 项目列表顶部的状态页签只作筛选，不带内容区。 */
 .project-status-tabs { flex: 0 0 auto; margin-bottom: 8px; }
 .project-status-tabs .arco-tabs-content { display: none; }
+
+/* 拖选文字只选起点所在列（useColumnTextSelection） */
+[data-select-col="1"] .arco-table-tr > .arco-table-td:not(:nth-child(1)) { user-select: none; }
+[data-select-col="2"] .arco-table-tr > .arco-table-td:not(:nth-child(2)) { user-select: none; }
+[data-select-col="3"] .arco-table-tr > .arco-table-td:not(:nth-child(3)) { user-select: none; }
+[data-select-col="4"] .arco-table-tr > .arco-table-td:not(:nth-child(4)) { user-select: none; }
+[data-select-col="5"] .arco-table-tr > .arco-table-td:not(:nth-child(5)) { user-select: none; }
+[data-select-col="6"] .arco-table-tr > .arco-table-td:not(:nth-child(6)) { user-select: none; }
+[data-select-col="7"] .arco-table-tr > .arco-table-td:not(:nth-child(7)) { user-select: none; }
+[data-select-col="8"] .arco-table-tr > .arco-table-td:not(:nth-child(8)) { user-select: none; }
+[data-select-col="9"] .arco-table-tr > .arco-table-td:not(:nth-child(9)) { user-select: none; }
+[data-select-col="10"] .arco-table-tr > .arco-table-td:not(:nth-child(10)) { user-select: none; }
+[data-select-col="11"] .arco-table-tr > .arco-table-td:not(:nth-child(11)) { user-select: none; }
+[data-select-col="12"] .arco-table-tr > .arco-table-td:not(:nth-child(12)) { user-select: none; }
+[data-select-col="13"] .arco-table-tr > .arco-table-td:not(:nth-child(13)) { user-select: none; }
+[data-select-col="14"] .arco-table-tr > .arco-table-td:not(:nth-child(14)) { user-select: none; }
+[data-select-col="15"] .arco-table-tr > .arco-table-td:not(:nth-child(15)) { user-select: none; }
+[data-select-col="16"] .arco-table-tr > .arco-table-td:not(:nth-child(16)) { user-select: none; }
+[data-select-col="17"] .arco-table-tr > .arco-table-td:not(:nth-child(17)) { user-select: none; }
+[data-select-col="18"] .arco-table-tr > .arco-table-td:not(:nth-child(18)) { user-select: none; }
+[data-select-col="19"] .arco-table-tr > .arco-table-td:not(:nth-child(19)) { user-select: none; }
+[data-select-col="20"] .arco-table-tr > .arco-table-td:not(:nth-child(20)) { user-select: none; }
+[data-select-col="21"] .arco-table-tr > .arco-table-td:not(:nth-child(21)) { user-select: none; }
+[data-select-col="22"] .arco-table-tr > .arco-table-td:not(:nth-child(22)) { user-select: none; }
+[data-select-col="23"] .arco-table-tr > .arco-table-td:not(:nth-child(23)) { user-select: none; }
+[data-select-col="24"] .arco-table-tr > .arco-table-td:not(:nth-child(24)) { user-select: none; }
+[data-select-col="25"] .arco-table-tr > .arco-table-td:not(:nth-child(25)) { user-select: none; }
+[data-select-col="26"] .arco-table-tr > .arco-table-td:not(:nth-child(26)) { user-select: none; }
+[data-select-col="27"] .arco-table-tr > .arco-table-td:not(:nth-child(27)) { user-select: none; }
+[data-select-col="28"] .arco-table-tr > .arco-table-td:not(:nth-child(28)) { user-select: none; }
+[data-select-col="29"] .arco-table-tr > .arco-table-td:not(:nth-child(29)) { user-select: none; }
+[data-select-col="30"] .arco-table-tr > .arco-table-td:not(:nth-child(30)) { user-select: none; }
+[data-select-col="31"] .arco-table-tr > .arco-table-td:not(:nth-child(31)) { user-select: none; }
+[data-select-col="32"] .arco-table-tr > .arco-table-td:not(:nth-child(32)) { user-select: none; }
+[data-select-col="33"] .arco-table-tr > .arco-table-td:not(:nth-child(33)) { user-select: none; }
+[data-select-col="34"] .arco-table-tr > .arco-table-td:not(:nth-child(34)) { user-select: none; }
+[data-select-col="35"] .arco-table-tr > .arco-table-td:not(:nth-child(35)) { user-select: none; }
+[data-select-col="36"] .arco-table-tr > .arco-table-td:not(:nth-child(36)) { user-select: none; }
+[data-select-col="37"] .arco-table-tr > .arco-table-td:not(:nth-child(37)) { user-select: none; }
+[data-select-col="38"] .arco-table-tr > .arco-table-td:not(:nth-child(38)) { user-select: none; }
+[data-select-col="39"] .arco-table-tr > .arco-table-td:not(:nth-child(39)) { user-select: none; }
+[data-select-col="40"] .arco-table-tr > .arco-table-td:not(:nth-child(40)) { user-select: none; }
+[data-select-col="41"] .arco-table-tr > .arco-table-td:not(:nth-child(41)) { user-select: none; }
+[data-select-col="42"] .arco-table-tr > .arco-table-td:not(:nth-child(42)) { user-select: none; }
+[data-select-col="43"] .arco-table-tr > .arco-table-td:not(:nth-child(43)) { user-select: none; }
+[data-select-col="44"] .arco-table-tr > .arco-table-td:not(:nth-child(44)) { user-select: none; }
+[data-select-col="45"] .arco-table-tr > .arco-table-td:not(:nth-child(45)) { user-select: none; }
+[data-select-col="46"] .arco-table-tr > .arco-table-td:not(:nth-child(46)) { user-select: none; }
+[data-select-col="47"] .arco-table-tr > .arco-table-td:not(:nth-child(47)) { user-select: none; }
+[data-select-col="48"] .arco-table-tr > .arco-table-td:not(:nth-child(48)) { user-select: none; }
+[data-select-col="49"] .arco-table-tr > .arco-table-td:not(:nth-child(49)) { user-select: none; }
+[data-select-col="50"] .arco-table-tr > .arco-table-td:not(:nth-child(50)) { user-select: none; }
+[data-select-col="51"] .arco-table-tr > .arco-table-td:not(:nth-child(51)) { user-select: none; }
+[data-select-col="52"] .arco-table-tr > .arco-table-td:not(:nth-child(52)) { user-select: none; }
+[data-select-col="53"] .arco-table-tr > .arco-table-td:not(:nth-child(53)) { user-select: none; }
+[data-select-col="54"] .arco-table-tr > .arco-table-td:not(:nth-child(54)) { user-select: none; }
+[data-select-col="55"] .arco-table-tr > .arco-table-td:not(:nth-child(55)) { user-select: none; }
+[data-select-col="56"] .arco-table-tr > .arco-table-td:not(:nth-child(56)) { user-select: none; }
+[data-select-col="57"] .arco-table-tr > .arco-table-td:not(:nth-child(57)) { user-select: none; }
+[data-select-col="58"] .arco-table-tr > .arco-table-td:not(:nth-child(58)) { user-select: none; }
+[data-select-col="59"] .arco-table-tr > .arco-table-td:not(:nth-child(59)) { user-select: none; }
+[data-select-col="60"] .arco-table-tr > .arco-table-td:not(:nth-child(60)) { user-select: none; }

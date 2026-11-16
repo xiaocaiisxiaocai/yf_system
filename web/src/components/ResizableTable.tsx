@@ -5,6 +5,7 @@ import { ColumnResizeProvider } from './columnResize'
 import { TABLE_PAGINATION } from './tablePagination'
 import type { ColumnLayoutSpec } from './tableColumnLayout'
 import { useAdjustableColumns } from './useAdjustableColumns'
+import { useColumnTextSelection } from './useColumnTextSelection'
 
 /** 列没写宽度时的初始宽度；拖动后按用户记在浏览器。 */
 const RESIZABLE_DEFAULT_WIDTH = 120
@@ -51,6 +52,7 @@ function lockedByDefault<T>(column: TableColumnProps<T>, index: number) {
 function FlatResizableTable<T extends object>({ tableId, columns, growKey, lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
   const userId = useAuth((state) => state.user?.id)
   const hostRef = useRef<HTMLDivElement>(null)
+  useColumnTextSelection(hostRef)
   const keyed: (KeyedColumn<T> & { locked: boolean })[] = columns.map((column, index) => ({
     onHeaderCell: columnHeaderProps,
     ...column,
@@ -109,6 +111,7 @@ const flattenColumns = <T,>(columns: TableColumnProps<T>[]): Leaf<T>[] => column
 function GroupedTable<T extends object>({ tableId, columns, lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
   const userId = useAuth((state) => state.user?.id)
   const hostRef = useRef<HTMLDivElement>(null)
+  useColumnTextSelection(hostRef)
   const leaves = flattenColumns(columns)
   const keyed: (KeyedColumn<T> & { locked: boolean; groupKey?: string; group?: TableColumnProps<T> })[] = leaves.map(({ column, groupKey, group }, index) => {
     const key = keyOf(column, index)
