@@ -20,6 +20,12 @@
   background-color: #d9d9d9;
 }
 
+.outsource-table .arco-table-td.outsource-cell-changed,
+.outsource-table .outsource-row--paused > .arco-table-td.outsource-cell-changed,
+.outsource-table .outsource-row--cancelled > .arco-table-td.outsource-cell-changed {
+  background-color: #fff176 !important;
+}
+
 .outsource-due-changed {
   color: rgb(var(--orange-6));
   font-weight: 600;

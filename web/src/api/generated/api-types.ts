@@ -1167,6 +1167,7 @@ export interface OutsourceItemResponse {
   closed: boolean
   ipmsSyncedAt: string | null
   updatedAt: string
+  changedFields: Array<string> | null
 }
 
 export interface OutsourceItemUpdate {

@@ -50,6 +50,13 @@ const MATCH_PROBLEM: Record<string, string> = {
   UNKNOWN_TYPE: '外发类型不在字典中，不能发送',
   VENDOR_MISMATCH: '外发类型与厂商不符，不能发送',
 }
+/** Column title → the key the server uses for that column in `changedFields`. */
+const CHANGE_KEYS: Record<string, string> = {
+  外发日期: 'outsourceDate', 工令: 'workOrderNo', 客户: 'customer', 机型: 'machineModel', 机构课别: 'mechanicalSection',
+  机构执行人: 'mechanicalOwner', 电控执行人: 'electricalOwner', 工令下发: 'workOrderIssuedOn', BOM时间: 'bomOn', 发图: 'drawingReleasedOn',
+  外发类型: 'type', 原始交期: 'originalDueDate', 最新交期: 'latestDueDate', 数量: 'quantity', 外发厂商: 'vendor', 备注: 'remark', 状态: 'status',
+}
+
 const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
 
 interface Filters {
@@ -285,7 +292,19 @@ export default function OutsourceListPage() {
       </Space>,
     },
   ]
-  const columns = rawColumns
+  // A cell that differs from what was last mailed to the vendor is yellow, as in the mail and its Excel attachment.
+  // Arco takes a cell's class from what its render function returns (`props`), not from `onCell`.
+  const columns = rawColumns.map((column) => {
+    const key = typeof column.title === 'string' ? CHANGE_KEYS[column.title] : undefined
+    if (!key) return column
+    return {
+      ...column,
+      render: (value: unknown, item: Item, index: number) => {
+        const content = column.render ? column.render(value, item, index) : (value ?? '')
+        return item.changedFields?.includes(key) ? { children: content, props: { className: 'outsource-cell-changed' } } : content
+      },
+    }
+  })
 
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外协清单</h1>

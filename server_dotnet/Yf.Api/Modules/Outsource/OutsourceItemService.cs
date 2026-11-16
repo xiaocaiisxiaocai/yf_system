@@ -612,19 +612,34 @@ internal sealed class OutsourceReference
 
     public string? CodeOf(ulong typeId) => types.Values.Where(x => x.Id == typeId).Select(x => x.Code).FirstOrDefault();
 
-    public OutsourceItemResponse Json(OutsourceItem item) => new(
+    public OutsourceItemResponse Json(OutsourceItem item) => new OutsourceItemResponse(
         item.Id, item.SerialNo, item.WorkOrderNo, item.OutsourceDate, item.VendorId, VendorNames.GetValueOrDefault(item.VendorId) ?? "",
         item.Customer, item.MachineModel, item.MechanicalSection, item.MechanicalOwner, item.ElectricalOwner,
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
         item.Remark, item.Status, item.SendStatus, Match(item.TypeCode, item.VendorId), item.ClosedAt is not null,
-        item.IpmsSyncedAt, item.UpdatedAt);
+        item.IpmsSyncedAt, item.UpdatedAt).WithChangedFields(item);
 }
 
 /// <summary>
 /// The outsourcing-list columns, shared by the export, vendor mail bodies and attachments, and the "as last sent"
 /// snapshot, so the same field is compared and highlighted everywhere.
 /// </summary>
+internal static class OutsourceChangeMarks
+{
+    /// <summary>Marks the fields that differ from the last mail to the item's current vendor (none before it was ever sent).</summary>
+    internal static OutsourceItemResponse WithChangedFields(this OutsourceItemResponse response, OutsourceItem item)
+    {
+        if (item.NotifiedVendorId != item.VendorId || item.LastSentSnapshot is not { } json) return response;
+        try
+        {
+            var snapshot = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string?>>(json);
+            return response with { ChangedFields = [.. OutsourceWorkbook.Changed(response, snapshot)] };
+        }
+        catch (System.Text.Json.JsonException) { return response; }
+    }
+}
+
 internal static class OutsourceWorkbook
 {
     internal sealed record Field(string Key, string Header, double Width, Func<OutsourceItemResponse, string?> Value);

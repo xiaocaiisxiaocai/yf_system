@@ -151,6 +151,27 @@ public sealed class OutsourceItemTypeTests
         Assert.Equal((new DateOnly(2027, 2, 1), w1.OriginalDueDate), (after.LatestDueDate, after.OriginalDueDate));
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task CellsThatDifferFromTheLastMailAreMarkedInTheList()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_changed_cells", ct);
+        await using var _ = f.Database;
+        f.Ipms.Add("W1");
+        await f.Items.ImportAsync(f.Planner, Request(("W1", "鼎亚", "OEMA")), ct);
+        var item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
+        Assert.Null(item.ChangedFields); // never mailed: nothing to compare with
+
+        var snapshot = OutsourceWorkbook.Snapshot(item);
+        snapshot["quantity"] = "99";
+        snapshot["remark"] = "旧备注";
+        var json = System.Text.Json.JsonSerializer.Serialize(snapshot, new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        await f.Database.ExecuteAsync($"UPDATE outsource_items SET send_status='PENDING_NOTICE', notified_vendor_id=vendor_id, last_sent_snapshot='{json}'", ct);
+
+        var marked = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
+        Assert.Equal(["quantity", "remark"], marked.ChangedFields!.Order());
+    }
+
     private static OutsourceItemQuery All() => new(null, null, null, null, null, null, null, false);
 
     private static async Task<OutsourceItemResponse> ImportOneAsync(Fixture f, string no, string vendor, string type, CancellationToken ct)
