@@ -1,3 +1,4 @@
+using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Outsource;
@@ -170,6 +171,27 @@ public sealed class OutsourceItemTypeTests
 
         var marked = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
         Assert.Equal(["quantity", "remark"], marked.ChangedFields!.Order());
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task APurchaserCanDeleteARowThatWasAlreadyMailedAndTheAuditKeepsItsSendStatus()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_delete_sent", ct);
+        await using var _ = f.Database;
+        f.Ipms.Add("W1");
+        await f.Items.ImportAsync(f.Planner, Request(("W1", "鼎亚", "OEMA")), ct);
+        await f.Database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT', notified_vendor_id=vendor_id", ct);
+        var item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
+            f.Items.BatchDeleteAsync(f.Planner, new([new(item.Id, item.UpdatedAt)]), ct))).Status);
+
+        await f.Items.BatchDeleteAsync(f.Buyer, new([new(item.Id, item.UpdatedAt)]), ct);
+
+        Assert.Empty((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
+        await using var connection = await f.Database.Database.OpenAsync(ct);
+        var detail = await connection.QuerySingleAsync<string>("SELECT detail FROM audit_logs WHERE action='OUTSOURCE_ITEM_DELETE'");
+        Assert.True(detail.Contains("sendStatus", StringComparison.OrdinalIgnoreCase) && detail.Contains("SENT", StringComparison.Ordinal), detail);
     }
 
     private static OutsourceItemQuery All() => new(null, null, null, null, null, null, null, false);

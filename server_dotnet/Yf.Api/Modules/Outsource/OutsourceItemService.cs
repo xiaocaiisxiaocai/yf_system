@@ -349,8 +349,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
         var locked = await LockAsync(context, versions, ct);
-        if (locked.Any(x => x.SendStatus != OutsourceSendStatuses.Unsent))
-            throw ApiException.Conflict("已发送给厂商的记录不能删除，请改为「取消」");
+        // Anyone with the edit-and-send permission may delete, sent rows included: the vendor is not told, so the audit
+        // record says whether the row had been mailed. Its mail history keeps the work order number (no FK to items).
         var ids = locked.Select(x => x.Id).ToArray();
         await context.OutsourceItems.Where(x => ids.Contains(x.Id)).ExecuteDeleteAsync(ct);
         var vendors = await VendorNamesAsync(context, ct);
@@ -361,6 +361,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 {
                     targetName = item.WorkOrderNo, workOrderNo = item.WorkOrderNo,
                     vendor = vendors.GetValueOrDefault(item.VendorId),
+                    sendStatus = item.SendStatus,
                 }, null, ct);
         }
         await transaction.CommitAsync(ct);

@@ -169,12 +169,10 @@ public sealed class OutsourceItemTests
             Assert.Contains("<c r=\"A2\" s=\"3\"", sheet, StringComparison.Ordinal);
         }
 
-        // Deletion: only unsent rows, and only by purchasing.
+        // Deletion: only by purchasing; a row already mailed to the vendor can be deleted too (the audit keeps its send status).
         var latest = (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
         var sentRow = latest.Single(x => x.WorkOrderNo == "21089901");
         var unsentRow = latest.Single(x => x.WorkOrderNo == "21089902");
-        Assert.Equal("已发送给厂商的记录不能删除，请改为「取消」", (await Assert.ThrowsAsync<ApiException>(() =>
-            service.BatchDeleteAsync(buyer, new([new(sentRow.Id, sentRow.UpdatedAt), new(unsentRow.Id, unsentRow.UpdatedAt)]), ct))).Message);
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
             service.BatchDeleteAsync(planner, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct))).Status);
         await service.BatchDeleteAsync(buyer, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct);

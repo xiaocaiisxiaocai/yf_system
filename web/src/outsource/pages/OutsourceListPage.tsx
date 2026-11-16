@@ -216,6 +216,7 @@ export default function OutsourceListPage() {
     } catch { /* 统一请求层提示 */ }
   }
   const closedSelected = selectedItems.filter((item) => item.closed).length
+  const sentSelected = selectedItems.filter((item) => item.sendStatus !== 'UNSENT').length
 
   const prepareImport = async (rows: ExcelImportRow[]) => {
     const payload: ImportRow[] = rows.map((row) => ({
@@ -335,7 +336,9 @@ export default function OutsourceListPage() {
           <Popconfirm title={`将所选 ${selected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
             <Button icon={<IconCheckCircle />}>标记完成</Button>
           </Popconfirm>
-          <Popconfirm title={`删除所选 ${selected.length} 条记录？已发送给厂商的记录不能删除。`} onOk={removeSelected}>
+          <Popconfirm title={sentSelected > 0
+            ? `所选含 ${sentSelected} 条已发送给厂商的记录，删除后不会通知厂商，且无法恢复。确定删除 ${selected.length} 条？`
+            : `删除所选 ${selected.length} 条记录？`} onOk={removeSelected}>
             <Button status="danger">删除</Button>
           </Popconfirm>
         </>}
