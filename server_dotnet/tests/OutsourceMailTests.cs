@@ -130,6 +130,10 @@ public sealed class OutsourceMailTests
         Assert.True(partial.Recipients.Single(x => x.Email == "customer@client.invalid").Rejected);
         var failed = records.Single(x => x.VendorId == duopu.Id);
         Assert.Equal(("FAILED", "厂商收件地址全部被拒收"), (failed.Status, failed.LastError));
+        // The notice that never reached the vendor must not leave its items looking delivered.
+        list = (await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
+        Assert.All(list.Where(x => x.VendorId == duopu.Id), x => Assert.Equal("PENDING_NOTICE", x.SendStatus));
+        Assert.All(list.Where(x => x.VendorId == dingya.Id), x => Assert.Equal("SENT", x.SendStatus));
         Assert.Equal(0, await worker.RunOnceAsync(ct));
         var attachment = await mails.AttachmentAsync(viewer, partial.Id, ct);
         Assert.Equal(partial.AttachmentName, attachment.Name);
@@ -138,9 +142,22 @@ public sealed class OutsourceMailTests
         Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => mails.RetryAsync(buyer, partial.Id, ct))).Status);
         transport.Offline = true;
         Assert.Equal("QUEUED", (await mails.RetryAsync(buyer, failed.Id, ct)).Status);
+        list = (await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List; // resending the notice puts its items back to sent
+        Assert.All(list, x => Assert.Equal("SENT", x.SendStatus));
         await worker.RunOnceAsync(ct);
         var waiting = (await mails.ListAsync(viewer, duopu.Id, null, 1, 20, 0, ct)).List.Single();
         Assert.Equal(("QUEUED", 1, "无法连接 SMTP 服务器"), (waiting.Status, waiting.Attempts, waiting.LastError));
+
+        // A send that died half way is not repeated by itself: it fails as "unknown" and its items wait to be told again.
+        await using (var connection = await database.Database.OpenAsync(ct))
+            await connection.ExecuteAsync("UPDATE outsource_mails SET status='SENDING', updated_at=UTC_TIMESTAMP(3) - INTERVAL 20 MINUTE WHERE id=" + failed.Id);
+        await worker.RunOnceAsync(ct);
+        var lost = (await mails.ListAsync(viewer, duopu.Id, null, 1, 20, 0, ct)).List.Single();
+        Assert.Equal("FAILED", lost.Status);
+        Assert.Contains("发送中断", lost.LastError, StringComparison.Ordinal);
+        Assert.All((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List.Where(x => x.VendorId == duopu.Id), x => Assert.Equal("PENDING_NOTICE", x.SendStatus));
+        Assert.Equal("QUEUED", (await mails.RetryAsync(buyer, failed.Id, ct)).Status);
+        list = (await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
 
         // Changes after sending: the changed cell is yellow next time; moving an item adds a withdrawal for the old vendor.
         var a = list.Single(x => x.WorkOrderNo == "A1");

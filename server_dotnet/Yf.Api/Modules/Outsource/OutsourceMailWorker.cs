@@ -107,9 +107,18 @@ public sealed class OutsourceMailWorker(
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.OpenConnectionAsync(ct);
         var now = await DbClock.UtcNowAsync(context, ct, 3);
-        // A worker that died mid-send leaves SENDING behind; give it back to the queue.
-        await context.OutsourceMails.Where(x => x.Status == OutsourceMailStatuses.Sending && x.UpdatedAt < now - StaleSending)
-            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, OutsourceMailStatuses.Queued), ct);
+        // A worker that died mid-send leaves SENDING behind. Whether the vendor got the mail is unknown, so it is not sent
+        // again by itself: it fails with that explanation and purchasing resends after checking.
+        var stale = await context.OutsourceMails.AsNoTracking()
+            .Where(x => x.Status == OutsourceMailStatuses.Sending && x.UpdatedAt < now - StaleSending)
+            .Select(x => new { x.Id, x.Kind, x.VendorId }).ToArrayAsync(ct);
+        foreach (var lost in stale)
+        {
+            var failed = await context.OutsourceMails.Where(x => x.Id == lost.Id && x.Status == OutsourceMailStatuses.Sending)
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, OutsourceMailStatuses.Failed)
+                    .SetProperty(x => x.LastError, "发送中断，不确定厂商是否已收到；请确认后再重新发送"), ct);
+            if (failed > 0 && lost.Kind == OutsourceMailKinds.Notice) await ReopenItemsAsync(context, lost.Id, lost.VendorId, ct);
+        }
         var due = await context.OutsourceMails.AsNoTracking()
             .Where(x => x.Status == OutsourceMailStatuses.Queued && (x.NextAttemptAt == null || x.NextAttemptAt <= now))
             .OrderBy(x => x.Id).Select(x => x.Id).Take(20).ToArrayAsync(ct);
@@ -176,6 +185,9 @@ public sealed class OutsourceMailWorker(
             await context.OutsourceMailRecipients.Where(x => x.MailId == id && rejectedList.Contains(x.Email))
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Rejected, true), CancellationToken.None);
         }
+        // Confirming marked the items sent when the mail was queued; one that never reached the vendor must not stay "sent".
+        if (status == OutsourceMailStatuses.Failed && mail.Kind == OutsourceMailKinds.Notice)
+            await ReopenItemsAsync(context, id, mail.VendorId, CancellationToken.None);
         var delivered = status is OutsourceMailStatuses.Sent or OutsourceMailStatuses.Partial;
         await context.OutsourceMails.Where(x => x.Id == id).ExecuteUpdateAsync(s => s
             .SetProperty(x => x.Status, status).SetProperty(x => x.Attempts, x => x.Attempts + 1)
@@ -190,6 +202,12 @@ public sealed class OutsourceMailWorker(
                 }, null, CancellationToken.None);
         }
     }
+
+    /// <summary>Items of a failed notice go back to "有变更待通知" so the list shows the vendor still has to be told.</summary>
+    internal static Task<int> ReopenItemsAsync(YfDbContext context, ulong mailId, ulong vendorId, CancellationToken ct) =>
+        context.OutsourceItems.Where(item => item.SendStatus == OutsourceSendStatuses.Sent && item.NotifiedVendorId == vendorId
+                && context.OutsourceMailItems.Any(link => link.MailId == mailId && link.ItemId == item.Id))
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.SendStatus, OutsourceSendStatuses.PendingNotice), ct);
 
     internal static MimeMessage BuildMessage(SmtpOptions smtp, OutsourceMail mail, IReadOnlyList<OutsourceMailRecipient> recipients)
     {

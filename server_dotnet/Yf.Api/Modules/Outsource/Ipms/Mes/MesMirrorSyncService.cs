@@ -491,7 +491,8 @@ public sealed class MesMirrorSyncService(
             foreach (var row in all)
             {
                 ct.ThrowIfCancellationRequested();
-                var values = OrderValues(JsonDocument.Parse(row.RawJson).RootElement);
+                using var json = JsonDocument.Parse(row.RawJson);
+                var values = OrderValues(json.RootElement);
                 if (conditions.All(c => values.TryGetValue(c.Field, out var text) && c.Terms.Any(term => (text ?? "").Contains(term, StringComparison.OrdinalIgnoreCase))))
                     matched.Add(new MesOrderRow(row.WorkOrderNo, DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc), values));
             }
