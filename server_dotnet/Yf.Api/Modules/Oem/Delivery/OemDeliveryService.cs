@@ -108,6 +108,7 @@ public sealed class OemDeliveryService(
         await audit.WriteAsync(uow, current, "OEM_DOWNLOAD_START", "oem_file", fileId, new
         {
             targetName = file.OriginalName, transferId = transfer.Id, downloadSessionId = session.Id, session.Purpose, recipientSide = session.RecipientSide,
+            sizeBytes = file.SizeBytes,
         }, ct);
         await uow.CommitAsync(ct);
         var expiresAt = DateTime.SpecifyKind(Min(deadline, uow.Now.Add(GrantLifetime)), DateTimeKind.Utc);
@@ -373,9 +374,14 @@ public sealed class OemDeliveryService(
         var transferId = file.TransferId;
         var transfer = await uow.Db.OemTransfers.SingleAsync(item => item.Id == transferId, ct);
         var downloader = await AuditActorOfAsync(uow, session, ct);
+        // From issuing the download to the last byte: includes pauses between resumed ranges.
+        var elapsed = (session.CompletedAt ?? uow.Now) - session.CreatedAt;
         await audit.WriteAsync(uow, downloader, "OEM_DOWNLOAD_COMPLETE", "oem_file", file.Id, new
         {
             targetName = file.OriginalName, transferId, downloadSessionId = session.Id, session.Purpose, recipientSide = session.RecipientSide,
+            sizeBytes = session.ExpectedSize,
+            durationMs = Files.TransferMetrics.DurationMs(elapsed),
+            bytesPerSecond = Files.TransferMetrics.BytesPerSecond(session.ExpectedSize, elapsed),
         }, ct);
         if (!session.RecipientSide || file.FirstRecipientDownloadAt is not null) return;
         var snapshot = new RetentionSnapshot(transfer.RetentionMode!, transfer.ReleaseTtlMinutes, transfer.ReceiptGraceMinutes);

@@ -2,7 +2,7 @@ import type { AuditRow } from '../../api/types'
 import { DIRECTION_LABEL, VALIDATION } from '../../components/statusLabels'
 import { fmtTime } from '../../../api/types'
 import {
-  actorIdentity, displayChanges, formatAuditValue, formatByteSize, formatChangeValue, targetIdentity,
+  actorIdentity, displayChanges, formatAuditValue, formatByteSize, formatChangeValue, formatDuration, formatSpeed, targetIdentity,
   type ActionMeta, type AuditLogRow, type DetailNote, type DisplayIdentity,
 } from '../../../pages/system/auditLogDetails'
 import type { AuditPresenter } from '../../../components/AuditLogParts'
@@ -190,6 +190,9 @@ export function oemDetailSummary(row: AuditLogRow): string {
     case 'OEM_TRANSFER_RELEASE':
       return join(text(detail.expiresAt) ? `有效期至 ${fmtTime(String(detail.expiresAt))}` : '长期有效', label(RETENTION_LABELS, detail.retentionMode))
     case 'OEM_FILE_UPLOAD':
+      return join(hasValue(detail.sizeBytes) && formatByteSize(detail.sizeBytes),
+        hasValue(detail.durationMs) && `耗时 ${formatDuration(detail.durationMs)}`,
+        hasValue(detail.bytesPerSecond) && `平均 ${formatSpeed(detail.bytesPerSecond)}`) || '-'
     case 'OEM_FILE_REMOVE':
     case 'OEM_RECONCILE_FILE_RELOCATED':
     case 'OEM_FILE_STORAGE_LOST':
@@ -203,8 +206,11 @@ export function oemDetailSummary(row: AuditLogRow): string {
       return join(validationLabel(detail.verdict), reason) || '-'
     case 'OEM_FILE_PREVIEW':
     case 'OEM_DOWNLOAD_START':
-    case 'OEM_DOWNLOAD_COMPLETE':
       return accessSummary(row)
+    case 'OEM_DOWNLOAD_COMPLETE':
+      return join(accessSummary(row) !== '-' && accessSummary(row), hasValue(detail.sizeBytes) && formatByteSize(detail.sizeBytes),
+        hasValue(detail.durationMs) && `耗时 ${formatDuration(detail.durationMs)}`,
+        hasValue(detail.bytesPerSecond) && `平均 ${formatSpeed(detail.bytesPerSecond)}`)
     case 'OEM_FILE_FIRST_RECEIPT':
       return `计划删除：${timeOrNever(detail.purgeDueAt, '不自动删除')}`
     case 'OEM_RECONCILE_COMPLETED':
@@ -246,6 +252,8 @@ const NOTE_FIELDS: [key: string, label: string, format?: (value: unknown) => str
   ['recipientSide', '接收方身份', formatAuditValue],
   ['sizeBytes', '文件大小', formatByteSize],
   ['size', '文件大小', formatByteSize],
+  ['durationMs', '耗时', formatDuration],
+  ['bytesPerSecond', '平均速度', formatSpeed],
   ['sha256', 'SHA-256'],
   ['manifest', '清单摘要'],
   ['attempts', '尝试次数'],

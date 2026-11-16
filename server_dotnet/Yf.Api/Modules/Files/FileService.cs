@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Buffers;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
@@ -113,10 +114,11 @@ public sealed class FileService(
                     Results.File(stream, FileStorage.MimeType("preview." + row.Ext), enableRangeProcessing: true), lease);
             }
             await WriteWindowedAuditAsync(context, conn, actor.Id, "FILE_DOWNLOAD", id,
-                new { name = row.OriginalName }, ct);
+                new { name = row.OriginalName, size = row.SizeBytes }, ct);
             return new GuardedFileResult(
                 Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
-                    enableRangeProcessing: true), lease);
+                    enableRangeProcessing: true), lease,
+                onFinished: AuditDownloadEnd(actor.Id, "FILE_DOWNLOAD_END", id, new() { ["name"] = row.OriginalName, ["size"] = row.SizeBytes }));
         }
         catch
         {
@@ -165,11 +167,12 @@ public sealed class FileService(
             stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024,
                 FileOptions.Asynchronous | FileOptions.RandomAccess);
             await WriteSessionAuditAsync(context, conn, session, "FILE_DOWNLOAD", id,
-                new { name = row.OriginalName }, ct);
+                new { name = row.OriginalName, size = row.SizeBytes }, ct);
             SetNoStore(context.Response);
             return new GuardedFileResult(
                 Results.File(stream, row.MimeType ?? "application/octet-stream", row.OriginalName,
-                    enableRangeProcessing: true), lease);
+                    enableRangeProcessing: true), lease,
+                onFinished: AuditDownloadEnd(session.UserId, "FILE_DOWNLOAD_END", id, new() { ["name"] = row.OriginalName, ["size"] = row.SizeBytes }));
         }
         catch
         {
@@ -216,7 +219,8 @@ public sealed class FileService(
             throw;
         }
         SetNoStore(context.Response);
-        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease, BatchWatchdogLimits());
+        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease, BatchWatchdogLimits(),
+            AuditDownloadEnd(session.UserId, "FILE_BATCH_DOWNLOAD_END", null, new() { ["ids"] = batch.Ids, ["inputBytes"] = batch.InputBytes }));
     }
 
     private TransferWatchdogLimits BatchWatchdogLimits() => new(
@@ -440,7 +444,8 @@ public sealed class FileService(
         SetNoStore(context.Response);
         // Stream the archive as it is compressed instead of staging up to 256 MiB on disk first, so the
         // download starts immediately. The limiter lease is held until the stream completes.
-        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease, BatchWatchdogLimits());
+        return new ZipStreamResult(batch.Entries, $"yf_files_{Guid.NewGuid():D}.zip", lease, BatchWatchdogLimits(),
+            AuditDownloadEnd(actor.Id, "FILE_BATCH_DOWNLOAD_END", null, new() { ["ids"] = batch.Ids, ["inputBytes"] = batch.InputBytes }));
     }
 
     /// <summary>
@@ -451,7 +456,8 @@ public sealed class FileService(
     /// when the maximum duration is exceeded, so a stuck download releases its limiter slot and file handles.
     /// </summary>
     internal sealed class ZipStreamResult(
-        IReadOnlyList<ArchiveSource> sources, string fileName, IDisposable lease, TransferWatchdogLimits? limits = null) : IResult
+        IReadOnlyList<ArchiveSource> sources, string fileName, IDisposable lease, TransferWatchdogLimits? limits = null,
+        Func<HttpContext, TransferOutcome, Task>? onFinished = null) : IResult
     {
         internal static readonly TransferWatchdogLimits DefaultLimits =
             new(64 * 1024, TransferWatchdogLimits.DefaultWindow, TimeSpan.FromMinutes(120));
@@ -460,6 +466,19 @@ public sealed class FileService(
         {
             using var _ = lease;
             using var watchdog = new TransferWatchdog(limits ?? DefaultLimits, httpContext.RequestAborted);
+            var started = Stopwatch.GetTimestamp();
+            var completed = false;
+            try { completed = await StreamAsync(httpContext, watchdog); }
+            finally
+            {
+                await TransferMetrics.NotifyAsync(httpContext, onFinished,
+                    new(watchdog.Transferred, Stopwatch.GetElapsedTime(started), completed));
+            }
+        }
+
+        /// <returns>Whether the whole archive was delivered.</returns>
+        private async Task<bool> StreamAsync(HttpContext httpContext, TransferWatchdog watchdog)
+        {
             var ct = watchdog.Token;
             // A stalled write may not observe the token (IIS in-process); aborting the connection always unblocks it.
             using var abortOnVerdict = ct.Register(() =>
@@ -511,11 +530,12 @@ public sealed class FileService(
                     if (watchdog.Verdict != TransferWatchdogVerdict.Healthy)
                         httpContext.RequestServices?.GetService<ILoggerFactory>()?.CreateLogger<ZipStreamResult>().LogWarning(
                             "Batch download aborted by watchdog ({Verdict}) after {Bytes} bytes.", watchdog.Verdict, watchdog.Transferred);
-                    return;
+                    return false;
                 }
                 throw;
             }
             await producer;
+            return true;
         }
     }
 
@@ -636,6 +656,28 @@ public sealed class FileService(
         SameSite = SameSiteMode.Strict,
         Path = path,
         MaxAge = lifetimeSeconds is int seconds ? TimeSpan.FromSeconds(seconds) : null,
+    };
+
+    /// <summary>
+    /// Records what one download response actually delivered: bytes, wall time, average speed and whether it ran
+    /// to the end. Written after the response on a fresh connection; HEAD and non-body responses are skipped.
+    /// </summary>
+    private Func<HttpContext, TransferOutcome, Task> AuditDownloadEnd(
+        ulong actorId, string action, ulong? fileId, Dictionary<string, object?> subject) => async (context, outcome) =>
+    {
+        var status = context.Response.StatusCode;
+        if (HttpMethods.IsHead(context.Request.Method) || status is not (StatusCodes.Status200OK or StatusCodes.Status206PartialContent)) return;
+        var detail = new Dictionary<string, object?>(subject)
+        {
+            ["transferredBytes"] = outcome.Bytes,
+            ["durationMs"] = TransferMetrics.DurationMs(outcome.Elapsed),
+            ["bytesPerSecond"] = TransferMetrics.BytesPerSecond(outcome.Bytes, outcome.Elapsed),
+            ["completed"] = outcome.Completed,
+        };
+        if (status == StatusCodes.Status206PartialContent) detail["partial"] = true;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await using var conn = await db.OpenAsync(timeout.Token);
+        await audit.WriteAsync(conn, null, actorId, action, "file", fileId, detail, ClientIp.Resolve(context, options), timeout.Token);
     };
 
     private async Task WriteSessionAuditAsync(

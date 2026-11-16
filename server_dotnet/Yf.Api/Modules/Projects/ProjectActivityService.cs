@@ -46,6 +46,8 @@ internal sealed class ProjectActivityService(
             ("file", "FILE_PREVIEW"),
             ("file", "FILE_DOWNLOAD"),
             ("file", "FILE_BATCH_DOWNLOAD"),
+            ("file", "FILE_DOWNLOAD_END"),
+            ("file", "FILE_BATCH_DOWNLOAD_END"),
         };
 
     internal static async Task<string> RevisionAsync(

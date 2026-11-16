@@ -102,7 +102,9 @@ export const ACTIONS: Record<string, ActionMeta> = {
   FILE_UPLOAD: action('上传文件', 'FILE', '文件', 'arcoblue'),
   FILE_DOWNLOAD: action('下载文件', 'FILE', '文件', 'cyan'),
   FILE_PREVIEW: action('预览文件', 'FILE', '文件', 'cyan'),
+  FILE_DOWNLOAD_END: action('下载结束', 'FILE', '文件', 'cyan'),
   FILE_BATCH_DOWNLOAD: action('批量下载', 'FILE', '文件', 'cyan'),
+  FILE_BATCH_DOWNLOAD_END: action('批量下载结束', 'FILE', '文件', 'cyan'),
   FILE_DELETE: action('删除文件', 'FILE', '文件', 'red'),
   FILE_WITHDRAW: action('撤回文件', 'FILE', '文件', 'orange'),
   FILE_RESTORE: action('恢复文件', 'FILE', '文件', 'green'),
@@ -446,6 +448,7 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
     }
     if (records.length > 20) notes.push({ label: '完整摘要', value: `共 ${records.length} 条，可复制详情查看全部记录`, tone: 'normal' })
   }
+  if (TRANSFER_ACTIONS.has(row.action)) notes.push(...transferNotes(detail))
   if (row.action === 'PROJECT_COPY') {
     notes.push({ label: '复制文件', value: `${formatAuditValue(detail.fileCount)} 个`, tone: 'normal' })
     notes.push({ label: '文件总大小', value: formatByteSize(detail.totalBytes), tone: 'normal' })
@@ -479,6 +482,52 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
     notes.push({ label: '提前发送', value: `${formatAuditValue(detail.rescheduled)} 封`, tone: 'normal' })
   }
   return notes
+}
+
+const TRANSFER_ACTIONS = new Set(['FILE_UPLOAD', 'FILE_DOWNLOAD', 'FILE_DOWNLOAD_END', 'FILE_BATCH_DOWNLOAD', 'FILE_BATCH_DOWNLOAD_END'])
+
+/** 毫秒 → 便于阅读的耗时。 */
+export function formatDuration(value: unknown): string {
+  const ms = Number(value)
+  if (value == null || !Number.isFinite(ms) || ms < 0) return formatAuditValue(value)
+  if (ms < 1000) return `${Math.round(ms)} 毫秒`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)} 秒`
+  const totalSeconds = Math.round(seconds)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const rest = totalSeconds % 60
+  return hours > 0 ? `${hours} 小时 ${minutes} 分` : `${minutes} 分 ${rest} 秒`
+}
+
+/** 字节/秒 → 平均速度。 */
+export function formatSpeed(value: unknown): string {
+  if (value == null || !Number.isFinite(Number(value))) return formatAuditValue(value)
+  return `${formatByteSize(value)}/s`
+}
+
+function transferNotes(detail: AuditDetail): DetailNote[] {
+  const notes: DetailNote[] = []
+  const size = detail.size ?? detail.inputBytes
+  if (size != null) notes.push({ label: detail.inputBytes != null ? '文件总大小' : '文件大小', value: formatByteSize(size), tone: 'normal' })
+  if (detail.transferredBytes != null) notes.push({ label: '实际传输', value: formatByteSize(detail.transferredBytes), tone: 'normal' })
+  if (detail.durationMs != null) notes.push({ label: '耗时', value: formatDuration(detail.durationMs), tone: 'normal' })
+  if (detail.bytesPerSecond != null) notes.push({ label: '平均速度', value: formatSpeed(detail.bytesPerSecond), tone: 'normal' })
+  if (detail.partial === true) notes.push({ label: '下载方式', value: '分段续传（本次只传了其中一段）', tone: 'normal' })
+  if (detail.completed === false) notes.push({ label: '传输结果', value: '未完成（连接中断或被取消）', tone: 'danger' })
+  return notes
+}
+
+function transferSummary(detail: AuditDetail): string {
+  const subject = cleanText(detail.name) ?? (Array.isArray(detail.ids) ? `${detail.ids.length} 个文件` : undefined)
+  const size = detail.size ?? detail.inputBytes
+  return [
+    subject,
+    size != null ? formatByteSize(size) : undefined,
+    detail.durationMs != null ? `耗时 ${formatDuration(detail.durationMs)}` : undefined,
+    detail.bytesPerSecond != null ? `平均 ${formatSpeed(detail.bytesPerSecond)}` : undefined,
+    detail.completed === false ? `未完成，已传 ${formatByteSize(detail.transferredBytes)}` : undefined,
+  ].filter(Boolean).join(' · ') || '-'
 }
 
 export function formatByteSize(value: unknown): string {
@@ -551,6 +600,7 @@ export function detailSummary(row: AuditLogRow): string {
   }
   if (row.action === 'EMAIL_SENT') return detail?.recipient ? `收件人 ${formatAuditValue(detail.recipient)}` : '邮件已发送'
   if (!detail) return row.targetType === 'project' ? '历史日志未记录详情' : '未记录补充信息'
+  if (TRANSFER_ACTIONS.has(row.action)) return transferSummary(detail)
   const parts = [detail.name, detail.fileName, detail.employeeNo, detail.projectId]
     .filter((value) => value != null && value !== '')
     .map(formatAuditValue)

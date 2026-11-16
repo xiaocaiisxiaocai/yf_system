@@ -85,7 +85,8 @@ public sealed class FileStreamLimiter
 internal sealed class GuardedFileResult(
     IResult inner,
     IDisposable lease,
-    TransferWatchdogLimits? limits = null) : IResult
+    TransferWatchdogLimits? limits = null,
+    Func<HttpContext, TransferOutcome, Task>? onFinished = null) : IResult
 {
     internal static readonly TransferWatchdogLimits DefaultLimits =
         new(64 * 1024, TransferWatchdogLimits.DefaultWindow, TimeSpan.FromHours(24));
@@ -106,9 +107,12 @@ internal sealed class GuardedFileResult(
         httpContext.RequestAborted = watchdog.Token;
         var originalBody = httpContext.Response.Body;
         httpContext.Response.Body = new ProgressStream(originalBody, watchdog);
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        var completed = false;
         try
         {
             await inner.ExecuteAsync(httpContext);
+            completed = !originalAbort.IsCancellationRequested && watchdog.Verdict == TransferWatchdogVerdict.Healthy;
         }
         catch (Exception error) when (ExpectedTermination(error, watchdog, originalAbort))
         {
@@ -123,6 +127,8 @@ internal sealed class GuardedFileResult(
             httpContext.Response.Body = originalBody;
             httpContext.RequestAborted = originalAbort;
         }
+        await TransferMetrics.NotifyAsync(httpContext, onFinished,
+            new(watchdog.Transferred, System.Diagnostics.Stopwatch.GetElapsedTime(started), completed));
     }
 
     /// <summary>Reports the bytes the response body accepted, which is the watchdog's progress signal.</summary>

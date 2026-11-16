@@ -159,7 +159,13 @@ public sealed partial class UploadService
             var fileId = file.Id;
             await EnqueueFileNoticeAsync(conn, tx, project.Id, fileId, session.FileName, direction, current, ct);
             await audit.WriteAsync(conn, tx, current.Id, "FILE_UPLOAD", "file", fileId,
-                new { name = session.FileName, size = session.FileSize, projectId = session.ProjectId },
+                new
+                {
+                    name = session.FileName, size = session.FileSize, projectId = session.ProjectId,
+                    // From starting the upload to the stored file: includes pauses before a resume and the final hash.
+                    durationMs = TransferMetrics.DurationMs(now - session.CreatedAt),
+                    bytesPerSecond = TransferMetrics.BytesPerSecond(session.FileSize, now - session.CreatedAt),
+                },
                 ClientIp.Resolve(context, options), ct);
             var completedAt = await DbNowAsync(ef, ct);
             var completed = await ef.UploadSessions

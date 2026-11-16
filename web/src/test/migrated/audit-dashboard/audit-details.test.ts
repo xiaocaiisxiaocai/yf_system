@@ -181,7 +181,7 @@ describe('审计详情生产契约', () => {
     const expectedByCategory: Record<string, string[]> = {
       AUTH: ['LOGIN', 'LOGIN_FAILED', 'LOGIN_LOCKED', 'LOGOUT', 'PASSWORD_CHANGE', 'PASSWORD_CHANGE_FAILED', 'PROFILE_UPDATE'],
       PROJECT: ['PROJECT_CREATE', 'PROJECT_GROUP_CREATE', 'PROJECT_GROUP_UPDATE', 'PROJECT_GROUP_TRANSFER', 'PROJECT_GROUP_STATUS_AUTO', 'PROJECT_GROUP_DELETE', 'PROJECT_COPY', 'PROJECT_UPDATE', 'PROJECT_START', 'PROJECT_SUBMIT', 'PROJECT_CONFIRM', 'PROJECT_REJECT', 'PROJECT_WITHDRAW', 'PROJECT_MATERIAL_APPROVE', 'PROJECT_MATERIAL_RETURN', 'PROJECT_ACCEPTANCE_MIGRATE', 'PROJECT_ACCEPTANCE_NOTIFICATIONS_MIGRATE', 'PROJECT_TERMINATE', 'PROJECT_RESTART', 'PROJECT_REOPEN', 'PROJECT_DELETE', 'PROJECT_MEMBERS'],
-      FILE: ['FILE_UPLOAD', 'FILE_DOWNLOAD', 'FILE_PREVIEW', 'FILE_BATCH_DOWNLOAD', 'FILE_DELETE', 'FILE_WITHDRAW', 'FILE_RESTORE', 'UPLOAD_ABORT'],
+      FILE: ['FILE_UPLOAD', 'FILE_DOWNLOAD', 'FILE_DOWNLOAD_END', 'FILE_PREVIEW', 'FILE_BATCH_DOWNLOAD', 'FILE_BATCH_DOWNLOAD_END', 'FILE_DELETE', 'FILE_WITHDRAW', 'FILE_RESTORE', 'UPLOAD_ABORT'],
       MESSAGE: ['MESSAGE_CREATE', 'MESSAGE_DELETE', 'MESSAGE_WITHDRAW', 'MESSAGE_RESTORE', 'MESSAGE_READ'],
       ORG: ['USER_CREATE', 'USER_UPDATE', 'USER_STATUS', 'USER_DELETE', 'USER_RESET_PASSWORD', 'USER_ASSIGN_ROLE', 'USER_ASSIGN_ROLES', 'DEPT_CREATE', 'DEPT_UPDATE', 'DEPT_STATUS', 'DEPT_DELETE', 'ROLE_CREATE', 'ROLE_UPDATE', 'ROLE_STATUS', 'ROLE_DELETE', 'ROLE_ASSIGN_PERMS'],
       SUPPLIER: ['SUPPLIER_CREATE', 'SUPPLIER_UPDATE', 'SUPPLIER_STATUS', 'SUPPLIER_DELETE', 'SUPPLIER_ACCOUNT_CREATE', 'SUPPLIER_ACCOUNT_UPDATE', 'SUPPLIER_ACCOUNT_STATUS', 'SUPPLIER_ACCOUNT_RESET_PASSWORD', 'SUPPLIER_ACCOUNT_DELETE'],
@@ -241,5 +241,22 @@ describe('审计详情生产契约', () => {
     }
     expect(ACTIONS.AUDIT_LOG_RETENTION.categoryCode).toBe('SYSTEM')
     expect(detailSummary(row)).toBe('已自动清理 1250 条超过 30 天的操作日志')
+  })
+
+  it('upload and download records show size, duration, average speed and an unfinished transfer', () => {
+    const upload: AuditLogRow = {
+      ...baseRow, action: 'FILE_UPLOAD', targetType: 'file',
+      detail: { name: 'a.zip', size: 10 * 1024 * 1024, projectId: 3, durationMs: 4000, bytesPerSecond: 2621440 },
+    }
+    expect(detailSummary(upload)).toBe('a.zip · 10.0 MB · 耗时 4.0 秒 · 平均 2.5 MB/s')
+    const broken: AuditLogRow = {
+      ...baseRow, action: 'FILE_DOWNLOAD_END', targetType: 'file',
+      detail: { name: 'a.zip', size: 2048, transferredBytes: 1024, durationMs: 125000, bytesPerSecond: 8, completed: false },
+    }
+    expect(ACTIONS.FILE_DOWNLOAD_END.label).toBe('下载结束')
+    expect(detailSummary(broken)).toBe('a.zip · 2.0 KB · 耗时 2 分 5 秒 · 平均 8 B/s · 未完成，已传 1.0 KB')
+    expect(detailNotes(broken).map((note) => `${note.label}:${note.value}`)).toEqual([
+      '文件大小:2.0 KB', '实际传输:1.0 KB', '耗时:2 分 5 秒', '平均速度:8 B/s', '传输结果:未完成（连接中断或被取消）',
+    ])
   })
 })

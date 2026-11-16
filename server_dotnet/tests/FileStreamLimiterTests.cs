@@ -73,6 +73,35 @@ public sealed class FileStreamLimiterTests
     }
 
     [Fact]
+    public async Task FinishedCallbackReportsDeliveredBytesTimeAndWhetherTheResponseRanToTheEnd()
+    {
+        var limiter = new FileStreamLimiter();
+        TransferOutcome? finished = null;
+        await new GuardedFileResult(new TrickleResult(3, TimeSpan.FromMilliseconds(5)), limiter.Acquire(13, Now), TestLimits,
+            (_, outcome) => { finished = outcome; return Task.CompletedTask; })
+            .ExecuteAsync(Context(TestContext.Current.CancellationToken));
+        Assert.Equal(3, finished!.Value.Bytes);
+        Assert.True(finished.Value.Completed);
+        Assert.True(finished.Value.Elapsed > TimeSpan.Zero);
+
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        TransferOutcome? cancelled = null;
+        var execution = new GuardedFileResult(new WaitingResult(entered), limiter.Acquire(14, Now), TestLimits,
+            (_, outcome) => { cancelled = outcome; return Task.CompletedTask; }).ExecuteAsync(Context(request.Token));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        request.Cancel();
+        await execution.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.False(cancelled!.Value.Completed);
+
+        // A failing callback never breaks the finished response.
+        await new GuardedFileResult(new CompletedResult(), limiter.Acquire(15, Now), TestLimits,
+            (_, _) => throw new InvalidOperationException("audit down")).ExecuteAsync(Context(TestContext.Current.CancellationToken));
+        Assert.Equal(1024, TransferMetrics.BytesPerSecond(2048, TimeSpan.FromSeconds(2)));
+        Assert.Null(TransferMetrics.BytesPerSecond(2048, TimeSpan.Zero));
+    }
+
+    [Fact]
     public async Task DeadlineAbortsAStuckResponseAndReleasesItsLease()
     {
         var limiter = new FileStreamLimiter();

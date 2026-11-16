@@ -345,6 +345,9 @@ public sealed partial class OemUploadService(
                 await audit.WriteAsync(uow, current, "OEM_FILE_UPLOAD", "oem_file", file.Id, new
                 {
                     targetName = file.OriginalName, transferId = file.TransferId, file.SizeBytes, file.Sha256,
+                    // From starting the upload to the stored file: includes pauses before a resume and the final hash.
+                    durationMs = Files.TransferMetrics.DurationMs(uow.Now - locked.CreatedAt),
+                    bytesPerSecond = Files.TransferMetrics.BytesPerSecond(file.SizeBytes, uow.Now - locked.CreatedAt),
                 }, ct);
                 await uow.CommitAsync(ct);
                 committed = true;
