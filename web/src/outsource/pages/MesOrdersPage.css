@@ -1,7 +1,8 @@
 .outsource-ipms-data-page {
-  --page-table-scroll-y: max(280px, calc(100dvh - 300px));
+  --page-table-scroll-y: max(280px, calc(100dvh - 240px));
 }
 
-.outsource-ipms-fields {
-  width: 100%;
+.outsource-ipms-data-page .arco-table-th,
+.outsource-ipms-data-page .arco-table-td {
+  white-space: nowrap;
 }

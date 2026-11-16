@@ -411,26 +411,10 @@ export interface MesMirrorTestRequest {
   password?: string | null
 }
 
-export interface MesOrderDetailResponse {
-  workOrderNo: string
-  fetchedAt: string
-  fields: Array<MesOrderField>
-}
-
-export interface MesOrderField {
-  key: string
-  value: string | null
-}
-
 export interface MesOrderRow {
   workOrderNo: string
-  customerName: string | null
-  deviceModels: string | null
-  processName: string | null
-  deliveryDate: string | null
-  completeDate: string | null
-  deviceNum: string | null
   fetchedAt: string
+  values: Record<string, string | null>
 }
 
 export interface MesTestResult {
@@ -2152,7 +2136,6 @@ export interface ApiResponses {
   "POST /outsource/mails/{id}/retry": OutsourceMailResponse
   "POST /outsource/mes-mirror/confirm": MesMirrorStatusResponse
   "GET /outsource/mes-mirror/orders": PageResponseOfMesOrderRow
-  "GET /outsource/mes-mirror/orders/{workOrderNo}": MesOrderDetailResponse
   "POST /outsource/mes-mirror/run": MesMirrorStatusResponse
   "PUT /outsource/mes-mirror/schedule": MesMirrorSettingsResponse
   "GET /outsource/mes-mirror/settings": MesMirrorSettingsResponse

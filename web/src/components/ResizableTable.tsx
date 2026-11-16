@@ -48,7 +48,7 @@ function lockedByDefault<T>(column: TableColumnProps<T>, index: number) {
  * Arco 表格加上可拖动的列宽，宽度按表格和用户记在浏览器里（与项目列表等页面同一套机制）。
  * 列宽规格直接取自各列已写的 `width`；双击表头分隔线恢复该列默认宽度。
  */
-export default function ResizableTable<T extends object>({ tableId, columns, growKey, lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
+function FlatResizableTable<T extends object>({ tableId, columns, growKey, lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
   const userId = useAuth((state) => state.user?.id)
   const hostRef = useRef<HTMLDivElement>(null)
   const keyed: (KeyedColumn<T> & { locked: boolean })[] = columns.map((column, index) => ({
@@ -94,4 +94,30 @@ export default function ResizableTable<T extends object>({ tableId, columns, gro
       </div>
     </ColumnResizeProvider>
   )
+}
+
+const leafWidth = (column: TableColumnProps<never>): number =>
+  column.children?.length ? column.children.reduce((sum, child) => sum + leafWidth(child as TableColumnProps<never>), 0)
+    : typeof column.width === 'number' ? column.width : RESIZABLE_DEFAULT_WIDTH
+
+/**
+ * 带分组表头（`children`）的表格：列宽、顺序按页面写定，不提供拖动列宽和「显示列」，其余（统一分页、横向滚动）与其他表格一致。
+ */
+function GroupedTable<T extends object>({ tableId: _tableId, columns, growKey: _growKey, lockedKeys: _lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
+  const width = columns.reduce((sum, column) => sum + leafWidth(column as TableColumnProps<never>), 0)
+  return (
+    <div className={classNames(className).includes('page-table') ? 'page-table-host' : undefined}>
+      <Table<T>
+        {...rest}
+        className={classNames(className).join(' ')}
+        columns={columns}
+        pagination={pagination && typeof pagination === 'object' ? { ...TABLE_PAGINATION, ...pagination } : pagination}
+        scroll={{ ...scroll, x: Math.max(width, typeof scroll?.x === 'number' ? scroll.x : 0) }}
+      />
+    </div>
+  )
+}
+
+export default function ResizableTable<T extends object>(props: ResizableTableProps<T>) {
+  return props.columns.some((column) => column.children?.length) ? <GroupedTable<T> {...props} /> : <FlatResizableTable<T> {...props} />
 }

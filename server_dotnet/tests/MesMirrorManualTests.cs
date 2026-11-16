@@ -132,20 +132,14 @@ public sealed class MesMirrorManualTests
         await WaitAsync(f, s => s.Phase == "AWAITING_CONFIRM", ct);
         await f.Service.ConfirmAsync(f.Admin, new(true), ct);
 
-        var all = await f.Service.OrdersAsync(f.Admin, null, 1, 20, 0, ct);
+        var all = await f.Service.OrdersAsync(f.Admin, 1, 20, 0, ct);
         Assert.Equal(4UL, all.Total);
-        Assert.Equal(["B9", "A3", "A2", "A1"], all.List.Select(x => x.WorkOrderNo));
-        Assert.Equal("旧客户", all.List.Single(x => x.WorkOrderNo == "A3").CustomerName);
-        Assert.Equal("客户A1", all.List.Single(x => x.WorkOrderNo == "A1").CustomerName);
-
-        var matched = await f.Service.OrdersAsync(f.Admin, "客户A", 1, 20, 0, ct);
-        Assert.Equal(["A2", "A1"], matched.List.Select(x => x.WorkOrderNo));
-        Assert.Empty((await f.Service.OrdersAsync(f.Admin, "%", 1, 20, 0, ct)).List);
-
-        var detail = await f.Service.OrderAsync(f.Admin, "A1", ct);
-        Assert.Contains(detail.Fields, x => x is { Key: "deviceModels", Value: "M-A1" });
-        Assert.Equal(404, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrderAsync(f.Admin, "NOPE", ct))).Status);
-        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Viewer, null, 1, 20, 0, ct))).Status);
+        Assert.Equal(["A1", "A2", "A3", "B9"], all.List.Select(x => x.WorkOrderNo)); // no planned date anywhere: by work order number
+        Assert.Equal("客户A1", all.List[0].Values["customerName"]);
+        Assert.Equal("M-A1", all.List[0].Values["deviceModels"]);
+        Assert.Empty(all.List[2].Values); // A3 and B9 were not part of the partial fetch and keep what they had
+        Assert.Equal(["A2"], (await f.Service.OrdersAsync(f.Admin, 2, 1, 1, ct)).List.Select(x => x.WorkOrderNo));
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Viewer, 1, 20, 0, ct))).Status);
     }
 
     [Fact(Timeout = 180_000)]

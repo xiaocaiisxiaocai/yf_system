@@ -39,13 +39,5 @@ public sealed record MesMirrorSettingsResponse(
 /// </summary>
 public sealed record MesMirrorTestRequest(string? BaseUrl, string? Account, string? Password);
 
-/// <summary>One mirrored work order in the data page: the identifying columns plus a few fields read from the raw MES row.</summary>
-public sealed record MesOrderRow(
-    string WorkOrderNo, string? CustomerName, string? DeviceModels, string? ProcessName, string? DeliveryDate,
-    string? CompleteDate, string? DeviceNum, DateTime FetchedAt);
-
-/// <summary>One MES field exactly as returned (name and text value); <c>null</c> stays empty.</summary>
-public sealed record MesOrderField(string Key, string? Value);
-
-/// <summary>Every field MES returned for a work order, in MES order.</summary>
-public sealed record MesOrderDetailResponse(string WorkOrderNo, DateTime FetchedAt, MesOrderField[] Fields);
+/// <summary>One mirrored work order for the data page: every field MES returned, by MES field name (<c>null</c> stays empty).</summary>
+public sealed record MesOrderRow(string WorkOrderNo, DateTime FetchedAt, IReadOnlyDictionary<string, string?> Values);
