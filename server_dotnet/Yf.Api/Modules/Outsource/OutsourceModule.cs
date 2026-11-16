@@ -125,6 +125,14 @@ public static class OutsourceModule
             s.StopAsync(AccessService.GetCurrent(c), ct));
         mirror.MapPost("/confirm", (MesMirrorConfirmRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.ConfirmAsync(AccessService.GetCurrent(c), r, ct));
+        mirror.MapGet("/orders", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+        {
+            var p = QueryValues.Page(c.Request);
+            var keyword = c.Request.Query["keyword"].ToString();
+            return s.OrdersAsync(AccessService.GetCurrent(c), keyword.Length == 0 ? null : keyword, p.Page, p.Size, p.Offset, ct);
+        });
+        mirror.MapGet("/orders/{workOrderNo}", (string workOrderNo, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.OrderAsync(AccessService.GetCurrent(c), workOrderNo, ct));
         mirror.MapGet("/settings", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.SettingsAsync(AccessService.GetCurrent(c), ct));
         mirror.MapPut("/settings", (MesMirrorSettingsRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>

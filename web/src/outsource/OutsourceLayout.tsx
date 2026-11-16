@@ -1,5 +1,5 @@
 import { Button, Result } from '@arco-design/web-react'
-import { IconEmail, IconList, IconSettings } from '@arco-design/web-react/icon'
+import { IconEmail, IconList, IconSettings, IconStorage } from '@arco-design/web-react/icon'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
@@ -21,6 +21,7 @@ export default function OutsourceLayout() {
   const menu: MenuEntry[] = [
     { path: '/outsource/items', label: '外协清单', icon: <IconList />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view) },
     { path: '/outsource/mails', label: '发送记录', icon: <IconEmail />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view) },
+    { path: '/outsource/ipms-data', label: 'IPMS 资料', icon: <IconStorage />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.settings), admin: true },
     { path: '/outsource/settings', label: '设定', icon: <IconSettings />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.settings), admin: true },
   ]
   if (!menu.some((item) => item.visible)) {

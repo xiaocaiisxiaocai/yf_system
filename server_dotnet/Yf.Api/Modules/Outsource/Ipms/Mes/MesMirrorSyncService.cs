@@ -421,6 +421,56 @@ public sealed class MesMirrorSyncService(
         lock (gate) { if (manual is { Phase: AwaitingConfirm }) manual = null; }
     }
 
+    // ---- mirrored data ----
+
+    /// <summary>Pages through the mirrored work orders, newest work order number first; the keyword matches number, customer or model.</summary>
+    public async Task<PageResponse<MesOrderRow>> OrdersAsync(CurrentUser actor, string? keyword, ulong page, uint size, ulong offset, CancellationToken ct)
+    {
+        await AuthorizeAsync(actor, ct);
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        var query = context.MesWorkOrders.AsNoTracking();
+        var text = keyword?.Trim();
+        if (!string.IsNullOrEmpty(text))
+        {
+            var pattern = "%" + text.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+            query = query.Where(x => EF.Functions.Like(x.WorkOrderNo, pattern, "\\") || EF.Functions.Like(x.CustomerName!, pattern, "\\")
+                || EF.Functions.Like(x.DeviceModels!, pattern, "\\"));
+        }
+        var total = (ulong)await query.CountAsync(ct);
+        var rows = await query.OrderByDescending(x => x.WorkOrderNo).Skip((int)offset).Take((int)size)
+            .Select(x => new { x.WorkOrderNo, x.CustomerName, x.DeviceModels, x.FetchedAt, x.RawJson }).ToArrayAsync(ct);
+        var list = rows.Select(row =>
+        {
+            using var json = JsonDocument.Parse(row.RawJson);
+            string? Read(string name) => json.RootElement.TryGetProperty(name, out var value) ? FieldText(value) : null;
+            return new MesOrderRow(row.WorkOrderNo, row.CustomerName, row.DeviceModels, Read("processName"), Read("deliveryDate"),
+                Read("completeDate"), Read("deviceNum"), DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc));
+        }).ToArray();
+        return new(list, total, page, size);
+    }
+
+    /// <summary>All fields of one mirrored work order, as MES returned them.</summary>
+    public async Task<MesOrderDetailResponse> OrderAsync(CurrentUser actor, string workOrderNo, CancellationToken ct)
+    {
+        await AuthorizeAsync(actor, ct);
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        var row = await context.MesWorkOrders.AsNoTracking().Where(x => x.WorkOrderNo == workOrderNo)
+            .Select(x => new { x.WorkOrderNo, x.FetchedAt, x.RawJson }).SingleOrDefaultAsync(ct)
+            ?? throw ApiException.NotFound("工令不存在");
+        using var json = JsonDocument.Parse(row.RawJson);
+        var fields = json.RootElement.ValueKind == JsonValueKind.Object
+            ? json.RootElement.EnumerateObject().Select(p => new MesOrderField(p.Name, FieldText(p.Value))).ToArray()
+            : [];
+        return new(row.WorkOrderNo, DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc), fields);
+    }
+
+    private static string? FieldText(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Null or JsonValueKind.Undefined => null,
+        JsonValueKind.String => value.GetString(),
+        _ => value.GetRawText(),
+    };
+
     // ---- connection settings and test ----
 
     public async Task<MesMirrorSettingsResponse> SettingsAsync(CurrentUser actor, CancellationToken ct)

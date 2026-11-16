@@ -9247,6 +9247,74 @@
         }
       }
     },
+    "/api/v1/outsource/mes-mirror/orders": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageResponseOfMesOrderRow"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/orders/{workOrderNo}": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "workOrderNo",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesOrderDetailResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/mes-mirror/settings": {
       "get": {
         "tags": [
@@ -11023,6 +11091,94 @@
           "password": {
             "type": "string",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesOrderDetailResponse": {
+        "required": [
+          "fetchedAt",
+          "fields",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "workOrderNo": {
+            "type": "string"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesOrderField"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesOrderField": {
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesOrderRow": {
+        "required": [
+          "completeDate",
+          "customerName",
+          "deliveryDate",
+          "deviceModels",
+          "deviceNum",
+          "fetchedAt",
+          "processName",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "workOrderNo": {
+            "type": "string"
+          },
+          "customerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deviceModels": {
+            "type": "string",
+            "nullable": true
+          },
+          "processName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deliveryDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "completeDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "deviceNum": {
+            "type": "string",
+            "nullable": true
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false
@@ -14833,6 +14989,36 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MailAuditEntry"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PageResponseOfMesOrderRow": {
+        "required": [
+          "list",
+          "page",
+          "pageSize",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "list": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesOrderRow"
             }
           },
           "total": {

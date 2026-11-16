@@ -42,6 +42,7 @@ const OutsourceLanding = lazy(() => import('./outsource/OutsourceLayout').then((
 const OutsourceSettings = lazy(() => import('./outsource/pages/OutsourceSettingsPage'))
 const OutsourceList = lazy(() => import('./outsource/pages/OutsourceListPage'))
 const OutsourceMails = lazy(() => import('./outsource/pages/OutsourceMailsPage'))
+const OutsourceIpmsData = lazy(() => import('./outsource/pages/MesOrdersPage'))
 const PortalLogin = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalLoginPage })))
 const PortalChangePassword = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalChangePasswordPage })))
 
@@ -167,6 +168,7 @@ export default function App() {
           <Route index element={<OutsourceLanding />} />
           <Route path="items" element={<Guard permission="outsource:view"><OutsourceList /></Guard>} />
           <Route path="mails" element={<Guard permission="outsource:view"><OutsourceMails /></Guard>} />
+          <Route path="ipms-data" element={<Guard permission="outsource:settings"><OutsourceIpmsData /></Guard>} />
           <Route path="settings" element={<Guard permission="outsource:settings"><OutsourceSettings /></Guard>} />
         </Route>
         <Route

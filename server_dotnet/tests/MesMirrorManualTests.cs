@@ -121,6 +121,34 @@ public sealed class MesMirrorManualTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task TheDataPageListsEveryMirroredOrderAndAPartialFetchOnlyUpdatesItsOwnRows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_manual_orders", 3, ct);
+        await using var _ = f.Database;
+        await SeedAsync(f, ct, ("A3", "旧客户"), ("B9", "留存客户"));
+
+        await f.Service.StartAsync(f.Admin, new("PAGE", 1, 2), ct);
+        await WaitAsync(f, s => s.Phase == "AWAITING_CONFIRM", ct);
+        await f.Service.ConfirmAsync(f.Admin, new(true), ct);
+
+        var all = await f.Service.OrdersAsync(f.Admin, null, 1, 20, 0, ct);
+        Assert.Equal(4UL, all.Total);
+        Assert.Equal(["B9", "A3", "A2", "A1"], all.List.Select(x => x.WorkOrderNo));
+        Assert.Equal("旧客户", all.List.Single(x => x.WorkOrderNo == "A3").CustomerName);
+        Assert.Equal("客户A1", all.List.Single(x => x.WorkOrderNo == "A1").CustomerName);
+
+        var matched = await f.Service.OrdersAsync(f.Admin, "客户A", 1, 20, 0, ct);
+        Assert.Equal(["A2", "A1"], matched.List.Select(x => x.WorkOrderNo));
+        Assert.Empty((await f.Service.OrdersAsync(f.Admin, "%", 1, 20, 0, ct)).List);
+
+        var detail = await f.Service.OrderAsync(f.Admin, "A1", ct);
+        Assert.Contains(detail.Fields, x => x is { Key: "deviceModels", Value: "M-A1" });
+        Assert.Equal(404, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrderAsync(f.Admin, "NOPE", ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Viewer, null, 1, 20, 0, ct))).Status);
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task ALeaseLeftByAPreviousProcessIsReleasedAtStartup()
     {
         var ct = TestContext.Current.CancellationToken;

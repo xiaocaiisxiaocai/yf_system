@@ -1,0 +1,7 @@
+.outsource-ipms-data-page {
+  --page-table-scroll-y: max(280px, calc(100dvh - 300px));
+}
+
+.outsource-ipms-fields {
+  width: 100%;
+}
