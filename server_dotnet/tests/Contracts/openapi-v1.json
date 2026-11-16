@@ -13616,6 +13616,7 @@
       "OutsourceBatchUpdate": {
         "required": [
           "items",
+          "latestDueDate",
           "outsourceDate",
           "remark",
           "status",
@@ -13650,6 +13651,10 @@
             "nullable": true
           },
           "status": {
+            "type": "string",
+            "nullable": true
+          },
+          "latestDueDate": {
             "type": "string",
             "nullable": true
           }
@@ -14019,6 +14024,7 @@
           "quantity",
           "remark",
           "sendStatus",
+          "serialNo",
           "status",
           "typeCode",
           "typeId",
@@ -14034,6 +14040,10 @@
           "id": {
             "type": "integer",
             "format": "int64"
+          },
+          "serialNo": {
+            "type": "integer",
+            "format": "int32"
           },
           "workOrderNo": {
             "type": "string"
@@ -14143,6 +14153,7 @@
       "OutsourceItemUpdate": {
         "required": [
           "expectedUpdatedAt",
+          "latestDueDate",
           "outsourceDate",
           "remark",
           "status",
@@ -14176,6 +14187,10 @@
           "expectedUpdatedAt": {
             "type": "string",
             "format": "date-time",
+            "nullable": true
+          },
+          "latestDueDate": {
+            "type": "string",
             "nullable": true
           }
         },

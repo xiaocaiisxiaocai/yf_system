@@ -67,6 +67,8 @@ public sealed class SchemaShapeTests
         "20261113091750_AddIpmsConnectionSettings",
         "20261113095243_AddIpmsScheduleSwitches",
         "20261113102738_AddMesStagingOrder",
+        "20261116061057_AddOutsourceSerialNo",
+        "20261116062337_AddMesPlanEndSort",
     ];
 
     [Fact]

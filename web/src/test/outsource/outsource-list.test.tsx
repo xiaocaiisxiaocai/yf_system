@@ -106,7 +106,7 @@ describe('外协清单页面', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
-      outsourceDate: '2026-11-04', vendorId: 1, typeId: 5, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
+      outsourceDate: '2026-11-04', vendorId: 1, typeId: 5, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z', latestDueDate: '2026-12-31',
     }))
   })
 
@@ -131,7 +131,7 @@ describe('外协清单页面', () => {
     fireEvent.click(await screen.findByRole('option', { name: '元控' }))
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
-      outsourceDate: '2026-11-04', vendorId: 2, typeId: 6, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
+      outsourceDate: '2026-11-04', vendorId: 2, typeId: 6, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z', latestDueDate: '2026-12-31',
     }))
   })
 
@@ -220,12 +220,12 @@ describe('外协清单页面', () => {
     await screen.findByText('21089901') // the toolbar keeps changing until the list has loaded
     await user.click(screen.getByRole('button', { name: '汇入' }))
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/填写外发日期、工令、外发厂商和外发类型/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/填写外发日期、工令、外发类型和外发厂商/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
     await waitFor(() => expect(download).toHaveBeenCalled())
-    expect(download.mock.calls[0][1][0].headers).toEqual(['外发日期', '工令', '外发厂商', '外发类型'])
+    expect(download.mock.calls[0][1][0].headers).toEqual(['外发日期', '工令', '外发类型', '外发厂商'])
 
-    const buffer = await workbook.createExcelWorkbook([{ name: '数据', headers: ['外发日期', '工令', '外发厂商', '外发类型'], rows: [['2026-11-04', '21089901', '鼎亚', 'OEMA']] }])
+    const buffer = await workbook.createExcelWorkbook([{ name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商'], rows: [['2026-11-04', '21089901', 'OEMA', '鼎亚']] }])
     await user.upload(within(dialog).getByLabelText('选择 Excel 文件') as HTMLInputElement, new File([buffer], 'items.xlsx'))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', {
       rows: [{ rowNumber: 2, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],

@@ -10,11 +10,17 @@ import './MesOrdersPage.css'
 
 type Order = ApiResponses['GET /outsource/mes-mirror/orders']['list'][number]
 
+const FIRST_ROWS = 12
+const ROWS_PER_STEP = 12
+
 const cell = (column: MesColumn) => (_: unknown, order: Order) => {
   const value = order.values[column.prop]
   if (value === null || value === undefined) return ''
   return MES_CODE_TEXT[column.prop]?.[value] ?? value
 }
+
+/** Room the header text needs: its characters (14px each), the cell padding and the filter icon. */
+const headerWidth = (label: string) => [...label].length * 14 + 32 + 28
 
 /** The header filter of one column: a word list for coded fields, otherwise "contains" text. */
 function FilterPanel({ column, value, onApply }: { column: MesColumn; value: string; onApply: (text: string) => void }) {
@@ -42,6 +48,15 @@ export default function MesOrdersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const sequence = useRef(0)
+  // 110 columns make a row heavy: the first rows appear at once and the rest of the page is added in small steps,
+  // so a 100-row page shows data straight away instead of after one long render.
+  const [grown, setGrown] = useState<{ source: Order[]; count: number }>({ source: [], count: FIRST_ROWS })
+  const [tableHeight, setTableHeight] = useState(() => Math.max(280, window.innerHeight - 240))
+  useEffect(() => {
+    const resize = () => setTableHeight(Math.max(280, window.innerHeight - 240))
+    window.addEventListener('resize', resize)
+    return () => window.removeEventListener('resize', resize)
+  }, [])
 
   const load = useCallback(async () => {
     const seq = ++sequence.current
@@ -72,11 +87,20 @@ export default function MesOrdersPage() {
     setPage(1)
   }
   const leaf = (column: MesColumn, fixed?: 'left'): TableColumnProps<Order> => ({
-    title: column.label, key: column.prop, width: column.width, render: cell(column), ...(fixed ? { fixed } : {}),
+    // The width IPMS gives a column fits its data; the header also holds the filter icon and the resize handle.
+    title: column.label, key: column.prop, width: Math.max(column.width, headerWidth(column.label)), render: cell(column), ...(fixed ? { fixed } : {}),
     filteredValue: filters[column.prop] ? [filters[column.prop]] : [],
     filterDropdown: ({ confirm }: { confirm?: Function }) => <FilterPanel key={filters[column.prop] ?? ''} column={column}
       value={filters[column.prop] ?? ''} onApply={(text) => { apply(column.prop, text); confirm?.() }} />,
   })
+
+  useEffect(() => {
+    const timers: number[] = []
+    for (let count = FIRST_ROWS + ROWS_PER_STEP, step = 1; count < orders.length + ROWS_PER_STEP; count += ROWS_PER_STEP, step += 1)
+      timers.push(window.setTimeout(() => setGrown({ source: orders, count }), step * 30))
+    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  }, [orders])
+  const shown = orders.slice(0, grown.source === orders ? grown.count : FIRST_ROWS)
 
   const columns: TableColumnProps<Order>[] = [
     { title: '序号', key: 'seq', width: 72, fixed: 'left', render: (_, __, index) => (page - 1) * pageSize + index + 1 },
@@ -89,8 +113,8 @@ export default function MesOrdersPage() {
   return <Card className="page-card page-card--table outsource-ipms-data-page">
     <h1 className="visually-hidden">IPMS 资料</h1>
     {error ? <LoadError message="IPMS 资料加载失败" onRetry={() => void load()} />
-      : <ResizableTable<Order> tableId="outsource-ipms-orders" className="page-table" rowKey="workOrderNo" loading={loading} data={orders}
-        columns={columns} noDataElement={loading ? <span /> : <Empty description="暂无资料" />} scroll={{ y: 'var(--page-table-scroll-y)' }}
+      : <ResizableTable<Order> tableId="outsource-ipms-orders" className="page-table" rowKey="workOrderNo" loading={loading} data={shown}
+        columns={columns} noDataElement={loading ? <span /> : <Empty description="暂无资料" />} scroll={{ y: tableHeight }}
         border={{ wrapper: true, headerCell: true, bodyCell: true, cell: true }}
         pagination={{ current: page, pageSize, total, onChange: (next, size) => { setPage(size === pageSize ? next : 1); setPageSize(size) } }} />}
   </Card>

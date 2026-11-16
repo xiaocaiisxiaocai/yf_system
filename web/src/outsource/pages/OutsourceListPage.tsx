@@ -50,7 +50,7 @@ const MATCH_PROBLEM: Record<string, string> = {
   UNKNOWN_TYPE: '外发类型不在字典中，不能发送',
   VENDOR_MISMATCH: '外发类型与厂商不符，不能发送',
 }
-const IMPORT_HEADERS = ['外发日期', '工令', '外发厂商', '外发类型'] as const
+const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
 
 interface Filters {
   keyword: string
@@ -243,6 +243,7 @@ export default function OutsourceListPage() {
 
   const date = (value?: string | null) => value ?? ''
   const rawColumns: TableColumnProps<Item>[] = [
+    { title: '序号', dataIndex: 'serialNo', width: 70, fixed: 'left', align: 'center' },
     { title: '外发日期', dataIndex: 'outsourceDate', width: 110, fixed: 'left' },
     { title: '工令', dataIndex: 'workOrderNo', width: 110, fixed: 'left' },
     { title: '客户', dataIndex: 'customer', width: 150, ellipsis: true },
@@ -347,7 +348,7 @@ export default function OutsourceListPage() {
       onSent={() => { setMailing(null); setSelected([]); void load() }} />
     <ExcelImportDialog<ImportRow> visible={importOpen} title="汇入外协清单" templateName="外协清单汇入模板.xlsx"
       requiredHeaders={IMPORT_HEADERS} maxRows={500} keyTitle="工令"
-      notice={<>填写外发日期、工令、外发厂商和外发类型，其余字段由 IPMS 带出。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}
+      notice={<>填写外发日期、工令、外发类型和外发厂商，序号自动编，其余字段由 IPMS 带出。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}
       prepare={prepareImport} commit={commitImport}
       onImported={() => { void load() }} onClose={() => setImportOpen(false)} />
   </Card>
@@ -371,7 +372,7 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
   const [saving, setSaving] = useState(false)
   const selectedTypeId = Form.useWatch('typeId', form) as number | undefined
   useEffect(() => {
-    if (item) form.setFieldsValue({ outsourceDate: item.outsourceDate, vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '' })
+    if (item) form.setFieldsValue({ outsourceDate: item.outsourceDate, vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '', latestDueDate: item.latestDueDate ?? undefined })
   }, [item, form])
   const save = async () => {
     if (!item || saving) return
@@ -381,7 +382,7 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
     try {
       await http.put<ApiResponses['PUT /outsource/items/{id}']>(`/outsource/items/${item.id}`, {
         outsourceDate: values.outsourceDate, vendorId: values.vendorId, typeId: values.typeId, status: values.status,
-        remark: values.remark?.trim() ?? '', expectedUpdatedAt: item.updatedAt,
+        remark: values.remark?.trim() ?? '', expectedUpdatedAt: item.updatedAt, latestDueDate: values.latestDueDate || undefined,
       })
       Message.success('外协记录已保存'); await onSaved()
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
@@ -402,6 +403,7 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
       <Form.Item field="vendorId" label="外发厂商" rules={[{ required: true, message: '请选择外发厂商' }]}>
         <Select aria-label="外发厂商" disabled={!item || selectedTypeId === undefined} options={item ? vendorOptions(vendors, types, item, selectedTypeId) : []} />
       </Form.Item>
+      <Form.Item field="latestDueDate" label="最新交期"><DatePicker style={{ width: '100%' }} /></Form.Item>
       <Form.Item field="status" label="状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>
       <Form.Item field="remark" label="备注" rules={[{ maxLength: 500, message: '备注最多 500 个字符' }]}>
         <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} />
@@ -418,18 +420,19 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
   const [vendorId, setVendorId] = useState<number>()
   const [typeId, setTypeId] = useState<number>()
   const [status, setStatus] = useState<string>()
+  const [latestDueDate, setLatestDueDate] = useState<string>()
   const [changeRemark, setChangeRemark] = useState(false)
   const [remark, setRemark] = useState('')
   const [saving, setSaving] = useState(false)
-  const reset = () => { setOutsourceDate(undefined); setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setChangeRemark(false); setRemark('') }
-  const nothing = !outsourceDate && vendorId === undefined && typeId === undefined && !status && !changeRemark
+  const reset = () => { setOutsourceDate(undefined); setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setLatestDueDate(undefined); setChangeRemark(false); setRemark('') }
+  const nothing = !outsourceDate && vendorId === undefined && typeId === undefined && !status && !latestDueDate && !changeRemark
   const save = async () => {
     if (saving || nothing) return
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /outsource/items/batch']>('/outsource/items/batch', {
         items: items.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt })),
-        outsourceDate, vendorId, typeId, status, remark: changeRemark ? remark.trim() : undefined,
+        outsourceDate, vendorId, typeId, status, latestDueDate, remark: changeRemark ? remark.trim() : undefined,
       })
       Message.success(`已修改 ${items.length} 条记录`); reset(); await onSaved()
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
@@ -443,6 +446,7 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
         options={vendors.filter((vendor) => vendor.status === 'ACTIVE').map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>
       <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId} onChange={setTypeId}
         options={typeOptions(types)} /></Form.Item>
+      <Form.Item label="最新交期"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={latestDueDate} onChange={(value) => setLatestDueDate(value || undefined)} /></Form.Item>
       <Form.Item label="状态"><Select allowClear placeholder="不修改" value={status} onChange={setStatus} options={STATUS_OPTIONS} /></Form.Item>
       <Form.Item label={<Checkbox checked={changeRemark} onChange={setChangeRemark}>修改备注</Checkbox>}>
         <Input.TextArea aria-label="备注" disabled={!changeRemark} value={remark} onChange={setRemark} maxLength={500} autoSize={{ minRows: 2, maxRows: 4 }} />

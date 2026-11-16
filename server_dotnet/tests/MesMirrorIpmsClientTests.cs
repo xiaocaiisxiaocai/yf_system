@@ -13,16 +13,22 @@ public sealed class MesMirrorIpmsClientTests
     public void MapsTheConfirmedFieldsAndLeavesTheRestEmpty()
     {
         var order = MesMirrorIpmsClient.Map("21091052",
-            """{"workOrder":"21091052","customerName":"Peng Shen (Thailand)","deviceModels":"SFC-1500","deviceNum":3,"customerEndDate":"2027-01-08"}""");
+            """
+            {"workOrder":"21091052","customerName":"Peng Shen (Thailand)","deviceModels":"SFC-1500","deviceNum":3,
+             "bomChargeUser":"周晓淋","twodChargeUser":"周晓淋","applyEndTime":"2026-06-07","bomActualDate":"2026-06-29",
+             "jjtActualDate":"2026-07-06","deliveryDate":"2027-01-08","customerEndDate":"2027-03-01","planEndDate":"2027-02-01"}
+            """);
 
-        Assert.Equal(new IpmsWorkOrder("21091052", "Peng Shen (Thailand)", "SFC-1500", null, null, null, null, null, null,
+        // 机构课别 is not in MES (it comes from the owner's account) and neither is 电控执行人; the due date is MES 原交期.
+        Assert.Equal(new IpmsWorkOrder("21091052", "Peng Shen (Thailand)", "SFC-1500", null, "周晓淋", null,
+            new DateOnly(2026, 6, 7), new DateOnly(2026, 6, 29), new DateOnly(2026, 7, 6),
             3, new DateOnly(2027, 1, 8), false), order);
     }
 
     [Theory]
-    [InlineData("""{"deviceNum":"2","customerEndDate":"2026-12-30 00:00:00"}""", 2, "2026-12-30")]
-    [InlineData("""{"deviceNum":"x","customerEndDate":"garbage"}""", null, null)]
-    [InlineData("""{"deviceNum":null,"customerEndDate":null}""", null, null)]
+    [InlineData("""{"deviceNum":"2","deliveryDate":"2026-12-30 00:00:00"}""", 2, "2026-12-30")]
+    [InlineData("""{"deviceNum":"x","deliveryDate":"garbage"}""", null, null)]
+    [InlineData("""{"deviceNum":null,"deliveryDate":null}""", null, null)]
     [InlineData("""{}""", null, null)]
     public void ToleratesMissingOrMalformedValues(string json, int? quantity, string? due)
     {
@@ -66,12 +72,38 @@ public sealed class MesMirrorIpmsClientTests
             await database.ExecuteAsync($$"""
                 INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,customer_name,device_models,raw_json)
                 VALUES('{{no}}','b',UTC_TIMESTAMP(3),'客户{{no}}','M-{{no}}',
-                  '{"workOrder":"{{no}}","customerName":"客户{{no}}","deviceModels":"M-{{no}}","deviceNum":2,"customerEndDate":"2027-02-0{{no[1]}}"}')
+                  '{"workOrder":"{{no}}","customerName":"客户{{no}}","deviceModels":"M-{{no}}","deviceNum":2,"deliveryDate":"2027-02-0{{no[1]}}"}')
                 """, ct);
 
         var found = await client.LookupAsync(["A1", "A3", "NOPE"], ct);
 
         Assert.Equal(["A1", "A3"], found.Keys.Order());
         Assert.Equal(("客户A3", "M-A3", 2, new DateOnly(2027, 2, 3)), (found["A3"].Customer, found["A3"].MachineModel, found["A3"].Quantity, found["A3"].DueDate));
+
+        // 机构课别 is the 课别 of the one active internal account named like the owner; no account, a company, a name used in
+        // two 课别, or an account placed above 课别 level leave it empty.
+        await database.ExecuteAsync("""
+            INSERT INTO departments(id,name,parent_id,kind,sort_no,status,created_at,updated_at) VALUES
+              (9001,'研发事业部',NULL,'DIVISION',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9002,'机构部',9001,'DEPARTMENT',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9003,'机构一课',9002,'SECTION',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9004,'机构二课',9002,'SECTION',2,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9901,'sec_a','unused','周晓淋','a@example.invalid','INTERNAL',NULL,9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9902,'sec_b','unused','重名','b@example.invalid','INTERNAL',NULL,9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9903,'sec_c','unused','重名','c@example.invalid','INTERNAL',NULL,9004,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9904,'sec_d','unused','部门级','d@example.invalid','INTERNAL',NULL,9002,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9905,'sec_e','unused','已停用','e@example.invalid','INTERNAL',NULL,9003,'DISABLED',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            """, ct);
+        var owners = new[] { ("S1", "周晓淋"), ("S2", "重名"), ("S3", "部门级"), ("S4", "鼎亚研发"), ("S5", "已停用") };
+        foreach (var (no, owner) in owners)
+            await database.ExecuteAsync($$"""
+                INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,customer_name,device_models,raw_json)
+                VALUES('{{no}}','b',UTC_TIMESTAMP(3),'c','m','{"bomChargeUser":"{{owner}}"}')
+                """, ct);
+        var owned = await client.LookupAsync(owners.Select(x => x.Item1).ToArray(), ct);
+        Assert.Equal(new (string, string?)[] { ("S1", "机构一课"), ("S2", null), ("S3", null), ("S4", null), ("S5", null) },
+            owners.Select(x => (x.Item1, owned[x.Item1].MechanicalSection)));
+        Assert.Equal("周晓淋", owned["S1"].MechanicalOwner);
     }
 }

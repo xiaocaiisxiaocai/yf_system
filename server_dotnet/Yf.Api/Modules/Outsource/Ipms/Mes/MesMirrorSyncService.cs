@@ -461,8 +461,7 @@ public sealed class MesMirrorSyncService(
             SELECT work_order_no AS WorkOrderNo, fetched_at AS FetchedAt, raw_json AS RawJson
             FROM mes_work_orders
             {where}
-            ORDER BY COALESCE(IF(JSON_TYPE(JSON_EXTRACT(raw_json,'$.planEndDate'))='NULL', '', JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.planEndDate'))), ''),
-                     work_order_no
+            ORDER BY plan_end_sort, work_order_no
             LIMIT {(long)size} OFFSET {(long)offset}
             """, parameters).ToArrayAsync(ct);
         var list = rows.Select(row =>

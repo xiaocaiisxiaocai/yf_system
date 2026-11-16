@@ -31,19 +31,19 @@ public sealed record OutsourceImportPreviewRow(
 public sealed record OutsourceImportPreviewResponse(int Ready, int Skipped, int Invalid, OutsourceImportPreviewRow[] Rows);
 
 public sealed record OutsourceItemResponse(
-    ulong Id, string WorkOrderNo, DateOnly OutsourceDate, ulong VendorId, string VendorName,
+    ulong Id, uint SerialNo, string WorkOrderNo, DateOnly OutsourceDate, ulong VendorId, string VendorName,
     string? Customer, string? MachineModel, string? MechanicalSection, string? MechanicalOwner, string? ElectricalOwner,
     DateOnly? WorkOrderIssuedOn, DateOnly? BomOn, DateOnly? DrawingReleasedOn,
     string? TypeCode, ulong? TypeId, string? TypeLabel, int? Quantity, DateOnly? OriginalDueDate, DateOnly? LatestDueDate,
     string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt);
 
 /// <summary><paramref name="TypeId"/> is optional: null keeps the current type (a record whose type was disabled can still be edited).
-public sealed record OutsourceItemUpdate(string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateTime? ExpectedUpdatedAt);
+public sealed record OutsourceItemUpdate(string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateTime? ExpectedUpdatedAt, string? LatestDueDate = null);
 
 public sealed record OutsourceItemVersion(ulong Id, DateTime ExpectedUpdatedAt);
 
 /// <summary>Batch edit: only the fields that are present change; an empty remark clears it.</summary>
-public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status);
+public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, string? LatestDueDate = null);
 
 public sealed record OutsourceBatchDelete(OutsourceItemVersion[]? Items);
 

@@ -77,7 +77,8 @@ public sealed class OutsourceSyncTests
         OutsourceItemResponse Row(IEnumerable<OutsourceItemResponse> rows, string no) => rows.Single(x => x.WorkOrderNo == no);
         var before = (await items.ListAsync(buyer, Query(true), 1, 20, 0, ct)).List;
 
-        ipms.Orders["A1"] = ipms.Orders["A1"] with { DueDate = new DateOnly(2027, 1, 15) };
+        // IPMS moves the original due date and the owner: the owner is synced, the due dates (purchasing's latest one included) stay.
+        ipms.Orders["A1"] = ipms.Orders["A1"] with { DueDate = new DateOnly(2027, 1, 15), MechanicalOwner = "新执行人" };
         ipms.Orders["B1"] = ipms.Orders["B1"] with { Quantity = 2 };
         ipms.Orders["C1"] = ipms.Orders["C1"] with { Closed = true };
         ipms.Orders.Remove("D1");
@@ -91,7 +92,7 @@ public sealed class OutsourceSyncTests
 
         var after = (await items.ListAsync(buyer, Query(true), 1, 20, 0, ct)).List;
         var a = Row(after, "A1");
-        Assert.Equal((new DateOnly(2027, 1, 15), new DateOnly(2026, 12, 31), "PENDING_NOTICE"), (a.LatestDueDate, a.OriginalDueDate, a.SendStatus));
+        Assert.Equal((new DateOnly(2026, 12, 31), new DateOnly(2026, 12, 31), "新执行人", "PENDING_NOTICE"), (a.LatestDueDate, a.OriginalDueDate, a.MechanicalOwner, a.SendStatus));
         var b = Row(after, "B1");
         Assert.Equal((2, "UNSENT"), (b.Quantity, b.SendStatus));
         Assert.True(Row(after, "C1").Closed);
@@ -104,9 +105,9 @@ public sealed class OutsourceSyncTests
         Assert.DoesNotContain((await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List, x => x.WorkOrderNo == "C1");
 
         // Each changed IPMS field is kept in the item's history with its source and the person who synced.
-        var dueHistory = Assert.Single(await items.ChangesAsync(viewer, a.Id, ct));
-        Assert.Equal(("latestDueDate", "最新交期", "2026-12-31", "2027-01-15", "IPMS_MANUAL", "采购"),
-            (dueHistory.Field, dueHistory.Label, dueHistory.OldValue, dueHistory.NewValue, dueHistory.Source, dueHistory.ActorName));
+        var ownerHistory = Assert.Single(await items.ChangesAsync(viewer, a.Id, ct));
+        Assert.Equal(("mechanicalOwner", "机构执行人", "机构甲", "新执行人", "IPMS_MANUAL", "采购"),
+            (ownerHistory.Field, ownerHistory.Label, ownerHistory.OldValue, ownerHistory.NewValue, ownerHistory.Source, ownerHistory.ActorName));
         var quantityHistory = Assert.Single(await items.ChangesAsync(viewer, b.Id, ct));
         Assert.Equal(("quantity", "1", "2"), (quantityHistory.Field, quantityHistory.OldValue, quantityHistory.NewValue));
         Assert.Empty(await items.ChangesAsync(viewer, e.Id, ct));
@@ -123,7 +124,7 @@ public sealed class OutsourceSyncTests
         Assert.Equal(503, outage.Status);
         var failed = await sync.StatusAsync(viewer, ct);
         Assert.Equal(("IPMS 暂时无法连接，请稍后再试", selected.LastSuccessAt), (failed.LastError, failed.LastSuccessAt));
-        Assert.Equal(new DateOnly(2027, 1, 15), Row((await items.ListAsync(buyer, Query(true), 1, 20, 0, ct)).List, "A1").LatestDueDate);
+        Assert.Equal("新执行人", Row((await items.ListAsync(buyer, Query(true), 1, 20, 0, ct)).List, "A1").MechanicalOwner);
         ipms.Unavailable = false;
 
         // A run in progress blocks another one.

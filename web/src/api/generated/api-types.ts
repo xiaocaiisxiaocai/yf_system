@@ -1054,6 +1054,7 @@ export interface OutsourceBatchUpdate {
   typeId?: number | null
   remark?: string | null
   status?: string | null
+  latestDueDate?: string | null
 }
 
 export interface OutsourceCcUserResponse {
@@ -1140,6 +1141,7 @@ export interface OutsourceItemChangeResponse {
 
 export interface OutsourceItemResponse {
   id: number
+  serialNo: number
   workOrderNo: string
   outsourceDate: string
   vendorId: number
@@ -1174,6 +1176,7 @@ export interface OutsourceItemUpdate {
   remark?: string | null
   status?: string | null
   expectedUpdatedAt?: string | null
+  latestDueDate?: string | null
 }
 
 export interface OutsourceItemVersion {

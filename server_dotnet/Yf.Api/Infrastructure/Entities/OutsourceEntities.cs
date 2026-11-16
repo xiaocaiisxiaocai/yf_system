@@ -68,6 +68,8 @@ public sealed class OutsourceItem
 {
     public ulong Id { get; set; }
     public string WorkOrderNo { get; set; } = null!;
+    /// <summary>The list's 序号: assigned at import, continuing from the highest number; never reused or renumbered.</summary>
+    public uint SerialNo { get; set; }
     public DateOnly OutsourceDate { get; set; }
     public ulong VendorId { get; set; }
     public string? Customer { get; set; }
@@ -295,6 +297,7 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
         b.Property(x => x.WorkOrderNo).HasColumnName("work_order_no").HasMaxLength(32).IsRequired();
+        b.Property(x => x.SerialNo).HasColumnName("serial_no");
         b.Property(x => x.OutsourceDate).HasColumnName("outsource_date").HasColumnType("date");
         b.Property(x => x.VendorId).HasColumnName("vendor_id");
         b.Property(x => x.Customer).HasColumnName("customer").HasMaxLength(128);
@@ -321,6 +324,7 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
         b.HasIndex(x => x.WorkOrderNo).IsUnique().HasDatabaseName("uk_outsource_items_work_order");
+        b.HasIndex(x => x.SerialNo).IsUnique().HasDatabaseName("uk_outsource_items_serial");
         b.HasIndex(x => new { x.VendorId, x.ClosedAt, x.OutsourceDate }).HasDatabaseName("idx_outsource_items_vendor_open");
         b.HasIndex(x => new { x.ClosedAt, x.OutsourceDate, x.Id }).HasDatabaseName("idx_outsource_items_open_date");
         b.HasOne<OutsourceVendor>().WithMany().HasForeignKey(x => x.VendorId)

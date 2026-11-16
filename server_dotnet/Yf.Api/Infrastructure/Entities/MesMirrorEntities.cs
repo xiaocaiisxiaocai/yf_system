@@ -15,6 +15,8 @@ public sealed class MesWorkOrder
     public string? CustomerName { get; set; }
     public string? DeviceModels { get; set; }
     public string RawJson { get; set; } = null!;
+    /// <summary>The planned delivery date text of <see cref="RawJson"/> (empty when missing), kept by the database so the data page sorts by an index, not by parsing every row.</summary>
+    public string PlanEndSort { get; set; } = null!;
 }
 
 /// <summary>Same shape as <see cref="MesWorkOrder"/>: pages are collected here and swapped in only after the whole fetch is validated.</summary>
@@ -69,6 +71,9 @@ public sealed class MesWorkOrderConfig : IEntityTypeConfiguration<MesWorkOrder>
         b.Property(x => x.CustomerName).HasColumnName("customer_name").HasMaxLength(256);
         b.Property(x => x.DeviceModels).HasColumnName("device_models").HasMaxLength(256);
         b.Property(x => x.RawJson).HasColumnName("raw_json").HasColumnType("longtext").IsRequired();
+        b.Property(x => x.PlanEndSort).HasColumnName("plan_end_sort").HasMaxLength(32).ValueGeneratedOnAddOrUpdate()
+            .HasComputedColumnSql("LEFT(COALESCE(IF(JSON_TYPE(JSON_EXTRACT(raw_json,'$.planEndDate'))='NULL','',JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.planEndDate'))),''),32)", stored: true);
+        b.HasIndex(x => new { x.PlanEndSort, x.WorkOrderNo }).HasDatabaseName("idx_mes_work_orders_plan_end");
     }
 }
 

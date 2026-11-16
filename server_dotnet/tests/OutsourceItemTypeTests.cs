@@ -104,15 +104,51 @@ public sealed class OutsourceItemTypeTests
         await using var _ = f.Database;
         f.Ipms.Add("W1");
         await f.Items.ImportAsync(f.Planner, Request(("W1", "鼎亚", "OEMA")), ct);
-        // IPMS reports a new due date: the type entered by staff stays as it is.
-        f.Ipms.Orders["W1"] = f.Ipms.Orders["W1"] with { DueDate = new DateOnly(2027, 1, 15) };
+        // IPMS reports a new quantity: the type entered by staff stays as it is.
+        f.Ipms.Orders["W1"] = f.Ipms.Orders["W1"] with { Quantity = 9 };
 
         await f.Sync.SyncNowAsync(f.Buyer, new(null), ct);
 
         var item = Assert.Single((await f.Items.ListAsync(f.Buyer, new OutsourceItemQuery(null, null, null, null, null, null, null, false), 1, 20, 0, ct)).List);
-        Assert.Equal(("OEMA", new DateOnly(2027, 1, 15)), (item.TypeCode, item.LatestDueDate));
+        Assert.Equal(("OEMA", 9), (item.TypeCode, item.Quantity));
         var history = await f.Items.ChangesAsync(f.Buyer, item.Id, ct);
-        Assert.Equal(["latestDueDate"], history.Select(x => x.Field));
+        Assert.Equal(["quantity"], history.Select(x => x.Field));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task ImportNumbersTheRowsAndPurchasingMaintainsTheLatestDueDate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_serial_due", ct);
+        await using var _ = f.Database;
+        foreach (var no in new[] { "W1", "W2", "W3" }) f.Ipms.Add(no);
+        await f.Items.ImportAsync(f.Planner, Request(("W1", "鼎亚", "OEMA"), ("W2", "鼎亚", "OEMA")), ct);
+        await f.Items.ImportAsync(f.Planner, Request(("W3", "鼎亚", "OEMA")), ct);
+
+        var list = (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List;
+        // 序号 continues across imports, in file order.
+        Assert.Equal([("W1", 1u), ("W2", 2u), ("W3", 3u)], list.OrderBy(x => x.SerialNo).Select(x => (x.WorkOrderNo, x.SerialNo)));
+        // The latest due date starts as the original one.
+        Assert.All(list, x => Assert.Equal(x.OriginalDueDate, x.LatestDueDate));
+
+        var w1 = list.Single(x => x.WorkOrderNo == "W1");
+        var edited = await f.Items.UpdateAsync(f.Buyer, w1.Id,
+            new(w1.OutsourceDate.ToString("yyyy-MM-dd"), w1.VendorId, null, null, w1.Status, w1.UpdatedAt, "2027-02-01"), ct);
+        Assert.Equal((new DateOnly(2027, 2, 1), w1.OriginalDueDate), (edited.LatestDueDate, edited.OriginalDueDate));
+        Assert.Equal(["latestDueDate"], (await f.Items.ChangesAsync(f.Buyer, w1.Id, ct)).Select(x => x.Field));
+        var bad = await Assert.ThrowsAsync<ApiException>(() => f.Items.UpdateAsync(f.Buyer, w1.Id,
+            new(w1.OutsourceDate.ToString("yyyy-MM-dd"), w1.VendorId, null, null, w1.Status, edited.UpdatedAt, "明天"), ct));
+        Assert.Equal(400, bad.Status);
+
+        var w2 = list.Single(x => x.WorkOrderNo == "W2");
+        var batch = await f.Items.BatchUpdateAsync(f.Buyer, new(new[] { new OutsourceItemVersion(w2.Id, w2.UpdatedAt) }, null, null, null, null, null, "2027-03-01"), ct);
+        Assert.Equal(new DateOnly(2027, 3, 1), batch.Items.Single().LatestDueDate);
+
+        // IPMS reports another original due date: nothing the purchaser maintained moves.
+        f.Ipms.Orders["W1"] = f.Ipms.Orders["W1"] with { DueDate = new DateOnly(2030, 1, 1) };
+        await f.Sync.SyncNowAsync(f.Buyer, new(null), ct);
+        var after = (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single(x => x.WorkOrderNo == "W1");
+        Assert.Equal((new DateOnly(2027, 2, 1), w1.OriginalDueDate), (after.LatestDueDate, after.OriginalDueDate));
     }
 
     private static OutsourceItemQuery All() => new(null, null, null, null, null, null, null, false);

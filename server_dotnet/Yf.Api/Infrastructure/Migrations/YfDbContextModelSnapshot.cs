@@ -661,12 +661,23 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("datetime(3)")
                         .HasColumnName("fetched_at");
 
+                    b.Property<string>("PlanEndSort")
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("plan_end_sort")
+                        .HasComputedColumnSql("LEFT(COALESCE(IF(JSON_TYPE(JSON_EXTRACT(raw_json,'$.planEndDate'))='NULL','',JSON_UNQUOTE(JSON_EXTRACT(raw_json,'$.planEndDate'))),''),32)", true);
+
                     b.Property<string>("RawJson")
                         .IsRequired()
                         .HasColumnType("longtext")
                         .HasColumnName("raw_json");
 
                     b.HasKey("WorkOrderNo");
+
+                    b.HasIndex("PlanEndSort", "WorkOrderNo")
+                        .HasDatabaseName("idx_mes_work_orders_plan_end");
 
                     b.ToTable("mes_work_orders", (string)null);
 
@@ -1027,6 +1038,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDefaultValue("UNSENT")
                         .HasColumnName("send_status");
 
+                    b.Property<uint>("SerialNo")
+                        .HasColumnType("int unsigned")
+                        .HasColumnName("serial_no");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -1063,6 +1078,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnName("work_order_no");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("SerialNo")
+                        .IsUnique()
+                        .HasDatabaseName("uk_outsource_items_serial");
 
                     b.HasIndex("WorkOrderNo")
                         .IsUnique()

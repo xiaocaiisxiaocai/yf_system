@@ -111,7 +111,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             .Select(x => x.Id).ToArrayAsync(ct);
         if (activeVendors.Length != vendorIds.Length) throw ApiException.Conflict("外协厂商状态已变化，请重新预览");
         var items = ready.Select(x => x.Item!).ToArray();
-        foreach (var item in items) item.CreatedBy = actor.Id;
+        var serial = await context.OutsourceItems.MaxAsync(x => (uint?)x.SerialNo, ct) ?? 0;
+        foreach (var item in items) { item.CreatedBy = actor.Id; item.SerialNo = ++serial; }
         context.OutsourceItems.AddRange(items);
         try { await context.SaveChangesAsync(ct); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
@@ -211,7 +212,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             };
             ApplyIpms(item, order, DateTime.UtcNow);
             item.TypeCode = lookup.TypeCode; // entered by staff, not read from IPMS
-            item.OriginalDueDate = order.DueDate;
+            // IPMS only supplies the original due date; the latest one starts out the same and is then maintained by purchasing.
+            item.OriginalDueDate = item.LatestDueDate = order.DueDate;
             result[lookup.Index] = new("READY", withIpms with { Status = "READY" }, lookup.VendorId, item);
         }
         return result;
@@ -229,7 +231,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         item.BomOn = order.BomOn;
         item.DrawingReleasedOn = order.DrawingReleasedOn;
         item.Quantity = order.Quantity;
-        item.LatestDueDate = order.DueDate;
         item.IpmsSyncedAt = syncedAt;
     }
 
@@ -327,7 +328,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<OutsourceItemResponse> UpdateAsync(CurrentUser actor, ulong id, OutsourceItemUpdate request, CancellationToken ct)
     {
         if (request.ExpectedUpdatedAt is not { } expected) throw ApiException.BadRequest("expectedUpdatedAt 必须为当前记录的 updatedAt");
-        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, requireAll: true);
+        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: true);
         var result = await ApplyAsync(actor, [new OutsourceItemVersion(id, expected)], change, ct);
         return result.Items.Single();
     }
@@ -335,8 +336,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public Task<OutsourceBatchResponse> BatchUpdateAsync(CurrentUser actor, OutsourceBatchUpdate request, CancellationToken ct)
     {
         var items = ValidateBatch(request.Items);
-        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, requireAll: false);
-        if (change.Date is null && change.VendorId is null && change.TypeId is null && change.Remark is null && change.Status is null)
+        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: false);
+        if (change.Date is null && change.VendorId is null && change.TypeId is null && change.Remark is null && change.Status is null && change.LatestDue is null)
             throw ApiException.BadRequest("请至少选择一项要修改的内容");
         return ApplyAsync(actor, items, change, ct);
     }
@@ -404,9 +405,9 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
 
     internal static string CompletionLabel(bool completed) => completed ? "已完成" : "未完成";
 
-    private sealed record Change(DateOnly? Date, ulong? VendorId, ulong? TypeId, string? Remark, string? Status);
+    private sealed record Change(DateOnly? Date, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateOnly? LatestDue);
 
-    private static Change ParseChange(string? date, ulong? vendorId, ulong? typeId, string? remark, string? status, bool requireAll)
+    private static Change ParseChange(string? date, ulong? vendorId, ulong? typeId, string? remark, string? status, string? latestDue, bool requireAll)
     {
         DateOnly? parsedDate = null;
         if (date is not null || requireAll)
@@ -426,7 +427,15 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             normalizedRemark = remark?.Trim() ?? "";
             if (normalizedRemark.EnumerateRunes().Count() > 500) throw ApiException.BadRequest("备注最多 500 个字符");
         }
-        return new(parsedDate, vendorId, typeId, normalizedRemark, status);
+        // Optional even on a single edit: absent keeps the current latest due date (an empty text never clears it).
+        DateOnly? parsedLatest = null;
+        if (!string.IsNullOrWhiteSpace(latestDue))
+        {
+            if (!DateOnly.TryParseExact(latestDue.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var due))
+                throw ApiException.BadRequest("最新交期格式不正确");
+            parsedLatest = due;
+        }
+        return new(parsedDate, vendorId, typeId, normalizedRemark, status, parsedLatest);
     }
 
     private static OutsourceItemVersion[] ValidateBatch(OutsourceItemVersion[]? items)
@@ -469,18 +478,20 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             var vendor = change.VendorId ?? before.VendorId;
             var remark = change.Remark is null ? before.Remark : change.Remark.Length == 0 ? null : change.Remark;
             var status = change.Status ?? before.Status;
+            var latestDue = change.LatestDue ?? before.LatestDueDate;
             var typeCode = TypeChanged(before, newTypeCode) ? newTypeCode : before.TypeCode;
             var changes = AuditChange.OnlyChanged(
                 new AuditChange("outsourceDate", "外发日期", Text(before.OutsourceDate), Text(date)),
                 new AuditChange("vendor", "外发厂商", reference.VendorNames.GetValueOrDefault(before.VendorId), reference.VendorNames.GetValueOrDefault(vendor)),
                 new AuditChange("typeCode", "外发类型", reference.Label(before.TypeCode), reference.Label(typeCode)),
                 new AuditChange("remark", "备注", before.Remark, remark),
-                new AuditChange("status", "状态", OutsourceItemStatuses.Label(before.Status), OutsourceItemStatuses.Label(status)));
+                new AuditChange("status", "状态", OutsourceItemStatuses.Label(before.Status), OutsourceItemStatuses.Label(status)),
+                new AuditChange("latestDueDate", "最新交期", before.LatestDueDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), latestDue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
             if (changes.Length == 0) continue;
             var sendStatus = before.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : before.SendStatus;
             await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor).SetProperty(x => x.TypeCode, typeCode)
-                .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status)
+                .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status).SetProperty(x => x.LatestDueDate, latestDue)
                 .SetProperty(x => x.SendStatus, sendStatus), ct);
             OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
             await context.SaveChangesAsync(ct);
@@ -602,7 +613,7 @@ internal sealed class OutsourceReference
     public string? CodeOf(ulong typeId) => types.Values.Where(x => x.Id == typeId).Select(x => x.Code).FirstOrDefault();
 
     public OutsourceItemResponse Json(OutsourceItem item) => new(
-        item.Id, item.WorkOrderNo, item.OutsourceDate, item.VendorId, VendorNames.GetValueOrDefault(item.VendorId) ?? "",
+        item.Id, item.SerialNo, item.WorkOrderNo, item.OutsourceDate, item.VendorId, VendorNames.GetValueOrDefault(item.VendorId) ?? "",
         item.Customer, item.MachineModel, item.MechanicalSection, item.MechanicalOwner, item.ElectricalOwner,
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
@@ -674,13 +685,13 @@ internal static class OutsourceWorkbook
         var fields = forVendor ? Fields : [.. Fields, SendStatus];
         var headers = new[] { "序号" }.Concat(fields.Select(field => field.Header)).ToArray();
         var widths = new[] { 6d }.Concat(fields.Select(field => field.Width)).ToArray();
-        var rows = items.Select((item, index) =>
+        var rows = items.Select(item =>
         {
             var keys = changed?.GetValueOrDefault(item.Id);
             var highlighted = keys is null ? null : fields.Select((field, column) => (field, column))
                 .Where(x => keys.Contains(x.field.Key)).Select(x => x.column + 1).ToHashSet();
             return new XlsxRow(
-                [(index + 1).ToString(CultureInfo.InvariantCulture), .. fields.Select(field => field.Value(item))],
+                [item.SerialNo.ToString(CultureInfo.InvariantCulture), .. fields.Select(field => field.Value(item))],
                 RowFill(item.Status), highlighted);
         }).ToArray();
         return SimpleXlsx.Write("外协清单", headers, rows, widths);
