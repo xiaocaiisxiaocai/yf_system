@@ -146,6 +146,7 @@ export default function ExcelImportDialog<T>({
   const confirm = async () => {
     if (!prepared || prepared.payload.length === 0 || saving || parsing) return
     setSaving(true)
+    let finished = false
     try {
       const result = await commit(prepared.payload)
       const resultsByRow = new Map(result.rows.map(row => [row.rowNumber, row]))
@@ -158,11 +159,14 @@ export default function ExcelImportDialog<T>({
       }))
       onImported?.(result)
       Message.success(`新增 ${result.created}，跳过 ${result.skipped}，失败 ${result.failed}`)
+      // 没有失败行就直接关闭；有失败行时留着结果表，方便查看原因和导出错误数据。
+      finished = result.failed === 0
     } catch {
       // The request layer displays the server error. Keeping the parsed rows allows a safe retry.
     } finally {
       setSaving(false)
     }
+    if (finished) { reset(); onClose() }
   }
 
   return (

@@ -51,7 +51,8 @@ describe('ExcelImportDialog', () => {
     await waitFor(() => expect(commit).toHaveBeenCalledWith([
       { rowNumber: 2, employeeNo: 'U001', initialPassword: 'Temporary#2026' },
     ]))
-    expect(await screen.findByText('已新增 1')).toBeInTheDocument()
+    // 没有失败行时导入完成后自动关闭。
+    await waitFor(() => expect(screen.getByRole('dialog', { hidden: true })).not.toBeVisible())
   })
 
   it('does not commit when the preview is cancelled', async () => {
