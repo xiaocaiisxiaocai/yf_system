@@ -371,7 +371,7 @@ public sealed class OutsourceItemChangeConfig : IEntityTypeConfiguration<Outsour
         b.Property(x => x.ActorUserId).HasColumnName("actor_user_id");
         b.Property(x => x.ChangedAt).HasColumnName("changed_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => new { x.ItemId, x.Id }).HasDatabaseName("idx_outsource_item_changes_item");
-        // History belongs to the item; only unsent items can be deleted, and then their history goes too.
+        // History belongs to the item; deleting an item deletes its history (the audit log keeps the deletion).
         b.HasOne<OutsourceItem>().WithMany().HasForeignKey(x => x.ItemId)
             .HasConstraintName("fk_outsource_item_changes_item").OnDelete(DeleteBehavior.Cascade);
     }

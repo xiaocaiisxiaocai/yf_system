@@ -178,6 +178,12 @@ public sealed class OutsourceItemTypeTests
 
         var marked = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
         Assert.Equal(["quantity", "remark"], marked.ChangedFields!.Order());
+
+        // The export marks the same cells (style 4 is the yellow fill).
+        var export = await f.Items.ExportAsync(f.Buyer, All(), ct);
+        using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(export.Content));
+        using var sheet = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(await sheet.ReadToEndAsync(ct), "s=\"4\"").Count);
     }
 
     [Fact(Timeout = 180_000)]

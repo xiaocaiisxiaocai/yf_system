@@ -115,8 +115,11 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         foreach (var item in items) { item.CreatedBy = actor.Id; item.SerialNo = ++serial; }
         context.OutsourceItems.AddRange(items);
         try { await context.SaveChangesAsync(ct); }
-        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
-        { throw ApiException.Conflict("部分工令已被他人汇入，请重新预览"); }
+        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 } duplicate)
+        {
+            throw ApiException.Conflict(duplicate.Message.Contains("uk_outsource_items_serial", StringComparison.Ordinal)
+                ? "另一批汇入刚刚完成，请重新预览后再汇入" : "部分工令已被他人汇入，请重新预览");
+        }
         if (items.Length > 0)
         {
             await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
@@ -275,7 +278,11 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         if (await filtered.CountAsync(ct) > MaximumExportRows)
             throw ApiException.BadRequest($"一次最多导出 {MaximumExportRows} 条，请缩小筛选范围");
         var rows = await filtered.OrderByDescending(x => x.OutsourceDate).ThenByDescending(x => x.Id).ToArrayAsync(ct);
-        var content = OutsourceWorkbook.Build(rows.Select(reference.Json).ToArray(), null);
+        // Cells that differ from the last mail are yellow, as in the list and the vendor attachment.
+        var responses = await reference.JsonMarkedAsync(context, rows, ct);
+        var changed = responses.Where(x => x.ChangedFields is { Length: > 0 })
+            .ToDictionary(x => x.Id, x => (IReadOnlySet<string>)x.ChangedFields!.ToHashSet(StringComparer.Ordinal));
+        var content = OutsourceWorkbook.Build(responses, changed);
         var vendorPart = query.VendorId is { } vendorId && reference.VendorNames.TryGetValue(vendorId, out var name) ? "_" + name : "";
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         return new(content, $"外协清单{vendorPart}_{today}.xlsx");

@@ -159,7 +159,9 @@ public sealed class OutsourceMailWorker(
             var vendorAccepted = recipients.Any(x => x.Kind == "TO" && !rejectedSet.Contains(x.Email));
             status = !vendorAccepted ? OutsourceMailStatuses.Failed
                 : rejectedSet.Count > 0 ? OutsourceMailStatuses.Partial : OutsourceMailStatuses.Sent;
-            if (!vendorAccepted) error = "厂商收件地址全部被拒收";
+            if (!vendorAccepted)
+                error = recipients.Any(x => x.Kind != "TO" && !rejectedSet.Contains(x.Email))
+                    ? "厂商收件地址全部被拒收（抄送人已收到此邮件，重新发送会再抄送一次）" : "厂商收件地址全部被拒收";
             else if (rejectedSet.Count > 0) error = "部分地址被拒收：" + string.Join("、", rejected);
         }
         catch (OutsourcePermanentMailException permanent)

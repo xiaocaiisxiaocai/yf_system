@@ -129,7 +129,7 @@ public sealed class OutsourceMailTests
         Assert.Equal("PARTIAL", partial.Status);
         Assert.True(partial.Recipients.Single(x => x.Email == "customer@client.invalid").Rejected);
         var failed = records.Single(x => x.VendorId == duopu.Id);
-        Assert.Equal(("FAILED", "厂商收件地址全部被拒收"), (failed.Status, failed.LastError));
+        Assert.Equal(("FAILED", "厂商收件地址全部被拒收（抄送人已收到此邮件，重新发送会再抄送一次）"), (failed.Status, failed.LastError));
         // The notice that never reached the vendor must not leave its items looking delivered.
         list = (await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
         Assert.All(list.Where(x => x.VendorId == duopu.Id), x => Assert.Equal("PENDING_NOTICE", x.SendStatus));
