@@ -129,6 +129,7 @@ function ColumnVisibilityPicker({ picker }: { picker: ColumnPickerState }) {
             {picker.entries.map((entry) => (
               <li
                 key={entry.key}
+                title={entry.title}
                 className={[
                   'table-column-picker-item',
                   entry.pinned && 'is-pinned',

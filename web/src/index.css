@@ -433,7 +433,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .table-th-with-picker { position: relative; padding-right: 30px !important; }
 .table-column-picker-trigger.arco-btn { position: absolute; top: 50%; right: 8px; z-index: 4; transform: translateY(-50%); color: var(--color-text-3); }
 .table-column-picker-trigger.arco-btn:hover { color: rgb(var(--primary-6)); }
-.table-column-picker { display: flex; flex-direction: column; gap: 8px; width: 240px; }
+.table-column-picker { display: flex; flex-direction: column; gap: 8px; width: 280px; }
 .table-column-picker-list { display: flex; flex-direction: column; gap: 2px; max-height: 320px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 .table-column-picker-item { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 2px; border-radius: 4px; }
 .table-column-picker-item:hover { background: var(--color-fill-2); }
@@ -445,6 +445,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .table-column-picker-pin.arco-btn { flex: 0 0 auto; color: var(--color-text-4); }
 .table-column-picker-item.is-pinned .table-column-picker-pin.arco-btn { color: rgb(var(--primary-6)); }
 .table-column-picker-list .arco-checkbox { display: flex; align-items: center; height: 28px; margin: 0; padding: 0 2px; }
+.table-column-picker-list .arco-checkbox-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .table-column-picker-actions { display: flex; justify-content: flex-end; gap: 4px; }
 
 /* 工具栏与控件节奏统一 */
