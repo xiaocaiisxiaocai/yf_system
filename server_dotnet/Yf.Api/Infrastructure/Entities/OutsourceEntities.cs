@@ -102,6 +102,9 @@ public sealed class OutsourceItem
     public ulong? CreatedBy { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    /// <summary>Who last changed the item by hand (an edit or marking it finished) and when; IPMS syncs and sending do not count.</summary>
+    public ulong? ModifiedBy { get; set; }
+    public DateTime? ModifiedAt { get; set; }
 }
 
 /// <summary>
@@ -320,6 +323,8 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.Property(x => x.NotifiedVendorId).HasColumnName("notified_vendor_id");
         b.Property(x => x.LastSentSnapshot).HasColumnName("last_sent_snapshot").HasColumnType("text");
         b.Property(x => x.LastSentAt).HasColumnName("last_sent_at").HasColumnType("datetime(3)");
+        b.Property(x => x.ModifiedBy).HasColumnName("modified_by");
+        b.Property(x => x.ModifiedAt).HasColumnName("modified_at").HasColumnType("datetime(3)");
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();

@@ -106,7 +106,7 @@ describe('外协清单页面', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
-      outsourceDate: '2026-11-04', vendorId: 1, typeId: 5, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z', latestDueDate: '2026-12-31',
+      vendorId: 1, typeId: 5, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
   })
 
@@ -131,7 +131,7 @@ describe('外协清单页面', () => {
     fireEvent.click(await screen.findByRole('option', { name: '元控' }))
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
-      outsourceDate: '2026-11-04', vendorId: 2, typeId: 6, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z', latestDueDate: '2026-12-31',
+      vendorId: 2, typeId: 6, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
   })
 
@@ -169,7 +169,7 @@ describe('外协清单页面', () => {
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/batch', {
       items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }],
-      outsourceDate: undefined, vendorId: undefined, typeId: 5, status: undefined, remark: undefined,
+      vendorId: undefined, typeId: 5, status: undefined, remark: undefined,
     }))
   })
 

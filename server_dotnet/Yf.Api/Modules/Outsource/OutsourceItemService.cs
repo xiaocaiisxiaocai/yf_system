@@ -392,7 +392,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         {
             if ((before.ClosedAt is not null) == completed) continue;
             await context.OutsourceItems.Where(x => x.Id == before.Id)
-                .ExecuteUpdateAsync(s => s.SetProperty(x => x.ClosedAt, completed ? now : null), ct);
+                .ExecuteUpdateAsync(s => s.SetProperty(x => x.ClosedAt, completed ? now : null)
+                    .SetProperty(x => x.ModifiedBy, actor.Id).SetProperty(x => x.ModifiedAt, now), ct);
             AuditChange[] changes = [new("completed", "完成状态", CompletionLabel(!completed), CompletionLabel(completed))];
             OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
             await context.SaveChangesAsync(ct);
@@ -418,7 +419,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     private static Change ParseChange(string? date, ulong? vendorId, ulong? typeId, string? remark, string? status, string? latestDue, bool requireAll)
     {
         DateOnly? parsedDate = null;
-        if (date is not null || requireAll)
+        // Optional even on a single edit: absent keeps the current date.
+        if (date is not null)
         {
             if (!DateOnly.TryParseExact(date?.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value))
                 throw ApiException.BadRequest("外发日期格式不正确");
@@ -480,6 +482,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             if (match == OutsourceMatchStates.VendorMismatch)
                 throw ApiException.BadRequest($"工令 {item.WorkOrderNo}：{reference.Label(typeCode)} 不可配{reference.VendorNames[vendor]}");
         }
+        var modifiedAt = await DbClock.UtcNowAsync(context, ct, 3);
         foreach (var before in locked)
         {
             var date = change.Date ?? before.OutsourceDate;
@@ -500,7 +503,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor).SetProperty(x => x.TypeCode, typeCode)
                 .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status).SetProperty(x => x.LatestDueDate, latestDue)
-                .SetProperty(x => x.SendStatus, sendStatus), ct);
+                .SetProperty(x => x.SendStatus, sendStatus).SetProperty(x => x.ModifiedBy, actor.Id).SetProperty(x => x.ModifiedAt, modifiedAt), ct);
             OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
             await context.SaveChangesAsync(ct);
             await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
@@ -627,6 +630,16 @@ internal sealed class OutsourceReference
     public async Task<OutsourceItemResponse[]> JsonMarkedAsync(YfDbContext context, IReadOnlyList<OutsourceItem> items, CancellationToken ct)
     {
         var responses = items.Select(Json).ToArray();
+        // Who imported and who last edited each row, by name.
+        var userIds = items.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }).OfType<ulong>().Distinct().ToArray();
+        var names = userIds.Length == 0 ? [] : await context.Users.AsNoTracking().Where(x => userIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => x.RealName, ct);
+        var byId = items.ToDictionary(x => x.Id);
+        responses = responses.Select(response => response with
+        {
+            ImportedBy = byId[response.Id].CreatedBy is { } importer ? names.GetValueOrDefault(importer) : null,
+            ModifiedBy = byId[response.Id].ModifiedBy is { } editor ? names.GetValueOrDefault(editor) : null,
+        }).ToArray();
         var unsent = items.Where(x => x.NotifiedVendorId != x.VendorId || x.LastSentSnapshot is null).Select(x => x.Id).ToArray();
         if (unsent.Length == 0) return responses;
         var edited = (await context.OutsourceItemChanges.AsNoTracking()
@@ -643,7 +656,9 @@ internal sealed class OutsourceReference
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
         item.Remark, item.Status, item.SendStatus, Match(item.TypeCode, item.VendorId), item.ClosedAt is not null,
-        item.IpmsSyncedAt, item.UpdatedAt).WithChangedFields(item);
+        item.IpmsSyncedAt, item.UpdatedAt, null, null, CreatedAtOf(item), null, item.ModifiedAt).WithChangedFields(item);
+
+    private static DateTime? CreatedAtOf(OutsourceItem item) => item.CreatedBy is null ? null : item.CreatedAt;
 }
 
 /// <summary>

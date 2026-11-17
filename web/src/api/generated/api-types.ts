@@ -1168,6 +1168,10 @@ export interface OutsourceItemResponse {
   ipmsSyncedAt: string | null
   updatedAt: string
   changedFields: Array<string> | null
+  importedBy: string | null
+  importedAt: string | null
+  modifiedBy: string | null
+  modifiedAt: string | null
 }
 
 export interface OutsourceItemUpdate {

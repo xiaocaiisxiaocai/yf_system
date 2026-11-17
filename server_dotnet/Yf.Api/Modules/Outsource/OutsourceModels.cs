@@ -36,8 +36,9 @@ public sealed record OutsourceItemResponse(
     DateOnly? WorkOrderIssuedOn, DateOnly? BomOn, DateOnly? DrawingReleasedOn,
     string? TypeCode, ulong? TypeId, string? TypeLabel, int? Quantity, DateOnly? OriginalDueDate, DateOnly? LatestDueDate,
     string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt,
-    string[]? ChangedFields = null);
+    string[]? ChangedFields = null, string? ImportedBy = null, DateTime? ImportedAt = null, string? ModifiedBy = null, DateTime? ModifiedAt = null);
 
+// ImportedBy/At: who imported the row and when; ModifiedBy/At: who last edited it by hand (never IPMS syncs or sending).
 // ChangedFields: the column keys (OutsourceWorkbook.Fields) whose value differs from what was last mailed to this vendor; shown yellow like in the mail.
 
 /// <summary><paramref name="TypeId"/> is optional: null keeps the current type (a record whose type was disabled can still be edited).

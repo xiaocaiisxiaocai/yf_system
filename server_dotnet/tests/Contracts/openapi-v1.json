@@ -14014,12 +14014,16 @@
           "drawingReleasedOn",
           "electricalOwner",
           "id",
+          "importedAt",
+          "importedBy",
           "ipmsSyncedAt",
           "latestDueDate",
           "machineModel",
           "matchState",
           "mechanicalOwner",
           "mechanicalSection",
+          "modifiedAt",
+          "modifiedBy",
           "originalDueDate",
           "outsourceDate",
           "quantity",
@@ -14153,6 +14157,24 @@
             "items": {
               "type": "string"
             },
+            "nullable": true
+          },
+          "importedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "importedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "modifiedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "modifiedAt": {
+            "type": "string",
+            "format": "date-time",
             "nullable": true
           }
         },

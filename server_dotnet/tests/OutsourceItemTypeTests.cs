@@ -165,8 +165,14 @@ public sealed class OutsourceItemTypeTests
 
         // Never mailed, but edited by hand: the edited fields are marked until the first mail.
         var edited = await f.Items.UpdateAsync(f.Buyer, item.Id,
-            new(item.OutsourceDate.ToString("yyyy-MM-dd"), item.VendorId, null, "手填备注", item.Status, item.UpdatedAt, null), ct);
+            new(null, item.VendorId, null, "手填备注", item.Status, item.UpdatedAt, null), ct);
         Assert.Equal(["remark"], edited.ChangedFields!);
+        // The edit needs no date; the row says who imported it and who edited it last, and when.
+        Assert.Equal(item.OutsourceDate, edited.OutsourceDate);
+        Assert.False(string.IsNullOrEmpty(edited.ImportedBy));
+        Assert.Null(item.ModifiedBy);
+        Assert.False(string.IsNullOrEmpty(edited.ModifiedBy));
+        Assert.NotNull(edited.ModifiedAt);
         Assert.Equal(["remark"], Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List).ChangedFields!);
         item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List) with { ChangedFields = null };
 

@@ -70,6 +70,7 @@ public sealed class SchemaShapeTests
         "20261116061057_AddOutsourceSerialNo",
         "20261116062337_AddMesPlanEndSort",
         "20261116103111_AddEmailOutboxCopyOnly",
+        "20261117021148_AddOutsourceItemModifiedBy",
     ];
 
     [Fact]

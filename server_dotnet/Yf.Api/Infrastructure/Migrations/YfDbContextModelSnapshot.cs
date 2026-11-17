@@ -1015,6 +1015,14 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(64)")
                         .HasColumnName("mechanical_section");
 
+                    b.Property<DateTime?>("ModifiedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("modified_at");
+
+                    b.Property<ulong?>("ModifiedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("modified_by");
+
                     b.Property<ulong?>("NotifiedVendorId")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("notified_vendor_id");

@@ -284,6 +284,10 @@ export default function OutsourceListPage() {
         {item.closed && <Tag color="gray">已完成</Tag>}
       </Space>,
     },
+    { title: '导入人', dataIndex: 'importedBy', width: 100, ellipsis: true },
+    { title: '导入时间', width: 130, render: (_, item) => item.importedAt ? fmtTime(item.importedAt).slice(0, 16) : '' },
+    { title: '修改人', dataIndex: 'modifiedBy', width: 100, ellipsis: true },
+    { title: '修改时间', width: 130, render: (_, item) => item.modifiedAt ? fmtTime(item.modifiedAt).slice(0, 16) : '' },
     {
       title: '操作', width: canManage ? 80 : 56, align: 'center', fixed: 'right',
       render: (_, item) => <Space size={0}>
@@ -394,7 +398,7 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
   const [saving, setSaving] = useState(false)
   const selectedTypeId = Form.useWatch('typeId', form) as number | undefined
   useEffect(() => {
-    if (item) form.setFieldsValue({ outsourceDate: item.outsourceDate, vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '', latestDueDate: item.latestDueDate ?? undefined })
+    if (item) form.setFieldsValue({ vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '' })
   }, [item, form])
   const save = async () => {
     if (!item || saving) return
@@ -403,8 +407,8 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /outsource/items/{id}']>(`/outsource/items/${item.id}`, {
-        outsourceDate: values.outsourceDate, vendorId: values.vendorId, typeId: values.typeId, status: values.status,
-        remark: values.remark?.trim() ?? '', expectedUpdatedAt: item.updatedAt, latestDueDate: values.latestDueDate || undefined,
+        vendorId: values.vendorId, typeId: values.typeId, status: values.status,
+        remark: values.remark?.trim() ?? '', expectedUpdatedAt: item.updatedAt,
       })
       Message.success('外协记录已保存'); await onSaved()
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
@@ -412,7 +416,6 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
   return <Modal className="form-dialog" title={item ? `编辑工令 ${item.workOrderNo}` : '编辑'} visible={item !== null} onOk={() => void save()}
     onCancel={() => { if (!saving) onClose() }} confirmLoading={saving} closable={!saving} maskClosable={!saving} okText="保存" cancelText="取消" unmountOnExit>
     <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
-      <Form.Item field="outsourceDate" label="外发日期" rules={[{ required: true, message: '请选择外发日期' }]}><DatePicker style={{ width: '100%' }} /></Form.Item>
       <Form.Item field="typeId" label="外发类型" rules={[{ required: true, message: '请选择外发类型' }]}
         extra={item && item.typeId == null ? '当前外发类型不在字典中，请重新选择' : undefined}>
         <Select aria-label="外发类型" options={typeOptions(types)}
@@ -425,7 +428,6 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
       <Form.Item field="vendorId" label="外发厂商" rules={[{ required: true, message: '请选择外发厂商' }]}>
         <Select aria-label="外发厂商" disabled={!item || selectedTypeId === undefined} options={item ? vendorOptions(vendors, types, item, selectedTypeId) : []} />
       </Form.Item>
-      <Form.Item field="latestDueDate" label="最新交期"><DatePicker style={{ width: '100%' }} /></Form.Item>
       <Form.Item field="status" label="状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>
       <Form.Item field="remark" label="备注" rules={[{ maxLength: 500, message: '备注最多 500 个字符' }]}>
         <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} />
@@ -438,23 +440,21 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
 function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
   visible: boolean; items: Item[]; vendors: Vendor[]; types: OutsourceType[]; onClose: () => void; onSaved: () => Promise<void>
 }) {
-  const [outsourceDate, setOutsourceDate] = useState<string>()
   const [vendorId, setVendorId] = useState<number>()
   const [typeId, setTypeId] = useState<number>()
   const [status, setStatus] = useState<string>()
-  const [latestDueDate, setLatestDueDate] = useState<string>()
   const [changeRemark, setChangeRemark] = useState(false)
   const [remark, setRemark] = useState('')
   const [saving, setSaving] = useState(false)
-  const reset = () => { setOutsourceDate(undefined); setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setLatestDueDate(undefined); setChangeRemark(false); setRemark('') }
-  const nothing = !outsourceDate && vendorId === undefined && typeId === undefined && !status && !latestDueDate && !changeRemark
+  const reset = () => { setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setChangeRemark(false); setRemark('') }
+  const nothing = vendorId === undefined && typeId === undefined && !status && !changeRemark
   const save = async () => {
     if (saving || nothing) return
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /outsource/items/batch']>('/outsource/items/batch', {
         items: items.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt })),
-        outsourceDate, vendorId, typeId, status, latestDueDate, remark: changeRemark ? remark.trim() : undefined,
+        vendorId, typeId, status, remark: changeRemark ? remark.trim() : undefined,
       })
       Message.success(`已修改 ${items.length} 条记录`); reset(); await onSaved()
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
@@ -463,12 +463,10 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
     okButtonProps={{ disabled: nothing }} onCancel={() => { if (!saving) { reset(); onClose() } }} confirmLoading={saving}
     okText="保存" cancelText="取消">
     <Form layout="vertical" disabled={saving}>
-      <Form.Item label="外发日期"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={outsourceDate} onChange={(value) => setOutsourceDate(value || undefined)} /></Form.Item>
       <Form.Item label="外发厂商"><Select allowClear placeholder="不修改" value={vendorId} onChange={setVendorId}
         options={vendors.filter((vendor) => vendor.status === 'ACTIVE').map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>
       <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId} onChange={setTypeId}
         options={typeOptions(types)} /></Form.Item>
-      <Form.Item label="最新交期"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={latestDueDate} onChange={(value) => setLatestDueDate(value || undefined)} /></Form.Item>
       <Form.Item label="状态"><Select allowClear placeholder="不修改" value={status} onChange={setStatus} options={STATUS_OPTIONS} /></Form.Item>
       <Form.Item label={<Checkbox checked={changeRemark} onChange={setChangeRemark}>修改备注</Checkbox>}>
         <Input.TextArea aria-label="备注" disabled={!changeRemark} value={remark} onChange={setRemark} maxLength={500} autoSize={{ minRows: 2, maxRows: 4 }} />
