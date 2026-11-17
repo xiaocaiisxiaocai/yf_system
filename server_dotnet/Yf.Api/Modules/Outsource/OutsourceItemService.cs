@@ -707,26 +707,26 @@ internal static class OutsourceWorkbook
 
     private static string? Date(DateOnly? value) => value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    /// <summary>Every business column in template order (without the row number).</summary>
+    /// <summary>Every business column in the list page's order (without the row number), 2026-11-17.</summary>
     internal static readonly Field[] Fields =
     [
         new("outsourceDate", "外发日期", 12, x => Date(x.OutsourceDate)),
+        new("status", "状态", 8, x => OutsourceItemStatuses.Label(x.Status)),
         new("workOrderNo", "工令", 12, x => x.WorkOrderNo),
         new("customer", "客户", 18, x => x.Customer),
         new("machineModel", "机型", 14, x => x.MachineModel),
+        new("type", "外发类型", 24, x => x.TypeLabel ?? x.TypeCode),
+        new("vendor", "外发厂商", 14, x => x.VendorName),
         new("mechanicalSection", "机构课别", 14, x => x.MechanicalSection),
         new("mechanicalOwner", "机构执行人", 12, x => x.MechanicalOwner),
         new("electricalOwner", "电控执行人", 12, x => x.ElectricalOwner),
         new("workOrderIssuedOn", "工令下发", 12, x => Date(x.WorkOrderIssuedOn)),
         new("bomOn", "BOM时间", 12, x => Date(x.BomOn)),
         new("drawingReleasedOn", "发图", 12, x => Date(x.DrawingReleasedOn)),
-        new("type", "外发类型", 24, x => x.TypeLabel ?? x.TypeCode),
         new("originalDueDate", "原始交期", 12, x => Date(x.OriginalDueDate)),
         new("latestDueDate", "最新交期", 12, x => Date(x.LatestDueDate)),
         new("quantity", "数量", 8, x => x.Quantity?.ToString(CultureInfo.InvariantCulture)),
-        new("vendor", "外发厂商", 14, x => x.VendorName),
         new("remark", "备注", 24, x => x.Remark),
-        new("status", "状态", 8, x => OutsourceItemStatuses.Label(x.Status)),
     ];
 
     private static readonly Field SendStatus = new("sendStatus", "发送状态", 14, x => OutsourceSendStatuses.Label(x.SendStatus));

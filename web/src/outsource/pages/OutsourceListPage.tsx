@@ -253,30 +253,30 @@ export default function OutsourceListPage() {
   const rawColumns: TableColumnProps<Item>[] = [
     { title: '序号', dataIndex: 'serialNo', width: 70, fixed: 'left', align: 'center' },
     { title: '外发日期', dataIndex: 'outsourceDate', width: 110, fixed: 'left' },
+    {
+      title: '状态', width: 80, align: 'center', fixed: 'left',
+      render: (_, item) => <Tag color={STATUS_TAG[item.status]?.color}>{STATUS_TAG[item.status]?.label ?? item.status}</Tag>,
+    },
     { title: '工令', dataIndex: 'workOrderNo', width: 110, fixed: 'left' },
     { title: '客户', dataIndex: 'customer', width: 150, ellipsis: true },
     { title: '机型', dataIndex: 'machineModel', width: 120, ellipsis: true },
-    { title: '机构课别', dataIndex: 'mechanicalSection', width: 110, ellipsis: true },
-    { title: '机构执行人', dataIndex: 'mechanicalOwner', width: 100, ellipsis: true },
-    { title: '电控执行人', dataIndex: 'electricalOwner', width: 100, ellipsis: true },
-    { title: '工令下发', width: 110, render: (_, item) => date(item.workOrderIssuedOn) },
-    { title: 'BOM时间', width: 110, render: (_, item) => date(item.bomOn) },
-    { title: '发图', width: 110, render: (_, item) => date(item.drawingReleasedOn) },
     {
       title: '外发类型', width: 200, render: (_, item) => <Space size={4}>
         <span>{item.typeLabel ?? item.typeCode ?? ''}</span>
         {MATCH_PROBLEM[item.matchState] && <Tooltip content={MATCH_PROBLEM[item.matchState]}><Tag size="small" color="orangered">不符</Tag></Tooltip>}
       </Space>,
     },
+    { title: '外发厂商', dataIndex: 'vendorName', width: 110, ellipsis: true },
+    { title: '机构课别', dataIndex: 'mechanicalSection', width: 110, ellipsis: true },
+    { title: '机构执行人', dataIndex: 'mechanicalOwner', width: 100, ellipsis: true },
+    { title: '电控执行人', dataIndex: 'electricalOwner', width: 100, ellipsis: true },
+    { title: '工令下发', width: 110, render: (_, item) => date(item.workOrderIssuedOn) },
+    { title: 'BOM时间', width: 110, render: (_, item) => date(item.bomOn) },
+    { title: '发图', width: 110, render: (_, item) => date(item.drawingReleasedOn) },
     { title: '原始交期', width: 110, render: (_, item) => date(item.originalDueDate) },
     { title: '最新交期', width: 110, render: (_, item) => <LatestDueCell item={item} /> },
     { title: '数量', dataIndex: 'quantity', width: 70, align: 'center' },
-    { title: '外发厂商', dataIndex: 'vendorName', width: 110, ellipsis: true },
     { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true },
-    {
-      title: '状态', width: 80, align: 'center',
-      render: (_, item) => <Tag color={STATUS_TAG[item.status]?.color}>{STATUS_TAG[item.status]?.label ?? item.status}</Tag>,
-    },
     {
       title: '发送状态', width: 120, align: 'center',
       render: (_, item) => <Space size={4}>
