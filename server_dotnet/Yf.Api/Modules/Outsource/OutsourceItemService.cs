@@ -716,8 +716,8 @@ internal static class OutsourceWorkbook
     internal static XlsxFill RowFill(string status) => status switch
     {
         OutsourceItemStatuses.Paused => XlsxFill.Red,
-        OutsourceItemStatuses.Cancelled => XlsxFill.Gray,
-        _ => XlsxFill.None,
+        OutsourceItemStatuses.Cancelled => XlsxFill.PaleYellow,
+        _ => XlsxFill.Green,
     };
 
     /// <summary>Field values as mailed; stored per item and compared at the next send.</summary>

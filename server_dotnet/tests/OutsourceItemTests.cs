@@ -157,7 +157,7 @@ public sealed class OutsourceItemTests
         Assert.Equal(OutsourceMatchStates.VendorMismatch,
             (await service.ListAsync(buyer, Query(vendorId: dingya.Id), 1, 20, 0, ct)).List.Single().MatchState);
 
-        // Export: all columns, cancelled rows grey.
+        // Export: all columns, cancelled rows pale yellow.
         var export = await service.ExportAsync(viewer, Query(), ct);
         Assert.StartsWith("外协清单_", export.FileName, StringComparison.Ordinal);
         using (var zip = new ZipArchive(new MemoryStream(export.Content)))
@@ -166,7 +166,7 @@ public sealed class OutsourceItemTests
             var sheet = await reader.ReadToEndAsync(ct);
             Assert.Contains("21089901", sheet, StringComparison.Ordinal);
             Assert.Contains("超穎(泰國)", sheet, StringComparison.Ordinal);
-            Assert.Contains("<c r=\"A2\" s=\"3\"", sheet, StringComparison.Ordinal);
+            Assert.Contains("<c r=\"A2\" s=\"7\"", sheet, StringComparison.Ordinal);
         }
 
         // Deletion: only by purchasing; a row already mailed to the vendor can be deleted too (the audit keeps its send status).

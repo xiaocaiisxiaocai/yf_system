@@ -39,7 +39,7 @@ const SEND_STATUS_OPTIONS = [
 const STATUS_TAG: Record<string, { label: string; color: string }> = {
   NORMAL: { label: '正常', color: 'green' },
   PAUSED: { label: '暂停', color: 'red' },
-  CANCELLED: { label: '取消', color: 'gray' },
+  CANCELLED: { label: '取消', color: 'gold' },
 }
 const SEND_TAG: Record<string, { label: string; color: string }> = {
   UNSENT: { label: '未发送', color: 'gray' },
@@ -355,7 +355,7 @@ export default function OutsourceListPage() {
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
       : <ResizableTable<Item> tableId="outsource-items" className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
-        rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : '',
+        rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : 'outsource-row--normal',
           item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
         rowSelection={canManage ? {
           type: 'checkbox', selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]),

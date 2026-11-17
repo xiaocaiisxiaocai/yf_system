@@ -7,20 +7,27 @@
   align-items: flex-start;
 }
 
-/* 状态底色与邮件、Excel 一致：暂停红、取消灰。 */
+/* 状态底色与邮件、Excel 一致（浅色）：正常绿、暂停红、取消黄。 */
+.outsource-table .outsource-row--normal > .arco-table-td,
+.outsource-table .outsource-row--normal > .arco-table-td.arco-table-col-fixed-left,
+.outsource-table .outsource-row--normal > .arco-table-td.arco-table-col-fixed-right {
+  background-color: #e6f4ea;
+}
+
 .outsource-table .outsource-row--paused > .arco-table-td,
 .outsource-table .outsource-row--paused > .arco-table-td.arco-table-col-fixed-left,
 .outsource-table .outsource-row--paused > .arco-table-td.arco-table-col-fixed-right {
-  background-color: #ffc7ce;
+  background-color: #ffe0e0;
 }
 
 .outsource-table .outsource-row--cancelled > .arco-table-td,
 .outsource-table .outsource-row--cancelled > .arco-table-td.arco-table-col-fixed-left,
 .outsource-table .outsource-row--cancelled > .arco-table-td.arco-table-col-fixed-right {
-  background-color: #d9d9d9;
+  background-color: #fff7d1;
 }
 
 .outsource-table .arco-table-td.outsource-cell-changed,
+.outsource-table .outsource-row--normal > .arco-table-td.outsource-cell-changed,
 .outsource-table .outsource-row--paused > .arco-table-td.outsource-cell-changed,
 .outsource-table .outsource-row--cancelled > .arco-table-td.outsource-cell-changed {
   background-color: #fff176 !important;

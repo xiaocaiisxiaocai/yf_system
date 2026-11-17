@@ -53,9 +53,9 @@ internal static class OutsourceMailContent
         {
             var rowColor = withdraw ? null : item.Status switch
             {
-                OutsourceItemStatuses.Paused => "#ffc7ce",
-                OutsourceItemStatuses.Cancelled => "#d9d9d9",
-                _ => null,
+                OutsourceItemStatuses.Paused => "#ffe0e0",
+                OutsourceItemStatuses.Cancelled => "#fff7d1",
+                _ => "#e6f4ea",
             };
             var itemChanged = withdraw ? null : changed.GetValueOrDefault(item.Id);
             html.Append("<tr>");
