@@ -26,6 +26,9 @@ public sealed class MesMirrorManualTests
             return Task.FromResult(new MesTestResult(true, "连接成功，MES 共 5 笔", 5, 12));
         }
 
+        public Task<MesCustomerPage> FetchCustomersPageAsync(int page, int pageSize, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public async Task<MesPage> FetchPageAsync(int page, int pageSize, CancellationToken ct)
         {
             if (page == HangOnPage) await Task.Delay(Timeout.Infinite, ct);

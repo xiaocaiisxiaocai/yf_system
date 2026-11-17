@@ -7826,6 +7826,117 @@
         }
       }
     },
+    "/api/v1/outsource/settings/customers": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutsourceCustomerAliasResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/settings/customers/sync": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceCustomerSyncResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/settings/customers/{id}": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceCustomerAliasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceCustomerAliasResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/settings/types": {
       "get": {
         "tags": [
@@ -13434,6 +13545,89 @@
         },
         "additionalProperties": false
       },
+      "OutsourceCustomerAliasRequest": {
+        "required": [
+          "shortName"
+        ],
+        "type": "object",
+        "properties": {
+          "shortName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceCustomerAliasResponse": {
+        "required": [
+          "fullName",
+          "id",
+          "manual",
+          "shortName",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "fullName": {
+            "type": "string"
+          },
+          "shortName": {
+            "type": "string"
+          },
+          "manual": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceCustomerSyncResponse": {
+        "required": [
+          "added",
+          "aliases",
+          "customers",
+          "keptManual",
+          "rows",
+          "updated"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "customers": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "added": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "keptManual": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceCustomerAliasResponse"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "OutsourceDefaultCcRequest": {
         "required": [
           "userIds"
@@ -13674,6 +13868,7 @@
           "changedFields",
           "closed",
           "customer",
+          "customerFullName",
           "drawingReleasedOn",
           "electricalOwner",
           "id",
@@ -13838,6 +14033,10 @@
           "modifiedAt": {
             "type": "string",
             "format": "date-time",
+            "nullable": true
+          },
+          "customerFullName": {
+            "type": "string",
             "nullable": true
           }
         },

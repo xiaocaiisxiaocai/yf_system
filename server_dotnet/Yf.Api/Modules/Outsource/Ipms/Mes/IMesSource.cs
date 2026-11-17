@@ -6,6 +6,12 @@ public sealed record MesRow(string WorkOrderNo, string RawJson);
 /// <summary>One page of the MES monitoring list; <see cref="Total"/> is MES's count over all pages.</summary>
 public sealed record MesPage(int Total, IReadOnlyList<MesRow> Rows);
 
+/// <summary>Customer full and short name of one row of the IPMS 工单查询 list (sales order items).</summary>
+public sealed record MesCustomerRow(string? CustomerName, string? CustomerShortName);
+
+/// <summary>One page of the 工单查询 list reduced to its customer names; <see cref="Total"/> counts all rows.</summary>
+public sealed record MesCustomerPage(int Total, IReadOnlyList<MesCustomerRow> Rows);
+
 /// <summary>Outcome of a connection test: nothing was written, and <see cref="Message"/> never carries credentials.</summary>
 public sealed record MesTestResult(bool Ok, string Message, int? Total, int ElapsedMs);
 
@@ -38,4 +44,10 @@ public interface IMesSource
 
     /// <summary><paramref name="page"/> starts at 1. Throws <see cref="IpmsUnavailableException"/> when MES cannot answer.</summary>
     Task<MesPage> FetchPageAsync(int page, int pageSize, CancellationToken ct);
+
+    /// <summary>
+    /// One page of the 工单查询 list (customer full and short names only), with the same login as the monitoring list.
+    /// Throws <see cref="IpmsUnavailableException"/> when IPMS cannot answer.
+    /// </summary>
+    Task<MesCustomerPage> FetchCustomersPageAsync(int page, int pageSize, CancellationToken ct);
 }

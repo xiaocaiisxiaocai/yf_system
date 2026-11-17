@@ -258,7 +258,11 @@ export default function OutsourceListPage() {
       render: (_, item) => <Tag color={STATUS_TAG[item.status]?.color}>{STATUS_TAG[item.status]?.label ?? item.status}</Tag>,
     },
     { title: '工令', dataIndex: 'workOrderNo', width: 110, fixed: 'left' },
-    { title: '客户', dataIndex: 'customer', width: 150, ellipsis: true },
+    {
+      title: '客户', dataIndex: 'customer', width: 150, ellipsis: true,
+      render: (_, item) => item.customerFullName && item.customerFullName !== item.customer
+        ? <Tooltip content={item.customerFullName}><span>{item.customer}</span></Tooltip> : item.customer,
+    },
     { title: '机型', dataIndex: 'machineModel', width: 120, ellipsis: true },
     {
       title: '外发类型', width: 200, render: (_, item) => <Space size={4}>

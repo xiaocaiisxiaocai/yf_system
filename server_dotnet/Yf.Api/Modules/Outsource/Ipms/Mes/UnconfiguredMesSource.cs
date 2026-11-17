@@ -12,6 +12,9 @@ public sealed class UnconfiguredMesSource : IMesSource
 
     public Task<MesPage> FetchPageAsync(int page, int pageSize, CancellationToken ct) =>
         throw new IpmsUnavailableException("当前使用测试资料，不连接 IPMS");
+
+    public Task<MesCustomerPage> FetchCustomersPageAsync(int page, int pageSize, CancellationToken ct) =>
+        throw new IpmsUnavailableException("当前使用测试资料，不连接 IPMS");
 }
 
 internal static class MesSourceFactory

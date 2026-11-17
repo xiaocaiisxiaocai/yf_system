@@ -77,6 +77,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OutsourceType> OutsourceTypes => Set<OutsourceType>();
     public DbSet<OutsourceTypeVendor> OutsourceTypeVendors => Set<OutsourceTypeVendor>();
     public DbSet<OutsourceDefaultCc> OutsourceDefaultCc => Set<OutsourceDefaultCc>();
+    public DbSet<OutsourceCustomerAlias> OutsourceCustomerAliases => Set<OutsourceCustomerAlias>();
     public DbSet<OutsourceItem> OutsourceItems => Set<OutsourceItem>();
     public DbSet<OutsourceSyncState> OutsourceSyncState => Set<OutsourceSyncState>();
     public DbSet<OutsourceItemChange> OutsourceItemChanges => Set<OutsourceItemChange>();

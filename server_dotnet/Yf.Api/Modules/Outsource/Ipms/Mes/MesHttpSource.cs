@@ -16,6 +16,8 @@ public sealed class MesHttpSource(HttpClient http, IpmsOptions options, IMesSett
 {
     private const string LoginPath = "/xyj-admin/r/login";
     private const string DataPath = "/xyj-twxd-mes/r/xdSalesOrder/queryByMesMonitor";
+    /// <summary>业务中心 → 工单查询 (sales order items): the only place IPMS exposes the customer short name.</summary>
+    private const string CustomersPath = "/xyj-twxd-mes/r/xdSalesOrderItem/querySalesOrderItems";
     private const string Unavailable = "IPMS 暂时无法连接，请稍后再试";
     private const string NoAddress = "IPMS 地址尚未设定";
     private const string NoAccount = "IPMS 账号或密码尚未设定";
@@ -25,7 +27,14 @@ public sealed class MesHttpSource(HttpClient http, IpmsOptions options, IMesSett
     /// <summary>The connection <see cref="token"/> belongs to; another address, account or password means another session.</summary>
     private MesConnection? session;
 
-    public async Task<MesPage> FetchPageAsync(int page, int pageSize, CancellationToken ct)
+    public Task<MesPage> FetchPageAsync(int page, int pageSize, CancellationToken ct) =>
+        QueryAsync(DataPath, DataBody(page, pageSize), Parse, ct);
+
+    public Task<MesCustomerPage> FetchCustomersPageAsync(int page, int pageSize, CancellationToken ct) =>
+        QueryAsync(CustomersPath, PageBody(page, pageSize), ParseCustomers, ct);
+
+    /// <summary>Posts one query with the shared session, logging in again once when IPMS rejects the token.</summary>
+    private async Task<T> QueryAsync<T>(string path, JsonObject body, Func<HttpStatusCode, string, T> parse, CancellationToken ct)
     {
         await gate.WaitAsync(ct);
         try
@@ -42,8 +51,8 @@ public sealed class MesHttpSource(HttpClient http, IpmsOptions options, IMesSett
                 for (var attempt = 0; attempt < 2; attempt++)
                 {
                     token ??= await LoginAsync(connection, timeout.Token);
-                    var (status, body) = await PostAsync(baseUrl, DataPath, DataBody(page, pageSize), token, timeout.Token);
-                    if (!IsAuthFailure(status, body)) return Parse(status, body);
+                    var (status, text) = await PostAsync(baseUrl, path, body, token, timeout.Token);
+                    if (!IsAuthFailure(status, text)) return parse(status, text);
                     token = null; // expired or kicked: log in again once
                 }
                 throw new IpmsUnavailableException(Unavailable);
@@ -114,6 +123,20 @@ public sealed class MesHttpSource(HttpClient http, IpmsOptions options, IMesSett
         return (response.StatusCode, await response.Content.ReadAsStringAsync(ct));
     }
 
+    /// <summary>The 工单查询 list as its page sends it: no filters, so every work order.</summary>
+    private static JsonObject PageBody(int page, int pageSize) => new()
+    {
+        ["pageBean"] = new JsonObject { ["page"] = page, ["pageSize"] = pageSize, ["showTotal"] = true, ["summary"] = new JsonArray() },
+        ["queryComplaint"] = new JsonObject(),
+        ["params"] = new JsonObject(),
+        ["querys"] = new JsonArray(),
+        ["selfDate"] = new JsonObject(),
+        ["sorter"] = new JsonArray(),
+        ["countFlag"] = false,
+        ["dataAuthority"] = false,
+        ["permissionsGroup"] = false,
+    };
+
     private static JsonObject DataBody(int page, int pageSize) => new()
     {
         ["pageBean"] = new JsonObject { ["page"] = page, ["pageSize"] = pageSize, ["showTotal"] = true, ["summary"] = new JsonArray() },
@@ -158,6 +181,19 @@ public sealed class MesHttpSource(HttpClient http, IpmsOptions options, IMesSett
             result.Add(new(no.Trim(), row.GetRawText()));
         }
         return new(total, result);
+    }
+
+    private static MesCustomerPage ParseCustomers(HttpStatusCode status, string body)
+    {
+        if (status != HttpStatusCode.OK || !TryParse(body, out var root) || Code(root) != 200
+            || !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object
+            || !data.TryGetProperty("rows", out var rows) || rows.ValueKind != JsonValueKind.Array
+            || !data.TryGetProperty("total", out var totalValue) || !TryInt(totalValue, out var total))
+            throw new IpmsUnavailableException("IPMS 返回了无法识别的数据");
+        static string? Text(JsonElement row, string name) =>
+            row.ValueKind == JsonValueKind.Object && row.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                ? value.GetString() : null;
+        return new(total, rows.EnumerateArray().Select(row => new MesCustomerRow(Text(row, "customerName"), Text(row, "customerShortName"))).ToArray());
     }
 
     private static bool TryParse(string text, out JsonElement root)

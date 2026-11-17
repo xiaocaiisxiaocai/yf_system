@@ -209,6 +209,36 @@ public sealed class OutsourceTypeVendorConfig : IEntityTypeConfiguration<Outsour
     }
 }
 
+/// <summary>
+/// 客户全称 → 简称, generated from the IPMS 工单查询 list on demand. A short name set by hand (<see cref="Manual"/>) is kept
+/// by later syncs. The outsourcing list shows the short name in place of the full one.
+/// </summary>
+public sealed class OutsourceCustomerAlias
+{
+    public ulong Id { get; set; }
+    public string FullName { get; set; } = null!;
+    public string ShortName { get; set; } = null!;
+    public bool Manual { get; set; }
+    public ulong? UpdatedBy { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public sealed class OutsourceCustomerAliasConfig : IEntityTypeConfiguration<OutsourceCustomerAlias>
+{
+    public void Configure(EntityTypeBuilder<OutsourceCustomerAlias> b)
+    {
+        b.ToTable("outsource_customer_aliases");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.FullName).HasColumnName("full_name").HasMaxLength(128).IsRequired();
+        b.Property(x => x.ShortName).HasColumnName("short_name").HasMaxLength(64).IsRequired();
+        b.Property(x => x.Manual).HasColumnName("manual").HasDefaultValue(false);
+        b.Property(x => x.UpdatedBy).HasColumnName("updated_by");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)");
+        b.HasIndex(x => x.FullName).IsUnique().HasDatabaseName("uk_outsource_customer_aliases_full_name");
+    }
+}
+
 public sealed class OutsourceDefaultCcConfig : IEntityTypeConfiguration<OutsourceDefaultCc>
 {
     public void Configure(EntityTypeBuilder<OutsourceDefaultCc> b)

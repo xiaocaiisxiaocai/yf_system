@@ -8,6 +8,16 @@ public sealed record OutsourceTypeVendorsRequest(ulong[]? VendorIds);
 
 public sealed record OutsourceDefaultCcRequest(ulong[]? UserIds);
 
+/// <summary>客户全称 → 简称; <paramref name="Manual"/> marks a short name set by hand, which syncs keep.</summary>
+public sealed record OutsourceCustomerAliasResponse(ulong Id, string FullName, string ShortName, bool Manual, DateTime UpdatedAt);
+
+/// <summary>A short name set by hand; an empty text hands the row back to the next IPMS sync.</summary>
+public sealed record OutsourceCustomerAliasRequest(string? ShortName);
+
+/// <summary>What one sync from the IPMS 工单查询 list changed.</summary>
+public sealed record OutsourceCustomerSyncResponse(int Rows, int Customers, int Added, int Updated, int KeptManual,
+    OutsourceCustomerAliasResponse[] Aliases);
+
 
 /// <summary>An ODM/OEMA company used as an outsourcing vendor (its contacts are maintained and read in the ODM/OEMA directory).</summary>
 public sealed record OutsourceVendorResponse(ulong Id, string Name, string Status);
@@ -33,8 +43,10 @@ public sealed record OutsourceItemResponse(
     DateOnly? WorkOrderIssuedOn, DateOnly? BomOn, DateOnly? DrawingReleasedOn,
     string? TypeCode, ulong? TypeId, string? TypeLabel, int? Quantity, DateOnly? OriginalDueDate, DateOnly? LatestDueDate,
     string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt,
-    string[]? ChangedFields = null, string? ImportedBy = null, DateTime? ImportedAt = null, string? ModifiedBy = null, DateTime? ModifiedAt = null);
+    string[]? ChangedFields = null, string? ImportedBy = null, DateTime? ImportedAt = null, string? ModifiedBy = null, DateTime? ModifiedAt = null,
+    string? CustomerFullName = null);
 
+// Customer is the short name from the 客户简称 table when there is one; CustomerFullName is always IPMS's full name.
 // ImportedBy/At: who imported the row and when; ModifiedBy/At: who last edited it by hand (never IPMS syncs or sending).
 // ChangedFields: the column keys (OutsourceWorkbook.Fields) whose value differs from what was last mailed to this vendor; shown yellow like in the mail.
 

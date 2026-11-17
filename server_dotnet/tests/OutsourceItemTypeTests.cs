@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Outsource;
 using Yf.Api.Modules.Outsource.Ipms;
+using Yf.Api.Modules.Outsource.Ipms.Mes;
 
 namespace Yf.Api.Tests;
 
@@ -222,6 +223,89 @@ public sealed class OutsourceItemTypeTests
         await using var connection = await f.Database.Database.OpenAsync(ct);
         var detail = await connection.QuerySingleAsync<string>("SELECT detail FROM audit_logs WHERE action='OUTSOURCE_ITEM_DELETE'");
         Assert.True(detail.Contains("sendStatus", StringComparison.OrdinalIgnoreCase) && detail.Contains("SENT", StringComparison.Ordinal), detail);
+    }
+
+    /// <summary>The IPMS 工单查询 list, reduced to customer names, for the 客户简称 sync.</summary>
+    private sealed class CustomerMes(params (string? Full, string? Short)[] rows) : IMesSource
+    {
+        public (string? Full, string? Short)[] Rows { get; set; } = rows;
+
+        public Task<MesTestResult> TestAsync(MesConnection connection, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<MesPage> FetchPageAsync(int page, int pageSize, CancellationToken ct) => throw new NotSupportedException();
+
+        public Task<MesCustomerPage> FetchCustomersPageAsync(int page, int pageSize, CancellationToken ct) =>
+            Task.FromResult(new MesCustomerPage(Rows.Length,
+                Rows.Skip((page - 1) * pageSize).Take(pageSize).Select(x => new MesCustomerRow(x.Full, x.Short)).ToArray()));
+    }
+
+    [Fact]
+    public void ShortNamesTakeTheMostFrequentNameThatIsNotTheFullNameAgain()
+    {
+        var names = OutsourceSettingsService.ShortNames(new (string?, string?)[]
+        {
+            ("庆鼎精密电子(淮安)有限公司", "庆鼎"), ("庆鼎精密电子(淮安)有限公司", "庆鼎精密电子(淮安)有限公司"),
+            ("庆鼎精密电子(淮安)有限公司", "庆鼎精密电子(淮安)有限公司"), ("庆鼎精密电子(淮安)有限公司", "庆鼎"),
+            ("超颖电子电路股份有限公司", "超穎（黃石）"), ("超颖电子电路股份有限公司", "超穎"), ("超颖电子电路股份有限公司", "超穎"),
+            ("深圳市泰雪科技有限公司", "深圳市泰雪科技有限公司"), ("", "空"), (null, null), ("无简称", " "),
+            // IPMS writes one customer with a full-width and a half-width bracket, or in other letter case: still one customer.
+            ("宏恒勝電子科技（淮安）有限公司", "宏恒勝"), ("宏恒勝電子科技（淮安)有限公司", "宏恒勝"),
+            ("Tripod Vietnam (Bienhoa) Electronic", "健鼎（越南）一厂"), ("TRIPOD VIETNAM (BIENHOA) ELECTRONIC", "TRIPOD VIETNAM (BIENHOA) ELECTRONIC"),
+        }.Select(x => new MesCustomerRow(x.Item1, x.Item2)));
+        Assert.Equal(4, names.Count);
+        Assert.Equal("宏恒勝", names["宏恒勝電子科技（淮安）有限公司"]);
+        Assert.Equal("健鼎（越南）一厂", names["Tripod Vietnam (Bienhoa) Electronic"]);
+        Assert.Equal("庆鼎", names["庆鼎精密电子(淮安)有限公司"]);
+        Assert.Equal("超穎", names["超颖电子电路股份有限公司"]);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task CustomerShortNamesSyncFromIpmsAndShowInTheList()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_customer_alias", ct);
+        await using var _ = f.Database;
+        // IPMS spells the item's customer "超穎(泰國)" with full-width brackets here; it is the same customer.
+        var mes = new CustomerMes(("超穎（泰國）", "超穎泰國"), ("超穎(泰國)", "超穎(泰國)"), ("超穎(泰國)", "超穎泰國"),
+            ("超穎(泰國)", "泰国厂"), ("其他客户有限公司", "其他"), ("超穎（泰國)", "超穎泰國"));
+        var settings = new OutsourceSettingsService(EfTestSupport.DbContextFactory(f.Database.Options), new AuditService([]), mes);
+        f.Ipms.Add("W1");
+        await f.Items.ImportAsync(f.Planner, Request(("W1", "鼎亚", "OEMA")), ct);
+        var before = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
+        Assert.Equal(("超穎(泰國)", "超穎(泰國)"), (before.Customer, before.CustomerFullName));
+
+        // Only purchasing with the settings permission syncs.
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => settings.SyncCustomerAliasesAsync(f.Planner, ct))).Status);
+        var synced = await settings.SyncCustomerAliasesAsync(f.Buyer, ct);
+        Assert.Equal((6, 2, 2, 0, 0), (synced.Rows, synced.Customers, synced.Added, synced.Updated, synced.KeptManual));
+        var alias = synced.Aliases.Single(x => x.FullName != "其他客户有限公司");
+        Assert.Equal(("超穎泰國", false), (alias.ShortName, alias.Manual));
+
+        // The list, its keyword search and the export show the short name; the full name stays available.
+        var item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
+        Assert.Equal(("超穎泰國", "超穎(泰國)"), (item.Customer, item.CustomerFullName));
+        var search = new OutsourceItemQuery(null, null, null, null, null, null, "穎泰", false);
+        Assert.Single((await f.Items.ListAsync(f.Buyer, search, 1, 20, 0, ct)).List);
+        var export = await f.Items.ExportAsync(f.Buyer, All(), ct);
+        using (var zip = new System.IO.Compression.ZipArchive(new MemoryStream(export.Content)))
+        {
+            using var reader = new StreamReader(zip.GetEntry("xl/sharedStrings.xml")?.Open() ?? zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+            Assert.Contains("超穎泰國", await reader.ReadToEndAsync(ct), StringComparison.Ordinal);
+        }
+
+        // A short name set by hand survives later syncs; clearing it hands the row back to IPMS.
+        var manual = await settings.SetCustomerAliasAsync(f.Buyer, alias.Id, new(" 超颖泰国 "), ct);
+        Assert.Equal(("超颖泰国", true), (manual.ShortName, manual.Manual));
+        mes.Rows = [("超穎(泰國)", "超穎泰國廠"), ("超穎(泰國)", "超穎泰國廠"), ("其他客户有限公司", "其他")];
+        synced = await settings.SyncCustomerAliasesAsync(f.Buyer, ct);
+        Assert.Equal((0, 0, 1), (synced.Added, synced.Updated, synced.KeptManual));
+        Assert.Equal("超颖泰国", synced.Aliases.Single(x => x.Id == alias.Id).ShortName);
+        await settings.SetCustomerAliasAsync(f.Buyer, alias.Id, new(""), ct);
+        synced = await settings.SyncCustomerAliasesAsync(f.Buyer, ct);
+        Assert.Equal(("超穎泰國廠", false), synced.Aliases.Where(x => x.Id == alias.Id).Select(x => (x.ShortName, x.Manual)).Single());
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
+            settings.SetCustomerAliasAsync(f.Buyer, alias.Id, new(new string('长', 65)), ct))).Status);
+        Assert.Equal(2, (await settings.CustomerAliasesAsync(f.Planner, ct)).Length);
     }
 
     private static OutsourceItemQuery All() => new(null, null, null, null, null, null, null, false);

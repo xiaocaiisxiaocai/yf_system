@@ -10,6 +10,7 @@ import { actionSlots } from '../../components/ActionSlots'
 import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
 import MesMirrorPanel from './MesMirrorPanel'
+import OutsourceCustomersTab from './OutsourceCustomersTab'
 import './OutsourceSettingsPage.css'
 import ResizableTable from '../../components/ResizableTable'
 import StatusTag from '../../components/StatusTag'
@@ -18,7 +19,7 @@ type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type CcUser = ApiResponses['GET /outsource/settings/default-cc'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
-type TabKey = 'types' | 'cc' | 'sync'
+type TabKey = 'types' | 'customers' | 'cc' | 'sync'
 
 const ACTIVE = 'ACTIVE'
 const DISABLED = 'DISABLED'
@@ -68,11 +69,13 @@ export default function OutsourceSettingsPage() {
     <h1 className="visually-hidden">外协清单设定</h1>
     <Tabs className="outsource-settings-tabs" activeTab={tab} onChange={(value) => setTab(value as TabKey)}>
       <Tabs.TabPane key="types" title="外发类型" />
+      <Tabs.TabPane key="customers" title="客户简称" />
       <Tabs.TabPane key="cc" title="默认抄送" />
       <Tabs.TabPane key="sync" title="IPMS 同步" />
     </Tabs>
     {error ? <LoadError message="设定加载失败" onRetry={load} />
       : tab === 'types' ? <TypesTab types={types} vendors={vendors} loading={loading} reload={load} />
+          : tab === 'customers' ? <OutsourceCustomersTab />
           : tab === 'cc' ? <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />
             : <SyncTab />}
   </Card>

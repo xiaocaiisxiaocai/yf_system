@@ -1072,6 +1072,27 @@ export interface OutsourceCompletionRequest {
   completed?: boolean | null
 }
 
+export interface OutsourceCustomerAliasRequest {
+  shortName?: string | null
+}
+
+export interface OutsourceCustomerAliasResponse {
+  id: number
+  fullName: string
+  shortName: string
+  manual: boolean
+  updatedAt: string
+}
+
+export interface OutsourceCustomerSyncResponse {
+  rows: number
+  customers: number
+  added: number
+  updated: number
+  keptManual: number
+  aliases: Array<OutsourceCustomerAliasResponse>
+}
+
 export interface OutsourceDefaultCcRequest {
   userIds?: Array<number> | null
 }
@@ -1159,6 +1180,7 @@ export interface OutsourceItemResponse {
   importedAt: string | null
   modifiedBy: string | null
   modifiedAt: string | null
+  customerFullName: string | null
 }
 
 export interface OutsourceItemUpdate {
@@ -2132,6 +2154,9 @@ export interface ApiResponses {
   "POST /outsource/mes-mirror/stop": MesMirrorStatusResponse
   "POST /outsource/mes-mirror/test": MesTestResult
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
+  "GET /outsource/settings/customers": Array<OutsourceCustomerAliasResponse>
+  "POST /outsource/settings/customers/sync": OutsourceCustomerSyncResponse
+  "PUT /outsource/settings/customers/{id}": OutsourceCustomerAliasResponse
   "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/sync-schedule": OutsourceSyncStatusResponse

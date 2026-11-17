@@ -4,6 +4,8 @@ using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Admin;
+using Yf.Api.Modules.Outsource.Ipms;
+using Yf.Api.Modules.Outsource.Ipms.Mes;
 
 namespace Yf.Api.Modules.Outsource;
 
@@ -20,7 +22,7 @@ internal static class OutsourcePermissions
 /// mapping and the default internal copy list. Vendors and their mail contacts are the ODM/OEMA companies and
 /// contacts, maintained in the ODM/OEMA directory and only read here. See 外协清单契约 → 外发类型字典与防呆 / 发送.
 /// </summary>
-public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFactory, AuditService audit)
+public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFactory, AuditService audit, IMesSource? mes = null)
 {
     internal const int MaximumDefaultCc = 50;
 
@@ -144,6 +146,147 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         var result = await TypeJsonAsync(context, id, ct);
         await transaction.CommitAsync(ct);
         return result;
+    }
+
+    // ---- customer short names (客户全称 → 简称) ----
+
+    internal const int CustomerPageSize = 500;
+    internal const int MaximumCustomerPages = 200;
+
+    public async Task<OutsourceCustomerAliasResponse[]> CustomerAliasesAsync(CurrentUser actor, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await AuthorizeReadAsync(context, actor, ct);
+        return await AliasListAsync(context, ct);
+    }
+
+    /// <summary>
+    /// Reads the whole IPMS 工单查询 list and refreshes the table: every full name gets its most frequent short name that is
+    /// not just the full name again (IPMS often repeats the full name there). Short names set by hand stay; nothing is deleted.
+    /// </summary>
+    public async Task<OutsourceCustomerSyncResponse> SyncCustomerAliasesAsync(CurrentUser actor, CancellationToken ct)
+    {
+        if (mes is null) throw ApiException.Unavailable("当前环境未连接 IPMS");
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using (var check = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct))
+        {
+            await AuthorizeWriteAsync(context, actor, ct);
+            await check.CommitAsync(ct);
+        }
+        await context.Database.CloseConnectionAsync();
+
+        // The fetch talks to IPMS for a while; no database connection or transaction is held meanwhile.
+        var rows = new List<MesCustomerRow>();
+        try
+        {
+            for (var page = 1; page <= MaximumCustomerPages; page++)
+            {
+                var result = await mes.FetchCustomersPageAsync(page, CustomerPageSize, ct);
+                rows.AddRange(result.Rows);
+                if (result.Rows.Count < CustomerPageSize || rows.Count >= result.Total) break;
+            }
+        }
+        catch (IpmsUnavailableException error) { throw ApiException.Unavailable(error.Message); }
+        var aliases = ShortNames(rows);
+        if (aliases.Count == 0) throw ApiException.Unavailable("IPMS 工单查询没有返回任何客户简称");
+
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct);
+        var now = await DbClock.UtcNowAsync(context, ct, 3);
+        var existing = (await context.OutsourceCustomerAliases.ToListAsync(ct))
+            .GroupBy(x => CustomerKey(x.FullName)).ToDictionary(x => x.Key, x => x.First());
+        int added = 0, updated = 0, keptManual = 0;
+        foreach (var (fullName, shortName) in aliases)
+        {
+            if (!existing.TryGetValue(CustomerKey(fullName), out var row))
+            {
+                context.OutsourceCustomerAliases.Add(new OutsourceCustomerAlias
+                    { FullName = fullName, ShortName = shortName, UpdatedBy = actor.Id, UpdatedAt = now });
+                added++;
+            }
+            else if (row.Manual) { if (row.ShortName != shortName) keptManual++; }
+            else if (row.ShortName != shortName)
+            {
+                row.ShortName = shortName; row.UpdatedBy = actor.Id; row.UpdatedAt = now;
+                updated++;
+            }
+        }
+        await SaveUniqueAsync(context, "另一次同步刚刚完成，请刷新后再试", ct);
+        await WriteAuditAsync(context, actor, "OUTSOURCE_CUSTOMER_SYNC", "outsource_customer_alias", null, new
+        {
+            targetName = "客户简称同步", rows = rows.Count, customers = aliases.Count, added, updated, keptManual,
+        }, ct);
+        await transaction.CommitAsync(ct);
+        return new(rows.Count, aliases.Count, added, updated, keptManual, await AliasListAsync(context, ct));
+    }
+
+    /// <summary>Sets a short name by hand (kept by later syncs); an empty one hands the row back to the next sync.</summary>
+    public async Task<OutsourceCustomerAliasResponse> SetCustomerAliasAsync(
+        CurrentUser actor, ulong id, OutsourceCustomerAliasRequest request, CancellationToken ct)
+    {
+        var shortName = request.ShortName?.Trim() ?? "";
+        if (shortName.EnumerateRunes().Count() > 64) throw ApiException.BadRequest("客户简称最多 64 个字符");
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct);
+        var row = await context.OutsourceCustomerAliases
+            .FromSqlInterpolated($"SELECT * FROM outsource_customer_aliases WHERE id={id} FOR UPDATE")
+            .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        var before = (row.ShortName, row.Manual);
+        if (shortName.Length > 0) { row.ShortName = shortName; row.Manual = true; }
+        else row.Manual = false;
+        if ((row.ShortName, row.Manual) != before)
+        {
+            row.UpdatedBy = actor.Id;
+            row.UpdatedAt = await DbClock.UtcNowAsync(context, ct, 3);
+            await context.SaveChangesAsync(ct);
+            await WriteAuditAsync(context, actor, "OUTSOURCE_CUSTOMER_ALIAS", "outsource_customer_alias", id, new
+            {
+                targetName = row.FullName,
+                changes = AuditChange.OnlyChanged(
+                    new AuditChange("shortName", "客户简称", before.ShortName, row.ShortName),
+                    new AuditChange("manual", "手动设定", before.Manual ? "是" : "否", row.Manual ? "是" : "否")),
+            }, ct);
+        }
+        await transaction.CommitAsync(ct);
+        return new(row.Id, row.FullName, row.ShortName, row.Manual, row.UpdatedAt);
+    }
+
+    private static Task<OutsourceCustomerAliasResponse[]> AliasListAsync(YfDbContext context, CancellationToken ct) =>
+        context.OutsourceCustomerAliases.AsNoTracking().OrderBy(x => x.FullName)
+            .Select(x => new OutsourceCustomerAliasResponse(x.Id, x.FullName, x.ShortName, x.Manual, x.UpdatedAt)).ToArrayAsync(ct);
+
+    /// <summary>
+    /// How customer full names compare, like the database's <c>utf8mb4_unicode_ci</c> does: full-width and half-width forms
+    /// (IPMS writes both "（淮安）" and "（淮安)"), letter case and repeated spaces do not make another customer.
+    /// </summary>
+    internal static string CustomerKey(string name) =>
+        string.Join(' ', name.Normalize(System.Text.NormalizationForm.FormKC).ToUpperInvariant()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>
+    /// Full name → short name: per customer (<see cref="CustomerKey"/>), the most frequent short name that is not the full
+    /// name again (ties go to the one IPMS listed first), under the first spelling of the full name IPMS listed. Names longer
+    /// than the columns hold are skipped.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> ShortNames(IEnumerable<MesCustomerRow> rows)
+    {
+        var customers = new Dictionary<string, (string FullName, List<(string Short, int Count)> Shorts)>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var full = row.CustomerName?.Trim();
+            var shortName = row.CustomerShortName?.Trim();
+            if (string.IsNullOrEmpty(full) || full.Length > 128 || string.IsNullOrEmpty(shortName) || shortName.Length > 64
+                || CustomerKey(full) == CustomerKey(shortName)) continue;
+            var key = CustomerKey(full);
+            if (!customers.TryGetValue(key, out var customer)) customers[key] = customer = (full, []);
+            var index = customer.Shorts.FindIndex(x => x.Short == shortName);
+            if (index < 0) customer.Shorts.Add((shortName, 1)); else customer.Shorts[index] = (shortName, customer.Shorts[index].Count + 1);
+        }
+        return customers.Values.ToDictionary(x => x.FullName,
+            x => x.Shorts.Select((item, order) => (item.Short, item.Count, order))
+                .OrderByDescending(x => x.Count).ThenBy(x => x.order).First().Short,
+            StringComparer.Ordinal);
     }
 
     // ---- default copy list ----

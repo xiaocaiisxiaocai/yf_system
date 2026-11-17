@@ -30,6 +30,9 @@ public sealed class MesMirrorSyncTests
 
         private int Rows() => WorkOrders.Count;
 
+        public Task<MesCustomerPage> FetchCustomersPageAsync(int page, int pageSize, CancellationToken ct) =>
+            throw new NotSupportedException();
+
         public async Task<MesPage> FetchPageAsync(int page, int pageSize, CancellationToken ct)
         {
             Calls++;

@@ -31,6 +31,13 @@ public static class OutsourceModule
         settings.MapGet("/vendors", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.VendorsAsync(AccessService.GetCurrent(c), ct));
 
+        settings.MapGet("/customers", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
+            s.CustomerAliasesAsync(AccessService.GetCurrent(c), ct));
+        settings.MapPost("/customers/sync", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
+            s.SyncCustomerAliasesAsync(AccessService.GetCurrent(c), ct));
+        settings.MapPut("/customers/{id:long}", (ulong id, OutsourceCustomerAliasRequest r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
+            s.SetCustomerAliasAsync(AccessService.GetCurrent(c), id, r, ct));
+
         settings.MapGet("/types", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.TypesAsync(AccessService.GetCurrent(c), ct));
         settings.MapPost("/types", (OutsourceTypeUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>

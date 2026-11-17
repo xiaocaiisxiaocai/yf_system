@@ -203,7 +203,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             var withIpms = preview with
             {
                 VendorName = lookup.VendorName, OutsourceDate = lookup.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                Customer = order.Customer, MachineModel = order.MachineModel, TypeLabel = lookup.TypeLabel,
+                Customer = reference.CustomerShown(order.Customer), MachineModel = order.MachineModel, TypeLabel = lookup.TypeLabel,
                 Quantity = order.Quantity, LatestDueDate = order.DueDate,
             };
             if (order.Closed)
@@ -304,8 +304,11 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         if (query.Keyword is { } keyword)
         {
             var pattern = QueryValues.ContainsPattern(keyword);
+            // The list shows short names, so a keyword also finds the customers whose short name contains it.
+            var byShortName = reference.CustomersWithShortNameContaining(keyword);
             items = items.Where(x => EF.Functions.Like(x.WorkOrderNo, pattern, QueryValues.LikeEscape)
                 || EF.Functions.Like(x.Customer!, pattern, QueryValues.LikeEscape)
+                || byShortName.Contains(x.Customer!)
                 || EF.Functions.Like(x.MachineModel!, pattern, QueryValues.LikeEscape));
         }
         return items;
@@ -602,12 +605,28 @@ internal sealed class OutsourceReference
     private readonly HashSet<(ulong TypeId, ulong VendorId)> mapping;
     public IReadOnlyDictionary<ulong, string> VendorNames { get; }
     public IReadOnlySet<ulong> ActiveVendorIds { get; }
+    /// <summary>客户全称 → 简称, keyed by <see cref="OutsourceSettingsService.CustomerKey"/>.</summary>
+    private readonly Dictionary<string, string> customerShortNames;
+    /// <summary>The same key → the full name as stored in the table.</summary>
+    private readonly Dictionary<string, string> customerFullNames;
 
     private OutsourceReference(Dictionary<string, (ulong, string, string)> types, HashSet<(ulong, ulong)> mapping,
-        Dictionary<ulong, string> vendorNames, HashSet<ulong> activeVendorIds)
+        Dictionary<ulong, string> vendorNames, HashSet<ulong> activeVendorIds,
+        Dictionary<string, (string FullName, string ShortName)> customerShortNames)
     {
         this.types = types; this.mapping = mapping; VendorNames = vendorNames; ActiveVendorIds = activeVendorIds;
+        this.customerShortNames = customerShortNames.ToDictionary(x => x.Key, x => x.Value.ShortName, StringComparer.Ordinal);
+        customerFullNames = customerShortNames.ToDictionary(x => x.Key, x => x.Value.FullName, StringComparer.Ordinal);
     }
+
+    public string[] CustomersWithShortNameContaining(string keyword) =>
+        customerFullNames.Where(x => customerShortNames[x.Key].Contains(keyword.Trim(), StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Value).ToArray();
+
+    /// <summary>The short name the list shows for a customer; the full name when the table has none.</summary>
+    public string? CustomerShown(string? fullName) =>
+        !string.IsNullOrWhiteSpace(fullName) && customerShortNames.TryGetValue(OutsourceSettingsService.CustomerKey(fullName), out var shortName)
+            ? shortName : fullName;
 
     public static async Task<OutsourceReference> LoadAsync(YfDbContext context, CancellationToken ct)
     {
@@ -616,10 +635,13 @@ internal sealed class OutsourceReference
             .Select(x => new { x.Id, x.Code, x.Name }).ToArrayAsync(ct);
         var mapping = await context.OutsourceTypeVendors.AsNoTracking().Select(x => new { x.TypeId, x.VendorId }).ToArrayAsync(ct);
         var vendors = await context.OemCompanies.AsNoTracking().Select(x => new { x.Id, x.Name, x.Status }).ToArrayAsync(ct);
+        var aliases = await context.OutsourceCustomerAliases.AsNoTracking().Select(x => new { x.FullName, x.ShortName }).ToArrayAsync(ct);
         return new(types.ToDictionary(x => Normalize(x.Code)!, x => (x.Id, x.Code, x.Name)),
             mapping.Select(x => (x.TypeId, x.VendorId)).ToHashSet(),
             vendors.ToDictionary(x => x.Id, x => x.Name),
-            vendors.Where(x => x.Status == AccountStatuses.Active).Select(x => x.Id).ToHashSet());
+            vendors.Where(x => x.Status == AccountStatuses.Active).Select(x => x.Id).ToHashSet(),
+            aliases.GroupBy(x => OutsourceSettingsService.CustomerKey(x.FullName))
+                .ToDictionary(x => x.Key, x => (x.First().FullName, x.First().ShortName), StringComparer.Ordinal));
     }
 
     /// <summary>IPMS may report "OEMA" or "OEMA【进料+制造】"; both resolve to the dictionary code.</summary>
@@ -673,11 +695,11 @@ internal sealed class OutsourceReference
 
     public OutsourceItemResponse Json(OutsourceItem item) => new OutsourceItemResponse(
         item.Id, item.SerialNo, item.WorkOrderNo, item.OutsourceDate, item.VendorId, VendorNames.GetValueOrDefault(item.VendorId) ?? "",
-        item.Customer, item.MachineModel, item.MechanicalSection, item.MechanicalOwner, item.ElectricalOwner,
+        CustomerShown(item.Customer), item.MachineModel, item.MechanicalSection, item.MechanicalOwner, item.ElectricalOwner,
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
         item.Remark, item.Status, item.SendStatus, Match(item.TypeCode, item.VendorId), item.ClosedAt is not null,
-        item.IpmsSyncedAt, item.UpdatedAt, null, null, CreatedAtOf(item), null, item.ModifiedAt).WithChangedFields(item);
+        item.IpmsSyncedAt, item.UpdatedAt, null, null, CreatedAtOf(item), null, item.ModifiedAt, item.Customer).WithChangedFields(item);
 
     private static DateTime? CreatedAtOf(OutsourceItem item) => item.CreatedBy is null ? null : item.CreatedAt;
 }

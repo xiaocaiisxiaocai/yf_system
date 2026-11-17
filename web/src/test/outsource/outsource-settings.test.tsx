@@ -28,11 +28,16 @@ const vendors = [{
   id: 1, name: '鼎亚', status: 'ACTIVE',
 }]
 const types = [{ id: 5, code: 'OEMA', name: '进料+制造', status: 'ACTIVE', sortNo: 10, vendorIds: [1] }]
+const aliases = [
+  { id: 31, fullName: '庆鼎精密电子(淮安)有限公司', shortName: '庆鼎', manual: false, updatedAt: '2026-11-17T06:00:00.000Z' },
+  { id: 32, fullName: '超颖电子电路股份有限公司', shortName: '超穎', manual: true, updatedAt: '2026-11-17T06:00:00.000Z' },
+]
 const cc = [{ userId: 21, employeeNo: 'pm', realName: '生管甲', email: 'pm@example.test', status: 'ACTIVE' }]
 
 function mockSettings() {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-    data: url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : url.endsWith('/default-cc') ? cc : [],
+    data: url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : url.endsWith('/default-cc') ? cc
+      : url.endsWith('/customers') ? aliases : [],
   } as never))
 }
 
@@ -131,4 +136,37 @@ describe('外协清单入口与设定', () => {
     await waitFor(() => expect(toggle).not.toBeChecked())
   })
 
+
+  it('客户简称：从 IPMS 同步、按全称或简称搜索、手动修改', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    mockSettings()
+    const synced = [...aliases, { id: 33, fullName: '广州广合科技股份有限公司', shortName: '廣合', manual: false, updatedAt: '2026-11-17T07:00:00.000Z' }]
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { rows: 9, customers: 3, added: 1, updated: 0, keptManual: 0, aliases: synced } } as never)
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { ...aliases[0], shortName: '庆鼎淮安', manual: true } } as never)
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+
+    await user.click(await screen.findByRole('tab', { name: '客户简称' }))
+    const row = (await screen.findByText('庆鼎精密电子(淮安)有限公司')).closest('tr')!
+    expect(within(row).getByText('庆鼎')).toBeInTheDocument()
+    expect(within(row).getByText('IPMS')).toBeInTheDocument()
+    expect(within(screen.getByText('超颖电子电路股份有限公司').closest('tr')!).getByText('手动')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /从 IPMS 同步/ }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/settings/customers/sync'))
+    expect(await screen.findByText('广州广合科技股份有限公司')).toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText('客户全称或简称'), '廣合')
+    expect(screen.queryByText('庆鼎精密电子(淮安)有限公司')).not.toBeInTheDocument()
+    await user.clear(screen.getByPlaceholderText('客户全称或简称'))
+
+    const qingding = (await screen.findByText('庆鼎精密电子(淮安)有限公司')).closest('tr')!
+    await user.click(within(qingding).getByRole('button', { name: '编辑' }))
+    const input = await screen.findByLabelText('客户简称')
+    await user.clear(input)
+    await user.type(input, ' 庆鼎淮安 ')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/customers/31', { shortName: '庆鼎淮安' }))
+    expect(await screen.findByText('庆鼎淮安')).toBeInTheDocument()
+  })
 })
