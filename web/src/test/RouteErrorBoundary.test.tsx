@@ -9,6 +9,10 @@ function Boom(): JSX.Element {
   throw new Error('boom')
 }
 
+function StaleChunk(): JSX.Element {
+  throw new TypeError('Failed to fetch dynamically imported module: http://127.0.0.1:5180/src/oem/pages/TransferListPage.tsx')
+}
+
 function LocationDriver() {
   const navigate = useNavigate()
   return (
@@ -31,6 +35,7 @@ describe('RouteErrorBoundary', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    sessionStorage.clear()
   })
 
   it('shows the error result and returns to the previous route', async () => {
@@ -77,5 +82,16 @@ describe('RouteErrorBoundary', () => {
     )
     await user.click(screen.getByRole('button', { name: '重新加载' }))
     expect(reload).toHaveBeenCalledOnce()
+  })
+
+  it('reloads once by itself when a page chunk is stale, then shows the error result', () => {
+    const reload = vi.spyOn(documentNavigation, 'reload').mockImplementation(() => undefined)
+    const tree = <MemoryRouter><RouteErrorBoundary><StaleChunk /></RouteErrorBoundary></MemoryRouter>
+    const first = render(tree)
+    expect(reload).toHaveBeenCalledOnce()
+    first.unmount()
+    render(tree)
+    expect(reload).toHaveBeenCalledOnce()
+    expect(screen.getByText('页面出错')).toBeInTheDocument()
   })
 })
