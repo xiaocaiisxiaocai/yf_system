@@ -43,16 +43,16 @@ public sealed class MesMirrorIpmsClient(IDbContextFactory<YfDbContext> dbFactory
     /// <summary>
     /// MES field → outsourcing field (names are the 外协清单 columns, 契约 → 数据与字段归属):
     /// 客户 ← customerName, 机型 ← deviceModels, 机构执行人 ← bomChargeUser (the 2D and rack-drawing owners are always the same person),
-    /// 工令下发 ← applyEndTime (签收日期), BOM时间 ← bomActualDate, 发图 ← jjtActualDate (机架图实际), 数量 ← deviceNum,
+    /// 工令下发 ← applyEndTime (签收日期), 数量 ← deviceNum,
     /// 原始交期 ← deliveryDate (原交期). 机构课别 is derived from the owner's account (see <see cref="SectionsOfAsync"/>); MES has no
-    /// 电控执行人. The outsourcing type is entered by staff. MES only lists open work orders, so none is closed here.
+    /// 电控执行人. The outsourcing type, BOM时间 and 发图 are entered by staff (2026-11-17). MES only lists open work orders, so none is closed here.
     /// </summary>
     internal static IpmsWorkOrder Map(string workOrderNo, string rawJson)
     {
         using var json = JsonDocument.Parse(rawJson);
         var root = json.RootElement;
         return new(workOrderNo, Text(root, "customerName"), Text(root, "deviceModels"), null, Text(root, "bomChargeUser"), null,
-            Date(root, "applyEndTime"), Date(root, "bomActualDate"), Date(root, "jjtActualDate"),
+            Date(root, "applyEndTime"),
             Quantity(root, "deviceNum"), Date(root, "deliveryDate"), false);
     }
 

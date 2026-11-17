@@ -398,7 +398,7 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
   const [saving, setSaving] = useState(false)
   const selectedTypeId = Form.useWatch('typeId', form) as number | undefined
   useEffect(() => {
-    if (item) form.setFieldsValue({ vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '' })
+    if (item) form.setFieldsValue({ vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '', bomOn: item.bomOn ?? undefined, drawingReleasedOn: item.drawingReleasedOn ?? undefined })
   }, [item, form])
   const save = async () => {
     if (!item || saving) return
@@ -407,7 +407,7 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /outsource/items/{id}']>(`/outsource/items/${item.id}`, {
-        vendorId: values.vendorId, typeId: values.typeId, status: values.status,
+        vendorId: values.vendorId, typeId: values.typeId, status: values.status, bomOn: values.bomOn || '', drawingReleasedOn: values.drawingReleasedOn || '',
         remark: values.remark?.trim() ?? '', expectedUpdatedAt: item.updatedAt,
       })
       Message.success('外协记录已保存'); await onSaved()
@@ -428,6 +428,8 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
       <Form.Item field="vendorId" label="外发厂商" rules={[{ required: true, message: '请选择外发厂商' }]}>
         <Select aria-label="外发厂商" disabled={!item || selectedTypeId === undefined} options={item ? vendorOptions(vendors, types, item, selectedTypeId) : []} />
       </Form.Item>
+      <Form.Item field="bomOn" label="BOM时间"><DatePicker style={{ width: '100%' }} /></Form.Item>
+      <Form.Item field="drawingReleasedOn" label="发图"><DatePicker style={{ width: '100%' }} /></Form.Item>
       <Form.Item field="status" label="状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>
       <Form.Item field="remark" label="备注" rules={[{ maxLength: 500, message: '备注最多 500 个字符' }]}>
         <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} />
@@ -443,18 +445,20 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
   const [vendorId, setVendorId] = useState<number>()
   const [typeId, setTypeId] = useState<number>()
   const [status, setStatus] = useState<string>()
+  const [bomOn, setBomOn] = useState<string>()
+  const [drawingReleasedOn, setDrawingReleasedOn] = useState<string>()
   const [changeRemark, setChangeRemark] = useState(false)
   const [remark, setRemark] = useState('')
   const [saving, setSaving] = useState(false)
-  const reset = () => { setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setChangeRemark(false); setRemark('') }
-  const nothing = vendorId === undefined && typeId === undefined && !status && !changeRemark
+  const reset = () => { setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setBomOn(undefined); setDrawingReleasedOn(undefined); setChangeRemark(false); setRemark('') }
+  const nothing = vendorId === undefined && typeId === undefined && !status && !bomOn && !drawingReleasedOn && !changeRemark
   const save = async () => {
     if (saving || nothing) return
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /outsource/items/batch']>('/outsource/items/batch', {
         items: items.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt })),
-        vendorId, typeId, status, remark: changeRemark ? remark.trim() : undefined,
+        vendorId, typeId, status, bomOn, drawingReleasedOn, remark: changeRemark ? remark.trim() : undefined,
       })
       Message.success(`已修改 ${items.length} 条记录`); reset(); await onSaved()
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
@@ -467,6 +471,8 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
         options={vendors.filter((vendor) => vendor.status === 'ACTIVE').map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>
       <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId} onChange={setTypeId}
         options={typeOptions(types)} /></Form.Item>
+      <Form.Item label="BOM时间"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={bomOn} onChange={(value) => setBomOn(value || undefined)} /></Form.Item>
+      <Form.Item label="发图"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={drawingReleasedOn} onChange={(value) => setDrawingReleasedOn(value || undefined)} /></Form.Item>
       <Form.Item label="状态"><Select allowClear placeholder="不修改" value={status} onChange={setStatus} options={STATUS_OPTIONS} /></Form.Item>
       <Form.Item label={<Checkbox checked={changeRemark} onChange={setChangeRemark}>修改备注</Checkbox>}>
         <Input.TextArea aria-label="备注" disabled={!changeRemark} value={remark} onChange={setRemark} maxLength={500} autoSize={{ minRows: 2, maxRows: 4 }} />

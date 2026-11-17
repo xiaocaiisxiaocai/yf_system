@@ -5,7 +5,7 @@ namespace Yf.Api.Modules.Outsource.Ipms;
 
 /// <summary>
 /// The IPMS fields the outsourcing list copies for one work order. Every field is read-only in this system;
-/// IPMS stays the source of truth. The outsourcing type is not one of them: staff enter it (外协契约 → 外发类型字典与防呆). See 外协清单契约 → 数据与字段归属.
+/// IPMS stays the source of truth. The outsourcing type, BOM时间 and 发图 are not among them: staff enter them (外协契约 → 外发类型字典与防呆). See 外协清单契约 → 数据与字段归属.
 /// </summary>
 public sealed record IpmsWorkOrder(
     string WorkOrderNo,
@@ -15,8 +15,6 @@ public sealed record IpmsWorkOrder(
     string? MechanicalOwner,
     string? ElectricalOwner,
     DateOnly? WorkOrderIssuedOn,
-    DateOnly? BomOn,
-    DateOnly? DrawingReleasedOn,
     int? Quantity,
     DateOnly? DueDate,
     bool Closed);
@@ -122,7 +120,7 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
             var no = row.WorkOrderNo?.Trim();
             if (string.IsNullOrEmpty(no) || !wanted.Contains(no)) continue;
             result[no] = new(no, row.Customer, row.MachineModel, row.MechanicalSection, row.MechanicalOwner, row.ElectricalOwner,
-                row.WorkOrderIssuedOn, row.BomOn, row.DrawingReleasedOn, row.Quantity, row.DueDate, row.Closed);
+                row.WorkOrderIssuedOn, row.Quantity, row.DueDate, row.Closed);
         }
         return result;
     }
@@ -142,8 +140,6 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
         public string? MechanicalOwner { get; set; }
         public string? ElectricalOwner { get; set; }
         public DateOnly? WorkOrderIssuedOn { get; set; }
-        public DateOnly? BomOn { get; set; }
-        public DateOnly? DrawingReleasedOn { get; set; }
         public int? Quantity { get; set; }
         public DateOnly? DueDate { get; set; }
         public bool Closed { get; set; }

@@ -13328,6 +13328,8 @@
       },
       "OutsourceBatchUpdate": {
         "required": [
+          "bomOn",
+          "drawingReleasedOn",
           "items",
           "latestDueDate",
           "outsourceDate",
@@ -13368,6 +13370,14 @@
             "nullable": true
           },
           "latestDueDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "bomOn": {
+            "type": "string",
+            "nullable": true
+          },
+          "drawingReleasedOn": {
             "type": "string",
             "nullable": true
           }
@@ -13835,6 +13845,8 @@
       },
       "OutsourceItemUpdate": {
         "required": [
+          "bomOn",
+          "drawingReleasedOn",
           "expectedUpdatedAt",
           "latestDueDate",
           "outsourceDate",
@@ -13873,6 +13885,14 @@
             "nullable": true
           },
           "latestDueDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "bomOn": {
+            "type": "string",
+            "nullable": true
+          },
+          "drawingReleasedOn": {
             "type": "string",
             "nullable": true
           }

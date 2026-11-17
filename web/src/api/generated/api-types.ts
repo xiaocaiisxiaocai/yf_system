@@ -1055,6 +1055,8 @@ export interface OutsourceBatchUpdate {
   remark?: string | null
   status?: string | null
   latestDueDate?: string | null
+  bomOn?: string | null
+  drawingReleasedOn?: string | null
 }
 
 export interface OutsourceCcUserResponse {
@@ -1167,6 +1169,8 @@ export interface OutsourceItemUpdate {
   status?: string | null
   expectedUpdatedAt?: string | null
   latestDueDate?: string | null
+  bomOn?: string | null
+  drawingReleasedOn?: string | null
 }
 
 export interface OutsourceItemVersion {

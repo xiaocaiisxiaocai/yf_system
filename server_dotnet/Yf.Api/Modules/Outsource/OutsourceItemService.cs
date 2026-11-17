@@ -231,8 +231,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         item.MechanicalOwner = Cut(order.MechanicalOwner, 64);
         item.ElectricalOwner = Cut(order.ElectricalOwner, 64);
         item.WorkOrderIssuedOn = order.WorkOrderIssuedOn;
-        item.BomOn = order.BomOn;
-        item.DrawingReleasedOn = order.DrawingReleasedOn;
         item.Quantity = order.Quantity;
         item.IpmsSyncedAt = syncedAt;
     }
@@ -335,7 +333,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<OutsourceItemResponse> UpdateAsync(CurrentUser actor, ulong id, OutsourceItemUpdate request, CancellationToken ct)
     {
         if (request.ExpectedUpdatedAt is not { } expected) throw ApiException.BadRequest("expectedUpdatedAt 必须为当前记录的 updatedAt");
-        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: true);
+        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: true)
+            with { BomOn = ParseManualDate(request.BomOn, "BOM时间"), DrawingReleasedOn = ParseManualDate(request.DrawingReleasedOn, "发图") };
         var result = await ApplyAsync(actor, [new OutsourceItemVersion(id, expected)], change, ct);
         return result.Items.Single();
     }
@@ -343,8 +342,10 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public Task<OutsourceBatchResponse> BatchUpdateAsync(CurrentUser actor, OutsourceBatchUpdate request, CancellationToken ct)
     {
         var items = ValidateBatch(request.Items);
-        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: false);
-        if (change.Date is null && change.VendorId is null && change.TypeId is null && change.Remark is null && change.Status is null && change.LatestDue is null)
+        var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: false)
+            with { BomOn = ParseManualDate(request.BomOn, "BOM时间"), DrawingReleasedOn = ParseManualDate(request.DrawingReleasedOn, "发图") };
+        if (change.Date is null && change.VendorId is null && change.TypeId is null && change.Remark is null && change.Status is null && change.LatestDue is null
+            && change.BomOn is null && change.DrawingReleasedOn is null)
             throw ApiException.BadRequest("请至少选择一项要修改的内容");
         return ApplyAsync(actor, items, change, ct);
     }
@@ -414,7 +415,22 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
 
     internal static string CompletionLabel(bool completed) => completed ? "已完成" : "未完成";
 
-    private sealed record Change(DateOnly? Date, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateOnly? LatestDue);
+    private sealed record Change(DateOnly? Date, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateOnly? LatestDue)
+    {
+        /// <summary>BOM时间 and 发图 are filled in by hand: null keeps the value, <see cref="ManualDate.Value"/> null clears it.</summary>
+        public ManualDate? BomOn { get; init; }
+        public ManualDate? DrawingReleasedOn { get; init; }
+    }
+
+    private sealed record ManualDate(DateOnly? Value);
+
+    private static ManualDate? ParseManualDate(string? text, string label)
+    {
+        if (text is null) return null;
+        if (string.IsNullOrWhiteSpace(text)) return new(null);
+        return DateOnly.TryParseExact(text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var value)
+            ? new(value) : throw ApiException.BadRequest($"{label}格式不正确");
+    }
 
     private static Change ParseChange(string? date, ulong? vendorId, ulong? typeId, string? remark, string? status, string? latestDue, bool requireAll)
     {
@@ -490,6 +506,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             var remark = change.Remark is null ? before.Remark : change.Remark.Length == 0 ? null : change.Remark;
             var status = change.Status ?? before.Status;
             var latestDue = change.LatestDue ?? before.LatestDueDate;
+            var bomOn = change.BomOn is { } bom ? bom.Value : before.BomOn;
+            var drawingReleasedOn = change.DrawingReleasedOn is { } drawing ? drawing.Value : before.DrawingReleasedOn;
             var typeCode = TypeChanged(before, newTypeCode) ? newTypeCode : before.TypeCode;
             var changes = AuditChange.OnlyChanged(
                 new AuditChange("outsourceDate", "外发日期", Text(before.OutsourceDate), Text(date)),
@@ -497,12 +515,15 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 new AuditChange("typeCode", "外发类型", reference.Label(before.TypeCode), reference.Label(typeCode)),
                 new AuditChange("remark", "备注", before.Remark, remark),
                 new AuditChange("status", "状态", OutsourceItemStatuses.Label(before.Status), OutsourceItemStatuses.Label(status)),
-                new AuditChange("latestDueDate", "最新交期", before.LatestDueDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), latestDue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
+                new AuditChange("latestDueDate", "最新交期", before.LatestDueDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), latestDue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+                new AuditChange("bomOn", "BOM时间", before.BomOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), bomOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+                new AuditChange("drawingReleasedOn", "发图", before.DrawingReleasedOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), drawingReleasedOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
             if (changes.Length == 0) continue;
             var sendStatus = before.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : before.SendStatus;
             await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor).SetProperty(x => x.TypeCode, typeCode)
                 .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status).SetProperty(x => x.LatestDueDate, latestDue)
+                .SetProperty(x => x.BomOn, bomOn).SetProperty(x => x.DrawingReleasedOn, drawingReleasedOn)
                 .SetProperty(x => x.SendStatus, sendStatus).SetProperty(x => x.ModifiedBy, actor.Id).SetProperty(x => x.ModifiedAt, modifiedAt), ct);
             OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
             await context.SaveChangesAsync(ct);

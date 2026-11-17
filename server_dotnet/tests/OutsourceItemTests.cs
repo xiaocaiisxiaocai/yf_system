@@ -25,7 +25,7 @@ public sealed class OutsourceItemTests
         }
 
         public void Add(string no, bool closed = false) => Orders[no] = new(
-            no, "超穎(泰國)", "ST-201L", "4.王家琦", "机构甲", "电控乙", new DateOnly(2026, 9, 30), null, null,
+            no, "超穎(泰國)", "ST-201L", "4.王家琦", "机构甲", "电控乙", new DateOnly(2026, 9, 30),
             1, new DateOnly(2026, 12, 31), closed);
     }
 

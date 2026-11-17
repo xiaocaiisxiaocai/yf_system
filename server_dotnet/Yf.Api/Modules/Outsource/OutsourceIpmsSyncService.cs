@@ -206,8 +206,6 @@ public sealed class OutsourceIpmsSyncService(
             new AuditChange("mechanicalOwner", "", item.MechanicalOwner, next.MechanicalOwner),
             new AuditChange("electricalOwner", "", item.ElectricalOwner, next.ElectricalOwner),
             new AuditChange("workOrderIssuedOn", "", item.WorkOrderIssuedOn, next.WorkOrderIssuedOn),
-            new AuditChange("bomOn", "", item.BomOn, next.BomOn),
-            new AuditChange("drawingReleasedOn", "", item.DrawingReleasedOn, next.DrawingReleasedOn),
             new AuditChange("quantity", "", item.Quantity, next.Quantity));
         var changed = changes.Length > 0;
         // IPMS supplies only the original due date, once; the latest due date is purchasing's, so a sync never moves it
@@ -228,7 +226,6 @@ public sealed class OutsourceIpmsSyncService(
                 .SetProperty(x => x.Customer, next.Customer).SetProperty(x => x.MachineModel, next.MachineModel)
                 .SetProperty(x => x.MechanicalSection, next.MechanicalSection).SetProperty(x => x.MechanicalOwner, next.MechanicalOwner)
                 .SetProperty(x => x.ElectricalOwner, next.ElectricalOwner).SetProperty(x => x.WorkOrderIssuedOn, next.WorkOrderIssuedOn)
-                .SetProperty(x => x.BomOn, next.BomOn).SetProperty(x => x.DrawingReleasedOn, next.DrawingReleasedOn)
                 .SetProperty(x => x.Quantity, next.Quantity)
                 .SetProperty(x => x.LatestDueDate, latestDue).SetProperty(x => x.OriginalDueDate, originalDue)
                 .SetProperty(x => x.SendStatus, sendStatus).SetProperty(x => x.IpmsSyncedAt, now)

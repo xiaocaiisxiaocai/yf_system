@@ -19,9 +19,9 @@ public sealed class MesMirrorIpmsClientTests
              "jjtActualDate":"2026-07-06","deliveryDate":"2027-01-08","customerEndDate":"2027-03-01","planEndDate":"2027-02-01"}
             """);
 
-        // 机构课别 is not in MES (it comes from the owner's account) and neither is 电控执行人; the due date is MES 原交期.
+        // 机构课别 is not in MES (it comes from the owner's account) and neither is 电控执行人; the due date is MES 原交期. BOM时间 and 发图 are entered by staff, not read from MES.
         Assert.Equal(new IpmsWorkOrder("21091052", "Peng Shen (Thailand)", "SFC-1500", null, "周晓淋", null,
-            new DateOnly(2026, 6, 7), new DateOnly(2026, 6, 29), new DateOnly(2026, 7, 6),
+            new DateOnly(2026, 6, 7),
             3, new DateOnly(2027, 1, 8), false), order);
     }
 
