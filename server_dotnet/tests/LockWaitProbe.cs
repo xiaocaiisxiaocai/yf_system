@@ -17,7 +17,9 @@ internal static class LockWaitProbe
     internal static Task WaitForLockWaitAsync(
         string connectionString, CancellationToken ct, Task? stopWhenCompleted = null, TimeSpan? timeout = null) =>
         // MySQL 5.7 does not always list a blocked row-locking statement as LOCK WAIT in innodb_trx, so a locking
-        // statement that has been running for a full second (test data is tiny) counts as waiting as well.
+        // statement that has been running for a full second (test data is tiny) counts as waiting as well. Shared
+        // locks count too: the business gate (AppDb.LockBusinessAsync) waits in LOCK IN SHARE MODE, shown in state
+        // "statistics" without LOCK WAIT.
         PollAsync(connectionString, """
             SELECT
               (SELECT COUNT(*)
@@ -28,7 +30,8 @@ internal static class LockWaitProbe
               (SELECT COUNT(*)
                FROM information_schema.processlist p
                WHERE p.DB = @databaseName AND p.COMMAND = 'Query' AND p.TIME >= 1
-                 AND (p.INFO LIKE '%FOR UPDATE%' OR p.INFO LIKE 'UPDATE %' OR p.INFO LIKE 'DELETE %'))
+                 AND (p.INFO LIKE '%FOR UPDATE%' OR p.INFO LIKE '%LOCK IN SHARE MODE%' OR p.INFO LIKE '%FOR SHARE%'
+                      OR p.INFO LIKE 'UPDATE %' OR p.INFO LIKE 'DELETE %'))
             """, "an InnoDB lock wait", ct, stopWhenCompleted, timeout);
 
     /// <summary>
