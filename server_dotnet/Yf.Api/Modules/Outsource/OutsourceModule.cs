@@ -16,6 +16,7 @@ public static class OutsourceModule
         .AddSingleton<MesMirrorSyncService>()
         .AddSingleton<IHostedService>(provider => provider.GetRequiredService<MesMirrorSyncService>())
         .AddSingleton<OutsourceSettingsService>()
+        .AddSingleton<OutsourceVendorViewService>()
         .AddSingleton<OutsourceItemService>()
         .AddSingleton<OutsourceIpmsSyncService>()
         .AddSingleton<IHostedService>(provider => provider.GetRequiredService<OutsourceIpmsSyncService>())

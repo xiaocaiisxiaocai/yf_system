@@ -1325,10 +1325,30 @@ export interface OutsourceTypeVendorsRequest {
   vendorIds?: Array<number> | null
 }
 
+export interface OutsourceVendorColumn {
+  key: string
+  title: string
+}
+
+export interface OutsourceVendorPageResponse {
+  columns: Array<OutsourceVendorColumn>
+  list: Array<OutsourceVendorRow>
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface OutsourceVendorResponse {
   id: number
   name: string
   status: string
+}
+
+export interface OutsourceVendorRow {
+  id: number
+  status: string
+  closed: boolean
+  values: Record<string, string | null>
 }
 
 export interface PageResponseOfAuditLogResponse {
@@ -2128,6 +2148,7 @@ export interface ApiResponses {
   "GET /oem/internal-user-options": Array<OemInternalUserOptionResponse>
   "GET /oem/notify-policies": Array<OemSettingResponse>
   "PUT /oem/notify-policies": Array<OemSettingResponse>
+  "GET /oem/outsource-items": OutsourceVendorPageResponse
   "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>
   "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
   "POST /oem/retention-templates": OemRetentionTemplateResponse

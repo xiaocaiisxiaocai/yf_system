@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { Button, Dropdown, Menu, Result, Spin } from '@arco-design/web-react'
 import {
-  IconCheckCircle, IconDown, IconFile, IconHistory, IconPoweroff, IconSettings, IconUserGroup,
+  IconCheckCircle, IconDown, IconFile, IconHistory, IconList, IconPoweroff, IconSettings, IconUserGroup,
 } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -84,6 +84,7 @@ export function PortalLayout() {
       <OemProvider value={oemValue}>
         <Shell title="ODM/OEMA 文件传递" subtitle={account?.companyName} menu={[
           { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
+          { path: `${PORTAL_BASE}/outsource`, label: '外协清单', icon: <IconList />, visible: true },
         ]} account={
           <Dropdown trigger="click" droplist={
             <Menu onClickMenuItem={async (key) => {

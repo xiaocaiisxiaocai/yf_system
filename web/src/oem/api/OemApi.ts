@@ -74,6 +74,11 @@ export class OemApi {
     else await this.http.delete<ApiResponses[K]>(url)
   }
 
+  // Outsourcing list of the vendor's own company (portal only)
+  outsourceItems = (query: { page: number; pageSize: number; keyword?: string; includeClosed?: boolean }) =>
+    this.get<'GET /oem/outsource-items', ApiResponses['GET /oem/outsource-items']>('/oem/outsource-items',
+      { ...query, keyword: query.keyword || undefined, includeClosed: query.includeClosed ? 'true' : undefined })
+
   // Transfers
   listTransfers = (query: TransferQuery) =>
     this.get<'GET /oem/transfers', Page<TransferSummary>>('/oem/transfers', { ...query, mine: query.mine ? 'true' : undefined })

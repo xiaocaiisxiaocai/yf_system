@@ -105,6 +105,9 @@ public static class OemModule
         OemPolicyEndpoints.Map(secured);
         OemTransferEndpoints.Map(secured);
         OemDeliveryEndpoints.MapSecured(secured);
+        // The outsourcing list a vendor account may read (外协清单契约 → 厂商查看).
+        secured.MapGet("/outsource-items", (HttpContext c, Outsource.OutsourceVendorViewService s, CancellationToken ct) =>
+            s.ListAsync(OemActorAccessor.Get(c), c.Request, ct)).Produces<Outsource.OutsourceVendorPageResponse>();
         return endpoints;
     }
 }

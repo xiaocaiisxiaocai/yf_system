@@ -33,6 +33,7 @@ const OemLanding = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ 
 const PortalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.PortalLayout })))
 const OemTransferList = lazy(() => import('./oem/pages/TransferListPage'))
 const OemTransferDetail = lazy(() => import('./oem/pages/TransferDetailPage'))
+const PortalOutsource = lazy(() => import('./oem/pages/PortalOutsourcePage'))
 const OemApprovals = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.ApprovalsHub })))
 const OemCompanies = lazy(() => import('./oem/pages/admin/CompaniesPage'))
 const OemSettings = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.SettingsHub })))
@@ -162,6 +163,7 @@ export default function App() {
             <Route index element={<Navigate to="transfers" replace />} />
             <Route path="transfers" element={<OemTransferList />} />
             <Route path="transfers/:id" element={<OemTransferDetail />} />
+            <Route path="outsource" element={<PortalOutsource />} />
           </Route>
         </>}
         <Route path="/outsource" element={<Guard><OutsourceLayout /></Guard>}>

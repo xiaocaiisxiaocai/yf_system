@@ -76,6 +76,7 @@
   "GET /api/v1/oem/internal-user-options",
   "GET /api/v1/oem/notify-policies",
   "GET /api/v1/oem/retention-template-options",
+  "GET /api/v1/oem/outsource-items",
   "GET /api/v1/oem/retention-templates",
   "GET /api/v1/oem/transfer-recipient-choices",
   "GET /api/v1/oem/transfers",
