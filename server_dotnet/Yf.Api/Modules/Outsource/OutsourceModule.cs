@@ -33,6 +33,12 @@ public static class OutsourceModule
 
         settings.MapGet("/customers", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.CustomerAliasesAsync(AccessService.GetCurrent(c), ct));
+        settings.MapGet("/customers/missing", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
+            s.MissingCustomerAliasesAsync(AccessService.GetCurrent(c), ct));
+        settings.MapPost("/customers", (OutsourceCustomerAliasCreate r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
+            s.CreateCustomerAliasAsync(AccessService.GetCurrent(c), r, ct));
+        settings.MapDelete("/customers/{id:long}", (ulong id, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
+            s.DeleteCustomerAliasAsync(AccessService.GetCurrent(c), id, ct));
         settings.MapPost("/customers/sync", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.SyncCustomerAliasesAsync(AccessService.GetCurrent(c), ct));
         settings.MapPut("/customers/{id:long}", (ulong id, OutsourceCustomerAliasRequest r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
@@ -120,10 +126,11 @@ public static class OutsourceModule
             s.StopAsync(AccessService.GetCurrent(c), ct));
         mirror.MapPost("/confirm", (MesMirrorConfirmRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.ConfirmAsync(AccessService.GetCurrent(c), r, ct));
-        mirror.MapGet("/orders", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+        mirror.MapPost("/orders/query", (MesOrdersQuery r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
         {
-            var p = QueryValues.Page(c.Request);
-            return s.OrdersAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, c.Request.Query["filters"].ToString(), ct);
+            var size = (uint)Math.Clamp(r.PageSize ?? 20, 1UL, 100UL);
+            var page = Math.Clamp(r.Page ?? 1, 1UL, ulong.MaxValue / size);
+            return s.OrdersAsync(AccessService.GetCurrent(c), page, size, (page - 1) * size, r.Filters, ct);
         });
         mirror.MapGet("/settings", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.SettingsAsync(AccessService.GetCurrent(c), ct));

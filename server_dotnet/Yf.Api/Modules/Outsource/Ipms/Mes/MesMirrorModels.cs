@@ -40,4 +40,10 @@ public sealed record MesMirrorSettingsResponse(
 public sealed record MesMirrorTestRequest(string? BaseUrl, string? Account, string? Password);
 
 /// <summary>One mirrored work order for the data page: every field MES returned, by MES field name (<c>null</c> stays empty).</summary>
+/// <summary>
+/// One page of the mirrored work orders. <paramref name="Filters"/> maps a MES field to its terms (one per line, or separated by
+/// spaces and commas on a single line). Sent in the body: many pasted names would make the address too long (HTTP 414).
+/// </summary>
+public sealed record MesOrdersQuery(ulong? Page, ulong? PageSize, Dictionary<string, string?>? Filters);
+
 public sealed record MesOrderRow(string WorkOrderNo, DateTime FetchedAt, IReadOnlyDictionary<string, string?> Values);

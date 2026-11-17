@@ -220,6 +220,77 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         return new(rows.Count, aliases.Count, added, updated, keptManual, await AliasListAsync(context, ct));
     }
 
+    /// <summary>Adds a pair by hand for a customer the IPMS sync gives no short name; later syncs keep it.</summary>
+    public async Task<OutsourceCustomerAliasResponse> CreateCustomerAliasAsync(
+        CurrentUser actor, OutsourceCustomerAliasCreate request, CancellationToken ct)
+    {
+        var fullName = request.FullName?.Trim() ?? "";
+        var shortName = request.ShortName?.Trim() ?? "";
+        if (fullName.Length == 0 || fullName.EnumerateRunes().Count() > 128) throw ApiException.BadRequest("客户全称需为 1~128 个字符");
+        if (shortName.Length == 0 || shortName.EnumerateRunes().Count() > 64) throw ApiException.BadRequest("客户简称需为 1~64 个字符");
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct);
+        var key = CustomerKey(fullName);
+        var names = await context.OutsourceCustomerAliases.AsNoTracking().Select(x => x.FullName).ToArrayAsync(ct);
+        if (names.Any(name => CustomerKey(name) == key)) throw ApiException.Conflict("该客户已有简称，请直接编辑");
+        var row = new OutsourceCustomerAlias
+        {
+            FullName = fullName, ShortName = shortName, Manual = true, UpdatedBy = actor.Id,
+            UpdatedAt = await DbClock.UtcNowAsync(context, ct, 3),
+        };
+        context.OutsourceCustomerAliases.Add(row);
+        await SaveUniqueAsync(context, "该客户已有简称，请直接编辑", ct);
+        await WriteAuditAsync(context, actor, "OUTSOURCE_CUSTOMER_ALIAS", "outsource_customer_alias", row.Id, new
+        {
+            targetName = fullName,
+            changes = new[] { new AuditChange("shortName", "客户简称", null, shortName) },
+        }, ct);
+        await transaction.CommitAsync(ct);
+        return new(row.Id, row.FullName, row.ShortName, row.Manual, row.UpdatedAt);
+    }
+
+    /// <summary>Removes a pair added or edited by hand; pairs that came from IPMS would only come back with the next sync.</summary>
+    public async Task<EmptyResponse> DeleteCustomerAliasAsync(CurrentUser actor, ulong id, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct);
+        var row = await context.OutsourceCustomerAliases
+            .FromSqlInterpolated($"SELECT * FROM outsource_customer_aliases WHERE id={id} FOR UPDATE")
+            .AsNoTracking().SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        if (!row.Manual) throw ApiException.Conflict("只能删除手动设定的简称；IPMS 同步的会在下次同步时再出现");
+        await context.OutsourceCustomerAliases.Where(x => x.Id == id).ExecuteDeleteAsync(ct);
+        await WriteAuditAsync(context, actor, "OUTSOURCE_CUSTOMER_ALIAS", "outsource_customer_alias", id, new
+        {
+            targetName = row.FullName,
+            changes = new[] { new AuditChange("shortName", "客户简称", row.ShortName, null) },
+        }, ct);
+        await transaction.CommitAsync(ct);
+        return new();
+    }
+
+    /// <summary>
+    /// Customer full names in the IPMS data (MES mirror) or the outsourcing list without a short name, most work orders first,
+    /// so purchasing can add the ones IPMS does not provide.
+    /// </summary>
+    public async Task<OutsourceMissingCustomerResponse[]> MissingCustomerAliasesAsync(CurrentUser actor, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await AuthorizeReadAsync(context, actor, ct);
+        var known = (await context.OutsourceCustomerAliases.AsNoTracking().Select(x => x.FullName).ToArrayAsync(ct))
+            .Select(CustomerKey).ToHashSet(StringComparer.Ordinal);
+        var mes = await context.MesWorkOrders.AsNoTracking().Where(x => x.CustomerName != null && x.CustomerName != "")
+            .GroupBy(x => x.CustomerName!).Select(x => new { Name = x.Key, Count = x.Count() }).ToArrayAsync(ct);
+        var items = await context.OutsourceItems.AsNoTracking().Where(x => x.Customer != null && x.Customer != "")
+            .GroupBy(x => x.Customer!).Select(x => new { Name = x.Key, Count = x.Count() }).ToArrayAsync(ct);
+        return mes.Select(x => (x.Name, Mes: x.Count, Items: 0)).Concat(items.Select(x => (x.Name, Mes: 0, Items: x.Count)))
+            .Where(x => !known.Contains(CustomerKey(x.Name)))
+            .GroupBy(x => CustomerKey(x.Name))
+            .Select(x => new OutsourceMissingCustomerResponse(x.First().Name.Trim(), x.Sum(y => y.Mes), x.Sum(y => y.Items)))
+            .OrderByDescending(x => x.MesWorkOrders + x.OutsourceItems).ThenBy(x => x.FullName, StringComparer.Ordinal).ToArray();
+    }
+
     /// <summary>Sets a short name by hand (kept by later syncs); an empty one hands the row back to the next sync.</summary>
     public async Task<OutsourceCustomerAliasResponse> SetCustomerAliasAsync(
         CurrentUser actor, ulong id, OutsourceCustomerAliasRequest request, CancellationToken ct)

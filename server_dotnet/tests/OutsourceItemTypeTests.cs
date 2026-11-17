@@ -306,6 +306,28 @@ public sealed class OutsourceItemTypeTests
         Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
             settings.SetCustomerAliasAsync(f.Buyer, alias.Id, new(new string('长', 65)), ct))).Status);
         Assert.Equal(2, (await settings.CustomerAliasesAsync(f.Planner, ct)).Length);
+        // Customers IPMS gives no short name show up as missing (MES data and the outsourcing list); they are added by hand.
+        await f.Database.ExecuteAsync("""
+            INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,customer_name,device_models,raw_json)
+            VALUES('M1','b',UTC_TIMESTAMP(3),'深圳市泰雪科技有限公司','X','{}'),('M2','b',UTC_TIMESTAMP(3),'深圳市泰雪科技有限公司','X','{}'),
+                  ('M3','b',UTC_TIMESTAMP(3),'超穎（泰國)','X','{}');
+            """, ct);
+        var missing = await settings.MissingCustomerAliasesAsync(f.Planner, ct);
+        Assert.Equal([("深圳市泰雪科技有限公司", 2, 0)], missing.Select(x => (x.FullName, x.MesWorkOrders, x.OutsourceItems)));
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
+            settings.CreateCustomerAliasAsync(f.Planner, new("深圳市泰雪科技有限公司", "泰雪"), ct))).Status);
+        var added = await settings.CreateCustomerAliasAsync(f.Buyer, new(" 深圳市泰雪科技有限公司 ", " 泰雪 "), ct);
+        Assert.Equal(("深圳市泰雪科技有限公司", "泰雪", true), (added.FullName, added.ShortName, added.Manual));
+        Assert.Empty(await settings.MissingCustomerAliasesAsync(f.Planner, ct));
+        // The same customer in another spelling already has a short name.
+        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
+            settings.CreateCustomerAliasAsync(f.Buyer, new("超穎（泰國)", "重复"), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => settings.CreateCustomerAliasAsync(f.Buyer, new("新客户", ""), ct))).Status);
+        // Only hand-made pairs can be deleted; the IPMS ones would come back with the next sync.
+        var fromIpms = (await settings.CustomerAliasesAsync(f.Buyer, ct)).Single(x => x.FullName == "其他客户有限公司");
+        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => settings.DeleteCustomerAliasAsync(f.Buyer, fromIpms.Id, ct))).Status);
+        await settings.DeleteCustomerAliasAsync(f.Buyer, added.Id, ct);
+        Assert.Equal(["深圳市泰雪科技有限公司"], (await settings.MissingCustomerAliasesAsync(f.Planner, ct)).Select(x => x.FullName));
     }
 
     private static OutsourceItemQuery All() => new(null, null, null, null, null, null, null, false);

@@ -11,6 +11,15 @@ public sealed record OutsourceDefaultCcRequest(ulong[]? UserIds);
 /// <summary>客户全称 → 简称; <paramref name="Manual"/> marks a short name set by hand, which syncs keep.</summary>
 public sealed record OutsourceCustomerAliasResponse(ulong Id, string FullName, string ShortName, bool Manual, DateTime UpdatedAt);
 
+/// <summary>A pair added by hand (for a customer IPMS gives no short name); it is marked manual like an edit.</summary>
+public sealed record OutsourceCustomerAliasCreate(string? FullName, string? ShortName);
+
+/// <summary>
+/// A customer full name used by the IPMS data (MES mirror) or the outsourcing list that has no short name yet, with how many
+/// work orders carry it there.
+/// </summary>
+public sealed record OutsourceMissingCustomerResponse(string FullName, int MesWorkOrders, int OutsourceItems);
+
 /// <summary>A short name set by hand; an empty text hands the row back to the next IPMS sync.</summary>
 public sealed record OutsourceCustomerAliasRequest(string? ShortName);
 

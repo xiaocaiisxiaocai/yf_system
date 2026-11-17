@@ -145,15 +145,21 @@ public sealed class MesMirrorManualTests
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Viewer, 1, 20, 0, null, ct))).Status);
 
         // A column filter is "contains", counts only the matches, and % _ in the text are not wildcards.
-        var byCustomer = await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"户A2"}""", ct);
+        var byCustomer = await f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("customerName", "户A2")), ct);
         Assert.Equal(1UL, byCustomer.Total);
         Assert.Equal(["A2"], byCustomer.List.Select(x => x.WorkOrderNo));
-        Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"客户","deviceModels":"M-A"}""", ct)).Total);
-        Assert.Equal(0UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":"%"}""", ct)).Total);
-        Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, "{\"customerName\":\"户A1\\n户A2\"}", ct)).Total);
-        Assert.Equal(4UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"customerName":""}""", ct)).Total);
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Admin, 1, 20, 0, """{"x') OR 1=1 --":"a"}""", ct))).Status);
+        Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("customerName", "客户"), ("deviceModels", "M-A")), ct)).Total);
+        Assert.Equal(0UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("customerName", "%")), ct)).Total);
+        Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("customerName", "户A1\n户A2")), ct)).Total);
+        // One line splits on spaces and commas; pasted lines are whole names, so a line with a space is one term.
+        Assert.Equal(2UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("customerName", "户A1 户A2")), ct)).Total);
+        Assert.Equal(1UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("customerName", "户A1\n没有 户A2")), ct)).Total);
+        Assert.Equal(4UL, (await f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("customerName", "")), ct)).Total);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Admin, 1, 20, 0, Filter(("x') OR 1=1 --", "a")), ct))).Status);
     }
+
+    private static Dictionary<string, string?> Filter(params (string Field, string Text)[] filters) =>
+        filters.ToDictionary(x => x.Field, x => (string?)x.Text);
 
     [Fact(Timeout = 180_000)]
     public async Task ALeaseLeftByAPreviousProcessIsReleasedAtStartup()

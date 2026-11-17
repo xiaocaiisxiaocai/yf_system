@@ -417,6 +417,12 @@ export interface MesOrderRow {
   values: Record<string, string | null>
 }
 
+export interface MesOrdersQuery {
+  page?: number | null
+  pageSize?: number | null
+  filters?: Record<string, string | null> | null
+}
+
 export interface MesTestResult {
   ok: boolean
   message: string
@@ -1072,6 +1078,11 @@ export interface OutsourceCompletionRequest {
   completed?: boolean | null
 }
 
+export interface OutsourceCustomerAliasCreate {
+  fullName?: string | null
+  shortName?: string | null
+}
+
 export interface OutsourceCustomerAliasRequest {
   shortName?: string | null
 }
@@ -1263,6 +1274,12 @@ export interface OutsourceMailSendRequest {
 
 export interface OutsourceMailSendResponse {
   mails: Array<OutsourceMailResponse>
+}
+
+export interface OutsourceMissingCustomerResponse {
+  fullName: string
+  mesWorkOrders: number
+  outsourceItems: number
 }
 
 export interface OutsourceSyncRequest {
@@ -2145,7 +2162,7 @@ export interface ApiResponses {
   "GET /outsource/mails/{id}/attachment": Blob
   "POST /outsource/mails/{id}/retry": OutsourceMailResponse
   "POST /outsource/mes-mirror/confirm": MesMirrorStatusResponse
-  "GET /outsource/mes-mirror/orders": PageResponseOfMesOrderRow
+  "POST /outsource/mes-mirror/orders/query": PageResponseOfMesOrderRow
   "POST /outsource/mes-mirror/run": MesMirrorStatusResponse
   "PUT /outsource/mes-mirror/schedule": MesMirrorSettingsResponse
   "GET /outsource/mes-mirror/settings": MesMirrorSettingsResponse
@@ -2155,7 +2172,10 @@ export interface ApiResponses {
   "POST /outsource/mes-mirror/test": MesTestResult
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
   "GET /outsource/settings/customers": Array<OutsourceCustomerAliasResponse>
+  "POST /outsource/settings/customers": OutsourceCustomerAliasResponse
+  "GET /outsource/settings/customers/missing": Array<OutsourceMissingCustomerResponse>
   "POST /outsource/settings/customers/sync": OutsourceCustomerSyncResponse
+  "DELETE /outsource/settings/customers/{id}": EmptyResponse
   "PUT /outsource/settings/customers/{id}": OutsourceCustomerAliasResponse
   "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>

@@ -137,19 +137,33 @@ describe('外协清单入口与设定', () => {
   })
 
 
-  it('客户简称：从 IPMS 同步、按全称或简称搜索、手动修改', async () => {
+  it('客户简称：从 IPMS 同步、搜索、编辑，以及为缺少简称的客户新增', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])
-    mockSettings()
+    let current = aliases
+    let missing = [{ fullName: '深圳市泰雪科技有限公司', mesWorkOrders: 3, outsourceItems: 0 }]
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/customers/missing') ? missing : url.endsWith('/customers') ? current
+        : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : url.endsWith('/default-cc') ? cc : [],
+    } as never))
     const synced = [...aliases, { id: 33, fullName: '广州广合科技股份有限公司', shortName: '廣合', manual: false, updatedAt: '2026-11-17T07:00:00.000Z' }]
-    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { rows: 9, customers: 3, added: 1, updated: 0, keptManual: 0, aliases: synced } } as never)
-    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { ...aliases[0], shortName: '庆鼎淮安', manual: true } } as never)
+    const post = vi.spyOn(http, 'post').mockImplementation((url: string) => {
+      if (url.endsWith('/sync')) { current = synced; return Promise.resolve({ data: { rows: 9, customers: 3, added: 1, updated: 0, keptManual: 0, aliases: synced } } as never) }
+      const added = { id: 34, fullName: '深圳市泰雪科技有限公司', shortName: '泰雪', manual: true, updatedAt: '2026-11-17T08:00:00.000Z' }
+      current = [...current, added]; missing = []
+      return Promise.resolve({ data: added } as never)
+    })
+    const put = vi.spyOn(http, 'put').mockImplementation(() => {
+      current = current.map((row) => row.id === 31 ? { ...row, shortName: '庆鼎淮安', manual: true } : row)
+      return Promise.resolve({ data: current[0] } as never)
+    })
     render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
 
     await user.click(await screen.findByRole('tab', { name: '客户简称' }))
     const row = (await screen.findByText('庆鼎精密电子(淮安)有限公司')).closest('tr')!
     expect(within(row).getByText('庆鼎')).toBeInTheDocument()
     expect(within(row).getByText('IPMS')).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: '删除' })).toBeDisabled()
     expect(within(screen.getByText('超颖电子电路股份有限公司').closest('tr')!).getByText('手动')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: /从 IPMS 同步/ }))
@@ -168,5 +182,21 @@ describe('外协清单入口与设定', () => {
     await user.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/customers/31', { shortName: '庆鼎淮安' }))
     expect(await screen.findByText('庆鼎淮安')).toBeInTheDocument()
+
+    // 新增 starts in the full name; for a missing customer the full name is filled in and the short name has the focus.
+    await user.click(screen.getByRole('button', { name: /新增/ }))
+    await waitFor(() => expect(screen.getByLabelText('客户全称')).toHaveFocus())
+    await user.click(screen.getByRole('button', { name: '取消' }))
+
+    // Customers without a short name are listed; setting one adds a manual pair.
+    await user.click(screen.getByText(/缺少简称 1/))
+    const missingRow = (await screen.findByText('深圳市泰雪科技有限公司')).closest('tr')!
+    await user.click(within(missingRow).getByRole('button', { name: '设置简称' }))
+    expect(await screen.findByLabelText('客户全称')).toHaveValue('深圳市泰雪科技有限公司')
+    await waitFor(() => expect(screen.getByLabelText('客户简称')).toHaveFocus())
+    await user.type(screen.getByLabelText('客户简称'), '泰雪')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/settings/customers', { fullName: '深圳市泰雪科技有限公司', shortName: '泰雪' }))
+    expect(await screen.findByText(/缺少简称 0/)).toBeInTheDocument()
   })
 })

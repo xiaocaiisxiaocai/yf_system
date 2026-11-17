@@ -7856,10 +7856,47 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceCustomerAliasCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceCustomerAliasResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
       }
     },
-    "/api/v1/outsource/settings/customers/sync": {
-      "post": {
+    "/api/v1/outsource/settings/customers/missing": {
+      "get": {
         "tags": [
           "Yf.Api.Tests"
         ],
@@ -7869,7 +7906,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OutsourceCustomerSyncResponse"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutsourceMissingCustomerResponse"
+                  }
                 }
               }
             }
@@ -7888,6 +7928,44 @@
       }
     },
     "/api/v1/outsource/settings/customers/{id}": {
+      "delete": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmptyResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "put": {
         "tags": [
           "Yf.Api.Tests"
@@ -7920,6 +7998,35 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/OutsourceCustomerAliasResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/settings/customers/sync": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceCustomerSyncResponse"
                 }
               }
             }
@@ -9071,11 +9178,21 @@
         }
       }
     },
-    "/api/v1/outsource/mes-mirror/orders": {
-      "get": {
+    "/api/v1/outsource/mes-mirror/orders/query": {
+      "post": {
         "tags": [
           "Yf.Api.Tests"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesOrdersQuery"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -10901,6 +11018,35 @@
               "type": "string",
               "nullable": true
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesOrdersQuery": {
+        "required": [
+          "filters",
+          "page",
+          "pageSize"
+        ],
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "pageSize": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "filters": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -13545,6 +13691,24 @@
         },
         "additionalProperties": false
       },
+      "OutsourceCustomerAliasCreate": {
+        "required": [
+          "fullName",
+          "shortName"
+        ],
+        "type": "object",
+        "properties": {
+          "fullName": {
+            "type": "string",
+            "nullable": true
+          },
+          "shortName": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "OutsourceCustomerAliasRequest": {
         "required": [
           "shortName"
@@ -14394,6 +14558,28 @@
             "items": {
               "$ref": "#/components/schemas/OutsourceMailResponse"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceMissingCustomerResponse": {
+        "required": [
+          "fullName",
+          "mesWorkOrders",
+          "outsourceItems"
+        ],
+        "type": "object",
+        "properties": {
+          "fullName": {
+            "type": "string"
+          },
+          "mesWorkOrders": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "outsourceItems": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false

@@ -8,7 +8,7 @@ import ResizableTable from '../../components/ResizableTable'
 import { isGroup, MES_CODE_TEXT, MES_FIXED_COLUMNS, MES_LAYOUT, MES_PINNED_PROPS, type MesColumn } from '../mesColumns'
 import './MesOrdersPage.css'
 
-type Order = ApiResponses['GET /outsource/mes-mirror/orders']['list'][number]
+type Order = ApiResponses['POST /outsource/mes-mirror/orders/query']['list'][number]
 
 const FIRST_ROWS = 12
 const ROWS_PER_STEP = 12
@@ -63,7 +63,8 @@ export default function MesOrdersPage() {
     const seq = ++sequence.current
     setLoading(true); setError(false)
     try {
-      const response = await http.get<ApiResponses['GET /outsource/mes-mirror/orders']>('/outsource/mes-mirror/orders', { params: { page, pageSize, ...(Object.keys(filters).length ? { filters: JSON.stringify(filters) } : {}) } })
+      // Filters go in the body: many pasted names would make the address too long (HTTP 414).
+      const response = await http.post<ApiResponses['POST /outsource/mes-mirror/orders/query']>('/outsource/mes-mirror/orders/query', { page, pageSize, filters })
       if (seq !== sequence.current) return
       setOrders(response.data.list); setTotal(Number(response.data.total))
     } catch {

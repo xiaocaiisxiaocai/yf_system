@@ -434,28 +434,33 @@ public sealed class MesMirrorSyncService(
     /// spaces, commas, semicolons or line breaks) match any of them, different columns must all match.
     /// Field names are checked against a plain identifier pattern.
     /// </summary>
-    private static List<(string Field, string[] Terms)> ParseOrderFilters(string? filters)
+    private static List<(string Field, string[] Terms)> ParseOrderFilters(IReadOnlyDictionary<string, string?>? filters)
     {
         var result = new List<(string, string[])>();
-        if (string.IsNullOrWhiteSpace(filters)) return result;
-        Dictionary<string, string?>? parsed;
-        try { parsed = JsonSerializer.Deserialize<Dictionary<string, string?>>(filters); }
-        catch (JsonException) { throw ApiException.BadRequest("筛选条件格式不正确"); }
-        foreach (var (field, text) in (parsed ?? []).Where(item => !string.IsNullOrEmpty(item.Value)).Take(60))
+        foreach (var (field, text) in (filters ?? new Dictionary<string, string?>()).Where(item => !string.IsNullOrEmpty(item.Value)).Take(60))
         {
             if (!FieldName.IsMatch(field)) throw ApiException.BadRequest("筛选条件格式不正确");
-            var terms = TermSeparators.Split(text!).Where(term => term.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(200).ToArray();
+            var terms = Terms(text!).Distinct(StringComparer.OrdinalIgnoreCase).Take(500).ToArray();
             if (terms.Length > 0) result.Add((field, terms));
         }
         return result;
     }
+
+    /// <summary>
+    /// Pasted lines are whole terms, so a name with spaces or commas ("Peng Shen Technology (Thailand)") stays one name;
+    /// a single line splits on spaces, commas and semicolons.
+    /// </summary>
+    private static IEnumerable<string> Terms(string text) => text.Contains('\n')
+        ? text.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0)
+        : TermSeparators.Split(text).Where(term => term.Length > 0);
 
     private static Dictionary<string, string?> OrderValues(JsonElement root) => root.ValueKind == JsonValueKind.Object
         ? root.EnumerateObject().ToDictionary(p => p.Name, p => FieldText(p.Value), StringComparer.Ordinal)
         : new Dictionary<string, string?>();
 
     /// <summary>Pages through the mirrored work orders in IPMS order, each with every field MES returned.</summary>
-    public async Task<PageResponse<MesOrderRow>> OrdersAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? filters, CancellationToken ct)
+    public async Task<PageResponse<MesOrderRow>> OrdersAsync(CurrentUser actor, ulong page, uint size, ulong offset,
+        IReadOnlyDictionary<string, string?>? filters, CancellationToken ct)
     {
         await AuthorizeAsync(actor, ct);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
