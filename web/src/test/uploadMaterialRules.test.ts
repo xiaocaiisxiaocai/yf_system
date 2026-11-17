@@ -5,6 +5,8 @@ describe('company-to-supplier upload material rules', () => {
   it('classifies STEP files, archives and spreadsheets by extension only', () => {
     expect(isStepFile('装配.STEP')).toBe(true)
     expect(isStepFile('装配.stp')).toBe(true)
+    expect(isStepFile('装配.X_T')).toBe(true)
+    expect(isStepFile('装配.x_b')).toBe(false)
     expect(isStepFile('装配.step.zip')).toBe(false)
     expect(isModelMaterial('装配.step.zip')).toBe(true)
     expect(isModelMaterial('模型.RAR')).toBe(true)

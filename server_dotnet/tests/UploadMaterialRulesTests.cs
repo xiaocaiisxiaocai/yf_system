@@ -9,6 +9,8 @@ public sealed class UploadMaterialRulesTests
     {
         Assert.True(UploadMaterialRules.IsStepFile("CSLR-605 六軸雙工位放板機2105931-1.STEP"));
         Assert.True(UploadMaterialRules.IsStepFile("assembly.stp"));
+        Assert.True(UploadMaterialRules.IsStepFile("assembly.X_T"));
+        Assert.False(UploadMaterialRules.IsStepFile("assembly.x_b"));
         Assert.False(UploadMaterialRules.IsStepFile("assembly.step.zip"));
         Assert.False(UploadMaterialRules.IsStepFile("step"));
         Assert.True(UploadMaterialRules.IsSpreadsheet("a.XLSX"));

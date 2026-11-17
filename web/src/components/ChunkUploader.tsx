@@ -682,7 +682,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
       <div aria-live="polite">
         {missingMaterial && (
           <Alert type="warning" style={{ marginTop: 12 }}
-            content="本批需要同时包含动作流程 Excel 和 STEP 3D 图（.step/.stp）或压缩文件（.zip/.rar/.7z）。" />
+            content="本批需要同时包含动作流程 Excel 和 STEP 3D 图（.step/.stp/.x_t）或压缩文件（.zip/.rar/.7z）。" />
         )}
       </div>
       {totalCount > 0 && (

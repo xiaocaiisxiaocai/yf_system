@@ -821,7 +821,7 @@ describe('ChunkUploader upload material rules', () => {
   })
 
   it('business rejections at init become a terminal state with one aggregated toast', async () => {
-    const materialMessage = '发给供应商的资料需要同时包含动作流程 Excel 和 STEP 格式 3D 图（.step/.stp）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传'
+    const materialMessage = '发给供应商的资料需要同时包含动作流程 Excel 和 STEP 格式 3D 图（.step/.stp/.x_t）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传'
     const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
     mocks.post.mockImplementation((url: string) => {
       if (url === '/uploads/init') return Promise.reject({ response: { status: 400, data: { code: 40001, message: materialMessage } } })
@@ -848,7 +848,7 @@ describe('ChunkUploader upload material rules', () => {
   })
 
   it('a merge-time business rejection is terminal instead of awaiting confirmation', async () => {
-    const materialMessage = '发给供应商的资料需要同时包含动作流程 Excel 和 STEP 格式 3D 图（.step/.stp）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传'
+    const materialMessage = '发给供应商的资料需要同时包含动作流程 Excel 和 STEP 格式 3D 图（.step/.stp/.x_t）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传'
     const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
     mocks.post.mockImplementation((url: string, body?: { fileName?: string }) => {
       if (url === '/uploads/init') return Promise.resolve(initResponse(body?.fileName ?? 'session'))

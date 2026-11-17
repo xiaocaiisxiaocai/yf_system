@@ -1,8 +1,8 @@
 // 公司内部发给供应商（C2S）的资料要求；与后端 Yf.Api/Modules/Files/UploadMaterialRules.cs 保持一致。
-// 上传窗口的每一批必须同时有动作流程 Excel 与 STEP 3D 图或压缩文件（STEP 很多时会打包压缩）。
+// 上传窗口的每一批必须同时有动作流程 Excel 与 3D 图（.step/.stp/.x_t）或压缩文件（3D 图很多时会打包压缩）。
 // 供应商发给公司（S2C）不设限制，只展示资料示例。动作流程 Excel 不再校验文件名。
 
-const STEP_EXTENSIONS = ['step', 'stp']
+const STEP_EXTENSIONS = ['step', 'stp', 'x_t']
 const ARCHIVE_EXTENSIONS = ['zip', 'rar', '7z']
 const SPREADSHEET_EXTENSIONS = ['xls', 'xlsx', 'xlsm', 'xlsb']
 
