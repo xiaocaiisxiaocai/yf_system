@@ -27,7 +27,7 @@ public sealed class OutsourceItemTypeTests
     }
 
     private sealed record Fixture(SchemaShapeTests.SchemaDatabaseScope Database, OutsourceItemService Items, OutsourceSettingsService Settings,
-        StubIpms Ipms, OutsourceIpmsSyncService Sync, CurrentUser Planner, CurrentUser Buyer, OutsourceVendorResponse Dingya, OutsourceVendorResponse Yuankong,
+        StubIpms Ipms, OutsourceIpmsSyncService Sync, CurrentUser Planner, CurrentUser Buyer, OutsourceTestVendors.Vendor Dingya, OutsourceTestVendors.Vendor Yuankong,
         OutsourceTypeResponse Oema, OutsourceTypeResponse Odm);
 
     private static async Task<Fixture> CreateAsync(string name, CancellationToken ct)
@@ -53,8 +53,8 @@ public sealed class OutsourceItemTypeTests
         var ipms = new StubIpms();
         var items = new OutsourceItemService(factory, audit, ipms);
         var sync = new OutsourceIpmsSyncService(factory, audit, ipms, new AppOptions(), NullLogger<OutsourceIpmsSyncService>.Instance);
-        var dingya = await settings.CreateVendorAsync(buyer, new("鼎亚", null, 1), ct);
-        var yuankong = await settings.CreateVendorAsync(buyer, new("元控", null, 2), ct);
+        var dingya = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
+        var yuankong = await OutsourceTestVendors.CreateAsync(factory, "元控", ct);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         var odm = await settings.CreateTypeAsync(buyer, new("ODM-12345", "含售前售后", 2), ct);
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);
@@ -222,7 +222,7 @@ public sealed class OutsourceItemTypeTests
         return (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single(x => x.WorkOrderNo == no);
     }
 
-    private static async Task<OutsourceTypeResponse> NewTypeAsync(Fixture f, string code, OutsourceVendorResponse vendor, CancellationToken ct)
+    private static async Task<OutsourceTypeResponse> NewTypeAsync(Fixture f, string code, OutsourceTestVendors.Vendor vendor, CancellationToken ct)
     {
         var type = await f.Settings.CreateTypeAsync(f.Buyer, new(code, "测试类型", 9), ct);
         await f.Settings.SetTypeVendorsAsync(f.Buyer, type.Id, new([vendor.Id]), ct);

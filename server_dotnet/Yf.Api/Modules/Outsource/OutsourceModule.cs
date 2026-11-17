@@ -30,18 +30,6 @@ public static class OutsourceModule
         var settings = endpoints.MapGroup("/api/v1/outsource/settings");
         settings.MapGet("/vendors", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.VendorsAsync(AccessService.GetCurrent(c), ct));
-        settings.MapPost("/vendors", (OutsourceVendorUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.CreateVendorAsync(AccessService.GetCurrent(c), r, ct));
-        settings.MapPut("/vendors/{id:long}", (ulong id, OutsourceVendorUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.UpdateVendorAsync(AccessService.GetCurrent(c), id, r, ct));
-        settings.MapPut("/vendors/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.SetVendorStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
-        settings.MapPost("/vendors/{id:long}/contacts", (ulong id, OutsourceContactUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.CreateContactAsync(AccessService.GetCurrent(c), id, r, ct));
-        settings.MapPut("/contacts/{id:long}", (ulong id, OutsourceContactUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.UpdateContactAsync(AccessService.GetCurrent(c), id, r, ct));
-        settings.MapPut("/contacts/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.SetContactStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
 
         settings.MapGet("/types", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.TypesAsync(AccessService.GetCurrent(c), ct));

@@ -296,6 +296,11 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             throw ApiException.BadRequest($"该厂商仍有 {accountCount} 个关联账号，请先逐个删除账号；如需保留账号请停用厂商");
         if (await RetainedTransferReasonAsync(uow.Db, id, ct) is { } reason)
             throw ApiException.BadRequest($"{reason}请停用厂商以保留记录。");
+        // The outsourcing list uses these companies as its vendors.
+        if (await uow.Db.OutsourceItems.AnyAsync(item => item.VendorId == id || item.NotifiedVendorId == id, ct)
+            || await uow.Db.OutsourceTypeVendors.AnyAsync(mapping => mapping.VendorId == id, ct)
+            || await uow.Db.OutsourceMails.AnyAsync(mail => mail.VendorId == id, ct))
+            throw ApiException.BadRequest("该厂商已用于外协清单（外协记录、外发类型或发送记录），请停用厂商以保留记录。");
         var removedEmptyDrafts = await DirectoryTransfers(uow.Db, id, emptyDrafts: true).ExecuteDeleteAsync(ct);
         var removedContacts = await uow.Db.OemCompanyContacts.Where(contact => contact.OemCompanyId == id).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_COMPANY_DELETE", "oem_company", id,

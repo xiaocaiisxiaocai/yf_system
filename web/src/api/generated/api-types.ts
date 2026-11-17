@@ -1070,21 +1070,6 @@ export interface OutsourceCompletionRequest {
   completed?: boolean | null
 }
 
-export interface OutsourceContactResponse {
-  id: number
-  vendorId: number
-  name: string | null
-  email: string
-  status: string
-  sortNo: number
-}
-
-export interface OutsourceContactUpsert {
-  name?: string | null
-  email?: string | null
-  sortNo?: number | null
-}
-
 export interface OutsourceDefaultCcRequest {
   userIds?: Array<number> | null
 }
@@ -1300,16 +1285,7 @@ export interface OutsourceTypeVendorsRequest {
 export interface OutsourceVendorResponse {
   id: number
   name: string
-  remark: string | null
   status: string
-  sortNo: number
-  contacts: Array<OutsourceContactResponse>
-}
-
-export interface OutsourceVendorUpsert {
-  name?: string | null
-  remark?: string | null
-  sortNo?: number | null
 }
 
 export interface PageResponseOfAuditLogResponse {
@@ -2152,8 +2128,6 @@ export interface ApiResponses {
   "POST /outsource/mes-mirror/stop": MesMirrorStatusResponse
   "POST /outsource/mes-mirror/test": MesTestResult
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
-  "PUT /outsource/settings/contacts/{id}": OutsourceContactResponse
-  "PUT /outsource/settings/contacts/{id}/status": OutsourceContactResponse
   "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/sync-schedule": OutsourceSyncStatusResponse
@@ -2164,10 +2138,6 @@ export interface ApiResponses {
   "PUT /outsource/settings/types/{id}/status": OutsourceTypeResponse
   "PUT /outsource/settings/types/{id}/vendors": OutsourceTypeResponse
   "GET /outsource/settings/vendors": Array<OutsourceVendorResponse>
-  "POST /outsource/settings/vendors": OutsourceVendorResponse
-  "PUT /outsource/settings/vendors/{id}": OutsourceVendorResponse
-  "POST /outsource/settings/vendors/{id}/contacts": OutsourceContactResponse
-  "PUT /outsource/settings/vendors/{id}/status": OutsourceVendorResponse
   "GET /outsource/sync-status": OutsourceSyncStatusResponse
   "GET /permissions": Array<PermissionResponse>
   "GET /project-copies/{copyId}/files": PageResponseOfFileCopyHistoryItem

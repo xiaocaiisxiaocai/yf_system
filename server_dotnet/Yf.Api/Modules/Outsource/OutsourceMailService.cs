@@ -150,9 +150,11 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         var reference = await OutsourceReference.LoadAsync(context, ct);
         var items = rows.OrderBy(x => x.Id).ToArray();
         var responses = items.ToDictionary(x => x.Id, reference.Json);
-        var vendors = await context.OutsourceVendors.AsNoTracking().ToDictionaryAsync(x => x.Id, ct);
-        var contacts = (await context.OutsourceVendorContacts.AsNoTracking().Where(x => x.Status == AccountStatuses.Active)
-            .OrderBy(x => x.SortNo).ThenBy(x => x.Id).ToArrayAsync(ct)).ToLookup(x => x.VendorId);
+        // Vendors and contacts are the ODM/OEMA directory; a contact without an address is not a recipient.
+        var vendors = await context.OemCompanies.AsNoTracking().ToDictionaryAsync(x => x.Id, ct);
+        var contacts = (await context.OemCompanyContacts.AsNoTracking()
+            .Where(x => x.Status == AccountStatuses.Active && x.Email != null && x.Email != "")
+            .OrderBy(x => x.SortNo).ThenBy(x => x.Id).ToArrayAsync(ct)).ToLookup(x => x.OemCompanyId);
 
         var problems = new List<string>();
         foreach (var item in items)
@@ -163,7 +165,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
             else if (response.MatchState == OutsourceMatchStates.VendorMismatch) problems.Add($"工令 {item.WorkOrderNo} 的外发类型与厂商不符");
             else if (vendors[item.VendorId].Status != AccountStatuses.Active) problems.Add($"工令 {item.WorkOrderNo} 的厂商已停用");
         }
-        var notices = items.GroupBy(x => x.VendorId).OrderBy(g => vendors[g.Key].SortNo).ThenBy(g => g.Key).ToArray();
+        var notices = items.GroupBy(x => x.VendorId).OrderBy(g => g.Key).ToArray();
         var withdrawals = items.Where(x => x.NotifiedVendorId is { } old && old != x.VendorId)
             .GroupBy(x => x.NotifiedVendorId!.Value).OrderBy(g => g.Key).ToArray();
         foreach (var vendorId in notices.Select(g => g.Key).Concat(withdrawals.Select(g => g.Key)).Distinct())
@@ -178,7 +180,8 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
                 .OrderBy(x => x.SortNo).ThenBy(x => x.user.Id)
                 .Select(x => new { x.user.Id, x.user.Email, x.user.RealName }).ToArrayAsync(ct))
             .Select(x => new Address(x.Email, x.RealName, x.Id)).ToArray();
-        Address[] To(ulong vendorId) => contacts[vendorId].Select(x => new Address(x.Email, x.Name, null)).ToArray();
+        Address[] To(ulong vendorId) => contacts[vendorId].Select(x => new Address(x.Email!.Trim(), x.Name, null))
+            .DistinctBy(x => x.Email, StringComparer.OrdinalIgnoreCase).ToArray();
 
         var drafts = new List<Draft>();
         foreach (var group in notices)
@@ -303,7 +306,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         var items = (await context.OutsourceMailItems.AsNoTracking().Where(x => ids.Contains(x.MailId))
             .OrderBy(x => x.ItemId).ToArrayAsync(ct)).ToLookup(x => x.MailId);
         var vendorIds = mails.Select(x => x.VendorId).Distinct().ToArray();
-        var vendors = await context.OutsourceVendors.AsNoTracking().Where(x => vendorIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        var vendors = await context.OemCompanies.AsNoTracking().Where(x => vendorIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
         var userIds = mails.Select(x => x.CreatedBy).Distinct().ToArray();
         var users = await context.Users.AsNoTracking().Where(x => userIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.RealName, ct);
         return mails.Select(x => new OutsourceMailResponse(

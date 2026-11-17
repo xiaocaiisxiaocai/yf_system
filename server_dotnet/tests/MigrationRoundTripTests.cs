@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261117021148_AddOutsourceItemModifiedBy";
+    private const string Latest = "20261117031058_UseOemCompaniesAsOutsourceVendors";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -94,6 +94,7 @@ public sealed class MigrationRoundTripTests
         // + AddMesStagingOrder (Down drops the MES row order of staged rows).
         // + AddEmailOutboxCopyOnly (Down drops email_outbox.copy_only).
         // + AddOutsourceItemModifiedBy (Down drops outsource_items.modified_by and modified_at).
+        // + UseOemCompaniesAsOutsourceVendors (Down brings back the empty outsourcing vendor tables).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -124,7 +125,9 @@ public sealed class MigrationRoundTripTests
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|oem_transfer_internal_recipients", StringComparison.Ordinal));
         Assert.Contains(latestSchema, line => line.StartsWith("column|oem_transfers|signer_name|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|oem_transfers|signer_name|", StringComparison.Ordinal));
-        Assert.Contains(latestSchema, line => line.StartsWith("table|outsource_vendors", StringComparison.Ordinal));
+        // Outsourcing vendors are the ODM/OEMA companies since UseOemCompaniesAsOutsourceVendors.
+        Assert.Contains(latestSchema, line => line.StartsWith("table|outsource_items", StringComparison.Ordinal));
+        Assert.DoesNotContain(latestSchema, line => line.StartsWith("table|outsource_vendors", StringComparison.Ordinal));
         // AddMesMirror (Down drops the MES mirror tables) + AddMesMirrorBaseUrl (Down drops mes_mirror_state.base_url).
         Assert.Contains(latestSchema, line => line.StartsWith("column|mes_mirror_state|base_url|", StringComparison.Ordinal));
         Assert.Contains(latestSchema, line => line.StartsWith("column|mes_mirror_state|protected_password|", StringComparison.Ordinal));

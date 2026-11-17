@@ -68,11 +68,15 @@ public sealed class OutsourceMailTests
         var signal = new OutsourceMailSignal();
         var mails = new OutsourceMailService(factory, audit, signal);
 
-        var dingya = await settings.CreateVendorAsync(buyer, new("鼎亚", null, 1), ct);
-        var duopu = await settings.CreateVendorAsync(buyer, new("多普", null, 2), ct);
-        await settings.CreateContactAsync(buyer, dingya.Id, new(null, "d1@vendor.invalid", 1), ct);
-        await settings.CreateContactAsync(buyer, dingya.Id, new("窗口", "d2@vendor.invalid", 2), ct);
-        await settings.CreateContactAsync(buyer, duopu.Id, new(null, "p1@vendor.invalid", 1), ct);
+        var dingya = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
+        var duopu = await OutsourceTestVendors.CreateAsync(factory, "多普", ct);
+        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "d1", "d1@vendor.invalid", ct, sortNo: 1);
+        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "窗口", "d2@vendor.invalid", ct, sortNo: 2);
+        await OutsourceTestVendors.AddContactAsync(factory, duopu.Id, "p1", "p1@vendor.invalid", ct, sortNo: 1);
+        // ODM/OEMA contacts without an address, disabled ones and repeated addresses are not recipients.
+        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "无邮箱", null, ct, sortNo: 3);
+        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "停用", "off@vendor.invalid", ct, status: "DISABLED", sortNo: 4);
+        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "同邮箱", "D1@vendor.invalid", ct, sortNo: 5);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id, duopu.Id]), ct);
         await settings.SetDefaultCcAsync(buyer, new([9913]), ct);

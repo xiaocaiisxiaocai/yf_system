@@ -5,11 +5,11 @@ using Yf.Api.Modules.Outsource.Ipms;
 
 namespace Yf.Api.Tests;
 
-/// <summary>Reference data of the outsourcing list (外协清单契约): vendors, contacts, type dictionary, mapping and default copy list.</summary>
+/// <summary>Reference data of the outsourcing list (外协清单契约): vendors read from ODM/OEMA, type dictionary, mapping and default copy list.</summary>
 public sealed class OutsourceSettingsTests
 {
     [Fact(Timeout = 120_000)]
-    public async Task PurchasingMaintainsVendorsTypesMappingAndDefaultCopyList()
+    public async Task PurchasingMaintainsTypesMappingAndDefaultCopyListOverOemVendors()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_settings", ct);
@@ -36,25 +36,13 @@ public sealed class OutsourceSettingsTests
         var supplier = new CurrentUser(9615, "os_supplier", "SUPPLIER", 9601);
         var service = new OutsourceSettingsService(EfTestSupport.DbContextFactory(database.Options), new AuditService([]));
 
-        // Vendors and their mail contacts. A contact may have no name; the address is what matters.
-        var dingya = await service.CreateVendorAsync(buyer, new(" 鼎亚 ", null, 1), ct);
-        var yuankong = await service.CreateVendorAsync(buyer, new("元控", "单一来源", 2), ct);
-        Assert.Equal("鼎亚", dingya.Name);
-        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => service.CreateVendorAsync(buyer, new("鼎亚", null, 3), ct))).Status);
-        var first = await service.CreateContactAsync(buyer, dingya.Id, new(null, " first@vendor.invalid ", 1), ct);
-        await service.CreateContactAsync(buyer, dingya.Id, new("业务窗口", "second@vendor.invalid", 2), ct);
-        Assert.Null(first.Name);
-        Assert.Equal("first@vendor.invalid", first.Email);
-        Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.CreateContactAsync(buyer, dingya.Id, new(null, "FIRST@vendor.invalid", 3), ct))).Status);
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.CreateContactAsync(buyer, dingya.Id, new(null, "not-an-address", 3), ct))).Status);
-        // The same address may serve another vendor.
-        await service.CreateContactAsync(buyer, yuankong.Id, new(null, "first@vendor.invalid", 1), ct);
-        await service.SetContactStatusAsync(buyer, first.Id, AccountStatuses.Disabled, ct);
+        // Vendors are the ODM/OEMA companies; their contacts stay in the ODM/OEMA directory.
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var yuankong = await OutsourceTestVendors.CreateAsync(factory, "元控", ct, contacts: [("业务", "first@vendor.invalid", "ACTIVE")]);
+        var dingya = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct,
+            contacts: [("窗口甲", "first@vendor.invalid", "DISABLED"), ("窗口乙", "second@vendor.invalid", "ACTIVE"), ("无邮箱", null, "ACTIVE")]);
         var vendors = await service.VendorsAsync(buyer, ct);
-        Assert.Equal(["鼎亚", "元控"], vendors.Select(x => x.Name));
-        Assert.Equal([AccountStatuses.Disabled, AccountStatuses.Active], vendors[0].Contacts.Select(x => x.Status));
+        Assert.Equal(["元控", "鼎亚"], vendors.Select(x => x.Name));
 
         // Type dictionary and its vendor mapping (attachment 2).
         var oema = await service.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 4), ct);
@@ -89,7 +77,7 @@ public sealed class OutsourceSettingsTests
         // Viewers read reference data but cannot change it; staff without outsource permissions and suppliers see nothing.
         Assert.Equal(2, (await service.VendorsAsync(viewer, ct)).Length);
         Assert.Equal(2, (await service.DefaultCcAsync(viewer, ct)).Length);
-        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.CreateVendorAsync(viewer, new("合科", null, 5), ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.CreateTypeAsync(viewer, new("HK", "合科", 5), ct))).Status);
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.VendorsAsync(member, ct))).Status);
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.TypesAsync(supplier, ct))).Status);
 
@@ -101,8 +89,7 @@ public sealed class OutsourceSettingsTests
         var actions = (await connection.QueryAsync<string>(
             "SELECT action FROM audit_logs WHERE action LIKE 'OUTSOURCE_%' ORDER BY id")).ToArray();
         Assert.Equal(
-            ["OUTSOURCE_VENDOR_CREATE", "OUTSOURCE_VENDOR_CREATE", "OUTSOURCE_CONTACT_CREATE", "OUTSOURCE_CONTACT_CREATE",
-             "OUTSOURCE_CONTACT_CREATE", "OUTSOURCE_CONTACT_STATUS", "OUTSOURCE_TYPE_CREATE", "OUTSOURCE_TYPE_CREATE",
+            ["OUTSOURCE_TYPE_CREATE", "OUTSOURCE_TYPE_CREATE",
              "OUTSOURCE_TYPE_VENDORS", "OUTSOURCE_TYPE_VENDORS", "OUTSOURCE_TYPE_STATUS", "OUTSOURCE_DEFAULT_CC"],
             actions);
     }

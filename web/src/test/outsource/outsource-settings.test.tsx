@@ -25,11 +25,7 @@ function setInternalSession(permissions: string[]) {
 }
 
 const vendors = [{
-  id: 1, name: '鼎亚', remark: null, status: 'ACTIVE', sortNo: 10,
-  contacts: [
-    { id: 11, vendorId: 1, name: null, email: 'first@vendor.test', status: 'ACTIVE', sortNo: 1 },
-    { id: 12, vendorId: 1, name: null, email: 'old@vendor.test', status: 'DISABLED', sortNo: 2 },
-  ],
+  id: 1, name: '鼎亚', status: 'ACTIVE',
 }]
 const types = [{ id: 5, code: 'OEMA', name: '进料+制造', status: 'ACTIVE', sortNo: 10, vendorIds: [1] }]
 const cc = [{ userId: 21, employeeNo: 'pm', realName: '生管甲', email: 'pm@example.test', status: 'ACTIVE' }]
@@ -65,17 +61,13 @@ describe('外协清单入口与设定', () => {
     expect(screen.queryByRole('button', { name: '外协清单' })).not.toBeInTheDocument()
   })
 
-  it('显示厂商的启用邮箱、类型的可用厂商和默认抄送', async () => {
+  it('不再维护厂商，类型的可用厂商显示 ODM/OEMA 厂商名', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])
     mockSettings()
     render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
 
-    const vendorRow = (await screen.findByText('鼎亚')).closest('tr')!
-    expect(within(vendorRow).getByText('first@vendor.test')).toBeInTheDocument()
-    expect(within(vendorRow).queryByText('old@vendor.test')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('tab', { name: '外发类型' }))
+    expect(screen.queryByRole('tab', { name: '外协厂商' })).not.toBeInTheDocument()
     const typeRow = (await screen.findByText('OEMA【进料+制造】')).closest('tr')!
     expect(within(typeRow).getByText('鼎亚')).toBeInTheDocument()
 
@@ -139,20 +131,4 @@ describe('外协清单入口与设定', () => {
     await waitFor(() => expect(toggle).not.toBeChecked())
   })
 
-  it('新增厂商提交去除空白后的名称并重新加载', async () => {
-    const user = userEvent.setup()
-    setInternalSession(['outsource:settings'])
-    const get = mockSettings()
-    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ...vendors[0], id: 2, name: '合科', contacts: [] } } as never)
-    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
-    await screen.findByText('鼎亚')
-
-    await user.click(screen.getByRole('button', { name: /新增厂商/ }))
-    const dialog = await screen.findByRole('dialog')
-    await user.type(within(dialog).getByLabelText('厂商名称'), '  合科  ')
-    await user.click(within(dialog).getByRole('button', { name: '创建' }))
-
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/settings/vendors', { name: '合科', remark: null, sortNo: 20 }))
-    await waitFor(() => expect(get.mock.calls.filter(([url]) => url === '/outsource/settings/vendors')).toHaveLength(2))
-  })
 })

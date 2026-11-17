@@ -6,6 +6,25 @@ namespace Yf.Api.Tests.Oem;
 public sealed class OemDirectoryDeletionTests
 {
     [Fact(Timeout = 180_000)]
+    public async Task CompanyUsedByTheOutsourcingListCanOnlyBeDisabled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        var companyId = (await admin.PostAsync("/api/v1/oem/companies", new { name = "外协共用厂商" }, ct).Ok()).Id();
+        await using (var connection = await host.OpenAsync(ct))
+        {
+            await connection.ExecuteAsync("""
+                INSERT INTO outsource_types(code,name,status,sort_no,created_at,updated_at) VALUES('OEMA','进料+制造','ACTIVE',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+                INSERT INTO outsource_type_vendors(type_id,vendor_id) SELECT id, @companyId FROM outsource_types WHERE code='OEMA';
+                """, new { companyId });
+        }
+        var rejected = await admin.DeleteAsync($"/api/v1/oem/companies/{companyId}", ct).Status(HttpStatusCode.BadRequest);
+        Assert.Contains("外协清单", rejected.Json!["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        await admin.PutAsync($"/api/v1/oem/companies/{companyId}/status", new { status = "DISABLED" }, ct).Ok();
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task LoginAndPasswordChangeAloneDoNotPreventDeletingTheLastAccountAndCompany()
     {
         var ct = TestContext.Current.CancellationToken;

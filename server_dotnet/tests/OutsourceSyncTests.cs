@@ -66,7 +66,7 @@ public sealed class OutsourceSyncTests
         var items = new OutsourceItemService(factory, audit, ipms);
         var sync = new OutsourceIpmsSyncService(factory, audit, ipms, new AppOptions(), NullLogger<OutsourceIpmsSyncService>.Instance);
 
-        var vendor = await settings.CreateVendorAsync(buyer, new("鼎亚", null, 1), ct);
+        var vendor = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
         foreach (var no in new[] { "A1", "B1", "C1", "D1", "E1" }) ipms.Add(no);
@@ -178,7 +178,7 @@ public sealed class OutsourceSyncTests
         var ipms = new StubIpms();
         var items = new OutsourceItemService(factory, audit, ipms);
         var sync = new OutsourceIpmsSyncService(factory, audit, ipms, new AppOptions(), NullLogger<OutsourceIpmsSyncService>.Instance);
-        var vendor = await settings.CreateVendorAsync(buyer, new("鼎亚", null, 1), ct);
+        var vendor = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
         ipms.Add("A1"); ipms.Add("B1");

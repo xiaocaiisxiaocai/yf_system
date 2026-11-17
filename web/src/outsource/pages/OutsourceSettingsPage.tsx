@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, Descriptions, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Tabs, Tag, TimePicker,
+  Button, Card, Checkbox, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Tabs, Tag, TimePicker,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -15,11 +15,10 @@ import ResizableTable from '../../components/ResizableTable'
 import StatusTag from '../../components/StatusTag'
 
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
-type Contact = Vendor['contacts'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type CcUser = ApiResponses['GET /outsource/settings/default-cc'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
-type TabKey = 'vendors' | 'types' | 'cc' | 'sync'
+type TabKey = 'types' | 'cc' | 'sync'
 
 const ACTIVE = 'ACTIVE'
 const DISABLED = 'DISABLED'
@@ -34,7 +33,7 @@ const lengthRule = (label: string, max: number, required = true) => ({
 
 /** Purchasing-maintained reference data of the outsourcing list (外协清单契约 → 设定维护). */
 export default function OutsourceSettingsPage() {
-  const [tab, setTab] = useState<TabKey>('vendors')
+  const [tab, setTab] = useState<TabKey>('types')
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [types, setTypes] = useState<OutsourceType[]>([])
   const [cc, setCc] = useState<CcUser[]>([])
@@ -68,14 +67,12 @@ export default function OutsourceSettingsPage() {
   return <Card className="page-card page-card--table outsource-settings-page">
     <h1 className="visually-hidden">外协清单设定</h1>
     <Tabs className="outsource-settings-tabs" activeTab={tab} onChange={(value) => setTab(value as TabKey)}>
-      <Tabs.TabPane key="vendors" title="外协厂商" />
       <Tabs.TabPane key="types" title="外发类型" />
       <Tabs.TabPane key="cc" title="默认抄送" />
       <Tabs.TabPane key="sync" title="IPMS 同步" />
     </Tabs>
     {error ? <LoadError message="设定加载失败" onRetry={load} />
-      : tab === 'vendors' ? <VendorsTab vendors={vendors} loading={loading} reload={load} />
-        : tab === 'types' ? <TypesTab types={types} vendors={vendors} loading={loading} reload={load} />
+      : tab === 'types' ? <TypesTab types={types} vendors={vendors} loading={loading} reload={load} />
           : tab === 'cc' ? <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />
             : <SyncTab />}
   </Card>
@@ -93,136 +90,6 @@ function useSaving() {
 }
 
 const toggled = (status: string) => ({ status: status === ACTIVE ? DISABLED : ACTIVE })
-
-function VendorsTab({ vendors, loading, reload }: { vendors: Vendor[]; loading: boolean; reload: () => Promise<void> }) {
-  const [editing, setEditing] = useState<Vendor | null>(null)
-  const [open, setOpen] = useState(false)
-  const [contactsOf, setContactsOf] = useState<number | null>(null)
-  const [form] = Form.useForm()
-  const { saving, run } = useSaving()
-  const contactVendor = vendors.find((vendor) => vendor.id === contactsOf) ?? null
-
-  const startEdit = (vendor?: Vendor) => {
-    setEditing(vendor ?? null); form.resetFields()
-    form.setFieldsValue(vendor ? { name: vendor.name, remark: vendor.remark ?? '', sortNo: vendor.sortNo } : { name: '', remark: '', sortNo: nextSortNo(vendors) })
-    setOpen(true)
-  }
-  const save = () => run(async () => {
-    const values = await form.validate().catch(() => null)
-    if (!values) return
-    const body = { name: values.name.trim(), remark: values.remark?.trim() || null, sortNo: values.sortNo ?? 0 }
-    if (editing) await http.put<ApiResponses['PUT /outsource/settings/vendors/{id}']>(`/outsource/settings/vendors/${editing.id}`, body)
-    else await http.post<ApiResponses['POST /outsource/settings/vendors']>('/outsource/settings/vendors', body)
-    Message.success('外协厂商已保存'); setOpen(false); await reload()
-  })
-  const toggle = (vendor: Vendor) => run(async () => {
-    await http.put<ApiResponses['PUT /outsource/settings/vendors/{id}/status']>(`/outsource/settings/vendors/${vendor.id}/status`, toggled(vendor.status))
-    await reload()
-  })
-
-  const columns = [
-    { title: '厂商', dataIndex: 'name', width: 160, ellipsis: true },
-    {
-      title: '联络邮箱', width: 360, render: (_: unknown, vendor: Vendor) => {
-        const active = vendor.contacts.filter((contact) => contact.status === ACTIVE)
-        return active.length ? <Space wrap size={4}>{active.map((contact) => <Tag key={contact.id}>{contact.email}</Tag>)}</Space>
-          : <span className="outsource-muted">未设置，无法发送邮件</span>
-      },
-    },
-    { title: '备注', dataIndex: 'remark', width: 200, ellipsis: true },
-    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, vendor: Vendor) => <StatusTag status={vendor.status} /> },
-    {
-      title: '操作', width: 200, align: 'center' as const, render: (_: unknown, vendor: Vendor) => actionSlots([
-        <Button key="edit" type="text" size="mini" onClick={() => startEdit(vendor)}>编辑</Button>,
-        <Button key="contacts" type="text" size="mini" onClick={() => setContactsOf(vendor.id)}>联络邮箱</Button>,
-        <Button key="status" type="text" size="mini" status={vendor.status === ACTIVE ? 'danger' : undefined} disabled={saving}
-          onClick={() => void toggle(vendor)}>{vendor.status === ACTIVE ? '停用' : '启用'}</Button>,
-      ], 'outsource'),
-    },
-  ]
-
-  return <>
-    <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">
-      <span />
-      <Button type="primary" icon={<IconPlus />} disabled={loading} onClick={() => startEdit()}>新增厂商</Button>
-    </div>
-    <ResizableTable<Vendor> tableId="outsource-vendors" className="page-table" rowKey="id" loading={loading} data={vendors} pagination={false}
-      noDataElement={loading ? <span /> : <Empty description="暂无外协厂商" />} scroll={{ x: 1010, y: 'var(--page-table-scroll-y)' }}
-      columns={columns as TableColumnProps<Vendor>[]} />
-    <Modal className="form-dialog" title={editing ? '编辑外协厂商' : '新增外协厂商'} visible={open} onOk={save}
-      onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
-      okText={editing ? '保存' : '创建'} cancelText="取消">
-      <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
-        <Form.Item field="name" label="厂商名称" rules={[lengthRule('厂商名称', 64)]}><Input autoFocus maxLength={64} /></Form.Item>
-        <Form.Item field="remark" label="备注" rules={[lengthRule('备注', 255, false)]}><Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} maxLength={255} /></Form.Item>
-        <Form.Item field="sortNo" label="排序号"><InputNumber min={0} max={9999} precision={0} style={{ width: '100%' }} /></Form.Item>
-        <EnterSubmit />
-      </Form>
-    </Modal>
-    <ContactsDrawer vendor={contactVendor} onClose={() => setContactsOf(null)} reload={reload} />
-  </>
-}
-
-function ContactsDrawer({ vendor, onClose, reload }: { vendor: Vendor | null; onClose: () => void; reload: () => Promise<void> }) {
-  const [editing, setEditing] = useState<Contact | null>(null)
-  const [open, setOpen] = useState(false)
-  const [form] = Form.useForm()
-  const { saving, run } = useSaving()
-  const contacts = vendor?.contacts ?? []
-
-  const startEdit = (contact?: Contact) => {
-    setEditing(contact ?? null); form.resetFields()
-    form.setFieldsValue(contact ? { name: contact.name ?? '', email: contact.email, sortNo: contact.sortNo } : { name: '', email: '', sortNo: nextSortNo(contacts) })
-    setOpen(true)
-  }
-  const save = () => run(async () => {
-    if (!vendor) return
-    const values = await form.validate().catch(() => null)
-    if (!values) return
-    const body = { name: values.name?.trim() || null, email: values.email.trim(), sortNo: values.sortNo ?? 0 }
-    if (editing) await http.put<ApiResponses['PUT /outsource/settings/contacts/{id}']>(`/outsource/settings/contacts/${editing.id}`, body)
-    else await http.post<ApiResponses['POST /outsource/settings/vendors/{id}/contacts']>(`/outsource/settings/vendors/${vendor.id}/contacts`, body)
-    Message.success('联络邮箱已保存'); setOpen(false); await reload()
-  })
-  const toggle = (contact: Contact) => run(async () => {
-    await http.put<ApiResponses['PUT /outsource/settings/contacts/{id}/status']>(`/outsource/settings/contacts/${contact.id}/status`, toggled(contact.status))
-    await reload()
-  })
-
-  const columns = [
-    { title: '邮箱', dataIndex: 'email', width: 240, ellipsis: true },
-    { title: '姓名', dataIndex: 'name', width: 120, ellipsis: true },
-    { title: '状态', width: 80, align: 'center' as const, render: (_: unknown, contact: Contact) => <StatusTag status={contact.status} /> },
-    {
-      title: '操作', width: 130, align: 'center' as const, render: (_: unknown, contact: Contact) => actionSlots([
-        <Button key="edit" type="text" size="mini" onClick={() => startEdit(contact)}>编辑</Button>,
-        <Button key="status" type="text" size="mini" status={contact.status === ACTIVE ? 'danger' : undefined} disabled={saving}
-          onClick={() => void toggle(contact)}>{contact.status === ACTIVE ? '停用' : '启用'}</Button>,
-      ], 'single'),
-    },
-  ]
-
-  return <Drawer width={640} title={vendor ? `${vendor.name} · 联络邮箱` : '联络邮箱'} visible={vendor !== null} footer={null}
-    onCancel={onClose} unmountOnExit>
-    <div className="outsource-drawer-toolbar">
-      <Button type="primary" icon={<IconPlus />} onClick={() => startEdit()}>新增邮箱</Button>
-    </div>
-    <ResizableTable<Contact> tableId="outsource-vendor-contacts" rowKey="id" data={contacts} pagination={false} columns={columns as TableColumnProps<Contact>[]}
-      noDataElement={<Empty description="暂无联络邮箱" />} scroll={{ x: 570 }} />
-    <Modal className="form-dialog" title={editing ? '编辑联络邮箱' : '新增联络邮箱'} visible={open} onOk={save}
-      onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
-      okText={editing ? '保存' : '创建'} cancelText="取消">
-      <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
-        <Form.Item field="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
-          <Input autoFocus maxLength={128} />
-        </Form.Item>
-        <Form.Item field="name" label="姓名" rules={[lengthRule('姓名', 32, false)]}><Input maxLength={32} /></Form.Item>
-        <Form.Item field="sortNo" label="排序号"><InputNumber min={0} max={9999} precision={0} style={{ width: '100%' }} /></Form.Item>
-        <EnterSubmit />
-      </Form>
-    </Modal>
-  </Drawer>
-}
 
 function TypesTab({ types, vendors, loading, reload }: {
   types: OutsourceType[]; vendors: Vendor[]; loading: boolean; reload: () => Promise<void>

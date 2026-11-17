@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using Microsoft.EntityFrameworkCore;
 using Dapper;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Outsource;
@@ -57,10 +58,10 @@ public sealed class OutsourceItemTests
         var ipms = new StubIpms();
         var service = new OutsourceItemService(factory, audit, ipms);
 
-        var dingya = await settings.CreateVendorAsync(buyer, new("鼎亚", null, 1), ct);
-        var yuankong = await settings.CreateVendorAsync(buyer, new("元控", null, 2), ct);
-        var retired = await settings.CreateVendorAsync(buyer, new("停用厂", null, 3), ct);
-        await settings.SetVendorStatusAsync(buyer, retired.Id, AccountStatuses.Disabled, ct);
+        var dingya = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
+        var yuankong = await OutsourceTestVendors.CreateAsync(factory, "元控", ct);
+        var retired = await OutsourceTestVendors.CreateAsync(factory, "停用厂", ct);
+        await factory.CreateDbContext().OemCompanies.Where(x => x.Id == retired.Id).ExecuteUpdateAsync(x => x.SetProperty(c => c.Status, AccountStatuses.Disabled), ct);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         var odm = await settings.CreateTypeAsync(buyer, new("ODM-12345", "含售前售后", 2), ct);
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);

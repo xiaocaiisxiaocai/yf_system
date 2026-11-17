@@ -107,7 +107,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Import, ct);
         var ready = planned.Where(x => x.Status == "READY").ToArray();
         var vendorIds = ready.Select(x => x.VendorId).Distinct().ToArray();
-        var activeVendors = await context.OutsourceVendors.Where(x => vendorIds.Contains(x.Id) && x.Status == AccountStatuses.Active)
+        var activeVendors = await context.OemCompanies.Where(x => vendorIds.Contains(x.Id) && x.Status == AccountStatuses.Active)
             .Select(x => x.Id).ToArrayAsync(ct);
         if (activeVendors.Length != vendorIds.Length) throw ApiException.Conflict("外协厂商状态已变化，请重新预览");
         var items = ready.Select(x => x.Item!).ToArray();
@@ -142,7 +142,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     private async Task<List<PlannedRow>> PlanImportAsync(YfDbContext context, OutsourceImportRow[] rows, CancellationToken ct)
     {
         var reference = await OutsourceReference.LoadAsync(context, ct);
-        var vendorsByName = await context.OutsourceVendors.AsNoTracking()
+        var vendorsByName = await context.OemCompanies.AsNoTracking()
             .Select(x => new { x.Id, x.Name, x.Status }).ToListAsync(ct);
         var vendorLookup = vendorsByName.ToDictionary(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase);
         var parsed = rows.Select((row, index) => new
@@ -546,7 +546,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     private static string Text(DateOnly value) => value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private static Task<Dictionary<ulong, string>> VendorNamesAsync(YfDbContext context, CancellationToken ct) =>
-        context.OutsourceVendors.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
+        context.OemCompanies.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);
 
     // ---- authorization ----
 
@@ -594,7 +594,7 @@ internal sealed class OutsourceReference
         var types = await context.OutsourceTypes.AsNoTracking().Where(x => x.Status == AccountStatuses.Active)
             .Select(x => new { x.Id, x.Code, x.Name }).ToArrayAsync(ct);
         var mapping = await context.OutsourceTypeVendors.AsNoTracking().Select(x => new { x.TypeId, x.VendorId }).ToArrayAsync(ct);
-        var vendors = await context.OutsourceVendors.AsNoTracking().Select(x => new { x.Id, x.Name, x.Status }).ToArrayAsync(ct);
+        var vendors = await context.OemCompanies.AsNoTracking().Select(x => new { x.Id, x.Name, x.Status }).ToArrayAsync(ct);
         return new(types.ToDictionary(x => Normalize(x.Code)!, x => (x.Id, x.Code, x.Name)),
             mapping.Select(x => (x.TypeId, x.VendorId)).ToHashSet(),
             vendors.ToDictionary(x => x.Id, x => x.Name),
