@@ -94,6 +94,43 @@ public sealed class UserScopeCeilingTests
         Assert.Contains(9301UL, resolved.OrgIds);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task AnOrgManagerCannotGrantOrgToAnotherDivision()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        await database.ExecuteAsync(Fixture + """
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password)
+                VALUES (9203,'outsider','unused','Outsider','','INTERNAL',9302,'ACTIVE',0);
+            INSERT INTO user_roles(user_id,role_id) VALUES (9203,9102);
+            """, null, ct);
+        var users = Users(database);
+
+        // ORG is compared by the organisations it covers: the same level over another division is still wider.
+        var direct = await Assert.ThrowsAsync<ApiException>(() => users.SetDataScopesAsync(Manager, 9203,
+            new DataScopeAssign([new DataScopeEntry(DataScopeDomains.Project, "ORG")]), ct));
+        Assert.Equal(403, direct.Status);
+        var throughRole = await Assert.ThrowsAsync<ApiException>(() => users.AssignRoleAsync(Manager, 9203, [9104UL], ct));
+        Assert.Equal(403, throughRole.Status);
+        var throughCreate = await Assert.ThrowsAsync<ApiException>(() => users.CreateAsync(Manager,
+            new UserCreate("newcomer", "Strong#Pass9", "Newcomer", "", 9302, 9104, null), ct));
+        Assert.Equal(403, throughCreate.Status);
+
+        // A role default of ORG would give the outsider ORG over the other division as well.
+        var roles = new RoleService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), new AuditService([]));
+        var roleDefault = await Assert.ThrowsAsync<ApiException>(() => roles.SetDataScopesAsync(Manager, 9102,
+            new DataScopeAssign([new DataScopeEntry(DataScopeDomains.Project, "ORG")]), ct));
+        Assert.Equal(403, roleDefault.Status);
+
+        Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM user_data_scopes WHERE user_id=9203", ct));
+        Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM role_data_scopes WHERE role_id=9102", ct));
+        Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='newcomer'", ct));
+
+        // Inside the manager's own division the same grant is fine.
+        await users.SetDataScopesAsync(Manager, 9202,
+            new DataScopeAssign([new DataScopeEntry(DataScopeDomains.Project, "ORG")]), ct);
+    }
+
     private static UserService Users(MigratedTestDatabase database) =>
         new(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), new AuditService([]));
 }

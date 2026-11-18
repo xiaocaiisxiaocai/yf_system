@@ -141,34 +141,6 @@ public static class DataScopeService
         return result;
     }
 
-    public static async Task<string?> RoleDefaultAsync(
-        YfDbContext db, ulong userId, string domain, CancellationToken ct) =>
-        (await RoleDefaultRowsAsync(db, [userId], domain, ct)).GetValueOrDefault(userId);
-
-    /// <summary>One role row's default for a domain; used when checking a role that is about to be assigned.</summary>
-    public static async Task<string?> RoleDefaultForRoleAsync(
-        YfDbContext db, ulong roleId, string domain, CancellationToken ct) =>
-        await db.RoleDataScopes.AsNoTracking()
-            .Where(setting => setting.RoleId == roleId && setting.Domain == domain)
-            .Select(setting => setting.Scope).SingleOrDefaultAsync(ct);
-
-    /// <summary>
-    /// The range an account would hold if it carried <paramref name="roleId"/>: its explicit override, then that
-    /// role's default, then the organisation-leader fallback. Assigning a role is a range grant, so the caller is
-    /// checked against this value rather than only against the role's permission codes.
-    /// </summary>
-    public static async Task<string> ScopeWithRoleAsync(
-        YfDbContext db, ulong userId, ulong roleId, string domain, CancellationToken ct)
-    {
-        var overrideScope = await db.UserDataScopes.AsNoTracking()
-            .Where(setting => setting.UserId == userId && setting.Domain == domain)
-            .Select(setting => setting.Scope).SingleOrDefaultAsync(ct);
-        if (DataScopeValues.IsValid(overrideScope)) return overrideScope!;
-        var roleScope = await RoleDefaultForRoleAsync(db, roleId, domain, ct);
-        if (DataScopeValues.IsValid(roleScope)) return roleScope!;
-        return await LeadsAnyOrgAsync(db, userId, ct) ? DataScopeValues.Org : DataScopeValues.Self;
-    }
-
     /// <summary>The widest active role default per account; an account may be bound to more than one role row.</summary>
     private static async Task<IReadOnlyDictionary<ulong, string>> RoleDefaultRowsAsync(
         YfDbContext db, ulong[] ids, string domain, CancellationToken ct)
@@ -185,12 +157,6 @@ public static class DataScopeService
             .ToDictionary(group => group.Key,
                 group => group.OrderByDescending(row => DataScopeValues.Rank(row.Scope)).First().Scope);
     }
-
-    /// <summary>The account is the leader of at least one active organisation (the ORG fallback trigger).</summary>
-    public static async Task<bool> LeadsAnyOrgAsync(YfDbContext db, ulong userId, CancellationToken ct) =>
-        await db.Departments.AsNoTracking()
-            .AnyAsync(department => department.LeaderAccountId == userId
-                && department.Status == AccountStatuses.Active, ct);
 
     private static HashSet<ulong> Subtree(
         IEnumerable<ulong> roots, IReadOnlySet<ulong> activeOrgs, ILookup<ulong, ulong> children)
@@ -222,8 +188,18 @@ public static class DataScopeService
             .Select(user => user.Id).ToArrayAsync(ct);
     }
 
-    /// <summary>An administrator may not grant a range wider than the one they hold themselves.</summary>
+    /// <summary>Compares levels only: a range value nobody may assign above their own level.</summary>
     public static bool CanGrant(string grantorScope, string targetScope) =>
         DataScopeValues.Rank(targetScope) >= 0
         && DataScopeValues.Rank(targetScope) <= DataScopeValues.Rank(grantorScope);
+
+    /// <summary>
+    /// Whether <paramref name="holder"/> sees at least everything <paramref name="range"/> sees: ALL covers every
+    /// range, SELF is covered by any range, and ORG is covered only by ALL or by an ORG whose organisations include
+    /// every organisation the other one covers.
+    /// </summary>
+    public static bool Covers(DataScopeResolution holder, DataScopeResolution range) =>
+        holder.IsAll
+        || range.IsSelf
+        || range.IsOrg && holder.IsOrg && range.OrgIds.IsSubsetOf(holder.OrgIds);
 }

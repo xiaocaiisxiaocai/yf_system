@@ -74,8 +74,9 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             && request.Scopes.Any(entry => entry.Domain == DataScopeDomains.OemTransfer
                 && entry.Scope is not null && entry.Scope != DataScopeValues.All))
             throw ApiException.BadRequest("系统管理员的 ODM/OEMA 传递单范围固定为全部");
-        await EnsureScopeCeilingAsync(context, actor, id, request.Scopes, ct);
+        var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, [id], ct);
         await ApplyUserScopeAssignmentAsync(context, actor, user, id, request.Scopes, ct);
+        await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, [id], DomainsOf(request.Scopes), ct);
         var result = await DescribeScopesAsync(context, id, ct);
         await transaction.CommitAsync(ct);
         return result;
@@ -140,126 +141,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         }
     }
 
-    private static async Task EnsureScopeCeilingAsync(
-        YfDbContext context, CurrentUser actor, ulong id, IReadOnlyList<DataScopeEntry> entries, CancellationToken ct)
-    {
-        var connection = context.Database.Connection();
-        if (await AccessService.IsSystemAdminAsync(connection, context.Database.Transaction(), actor.Id, ct)) return;
-        foreach (var entry in entries)
-        {
-            // Clearing an override grants whatever the account falls back to, so it is checked like an explicit
-            // setting: otherwise a narrower manager could hand out a wider range simply by removing the override.
-            var granted = entry.Scope ?? await ClearingFallbackAsync(context, id, entry.Domain, ct);
-            var grantor = await DataScopeService.ResolveAsync(context, actor.Id, entry.Domain, ct);
-            if (!DataScopeService.CanGrant(grantor.Scope, granted))
-                throw ApiException.Forbidden("不能授予高于自身的数据范围");
-        }
-    }
-
-    /// <summary>The range an account falls back to once its explicit override is removed.</summary>
-    private static async Task<string> ClearingFallbackAsync(
-        YfDbContext context, ulong userId, string domain, CancellationToken ct)
-    {
-        var roleDefault = await DataScopeService.RoleDefaultAsync(context, userId, domain, ct);
-        if (DataScopeValues.IsValid(roleDefault)) return roleDefault!;
-        return await DataScopeService.LeadsAnyOrgAsync(context, userId, ct)
-            ? DataScopeValues.Org
-            : DataScopeValues.Self;
-    }
-
-    /// <summary>
-    /// Moving an account changes the subtree an ORG range covers, so the move is checked like a range grant: a
-    /// manager cannot relocate someone into an organisation outside their own coverage.
-    /// </summary>
-    private static async Task EnsureDepartmentScopeAsync(
-        YfDbContext context, CurrentUser actor, ulong userId, ulong departmentId, CancellationToken ct)
-    {
-        if (await AccessService.IsSystemAdminAsync(
-                context.Database.Connection(), context.Database.Transaction(), actor.Id, ct)) return;
-        foreach (var domain in DataScopeDomains.All)
-        {
-            var target = await DataScopeService.ResolveAsync(context, userId, domain, ct);
-            if (!target.IsOrg) continue;
-            var grantor = await DataScopeService.ResolveAsync(context, actor.Id, domain, ct);
-            if (grantor.IsAll) continue;
-            if (!grantor.IsOrg || !grantor.OrgIds.Contains(departmentId))
-                throw ApiException.Forbidden("不能把账号调整到自身数据范围之外的组织");
-        }
-    }
-
-    /// <summary>
-    /// Assigning a role also grants the role's data range, so the ceiling applies here too: an account manager
-    /// limited to SELF must not be able to put someone on a role that sees everything. A changing role is only
-    /// checked when the resulting range is wider than the one the account already has, so narrowing stays open.
-    /// </summary>
-    private static async Task EnsureRoleScopeCeilingAsync(
-        YfDbContext context, CurrentUser actor, ulong? userId, ulong roleId, CancellationToken ct)
-    {
-        var connection = context.Database.Connection();
-        if (await AccessService.IsSystemAdminAsync(connection, context.Database.Transaction(), actor.Id, ct)) return;
-        foreach (var domain in DataScopeDomains.All)
-        {
-            // A new account belongs to no organisation leadership yet, so only the role default can widen it.
-            var next = userId is ulong targetId
-                ? await DataScopeService.ScopeWithRoleAsync(context, targetId, roleId, domain, ct)
-                : await DataScopeService.RoleDefaultForRoleAsync(context, roleId, domain, ct) ?? DataScopeValues.Self;
-            if (userId is ulong existingId)
-            {
-                var current = await DataScopeService.ResolveAsync(context, existingId, domain, ct);
-                if (DataScopeValues.Rank(next) <= DataScopeValues.Rank(current.Scope)) continue;
-            }
-            var grantor = await DataScopeService.ResolveAsync(context, actor.Id, domain, ct);
-            if (!DataScopeService.CanGrant(grantor.Scope, next))
-                throw ApiException.Forbidden("不能分配数据范围高于自身范围的角色");
-        }
-    }
-
-    /// <summary>The actor's own ranges and the target's ranges before an update writes anything.</summary>
-    private sealed record ScopeBaseline(
-        bool ActorIsAdmin,
-        IReadOnlyDictionary<string, DataScopeResolution> Grantor,
-        IReadOnlyDictionary<string, DataScopeResolution> Target);
-
-    private static async Task<ScopeBaseline> CaptureScopeBaselineAsync(
-        YfDbContext context, CurrentUser actor, ulong targetId, CancellationToken ct)
-    {
-        if (await AccessService.IsSystemAdminAsync(
-                context.Database.Connection(), context.Database.Transaction(), actor.Id, ct))
-            return new(true, new Dictionary<string, DataScopeResolution>(), new Dictionary<string, DataScopeResolution>());
-        var grantor = new Dictionary<string, DataScopeResolution>();
-        var target = new Dictionary<string, DataScopeResolution>();
-        foreach (var domain in DataScopeDomains.All)
-        {
-            grantor[domain] = await DataScopeService.ResolveAsync(context, actor.Id, domain, ct);
-            target[domain] = await DataScopeService.ResolveAsync(context, targetId, domain, ct);
-        }
-        return new(false, grantor, target);
-    }
-
-    /// <summary>
-    /// Checks the range the account holds once every part of the update has been written (契约 §3: "按写入后生效的
-    /// 范围校验"). A role change combined with clearing an override, or a new ORG range combined with a move, is only
-    /// visible here: each part on its own looks harmless when evaluated against the state before the update.
-    /// </summary>
-    private static async Task EnsureResultingScopesAsync(
-        YfDbContext context, ScopeBaseline baseline, ulong targetId, IReadOnlyList<DataScopeEntry>? entries,
-        ulong? movedToDepartmentId, CancellationToken ct)
-    {
-        if (baseline.ActorIsAdmin) return;
-        foreach (var domain in DataScopeDomains.All)
-        {
-            var grantor = baseline.Grantor[domain];
-            var before = baseline.Target[domain];
-            var after = await DataScopeService.ResolveAsync(context, targetId, domain, ct);
-            var explicitlySet = entries?.Any(entry => entry.Domain == domain) == true;
-            if ((explicitlySet || DataScopeValues.Rank(after.Scope) > DataScopeValues.Rank(before.Scope))
-                && !DataScopeService.CanGrant(grantor.Scope, after.Scope))
-                throw ApiException.Forbidden("不能授予高于自身的数据范围");
-            if (movedToDepartmentId is ulong departmentId && after.IsOrg && !grantor.IsAll
-                && !(grantor.IsOrg && grantor.OrgIds.Contains(departmentId)))
-                throw ApiException.Forbidden("不能把账号调整到自身数据范围之外的组织");
-        }
-    }
+    private static string[] DomainsOf(IReadOnlyList<DataScopeEntry>? entries) =>
+        entries is null ? [] : entries.Select(entry => entry.Domain).ToArray();
 
     private static async Task<DataScopeResponse[]> DescribeScopesAsync(
         YfDbContext context, ulong id, CancellationToken ct)
@@ -327,7 +210,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await ManagementAsync(context, actor, "user:manage", ct);
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
         await permissionCeiling.EnsureManageRoleAsync(connection, dbTransaction, actor, roleId, ct);
-        await EnsureRoleScopeCeilingAsync(context, actor, null, roleId, ct);
+        var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, [], ct);
         await DepartmentService.EnsureActiveAsync(context, departmentId, ct);
         await EnsureRoleAssignableAsync(context, roleId, ct);
         var employeeNo = request.EmployeeNo.Trim();
@@ -344,9 +227,11 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (request.Scopes is { Count: > 0 })
         {
             ValidateScopeEntries(request.Scopes);
-            await EnsureScopeCeilingAsync(context, actor, user.Id, request.Scopes, ct);
             await ApplyUserScopeAssignmentAsync(context, actor, user, user.Id, request.Scopes, ct);
         }
+        // The new account's range comes from its role, its organisation and any range given here; all must stay
+        // inside the creator's own range.
+        await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, [user.Id], DomainsOf(request.Scopes), ct);
         var created = await FindAsync(context, user.Id, ct) ?? throw ApiException.NotFound();
         var role = await FindRoleAsync(context, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
         var department = await FindDepartmentAsync(context, departmentId, ct);
@@ -383,7 +268,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
         // Range, role and organisation can change together, so the per-part checks below cannot see the combined
         // result; this baseline lets the final check compare the range the account really ends up with.
-        var scopeBaseline = await CaptureScopeBaselineAsync(context, actor, id, ct);
+        var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, [id], ct);
         // 资料与范围在同一事务提交：范围校验失败时资料保持原样，不会只生效一半。
         if (request.Scopes is { Count: > 0 })
         {
@@ -392,7 +277,6 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
                 && request.Scopes.Any(entry => entry.Domain == DataScopeDomains.OemTransfer
                     && entry.Scope is not null && entry.Scope != DataScopeValues.All))
                 throw ApiException.BadRequest("系统管理员的 ODM/OEMA 传递单范围固定为全部");
-            await EnsureScopeCeilingAsync(context, actor, id, request.Scopes, ct);
         }
         if (departmentSpecified && departmentId is null || !departmentSpecified && user.DepartmentId is null) throw ApiException.BadRequest("请选择所属组织");
         var effectiveDepartmentId = departmentSpecified ? departmentId : user.DepartmentId;
@@ -408,13 +292,10 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         {
             await EnsureAdminRemovalSafeAsync(context, actor.Id, id, roleId, ct);
             await permissionCeiling.EnsureManageRoleAsync(connection, dbTransaction, actor, roleId, ct);
-            await EnsureRoleScopeCeilingAsync(context, actor, id, roleId, ct);
             await EnsureRoleAssignableAsync(context, roleId, ct);
         }
         else if (user.Status == AccountStatuses.Active) await EnsureRoleAssignableAsync(context, oldRoleId, ct);
         if (departmentChanged) await EnsureNoActiveProjectResponsibilityWithSectionAsync(context, id, ct);
-        if (departmentChanged && department is ulong movedDepartmentId)
-            await EnsureDepartmentScopeAsync(context, actor, id, movedDepartmentId, ct);
         if (roleChanged && !await RoleHasPermissionAsync(context, roleId, "project:list", ct))
             await EnsureNoActiveProjectResponsibilityAsync(context, id, ct);
         context.Attach(user);
@@ -430,8 +311,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);
             context.UserRoles.Add(new UserRole { UserId = id, RoleId = roleId }); await context.SaveChangesAsync(ct);
         }
-        await EnsureResultingScopesAsync(context, scopeBaseline, id, request.Scopes,
-            departmentChanged ? departmentId : null, ct);
+        await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, [id], DomainsOf(request.Scopes), ct);
         var updated = await FindAsync(context, id, ct) ?? throw ApiException.NotFound(); var newRoleId = roleChanged ? roleId : oldRoleId;
         var newRole = await FindRoleAsync(context, newRoleId, ct);
         var newDepartment = updated.DepartmentId is ulong newDepartmentId ? await FindDepartmentAsync(context, newDepartmentId, ct) : null;
@@ -517,7 +397,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
         await permissionCeiling.EnsureManageRoleAsync(connection, dbTransaction, actor, roleId, ct);
-        await EnsureRoleScopeCeilingAsync(context, actor, id, roleId, ct);
+        var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, [id], ct);
         await EnsureAdminRemovalSafeAsync(context, actor.Id, id, roleId, ct); await EnsureRoleAssignableAsync(context, roleId, ct);
         if (!await RoleHasPermissionAsync(context, roleId, "project:list", ct)) await EnsureNoActiveProjectResponsibilityAsync(context, id, ct);
         var old = await context.UserRoles.AsNoTracking().Where(x => x.UserId == id).Select(x => (ulong?)x.RoleId).SingleOrDefaultAsync(ct);
@@ -525,6 +405,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var newRole = await FindRoleAsync(context, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
         await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);
         context.UserRoles.Add(new UserRole { UserId = id, RoleId = roleId }); await context.SaveChangesAsync(ct);
+        await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, [id], [], ct);
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_ASSIGN_ROLE", "user", id, new
         {
             user.EmployeeNo, oldRoleId = old, newRoleId = roleId, oldRoleName = oldRole?.Name, newRoleName = newRole.Name,

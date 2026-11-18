@@ -112,29 +112,23 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         // value the query ignores; the range is fixed and the editor must not pretend otherwise.
         if (role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
             throw ApiException.BadRequest("系统管理员角色的数据范围固定为全部");
+        // A default changes the range of every member without a personal override. Setting a level above the actor
+        // is refused outright (even for a role nobody holds yet); beyond that, each member's resulting range — ORG
+        // compared by the organisations it covers — must stay inside the actor's own range. Clearing a default is
+        // checked the same way, because members who lead an organisation fall back to ORG.
         if (!await AccessService.IsSystemAdminAsync(
                 context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, ct))
         {
-            // Clearing a role default is a grant as well: members without an explicit override fall back to SELF,
-            // or to ORG when they lead an active organisation. That fallback is only wider than the actor when such
-            // a leader sits outside the actor's own subtree, so the check compares the real departments.
-            foreach (var entry in scopes)
+            foreach (var entry in scopes.Where(entry => entry.Scope is not null))
             {
                 var grantor = await DataScopeService.ResolveAsync(context, actor.Id, entry.Domain, ct);
-                if (entry.Scope is not null)
-                {
-                    if (!DataScopeService.CanGrant(grantor.Scope, entry.Scope))
-                        throw ApiException.Forbidden("不能授予高于自身的数据范围");
-                    continue;
-                }
-                if (grantor.IsAll) continue;
-                foreach (var departmentId in await UncoveredLeadingMemberDepartmentsAsync(context, id, entry.Domain, ct))
-                {
-                    if (!grantor.IsOrg || !grantor.OrgIds.Contains(departmentId))
-                        throw ApiException.Forbidden("不能授予高于自身的数据范围");
-                }
+                if (!DataScopeService.CanGrant(grantor.Scope, entry.Scope!))
+                    throw ApiException.Forbidden(DataScopeCeiling.WiderThanActorMessage);
             }
         }
+        var memberIds = await context.UserRoles.AsNoTracking().Where(member => member.RoleId == id)
+            .Select(member => member.UserId).Distinct().ToArrayAsync(ct);
+        var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, memberIds, ct);
         var before = await context.RoleDataScopes.AsNoTracking()
             .Where(setting => setting.RoleId == id)
             .ToDictionaryAsync(setting => setting.Domain, setting => setting.Scope, ct);
@@ -156,6 +150,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             else row.Scope = entry.Scope;
         }
         await context.SaveChangesAsync(ct);
+        await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, memberIds, [], ct);
         var after = await context.RoleDataScopes.AsNoTracking()
             .Where(setting => setting.RoleId == id)
             .ToDictionaryAsync(setting => setting.Domain, setting => setting.Scope, ct);
@@ -409,19 +404,6 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
     {
         await ManagementAuthorization.RequireAsync(context, actor, permission, ct);
     }
-
-    /// <summary>
-    /// Organisations led by a member of this role that has no personal override for the domain: clearing the role
-    /// default really hands these organisations the ORG fallback.
-    /// </summary>
-    private static Task<ulong[]> UncoveredLeadingMemberDepartmentsAsync(
-        YfDbContext context, ulong roleId, string domain, CancellationToken ct) =>
-        (from userRole in context.UserRoles
-         join department in context.Departments on userRole.UserId equals department.LeaderAccountId!.Value
-         where userRole.RoleId == roleId && department.Status == AccountStatuses.Active
-             && !context.UserDataScopes.Any(setting => setting.UserId == userRole.UserId
-                 && setting.Domain == domain)
-         select department.Id).Distinct().ToArrayAsync(ct);
 
     private static void Validate(RoleUpsert r) { if (string.IsNullOrWhiteSpace(r.Name) || r.Name.Trim().EnumerateRunes().Count() > 64) throw ApiException.BadRequest("角色名称需为 1~64 个字符"); if (r.Description?.EnumerateRunes().Count() > 255) throw ApiException.BadRequest("角色说明不能超过 255 个字符"); }
 
