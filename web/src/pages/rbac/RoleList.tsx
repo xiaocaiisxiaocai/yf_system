@@ -510,7 +510,7 @@ export default function RoleList() {
           <>
             <div className="section-heading" style={{ marginTop: 20 }}>默认数据范围</div>
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              角色成员的默认可见范围；管理员可在用户上单独覆盖。留空表示“仅本人”，组织主管仍按所辖组织自动扩大。
+              角色成员的默认可见范围，可在用户上单独覆盖。“未设置”时主管按所辖组织扩大；选“仅本人”则主管也只看本人。
             </Typography.Text>
             <div style={{ marginTop: 12 }}>
               {SCOPE_DOMAINS.map(({ domain, label }) => (
@@ -523,8 +523,8 @@ export default function RoleList() {
                     disabled={permTarget.canManage === false || roleScopesLoading || roleScopesLoadedFor !== permTarget.id}
                     onChange={(value) => setRoleScopes((prev) => ({ ...prev, [domain]: value }))}
                   >
-                    <Select.Option value="">仅本人（默认）</Select.Option>
-                    <Select.Option value="SELF">{SCOPE_LABELS.SELF}</Select.Option>
+                    <Select.Option value="">未设置（主管看所辖组织）</Select.Option>
+                    <Select.Option value="SELF">仅本人（主管也不扩大）</Select.Option>
                     <Select.Option value="ORG">{SCOPE_LABELS.ORG}</Select.Option>
                     <Select.Option value="ALL">{SCOPE_LABELS.ALL}</Select.Option>
                   </Select>
