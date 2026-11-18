@@ -251,25 +251,23 @@ async function openReleasedFile(page, url, fileName) {
         ['厂商名称', '账号', '初始密码'], [companyName, importedAccount.employeeNo, importedAccount.password]);
       await modal.getByRole('row').filter({ hasText: importedAccount.employeeNo }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
-      await modal.getByRole('row').filter({ hasText: importedAccount.employeeNo }).getByText('已导入', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).waitFor({ state: 'hidden' }); // the dialog closes itself when no row failed
       const accounts = await json(admin.context, adminToken, 'GET', `/oem/companies/${companyId}/accounts`);
       const savedAccount = accounts.find(item => item.employeeNo === importedAccount.employeeNo);
       assert(savedAccount);
       assert.equal(savedAccount.status, 'ACTIVE');
       assert.equal(savedAccount.mustChangePassword, true);
       assert.equal(savedAccount.lastLoginAt, null);
-      await modal.getByRole('button', { name: '关闭', exact: true }).click();
 
       const importedContact = { name: 'Excel 联络人-' + marker, email: 'excel-oem-' + marker + '@vendor.invalid' };
       modal = await upload(page, '导入联络人', '导入 ODM/OEMA 厂商联络人', 'oem-contacts.xlsx',
         ['厂商名称', '联络人姓名', '邮箱', '排序'], [companyName, importedContact.name, importedContact.email, '3']);
       await modal.getByRole('row').filter({ hasText: importedContact.email }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
-      await modal.getByRole('row').filter({ hasText: importedContact.email }).getByText('已导入', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).waitFor({ state: 'hidden' }); // the dialog closes itself when no row failed
       const contacts = await json(admin.context, adminToken, 'GET', `/oem/companies/${companyId}/contacts`);
       assert.equal(contacts.length, 3);
       assert(contacts.some(item => item.name === importedContact.name && item.email === importedContact.email));
-      await modal.getByRole('button', { name: '关闭', exact: true }).click();
 
       const exportAndRead = async buttonName => {
         const ready = page.waitForEvent('download');
@@ -322,9 +320,8 @@ async function openReleasedFile(page, url, fileName) {
       await modal.getByRole('row').filter({ hasText: importedCompanyName }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('row').filter({ hasText: companyName }).getByText('跳过', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
-      await modal.getByRole('row').filter({ hasText: importedCompanyName }).getByText('已导入', { exact: true }).waitFor();
-      await modal.getByRole('row').filter({ hasText: companyName }).getByText('跳过', { exact: true }).waitFor();
-      await modal.getByRole('button', { name: '关闭', exact: true }).click();
+      // A skipped duplicate is not a failure, so this dialog closes itself as well.
+      await modal.getByRole('button', { name: '确认导入', exact: true }).waitFor({ state: 'hidden' }); // the dialog closes itself when no row failed
 
       const companies = await json(admin.context, adminToken, 'GET', '/oem/companies?page=1&pageSize=100');
       const importedCompany = companies.list.find(item => item.name === importedCompanyName);

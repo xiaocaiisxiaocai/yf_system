@@ -98,7 +98,7 @@ const marker = crypto.randomBytes(5).toString('hex');
       });
       await modal.getByRole('row').filter({ hasText: employeeNo }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
-      await modal.getByRole('row').filter({ hasText: employeeNo }).getByText('已导入', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).waitFor({ state: 'hidden' }); // the dialog closes itself when no row failed
       const found = await read('GET', '/admin/users?keyword=' + encodeURIComponent(employeeNo));
       assert.equal(found.total, 1);
       user = found.list[0];
@@ -109,7 +109,6 @@ const marker = crypto.randomBytes(5).toString('hex');
       assert.equal(user.mustChangePassword, true);
       assert.equal(user.lastLoginAt, null);
       assert.equal(user.email, email);
-      await modal.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
     await record('内部账号导出包含状态结果但不含初始密码，并按所属组织名称导出', async () => {

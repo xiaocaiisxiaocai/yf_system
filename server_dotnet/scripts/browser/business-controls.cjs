@@ -119,13 +119,21 @@ async function choose(page, placeholder, optionName) {
       pendingProjects.push(project);
     }
 
-    await record('其他内部账号可见非本人负责的项目但只读且无系统管理菜单', async () => {
+    await record('非本人负责的项目按数据范围可见且只读，且无系统管理菜单', async () => {
       const managerContext = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
       const managerPage = await managerContext.newPage();
       track(managerPage, 'business-controls-manager');
       try {
         const manager = await login(managerPage, f.users.manager.username, f.users.manager.changedPassword);
         assert.equal(typeof manager.user.realName, 'string');
+        // Project visibility follows the data range: SELF hides projects owned by others, ALL shows them read only.
+        const managerScopes = '/admin/users/' + f.users.manager.id + '/data-scopes';
+        const searchPath = '/projects?page=1&pageSize=20&keyword=' + encodeURIComponent(pendingProjects[0].name);
+        await api(adminContext, 'PUT', managerScopes, { scopes: [{ domain: 'project', scope: 'SELF' }] }, adminToken);
+        const hidden = await (await api(managerContext, 'GET', searchPath, undefined, manager.accessToken)).json();
+        assert.equal(hidden.list.some(item => item.id === pendingProjects[0].id), false, "SELF range must hide others' projects");
+        await api(managerContext, 'GET', '/projects/' + pendingProjects[0].id, undefined, manager.accessToken, 403);
+        await api(adminContext, 'PUT', managerScopes, { scopes: [{ domain: 'project', scope: 'ALL' }] }, adminToken);
         await managerPage.waitForURL(s.base + '/');
         for (const label of ['供应商管理', '用户管理', '组织架构', '角色与权限', '操作日志', '系统参数']) {
           assert.equal(await managerPage.getByRole('menuitem', { name: label, exact: true }).count(), 0,
@@ -142,7 +150,7 @@ async function choose(page, placeholder, optionName) {
         await search.press('Enter');
         const body = await (await listed).json();
         const listedProject = body.list.find(item => item.id === pendingProjects[0].id);
-        assert(listedProject, 'every internal account must see a project it is not responsible for');
+        assert(listedProject, 'an ALL project range must list a project the account is not responsible for');
         assert.equal(listedProject.canManage, false);
         await managerPage.getByRole('link', { name: pendingProjects[0].name, exact: true }).click();
         await managerPage.waitForURL(s.base + '/projects/' + pendingProjects[0].id);

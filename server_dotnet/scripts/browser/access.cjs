@@ -146,7 +146,7 @@ async function createAccessUser(context, adminToken, permissions, departmentId, 
       await page.getByRole('button', { name: '账号菜单：' + noMenu.realName, exact: true }).click();
       await page.getByRole('menuitem', { name: '个人资料', exact: true }).click();
       await page.waitForURL(s.base + '/profile');
-      await page.getByText(noMenu.employeeNo, { exact: true }).waitFor();
+      await page.getByText('账号 ' + noMenu.employeeNo, { exact: true }).waitFor();
       page.off('request', countDashboard);
     });
 

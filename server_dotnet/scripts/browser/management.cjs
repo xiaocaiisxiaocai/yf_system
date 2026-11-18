@@ -3,12 +3,14 @@ const {assert,OUT,s,record,login,api,navigate,action,track}=require(process.env.
 (async()=>{let b,p;try{b=await require(process.env.YF_BROWSER_SUPPORT_DIR + '/shared-browser.cjs')(chromium);const c=await b.newContext({viewport:{width:1440,height:1000}});p=await c.newPage();track(p,'management');const auth=await login(p,'admin',s.adminPassword);await p.waitForURL(s.base+'/');
 const roleName='UI自动验收角色-'+Date.now();let role;
 await navigate(p,'/rbac/roles');
-await record('内置角色隐藏删除入口且直接删除请求被拒绝',async()=>{
+await record('内置角色删除入口停用且直接删除请求被拒绝',async()=>{
  const before=(await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json()).list.filter(r=>r.isBuiltIn);
  assert(before.length>0,'built-in role fixtures must exist');
  for(const item of before){
   const builtInRow=p.getByRole('row').filter({hasText:item.name});await builtInRow.waitFor();
-  assert.equal(await builtInRow.getByRole('button',{name:'删除',exact:true}).count(),0);
+  // Row actions this row cannot use are rendered disabled, never left out (web/CLAUDE.md, ActionSlots).
+  const remove=builtInRow.getByRole('button',{name:'删除',exact:true});
+  assert.equal(await remove.count(),1);assert.equal(await remove.isDisabled(),true,item.name+' delete must be disabled');
   await api(c,'DELETE','/admin/roles/'+item.id,undefined,auth.accessToken,400);
  }
  const after=(await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json()).list.filter(r=>r.isBuiltIn);
@@ -35,7 +37,7 @@ await record('权限父节点全选、半选、全清及保存回显',async()=>{
  const checkbox=name=>drawer.getByText(name,{exact:true}).locator('xpath=ancestor::*[@role="treeitem"][1]').getByRole('checkbox');
  const click=name=>checkbox(name).locator('..').click();
  const grants=async()=>(await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json()).list.find(x=>x.id===role.id).permissionIds.sort((a,b)=>a-b);
- const save=()=>action(p,'/admin/roles/'+role.id+'/permissions','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());
+ const save=()=>action(p,'/admin/roles/'+role.id+'/authorization','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());
  await click(menu.name);
  for(const child of children)assert.equal(await checkbox(child.name).isChecked(),true,child.name);
  await save();
@@ -60,10 +62,10 @@ await record('权限父节点全选、半选、全清及保存回显',async()=>{
 
 await record('角色菜单权限授予和撤销保存',async()=>{
  const drawer=p.locator('.arco-drawer');await drawer.getByRole('treeitem',{name:'工作台',exact:true}).getByRole('checkbox').locator('..').click();
- await action(p,'/admin/roles/'+role.id+'/permissions','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());
+ await action(p,'/admin/roles/'+role.id+'/authorization','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());
  let r=await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json();assert.equal(r.list.find(x=>x.id===role.id).permissionIds.length,1);
  await row().getByRole('button',{name:'分配权限',exact:true}).click();await drawer.getByRole('treeitem',{name:'工作台',exact:true}).getByRole('checkbox').locator('..').click();
- await action(p,'/admin/roles/'+role.id+'/permissions','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());
+ await action(p,'/admin/roles/'+role.id+'/authorization','PUT',()=>p.getByRole('button',{name:'保存权限',exact:true}).click());
  r=await(await api(c,'GET','/admin/roles',undefined,auth.accessToken)).json();assert.equal(r.list.find(x=>x.id===role.id).permissionIds.length,0);
 });
 for(const label of ['停用','启用'])await record('角色'+label+'和状态持久化',async()=>{

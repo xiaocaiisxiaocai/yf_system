@@ -87,8 +87,7 @@ let accountSpecs = [];
       for (const account of accountSpecs)
         await modal.getByRole('row').filter({ hasText: account.employeeNo }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
-      for (const account of accountSpecs)
-        await modal.getByRole('row').filter({ hasText: account.employeeNo }).getByText('已导入', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).waitFor({ state: 'hidden' }); // the dialog closes itself when no row failed
       accounts = await read('GET', `/admin/suppliers/${supplier.id}/accounts`);
       assert.equal(accounts.length, 2);
       for (const account of accountSpecs) {
@@ -104,7 +103,6 @@ let accountSpecs = [];
       assert.equal(firstLogin.mustChangePassword, true, 'new account requires first-login password change');
       await vendorPage.waitForURL('**/change-password');
       await vendorContext.close();
-      await modal.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
     await record('Robot 联络人模板不包含状态，多位联络人批量导入并从当前目录导出', async () => {
@@ -139,8 +137,7 @@ let accountSpecs = [];
       for (const contact of contactSpecs)
         await modal.getByRole('row').filter({ hasText: contact.email }).getByText('待导入', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
-      for (const contact of contactSpecs)
-        await modal.getByRole('row').filter({ hasText: contact.email }).getByText('已导入', { exact: true }).waitFor();
+      await modal.getByRole('button', { name: '确认导入', exact: true }).waitFor({ state: 'hidden' }); // the dialog closes itself when no row failed
       const contacts = await read('GET', `/admin/suppliers/${supplier.id}/contacts`);
       assert.equal(contacts.length, 2);
       for (const contact of contactSpecs) {
@@ -148,7 +145,6 @@ let accountSpecs = [];
         assert(saved && saved.name === contact.name);
         assert.equal(saved.status, 'ACTIVE');
       }
-      await modal.getByRole('button', { name: '关闭', exact: true }).click();
 
       const exportWorkbook = async buttonName => {
         const ready = page.waitForEvent('download');
