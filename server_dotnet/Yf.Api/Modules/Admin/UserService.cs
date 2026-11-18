@@ -214,6 +214,53 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         }
     }
 
+    /// <summary>The actor's own ranges and the target's ranges before an update writes anything.</summary>
+    private sealed record ScopeBaseline(
+        bool ActorIsAdmin,
+        IReadOnlyDictionary<string, DataScopeResolution> Grantor,
+        IReadOnlyDictionary<string, DataScopeResolution> Target);
+
+    private static async Task<ScopeBaseline> CaptureScopeBaselineAsync(
+        YfDbContext context, CurrentUser actor, ulong targetId, CancellationToken ct)
+    {
+        if (await AccessService.IsSystemAdminAsync(
+                context.Database.Connection(), context.Database.Transaction(), actor.Id, ct))
+            return new(true, new Dictionary<string, DataScopeResolution>(), new Dictionary<string, DataScopeResolution>());
+        var grantor = new Dictionary<string, DataScopeResolution>();
+        var target = new Dictionary<string, DataScopeResolution>();
+        foreach (var domain in DataScopeDomains.All)
+        {
+            grantor[domain] = await DataScopeService.ResolveAsync(context, actor.Id, domain, ct);
+            target[domain] = await DataScopeService.ResolveAsync(context, targetId, domain, ct);
+        }
+        return new(false, grantor, target);
+    }
+
+    /// <summary>
+    /// Checks the range the account holds once every part of the update has been written (契约 §3: "按写入后生效的
+    /// 范围校验"). A role change combined with clearing an override, or a new ORG range combined with a move, is only
+    /// visible here: each part on its own looks harmless when evaluated against the state before the update.
+    /// </summary>
+    private static async Task EnsureResultingScopesAsync(
+        YfDbContext context, ScopeBaseline baseline, ulong targetId, IReadOnlyList<DataScopeEntry>? entries,
+        ulong? movedToDepartmentId, CancellationToken ct)
+    {
+        if (baseline.ActorIsAdmin) return;
+        foreach (var domain in DataScopeDomains.All)
+        {
+            var grantor = baseline.Grantor[domain];
+            var before = baseline.Target[domain];
+            var after = await DataScopeService.ResolveAsync(context, targetId, domain, ct);
+            var explicitlySet = entries?.Any(entry => entry.Domain == domain) == true;
+            if ((explicitlySet || DataScopeValues.Rank(after.Scope) > DataScopeValues.Rank(before.Scope))
+                && !DataScopeService.CanGrant(grantor.Scope, after.Scope))
+                throw ApiException.Forbidden("不能授予高于自身的数据范围");
+            if (movedToDepartmentId is ulong departmentId && after.IsOrg && !grantor.IsAll
+                && !(grantor.IsOrg && grantor.OrgIds.Contains(departmentId)))
+                throw ApiException.Forbidden("不能把账号调整到自身数据范围之外的组织");
+        }
+    }
+
     private static async Task<DataScopeResponse[]> DescribeScopesAsync(
         YfDbContext context, ulong id, CancellationToken ct)
     {
@@ -334,6 +381,9 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var user = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块维护");
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
+        // Range, role and organisation can change together, so the per-part checks below cannot see the combined
+        // result; this baseline lets the final check compare the range the account really ends up with.
+        var scopeBaseline = await CaptureScopeBaselineAsync(context, actor, id, ct);
         // 资料与范围在同一事务提交：范围校验失败时资料保持原样，不会只生效一半。
         if (request.Scopes is { Count: > 0 })
         {
@@ -380,6 +430,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);
             context.UserRoles.Add(new UserRole { UserId = id, RoleId = roleId }); await context.SaveChangesAsync(ct);
         }
+        await EnsureResultingScopesAsync(context, scopeBaseline, id, request.Scopes,
+            departmentChanged ? departmentId : null, ct);
         var updated = await FindAsync(context, id, ct) ?? throw ApiException.NotFound(); var newRoleId = roleChanged ? roleId : oldRoleId;
         var newRole = await FindRoleAsync(context, newRoleId, ct);
         var newDepartment = updated.DepartmentId is ulong newDepartmentId ? await FindDepartmentAsync(context, newDepartmentId, ct) : null;
