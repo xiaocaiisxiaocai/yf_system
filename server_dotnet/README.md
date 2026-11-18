@@ -32,7 +32,7 @@
 
 ## 删除操作
 
-物理删除由独立权限点控制：`project:delete`、`file:delete`、`supplier:delete`、`supplier:account_delete`、`user:delete`、`dept:delete`、`role:delete` 和既有的 `message:delete_any`。系统管理员默认持有删除权限。项目删除还默认允许项目所属课别的主管，以及该课别上级部门、事业部的主管；主管只能查看和删除自己所辖组织内的项目。其他角色可由系统管理员在角色页明确分配 `project:delete`。管理页访问和其他编辑操作仍使用各自的菜单与管理权限；后端在删除事务内锁定项目并重新校验当前组织主管或显式权限。
+物理删除由独立权限点控制：`project:delete`、`file:delete`、`supplier:delete`、`supplier:account_delete`、`user:delete`、`dept:delete`、`role:delete`、`dict:delete` 和既有的 `message:delete_any`。系统管理员默认持有删除权限。项目删除还默认允许项目所属课别的主管，以及该课别上级部门、事业部的主管；主管只能查看和删除自己所辖组织内的项目。其他角色可由系统管理员在角色页明确分配 `project:delete`。管理页访问和其他编辑操作仍使用各自的菜单与管理权限；后端在删除事务内锁定项目并重新校验当前组织主管或显式权限。
 
 | 对象 | 删除条件与保留规则 |
 |---|---|

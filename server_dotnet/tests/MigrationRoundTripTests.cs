@@ -270,6 +270,10 @@ public sealed class MigrationRoundTripTests
             "SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=2")).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(["dashboard"], (await connection.QueryAsync<string>(
             "SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=3")).ToArray());
+        // A role that only held the user MENU could not read users before the split and must not gain the read code.
+        Assert.Equal(["org:user"], (await connection.QueryAsync<string>(
+            "SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=4"))
+            .Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(1, await connection.ExecuteScalarAsync<int>("""
             SELECT COUNT(*) FROM permissions child JOIN permissions parent ON parent.id=child.parent_id
             WHERE child.code='dept:leader_manage' AND parent.code='org:dept'
@@ -392,8 +396,11 @@ public sealed class MigrationRoundTripTests
               (28,'user:manage','用户管理','ACTION',4,19),
               (30,'dept:manage','组织架构管理','ACTION',5,21);
             INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at)
-            VALUES(1,'系统管理员',1,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            VALUES(1,'系统管理员',1,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+                  (4,'菜单角色',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
             INSERT INTO role_permissions(role_id,permission_id) SELECT 1,id FROM permissions;
+            -- 只有用户菜单、没有 user:manage 的角色：旧读接口本来就拒绝它，回填不得给它 user:view。
+            INSERT INTO role_permissions(role_id,permission_id) VALUES(4,4);
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password,failed_login_attempts,created_at,updated_at)
             VALUES(1,'admin','$argon2id$placeholder','系统管理员','admin@example.invalid','INTERNAL','ACTIVE',0,0,UTC_TIMESTAMP(),UTC_TIMESTAMP());
             INSERT INTO user_roles(user_id,role_id) VALUES(1,1);
