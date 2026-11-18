@@ -354,6 +354,15 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         "expectedCompletionDate": owned_project["expectedCompletionDate"],
         "expectedUpdatedAt": owned_project["updatedAt"],
     })
+    # Data ranges gate copying: with the inherited SELF range the source project is invisible.
+    client.call("PUT", f"/api/v1/admin/users/{creator_user['id']}/data-scopes",
+                {"scopes": [{"domain": "project", "scope": None}]})
+    creator_client.call("POST", f"/api/v1/projects/{owned_project['id']}/copy",
+                        {"name": "range-denied-copy-" + secrets.token_hex(5),
+                         "idempotencyKey": secrets.token_hex(16)}, expected=403)
+    check("project copy requires the source project inside the copier's data range", True)
+    client.call("PUT", f"/api/v1/admin/users/{creator_user['id']}/data-scopes",
+                {"scopes": [{"domain": "project", "scope": "ALL"}]})
     # A colleague copies someone else's project into a new project of their own.
     copied = submit_and_wait_copy(creator_client, owned_project["id"],
                                   "服务端归属复制项目-" + secrets.token_hex(5))

@@ -243,9 +243,21 @@ class Client:
         if response.status != expected:
             safe = data.decode(errors="replace")[:500] if response.headers.get("Content-Type", "").startswith("application/json") else "non-JSON response"
             raise AssertionError(f"{method} {path}: expected {expected}, got {response.status}: {safe}")
+        payload = None if raw else (json.loads(data) if data else None)
+        if (not raw and isinstance(payload, dict) and method == "POST"
+                and path == "/api/v1/admin/users" and payload.get("id")):
+            # These HTTP suites predate data ranges, so their fixtures must keep seeing every project
+            # they exercise. The range rules themselves are covered by DataScopeResolutionTests and by
+            # the denial assertion in test_project_remediation; a caller without the ceiling keeps the
+            # account's inherited range (the PUT simply fails and is ignored here).
+            try:
+                self.call("PUT", f"/api/v1/admin/users/{payload['id']}/data-scopes",
+                          {"scopes": [{"domain": "project", "scope": "ALL"}]})
+            except AssertionError:
+                pass
         if raw:
             return data, response.headers
-        return json.loads(data) if data else None
+        return payload
 
     def login(self, username, password):
         result = self.call("POST", "/api/v1/auth/login", {"employeeNo": username, "password": password})
