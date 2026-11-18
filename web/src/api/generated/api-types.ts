@@ -2008,6 +2008,7 @@ export interface UserCreate {
   departmentId?: number | null
   roleId?: number | null
   roleIds?: Array<number> | null
+  scopes?: Array<DataScopeEntry> | null
 }
 
 export interface UserResponse {

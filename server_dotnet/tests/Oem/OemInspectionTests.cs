@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
+using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Validation;
 using Yf.Api.Modules.Oem.Transfers;
@@ -27,6 +28,16 @@ public sealed class OemInspectionTests
         // 草稿写操作各自独立授权：编辑要 update，删除要 delete（create 持有者保留重试能力）。
         Assert.True(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(1, updateDraft: true)).EditDraft);
         Assert.True(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(1, deleteDraft: true)).DeleteDraft);
+        // 只有创建权的发送者：生产映射把 create 同时视作"可删自有草稿"，但不隐含编辑权限。
+        var creatorFacts = ActorFacts.For(
+            new InternalOemActor(new CurrentUser(1, "draft-sender", "INTERNAL", null), "sid"),
+            new HashSet<string>(StringComparer.Ordinal) { OemPermissions.TransferCreate }, false, false);
+        Assert.True(creatorFacts.CanDeleteDraft);
+        Assert.False(creatorFacts.CanUpdateDraft);
+        var creator = TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), creatorFacts);
+        Assert.True(creator.SendDraft);
+        Assert.True(creator.DeleteDraft);
+        Assert.False(creator.EditDraft);
         Assert.False(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(1)).EditDraft);
         Assert.False(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(2, view: true, download: true)).View);
         Assert.False(TransferAccess.Evaluate(Inbound(TransferLifecycle.Draft), Vendor()).View);

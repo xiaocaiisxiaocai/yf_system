@@ -33,7 +33,8 @@ public sealed record UserCreate(
     [property: JsonRequired] string Email,
     ulong? DepartmentId,
     ulong? RoleId,
-    IReadOnlyList<ulong>? RoleIds);
+    IReadOnlyList<ulong>? RoleIds,
+    IReadOnlyList<DataScopeEntry>? Scopes = null);
 public sealed record UserUpdate(
     string? RealName = null,
     string? Email = null,

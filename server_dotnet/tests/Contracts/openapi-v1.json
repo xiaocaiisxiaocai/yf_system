@@ -17791,7 +17791,8 @@
           "password",
           "realName",
           "roleId",
-          "roleIds"
+          "roleIds",
+          "scopes"
         ],
         "type": "object",
         "properties": {
@@ -17822,6 +17823,13 @@
             "items": {
               "type": "integer",
               "format": "int64"
+            },
+            "nullable": true
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DataScopeEntry"
             },
             "nullable": true
           }

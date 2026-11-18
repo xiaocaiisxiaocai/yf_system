@@ -449,7 +449,13 @@ export default function UserList() {
         })
         Message.success('用户已更新')
       } else {
-        await saveMutation.mutateAsync({ payload })
+        // 创建时给出的范围直接写在同一个事务里；留空表示跟随角色默认。
+        const newScopes = SCOPE_DOMAINS
+          .filter(({ domain }) => scopeValues[domain])
+          .map(({ domain }) => ({ domain, scope: scopeValues[domain] }))
+        await saveMutation.mutateAsync({
+          payload: { ...payload, ...(newScopes.length > 0 ? { scopes: newScopes } : {}) },
+        })
         Message.success('用户已创建（首次登录需改密）')
       }
       setEditOpen(false)
@@ -763,12 +769,12 @@ export default function UserList() {
                 ))}
               </Select>
             </Form.Item>
-            {editing && SCOPE_DOMAINS.map(({ domain, label }) => (
+            {canManageUsers && SCOPE_DOMAINS.map(({ domain, label }) => (
               <Form.Item key={domain} label={label}>
                 <Select
                   value={scopeValues[domain] ?? ''}
                   loading={scopesLoading}
-                  disabled={!canManageUsers || scopesLoading || scopeLoadedFor !== editing.id}
+                  disabled={!canManageUsers || scopesLoading || (editing !== null && scopeLoadedFor !== editing.id)}
                   onChange={(value) => setScopeValues((prev) => ({ ...prev, [domain]: value }))}
                 >
                   <Select.Option value="">

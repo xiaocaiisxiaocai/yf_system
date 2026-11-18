@@ -96,6 +96,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (request.Scopes is { } scopes)
             await ApplyScopeAssignmentAsync(context, actor, role, id, scopes, ct);
         var result = new RoleAuthorizationResponse(
+            // 调用到这里已经通过 EnsureManageRoleAsync，因此对本次调用者而言 canManage 恒为真。
             await JsonAsync(context, role, canManage: true, ct),
             await DescribeScopesAsync(context, id, ct));
         await tx.CommitAsync(ct);

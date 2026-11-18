@@ -293,6 +293,13 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         };
         context.Users.Add(user); await context.SaveChangesAsync(ct);
         context.UserRoles.Add(new UserRole { UserId = user.Id, RoleId = roleId }); await context.SaveChangesAsync(ct);
+        // 创建时就可以把个人范围定下来，避免“先按角色默认建好、再进编辑框收紧”的两步操作。
+        if (request.Scopes is { Count: > 0 })
+        {
+            ValidateScopeEntries(request.Scopes);
+            await EnsureScopeCeilingAsync(context, actor, user.Id, request.Scopes, ct);
+            await ApplyUserScopeAssignmentAsync(context, actor, user, user.Id, request.Scopes, ct);
+        }
         var created = await FindAsync(context, user.Id, ct) ?? throw ApiException.NotFound();
         var role = await FindRoleAsync(context, roleId, ct) ?? throw ApiException.BadRequest($"角色不存在: {roleId}");
         var department = await FindDepartmentAsync(context, departmentId, ct);
