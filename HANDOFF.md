@@ -1,5 +1,13 @@
 # 项目踩坑记录
 
+## picomatch 的 ReDoS 目前没有修复版本（2026-11-18）
+
+- 现象：`npm audit --include=dev` 在 `web/` 报 6 个 high（`vite`、`vitest`、`@vitejs/plugin-react`、`tinyglobby`、`fdir` 都指向 `picomatch`）。
+- 根因：GHSA-fc5q-39xc-vjpf 的影响范围是 `<=4.0.7`，而 `4.0.7` 就是 npm 上的最新版，上游尚未发布修复；`npm audit` 给出的"修复"是降级到 vite 6 / vitest 3，不可取。
+- 影响面：只在构建与测试期（glob 匹配），运行时的 `dist` 不含这些包；CI 的审计步骤会因它失败，但和业务代码无关。
+- 规避：等上游发版后升级；在那之前若需要绿 CI，只能对该 advisory 做显式豁免（`--omit=dev` 或审计白名单），不要执行 `npm audit fix --force`。
+- NuGet 侧同时扫描（`dotnet list package --vulnerable --include-transitive`，`Yf.Api` 与测试项目）为 0 个易受攻击的包。
+
 ## 授权保存必须一次请求、一个事务（2026-11-18）
 
 - 现象：角色抽屉与用户编辑框各自把"数据范围"和"权限/资料"拆成两次 PUT；第二步被拒绝时第一步已落库，出现"只生效一半"，旧页面还可能把别人刚撤销的授权写回去。
