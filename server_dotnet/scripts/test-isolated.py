@@ -215,6 +215,8 @@ class Client:
             urllib.request.HTTPCookieProcessor(self.cookies),
         )
         self.token = None
+        # Accounts created through this client get a project range of ALL (see call()).
+        self.widen_new_users = True
 
     def call(self, method, path, body=None, expected=200, headers=None, raw=False):
         pacing_mode, login_account = login_pacing_mode(method, path, body, expected)
@@ -244,17 +246,20 @@ class Client:
             safe = data.decode(errors="replace")[:500] if response.headers.get("Content-Type", "").startswith("application/json") else "non-JSON response"
             raise AssertionError(f"{method} {path}: expected {expected}, got {response.status}: {safe}")
         payload = None if raw else (json.loads(data) if data else None)
-        if (not raw and isinstance(payload, dict) and method == "POST"
+        if (not raw and isinstance(payload, dict) and method == "POST" and self.widen_new_users
                 and path == "/api/v1/admin/users" and payload.get("id")):
             # These HTTP suites predate data ranges, so their fixtures must keep seeing every project
-            # they exercise. The range rules themselves are covered by DataScopeResolutionTests and by
-            # the denial assertion in test_project_remediation; a caller without the ceiling keeps the
-            # account's inherited range (the PUT simply fails and is ignored here).
+            # they exercise. The range rules themselves are covered by UserScopeCeilingTests,
+            # DataScopeResolutionTests and the SELF assertions in test_project_remediation. Only the
+            # ceiling refusal (403: the caller's own range is narrower) is expected here; any other
+            # failure is a real error and must not be hidden. Set widen_new_users=False to keep the
+            # account's inherited range.
             try:
                 self.call("PUT", f"/api/v1/admin/users/{payload['id']}/data-scopes",
                           {"scopes": [{"domain": "project", "scope": "ALL"}]})
-            except AssertionError:
-                pass
+            except AssertionError as error:
+                if ": expected 200, got 403:" not in str(error):
+                    raise
         if raw:
             return data, response.headers
         return payload

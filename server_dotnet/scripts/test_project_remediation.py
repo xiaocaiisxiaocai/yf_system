@@ -355,8 +355,17 @@ def run_project_remediation_checks(client, Client, conn, check, storage_root):
         "expectedUpdatedAt": owned_project["updatedAt"],
     })
     # Data ranges gate copying: with the inherited SELF range the source project is invisible.
-    client.call("PUT", f"/api/v1/admin/users/{creator_user['id']}/data-scopes",
-                {"scopes": [{"domain": "project", "scope": None}]})
+    scopes = client.call("PUT", f"/api/v1/admin/users/{creator_user['id']}/data-scopes",
+                         {"scopes": [{"domain": "project", "scope": None}]})
+    # Without an override and without a role default an account that leads nothing sees only its own.
+    project_scope = next(row for row in scopes if row["domain"] == "project")
+    check("an account without override or role default falls back to the SELF project range",
+          project_scope["localScope"] is None and project_scope["effectiveScope"] == "SELF")
+    listed = creator_client.call("GET", "/api/v1/projects?page=1&pageSize=100")
+    check("a SELF range does not list projects owned by others",
+          all(row["id"] != owned_project["id"] for row in listed["list"]))
+    creator_client.call("GET", f"/api/v1/projects/{owned_project['id']}", expected=403)
+    check("a SELF range cannot open a project owned by others", True)
     creator_client.call("POST", f"/api/v1/projects/{owned_project['id']}/copy",
                         {"name": "range-denied-copy-" + secrets.token_hex(5),
                          "idempotencyKey": secrets.token_hex(16)}, expected=403)
