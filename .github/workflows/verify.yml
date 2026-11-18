@@ -5,13 +5,18 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push to the same branch makes the previous run obsolete; cancel it instead of paying for both.
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   non-browser-gates:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     services:
       mysql:
         image: mysql:8.4
@@ -55,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           status=0
-          for project in server_dotnet/Yf.Api/Yf.Api.csproj; do
+          for project in server_dotnet/Yf.Api/Yf.Api.csproj server_dotnet/TestHost/Yf.Api.TestHost.csproj server_dotnet/tests/Yf.Api.Tests.csproj; do
             output="$(dotnet list "$project" package --vulnerable --include-transitive 2>&1)"
             echo "$output"
             if grep -q "has the following vulnerable packages" <<<"$output"; then
@@ -66,13 +71,16 @@ jobs:
           exit "$status"
       - name: Audit web and build dependencies
         working-directory: web
-        run: npm audit --include=dev
+        # Allowlisted advisories live in scripts/audit-allowlist.json with a reason and a review date;
+        # everything else still fails the job (see scripts/audit-deps.mjs).
+        run: npm run audit:deps
       - name: Upload verification report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: verify-all-report
           path: .artifacts/tests/verify-all/
+          retention-days: 14
           if-no-files-found: ignore
 
   deploy-security:

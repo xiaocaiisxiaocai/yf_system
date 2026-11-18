@@ -1,0 +1,11 @@
+{
+  "advisories": [
+    {
+      "ghsa": "GHSA-fc5q-39xc-vjpf",
+      "package": "picomatch",
+      "severity": "high",
+      "reason": "ReDoS in glob matching that is only reached by build/test tooling (vite, vitest, tinyglobby, fdir). These packages never ship in dist/, and every input glob comes from this repository rather than a remote caller. picomatch 4.0.7 is the newest release and is itself inside the affected range, so no upgrade exists yet.",
+      "reviewBy": "2027-01-31"
+    }
+  ]
+}

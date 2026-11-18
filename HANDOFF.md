@@ -5,7 +5,7 @@
 - 现象：`npm audit --include=dev` 在 `web/` 报 6 个 high（`vite`、`vitest`、`@vitejs/plugin-react`、`tinyglobby`、`fdir` 都指向 `picomatch`）。
 - 根因：GHSA-fc5q-39xc-vjpf 的影响范围是 `<=4.0.7`，而 `4.0.7` 就是 npm 上的最新版，上游尚未发布修复；`npm audit` 给出的"修复"是降级到 vite 6 / vitest 3，不可取。
 - 影响面：只在构建与测试期（glob 匹配），运行时的 `dist` 不含这些包；CI 的审计步骤会因它失败，但和业务代码无关。
-- 规避：等上游发版后升级；在那之前若需要绿 CI，只能对该 advisory 做显式豁免（`--omit=dev` 或审计白名单），不要执行 `npm audit fix --force`。
+- 规避：等上游发版后升级；在那之前由 `web/scripts/audit-deps.mjs` 只放行 `web/scripts/audit-allowlist.json` 里列出的 advisory（当前仅此一条，带理由与复查日期），CI 用 `npm run audit:deps`。新出现的漏洞仍会让 CI 失败；`npm run audit:deps:strict` 忽略白名单，用来确认门禁本身没有失效。不要执行 `npm audit fix --force`（会降级 vite/vitest）。
 - NuGet 侧同时扫描（`dotnet list package --vulnerable --include-transitive`，`Yf.Api` 与测试项目）为 0 个易受攻击的包。
 
 ## 授权保存必须一次请求、一个事务（2026-11-18）

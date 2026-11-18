@@ -12,6 +12,8 @@
     "postbuild": "node scripts/precompress-assets.mjs",
     "test:precompression": "node --test scripts/precompress-assets.test.mjs",
     "lint": "oxlint --deny-warnings",
+    "audit:deps": "node scripts/audit-deps.mjs",
+    "audit:deps:strict": "node scripts/audit-deps.mjs --strict",
     "preview": "vite preview",
     "build:excel-preview": "node scripts/build-excel-preview.mjs",
     "predev": "npm run build:excel-preview && npm run build:pptx-preview && npm run build:docx-preview",
