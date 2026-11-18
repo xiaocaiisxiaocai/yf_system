@@ -38,6 +38,16 @@ function runAudit() {
 }
 
 const report = runAudit()
+// Fail closed: when npm cannot reach the registry (or audit itself breaks) it still prints JSON — an `error`
+// object without any report — and treating that as "nothing found" would turn the gate green without auditing.
+if (report.error || typeof report.metadata?.vulnerabilities !== 'object' || typeof report.vulnerabilities !== 'object') {
+  const detail = report.error
+    ? [report.error.code, report.error.summary || report.error.message || report.error.detail].filter(Boolean).join(' ')
+      || JSON.stringify(report.error)
+    : 'no audit report in the output'
+  console.error(`FAIL npm audit did not produce a report: ${detail}`)
+  process.exit(1)
+}
 const advisories = new Map()
 for (const [name, entry] of Object.entries(report.vulnerabilities ?? {})) {
   for (const via of entry.via ?? []) {
@@ -74,9 +84,8 @@ for (const item of (report.vulnerabilities ? Object.entries(report.vulnerabiliti
   }
 }
 
-if (warnings.length > 0) {
-  for (const warning of warnings) console.warn(`WARN ${warning}`)
-}
+// An allowlist entry past its review date no longer counts as reviewed: re-check the advisory and move the date.
+blocked.push(...warnings)
 if (blocked.length > 0) {
   console.error(`FAIL ${blocked.length} advisory(ies) are neither fixed nor allowlisted:`)
   for (const text of blocked) console.error(`  - ${text}`)
