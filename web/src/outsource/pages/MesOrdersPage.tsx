@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Input, Select } from '@arco-design/web-react'
+import { Button, Card, Empty, Input, Select, Space, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import http from '../../api/client'
 import type { ApiResponses } from '../../api/types'
@@ -12,6 +12,28 @@ type Order = ApiResponses['POST /outsource/mes-mirror/orders/query']['list'][num
 
 const FIRST_ROWS = 12
 const ROWS_PER_STEP = 12
+/** 已启用筛选标签那一行占掉的高度，表格高度要相应缩短。 */
+const FILTER_BAR_HEIGHT = 40
+
+const MES_COLUMN_LABELS: Record<string, string> = Object.fromEntries([
+  ...MES_FIXED_COLUMNS.map((column) => [column.prop, column.label] as const),
+  ...MES_LAYOUT.flatMap((item) => isGroup(item)
+    ? item.columns.map((column) => [column.prop, `${item.label} · ${column.label}`] as const)
+    : [[item.prop, item.label] as const]),
+])
+
+/** 与服务端同一个切词规则：粘贴的多行每行是一个完整词，单行才按空格、逗号、分号拆开。 */
+function filterTerms(text: string): string[] {
+  return text.includes('\n')
+    ? text.split('\n').map((line) => line.trim()).filter(Boolean)
+    : text.split(/[\s,，;；、]+/).filter(Boolean)
+}
+
+function formatFilterValue(prop: string, rawValue: string): string {
+  const words = MES_CODE_TEXT[prop]
+  const terms = filterTerms(rawValue)
+  return words ? terms.map((token) => words[token] ?? token).join('、') : terms.join('、')
+}
 
 const cell = (column: MesColumn) => (_: unknown, order: Order) => {
   const value = order.values[column.prop]
@@ -52,12 +74,15 @@ export default function MesOrdersPage() {
   // 110 columns make a row heavy: the first rows appear at once and the rest of the page is added in small steps,
   // so a 100-row page shows data straight away instead of after one long render.
   const [grown, setGrown] = useState<{ source: Order[]; count: number }>({ source: [], count: FIRST_ROWS })
-  const [tableHeight, setTableHeight] = useState(() => Math.max(280, window.innerHeight - 240))
+  const hasFilters = Object.keys(filters).length > 0
+  const tableHeightFor = useCallback(() => Math.max(280, window.innerHeight - 240 - (hasFilters ? FILTER_BAR_HEIGHT : 0)), [hasFilters])
+  const [tableHeight, setTableHeight] = useState(tableHeightFor)
   useEffect(() => {
-    const resize = () => setTableHeight(Math.max(280, window.innerHeight - 240))
+    const resize = () => setTableHeight(tableHeightFor())
+    resize()
     window.addEventListener('resize', resize)
     return () => window.removeEventListener('resize', resize)
-  }, [])
+  }, [tableHeightFor])
 
   const load = useCallback(async () => {
     const seq = ++sequence.current
@@ -112,8 +137,22 @@ export default function MesOrdersPage() {
       : leaf(item)),
   ]
 
+  const activeFilterEntries = Object.entries(filters)
+
   return <Card className="page-card page-card--table outsource-ipms-data-page">
     <h1 className="visually-hidden">IPMS 资料</h1>
+    {activeFilterEntries.length > 0 && (
+      <div className="page-toolbar responsive-toolbar" role="region" aria-label="已启用筛选">
+        <Space wrap size={8}>
+          {activeFilterEntries.map(([prop, value]) => (
+            <Tag key={prop} closable onClose={() => apply(prop, '')}>
+              {`${MES_COLUMN_LABELS[prop] ?? prop}：${formatFilterValue(prop, value)}`}
+            </Tag>
+          ))}
+          <Button size="mini" onClick={() => { setFilters({}); setPage(1) }}>清空筛选</Button>
+        </Space>
+      </div>
+    )}
     {error ? <LoadError message="IPMS 资料加载失败" onRetry={() => void load()} />
       : <ResizableTable<Order> tableId="outsource-ipms-orders" className="page-table" rowKey="workOrderNo" loading={loading} data={shown}
         columns={columns} noDataElement={loading ? <span /> : <Empty description="暂无资料" />} scroll={{ y: tableHeight }}

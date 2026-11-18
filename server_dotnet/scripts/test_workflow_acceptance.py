@@ -55,7 +55,9 @@ def _project_snapshot(conn, project_id):
         )
         uploads = tuple(cursor.fetchall())
         cursor.execute(
-            "SELECT action,target_type,target_id FROM audit_logs ORDER BY id"
+            # FILE_DOWNLOAD_END is written after an earlier download's stream finishes, so it can land between two
+            # snapshots; a rejected write never produces one, so it is left out of the comparison.
+            "SELECT action,target_type,target_id FROM audit_logs WHERE action<>'FILE_DOWNLOAD_END' ORDER BY id"
         )
         audit = tuple(cursor.fetchall())
         cursor.execute(

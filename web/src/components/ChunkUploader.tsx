@@ -230,6 +230,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   // 公司发给供应商：本批（不含已取消或被拒绝的文件）必须同时有动作流程 Excel 与 STEP 或压缩文件才能上传。
   const missingMaterial = companyRules && hasQueued && !hasRequiredMaterial(entries
     .filter((e) => e.phase !== 'cancelled' && e.phase !== 'rejected').map((e) => e.file.name))
+  const missingSignature = Boolean(requireSignature && hasQueued && !signerName.trim())
   const canAddMore = !locking && entries.every((e) => e.phase === 'queued' || e.phase === 'interrupted' || e.phase === 'rejected')
 
   const patchEntry = (key: string, patch: Partial<Entry>) =>
@@ -469,7 +470,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
   }
 
   const startAll = async () => {
-    if (closingRef.current || locking || missingMaterial) return
+    if (closingRef.current || locking || missingMaterial || missingSignature) return
     batchStartedRef.current = true
     rejectionToastsRef.current.clear()
     const runnable = entries.filter((entry) => entry.phase === 'queued' || entry.phase === 'interrupted')
@@ -640,7 +641,7 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
         ) : (
           <>
             <Button onClick={closeAll}>关闭</Button>
-            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued || missingMaterial} onClick={startAll} icon={<IconUpload />}>
+            <Button type="primary" aria-label="上传所选文件" disabled={!hasQueued || missingMaterial || missingSignature} onClick={startAll} icon={<IconUpload />}>
               上传所选文件{hasQueued ? `（${pending.length}）` : ''}
             </Button>
           </>
@@ -680,6 +681,10 @@ export default function ChunkUploader({ projectId, visible, onClose, onDone, onA
           disabled={!canAddMore} onChange={setSignerName} style={{ maxWidth: 240 }} />
       </div>}
       <div aria-live="polite">
+        {missingSignature && (
+          <Alert type="info" style={{ marginTop: 12 }}
+            content="请先填写签名（提供人姓名），再开始上传文件。" />
+        )}
         {missingMaterial && (
           <Alert type="warning" style={{ marginTop: 12 }}
             content="本批需要同时包含动作流程 Excel 和 STEP 3D 图（.step/.stp/.x_t）或压缩文件（.zip/.rar/.7z）。" />

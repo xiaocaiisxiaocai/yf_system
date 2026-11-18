@@ -245,4 +245,37 @@ describe('外协清单页面', () => {
     await user.click(screen.getByRole('button', { name: /同步所选 \(1\)/ }))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/sync', { itemIds: [1] }))
   })
+
+  it('同时勾选未完成与已完成记录时，两类批量操作分别按各自集合生效，批量修改按类型过滤厂商', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:view', 'outsource:manage'])
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/items' ? { list: [items[0], { ...items[1], closed: true }], total: 2, page: 1, pageSize: 20 }
+          : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+    } as never))
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items } } as never)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    const openRow = (await screen.findByText('21089901')).closest('tr')!
+    const closedRow = screen.getByText('21089961').closest('tr')!
+    await user.click(within(openRow).getByRole('checkbox'))
+    await user.click(within(closedRow).getByRole('checkbox'))
+
+    expect(screen.getByRole('button', { name: '重新开启 (1)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '发送邮件 (1)' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '批量修改 (1)' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '批量修改 (1)' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('combobox', { name: '外发厂商' }))
+    fireEvent.click(await screen.findByRole('option', { name: '元控' }))
+    await user.click(within(dialog).getByRole('combobox', { name: '外发类型' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'OEMA【进料+制造】' }))
+
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/batch', {
+      items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }],
+      vendorId: undefined, typeId: 5, status: undefined, bomOn: undefined, drawingReleasedOn: undefined, remark: undefined,
+    }))
+  })
 })

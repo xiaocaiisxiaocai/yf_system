@@ -140,5 +140,11 @@ describe('ODM/OEMA 审批进度', () => {
     expect(screen.queryByText('已停用主管（A0021）')).not.toBeInTheDocument()
     expect(screen.queryByText(/审批流程/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '改派' })).not.toBeInTheDocument()
+
+    // 鼠标悬停在审批列状态标签上时，Popover 展示节点与审批人详情。
+    const approvalCellTag = screen.getAllByText('审批异常').at(-1)!
+    fireEvent.mouseEnter(approvalCellTag.closest('[tabindex="0"]')!)
+    expect(await screen.findByText(/1\. 课别主管/)).toBeInTheDocument()
+    expect(screen.getByText(/已停用主管（A0021）/)).toBeInTheDocument()
   })
 })

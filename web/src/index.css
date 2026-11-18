@@ -782,7 +782,10 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .action-slots--oem-file > .action-slot { --action-slot-width: 56px; }
 /* 外协设定：第二个操作是四个字（联络邮箱、可用厂商）。 */
 .action-slots--outsource > .action-slot:nth-child(2) { --action-slot-width: 60px; }
-.action-slots--outsource-mail > .action-slot:nth-child(2) { --action-slot-width: 60px; }
+/* 外协发送记录：详情 / 附件 / 重新发送 三个槽位各自宽度（"重新发送"是四个字）。 */
+.action-slots--outsource-mail > .action-slot:nth-child(1) { --action-slot-width: 40px; }
+.action-slots--outsource-mail > .action-slot:nth-child(2) { --action-slot-width: 44px; }
+.action-slots--outsource-mail > .action-slot:nth-child(3) { --action-slot-width: 56px; }
 .action-slots--storage > .action-slot:nth-child(1),
 .action-slots--storage > .action-slot:nth-child(3) { --action-slot-width: 64px; }
 
@@ -812,6 +815,8 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .file-table--compact .arco-empty-image { margin-bottom: 4px; font-size: 32px; line-height: 1; }
 .file-table--compact .arco-empty-description { font-size: 13px; }
 .file-table-hint-icon { color: var(--color-text-3); font-size: 16px; cursor: help; vertical-align: middle; }
+/* 打包下载按钮旁的本批总体积，占位不影响按钮位置。 */
+.file-selected-summary { color: var(--color-text-2); font-size: 13px; white-space: nowrap; }
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .page-load-error { display: flex; align-items: center; gap: 8px; padding: 24px 0; }
 .table-cell-wrap { display: block; white-space: normal; overflow-wrap: anywhere; line-height: 20px; }

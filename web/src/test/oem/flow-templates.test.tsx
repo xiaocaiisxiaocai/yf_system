@@ -189,6 +189,26 @@ describe('ODM/OEMA 审批模板', () => {
     expect(createFlowTemplate).toHaveBeenCalledTimes(1)
   })
 
+  it('适用组织里已停用的组织不能再被勾选，已保存的范围仍然可见', async () => {
+    const user = userEvent.setup()
+    renderPage({
+      flowTemplates: vi.fn().mockResolvedValue([template()]),
+      departments: vi.fn().mockResolvedValue([
+        { id: 11, name: '制造课', kind: 'SECTION', status: 'ACTIVE', sortNo: 1, children: [] },
+        { id: 12, name: '历史课', kind: 'SECTION', status: 'DISABLED', sortNo: 2, children: [] },
+      ]),
+    })
+
+    await user.click(await screen.findByText('默认审批'))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(dialog.querySelector('.arco-tree-select')!)
+
+    expect((await screen.findByText('历史课（已停用）')).closest('.arco-tree-node'))
+      .toHaveClass('arco-tree-node-disabled')
+    // 已选中的组织出现在标签里，取下拉树中的那个节点。
+    expect(screen.getAllByText('制造课').at(-1)!.closest('.arco-tree-node')).not.toHaveClass('arco-tree-node-disabled')
+  })
+
   it('加载失败显示重试，失败刷新不会清掉已有模板', async () => {
     const user = userEvent.setup()
     const flowTemplates = vi.fn()

@@ -311,8 +311,11 @@ describe('ChunkUploader DOM contracts', () => {
     render(<ChunkUploader projectId={1} visible onClose={() => undefined} onDone={() => undefined} requireSignature />)
     const signature = screen.getByRole('textbox', { name: '签名' })
     expect(signature).toHaveValue('')
-    fireEvent.change(signature, { target: { value: ' 张三 ' } })
     choose(uploadFile('a'))
+    expect(startButton()).toBeDisabled()
+    expect(screen.getByText('请先填写签名（提供人姓名），再开始上传文件。')).toBeVisible()
+    fireEvent.change(signature, { target: { value: ' 张三 ' } })
+    expect(startButton()).toBeEnabled()
     fireEvent.click(startButton())
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/uploads/init',
       expect.objectContaining({ fileName: 'a', signerName: '张三' }), expect.anything()))

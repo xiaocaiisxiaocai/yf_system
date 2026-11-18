@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Message, Popover, Select, Space, Tag, Tooltip } from '@arco-design/web-react'
+import { Button, Card, Descriptions, Empty, Message, Modal, Popover, Select, Space, Tag, Tooltip } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
@@ -51,6 +51,7 @@ export default function OutsourceMailsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [busy, setBusy] = useState<number | null>(null)
+  const [viewing, setViewing] = useState<Mail | null>(null)
   const sequence = useRef(0)
 
   const load = useCallback(async (quiet = false) => {
@@ -132,8 +133,9 @@ export default function OutsourceMailsPage() {
     { title: '说明', dataIndex: 'lastError', width: 220, ellipsis: true, render: (value: string | null) => value ?? '' },
     { title: '发送人', dataIndex: 'createdByName', width: 100, ellipsis: true },
     {
-      title: '操作', width: 150, align: 'center', fixed: 'right',
+      title: '操作', width: 180, align: 'center', fixed: 'right',
       render: (_, mail) => actionSlots([
+        <Button key="detail" type="text" size="mini" onClick={() => setViewing(mail)}>详情</Button>,
         <Button key="attachment" type="text" size="mini" loading={busy === mail.id} disabled={!mail.attachmentName}
           onClick={() => void download(mail)}>附件</Button>,
         canManage && <Button key="retry" type="text" size="mini" disabled={mail.status !== 'FAILED' || busy === mail.id}
@@ -146,7 +148,7 @@ export default function OutsourceMailsPage() {
     <h1 className="visually-hidden">发送记录</h1>
     <div className="page-toolbar responsive-toolbar">
       <Space wrap>
-        <Select aria-label="厂商" placeholder="全部厂商" allowClear style={{ width: 160 }} value={vendorId}
+        <Select aria-label="厂商" placeholder="全部厂商" allowClear showSearch style={{ width: 160 }} value={vendorId}
           onChange={(value) => { setVendorId(value); setPage(1) }} options={vendors.map((vendor) => ({ label: vendor.name, value: vendor.id }))} />
         <Select aria-label="状态" placeholder="全部状态" allowClear style={{ width: 140 }} value={status}
           onChange={(value) => { setStatus(value); setPage(1) }} options={STATUS_OPTIONS} />
@@ -156,5 +158,35 @@ export default function OutsourceMailsPage() {
       : <ResizableTable<Mail> tableId="outsource-mails" className="page-table" rowKey="id" loading={loading} data={mails} columns={columns}
         noDataElement={loading ? <span /> : <Empty description="暂无发送记录" />} scroll={{ x: 1630, y: 'var(--page-table-scroll-y)' }}
         pagination={{ current: page, pageSize, total, onChange: (next, size) => { setPage(size === pageSize ? next : 1); setPageSize(size) } }} />}
+    <Modal title="邮件发送详情" visible={viewing !== null} footer={null} onCancel={() => setViewing(null)} unmountOnExit>
+      {viewing && (
+        <Descriptions
+          column={1}
+          border
+          size="small"
+          data={[
+            { label: '发送时间', value: fmtTime(viewing.createdAt) },
+            { label: '邮件类型', value: viewing.kind === 'WITHDRAW' ? '撤回通知' : '外发通知' },
+            { label: '外发厂商', value: viewing.vendorName },
+            { label: '邮件主旨', value: viewing.subject },
+            { label: '关联工令', value: viewing.workOrderNos.join('、') || '—' },
+            {
+              label: '收件人',
+              value: viewing.recipients.filter((r) => r.kind === 'TO')
+                .map((r) => `${r.name ? `${r.name} <${r.email}>` : r.email}${r.rejected ? '（被拒收）' : ''}`).join('；') || '—',
+            },
+            {
+              label: '抄送',
+              value: viewing.recipients.filter((r) => r.kind === 'CC')
+                .map((r) => `${r.name ? `${r.name} <${r.email}>` : r.email}${r.rejected ? '（被拒收）' : ''}`).join('；') || '—',
+            },
+            { label: '发送状态', value: STATUS[viewing.status]?.label ?? viewing.status },
+            ...(viewing.lastError ? [{ label: '失败原因', value: viewing.lastError }] : []),
+            { label: '发送人', value: viewing.createdByName || '—' },
+            { label: '附件名称', value: viewing.attachmentName || '无附件' },
+          ]}
+        />
+      )}
+    </Modal>
   </Card>
 }

@@ -60,12 +60,18 @@ function allKeys(nodes: DeptNode[]): string[] {
   return nodes.flatMap((n) => [String(n.id), ...(n.children ? allKeys(n.children) : [])])
 }
 
-function filterTree(nodes: DeptNode[], keyword: string): DeptNode[] {
+function filterTree(nodes: DeptNode[], keyword: string, onlyMissingLeader = false): DeptNode[] {
   const query = keyword.trim().toLocaleLowerCase()
-  if (!query) return nodes
+  if (!query && !onlyMissingLeader) return nodes
   return nodes.flatMap((node) => {
-    if (node.name.toLocaleLowerCase().includes(query)) return [node]
-    const children = filterTree(node.children || [], query)
+    const children = filterTree(node.children || [], keyword, onlyMissingLeader)
+    const matchesQuery = !query || node.name.toLocaleLowerCase().includes(query)
+    if (onlyMissingLeader) {
+      const isMissingLeader = node.status === 'ACTIVE' && !node.leader
+      if ((matchesQuery && isMissingLeader) || children.length > 0) return [{ ...node, children }]
+      return []
+    }
+    if (matchesQuery) return [node]
     return children.length ? [{ ...node, children }] : []
   })
 }
@@ -76,12 +82,14 @@ function treeStats(nodes: DeptNode[]) {
     if (kind === 'DIVISION') acc.division += 1
     else if (kind === 'DEPARTMENT') acc.department += 1
     else acc.section += 1
+    if (node.status === 'ACTIVE' && !node.leader) acc.missingLeader += 1
     const child = treeStats(node.children || [])
     acc.division += child.division
     acc.department += child.department
     acc.section += child.section
+    acc.missingLeader += child.missingLeader
     return acc
-  }, { division: 0, department: 0, section: 0 })
+  }, { division: 0, department: 0, section: 0, missingLeader: 0 })
 }
 
 function findPath(nodes: DeptNode[], id: number, parents: DeptNode[] = []): DeptNode[] {
@@ -138,6 +146,7 @@ export default function DeptManage() {
   const [selected, setSelected] = useState<DeptNode | null>(null)
   const [moreFor, setMoreFor] = useState<number | null>(null)
   const [keyword, setKeyword] = useState('')
+  const [onlyMissingLeader, setOnlyMissingLeader] = useState(false)
   const [expandedKeys, setExpandedKeys] = useState<string[] | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -364,7 +373,8 @@ export default function DeptManage() {
   const selectedPath = selected ? findPath(tree, selected.id).map((node) => node.name).join(' > ') : ''
   const selectedParent = selected ? findPath(tree, selected.id).slice(-2, -1)[0] : undefined
   const selectedChildrenCount = selected?.children?.length || 0
-  const visibleTree = filterTree(tree, keyword)
+  const filterMissingLeader = canManageLeader && onlyMissingLeader
+  const visibleTree = filterTree(tree, keyword, filterMissingLeader)
   const childNodes = selected ? selected.children || [] : tree
   const navigateTo = (node: DeptNode | null) => {
     setSelected(node)
@@ -381,6 +391,7 @@ export default function DeptManage() {
             <span><b>{stats.division}</b> 个事业部</span>
             <span><b>{stats.department}</b> 个部门</span>
             <span><b>{stats.section}</b> 个课别</span>
+            {canManageLeader && stats.missingLeader > 0 && <span><b>{stats.missingLeader}</b> 个待设主管</span>}
           </div>
         </div>
         {canManage && (
@@ -400,13 +411,27 @@ export default function DeptManage() {
             <div className="org-view-tree-heading">
               <Typography.Text bold>组织目录</Typography.Text>
               <div className="org-view-tree-tools">
+                {canManageLeader && (
+                  <Button
+                    type={onlyMissingLeader ? 'primary' : 'text'}
+                    size="mini"
+                    aria-pressed={onlyMissingLeader}
+                    onClick={() => {
+                      const next = !onlyMissingLeader
+                      setOnlyMissingLeader(next)
+                      setExpandedKeys(allKeys(filterTree(tree, keyword, next)))
+                    }}
+                  >
+                    仅看待设主管
+                  </Button>
+                )}
                 <Button type="text" size="mini" onClick={() => setExpandedKeys(allKeys(visibleTree))}>展开</Button>
                 <Button type="text" size="mini" onClick={() => setExpandedKeys([])}>收起</Button>
               </div>
             </div>
             <Input allowClear prefix={<IconSearch />} placeholder="搜索组织名称" value={keyword} onChange={(value) => {
               setKeyword(value)
-              setExpandedKeys(allKeys(filterTree(tree, value)))
+              setExpandedKeys(allKeys(filterTree(tree, value, filterMissingLeader)))
             }} />
           </div>
           <div className="org-view-tree-scroll">
@@ -425,7 +450,7 @@ export default function DeptManage() {
                     const id = Number(keys[0])
                     setSelected(id ? findNode(tree, id) : null)
                   }}
-                /> : !loading && <div className="org-view-tree-empty">{keyword.trim() ? '未找到匹配的组织' : '暂无组织'}</div>}
+                /> : !loading && <div className="org-view-tree-empty">{keyword.trim() || filterMissingLeader ? '未找到匹配的组织' : '暂无组织'}</div>}
               </Spin>
             )}
           </div>

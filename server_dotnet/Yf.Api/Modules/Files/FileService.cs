@@ -38,6 +38,15 @@ public sealed class FileService(
         var direction = context.Request.Query["direction"].ToString();
         var keyword = context.Request.Query["keyword"].ToString().Trim();
         var targetId = QueryValues.OptionalUInt64(context.Request, "targetId");
+        // The table's 类型 filter sends the extensions of one category ("step,stp,x_t"); it has to be part of the query,
+        // otherwise only the current page would be filtered and the total would describe a different result set.
+        var extensions = context.Request.Query["ext"].ToString()
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(extension => extension.TrimStart('.').ToLowerInvariant())
+            .Where(extension => extension.Length is > 0 and <= 16)
+            .Distinct(StringComparer.Ordinal)
+            .Take(64)
+            .ToArray();
         // Withdrawn files stay listed for internal accounts (readable) and for the supplier account that withdrew
         // them (restorable, not readable); other supplier accounts never see them.
         var actorId = actor.Id;
@@ -50,6 +59,11 @@ public sealed class FileService(
         {
             var pattern = QueryValues.ContainsPattern(keyword);
             query = query.Where(file => EF.Functions.Like(file.OriginalName, pattern, QueryValues.LikeEscape));
+        }
+        if (extensions.Length > 0)
+        {
+            var allowed = extensions;
+            query = query.Where(file => allowed.Contains(file.Ext.ToLower()));
         }
         var total = (ulong)await query.LongCountAsync(ct);
         var rows = await query.OrderByDescending(file => file.Id).Select(file => new FileListRow

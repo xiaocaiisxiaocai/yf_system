@@ -378,4 +378,31 @@ describe('FileTable DOM contracts', () => {
       vi.stubGlobal('ResizeObserver', original)
     }
   })
+
+  it('displays total selected file size and asks the server for the chosen file category', async () => {
+    mocks.permissions.add('file:download')
+    const all = [row(1, '总装图.step', 'step', 2048), row(2, '说明文档.pdf', 'pdf', 1024)]
+    // 类型筛选在服务端生效：请求带上类别的扩展名，返回的 list/total 才是这一类的文件。
+    mocks.get.mockImplementation((_url: string, config?: { params?: { ext?: string } }) => {
+      const ext = config?.params?.ext
+      const list = ext ? all.filter((file) => ext.split(',').includes(file.ext)) : all
+      return Promise.resolve({ data: { list, total: list.length, page: 1, pageSize: 50 } })
+    })
+    render(<FileTable projectId={1} projectStatus="IN_PROGRESS" />)
+    await screen.findByText('总装图.step')
+
+    await userEvent.click(tableRow('总装图.step').getByRole('checkbox'))
+    expect(screen.getByLabelText('已选文件大小')).toHaveTextContent('共 2.0 KB')
+    expect(screen.getByRole('button', { name: '打包下载（1）' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('combobox', { name: '文件类型' }))
+    fireEvent.click(await screen.findByRole('option', { name: '文档与演示' }))
+
+    await waitFor(() => expect(screen.queryByText('总装图.step')).not.toBeInTheDocument())
+    expect(screen.getByText('说明文档.pdf')).toBeInTheDocument()
+    expect(mocks.get).toHaveBeenLastCalledWith('/projects/1/files', expect.objectContaining({
+      params: expect.objectContaining({ page: 1, ext: expect.stringContaining('pdf') }),
+    }))
+    expect(screen.queryByRole('button', { name: '打包下载（1）' })).not.toBeInTheDocument()
+  })
 })

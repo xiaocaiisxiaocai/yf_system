@@ -2,6 +2,7 @@ import { useRef, useState, type ReactNode } from 'react'
 import { Button, Drawer, Layout } from '@arco-design/web-react'
 import { IconMenu } from '@arco-design/web-react/icon'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import RouteErrorBoundary from '../components/RouteErrorBoundary'
 import AppRail, { type BusinessLine } from './AppRail'
 import NavSider, { NavMenu, type NavItem } from './NavSider'
 import './SectionShell.css'
@@ -44,7 +45,7 @@ export default function SectionShell({ title, subtitle, menu, account, line }: {
       <Layout className="layout-main">
         {line && <AppRail active={line} />}
         {items.length > 0 && <NavSider items={navItems} selectedKey={selected} onSelect={(key) => navigate(key)} />}
-        <Content className="layout-content"><Outlet /></Content>
+        <Content className="layout-content"><RouteErrorBoundary><Outlet /></RouteErrorBoundary></Content>
       </Layout>
       {items.length > 0 && <Drawer className="mobile-nav-drawer" title={(
         <div className="drawer-brand"><img className="drawer-logo" src="/saa-logo.svg" alt="SAA" /><span>{title}</span></div>

@@ -66,7 +66,15 @@ export function MessageComposer({
           disabled={sending}
           onChange={onSignerNameChange}
         />}
-        <Button className="message-composer-send" type="primary" size="small" icon={<IconSend />} onClick={onSend} disabled={(!content.trim() && !images.length) || loading && listLength === 0} loading={sending}>
+        <Button
+          className="message-composer-send"
+          type="primary"
+          size="small"
+          icon={<IconSend />}
+          onClick={onSend}
+          disabled={(!content.trim() && !images.length) || Boolean(onSignerNameChange && !signerName?.trim()) || (loading && listLength === 0)}
+          loading={sending}
+        >
           发送
         </Button>
       </div>

@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Button, Form, Input, Message, Spin } from '@arco-design/web-react'
 import { IconLock, IconUser } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import AuthShell from '../../../components/AuthShell'
 import PasswordInput from '../../../components/PasswordInput'
 import { confirmPasswordRule, passwordRule } from '../../../utils/password'
-import { bootPortalSession, portalChangePassword, portalLogin, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
+import { bootPortalSession, portalChangePassword, portalLogin, portalLogout, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
 
 const OEM_BRAND = 'ODM/OEMA 文件传递'
 
@@ -53,9 +53,29 @@ export function PortalChangePasswordPage() {
   const { booted, token, mustChangePassword } = usePortalAuth()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const submitting = useRef(false)
   useEffect(() => { void bootPortalSession() }, [])
 
+  const exitLogin = async () => {
+    if (submitting.current) return
+    submitting.current = true
+    setLoading(true)
+    try {
+      await portalLogout()
+      navigate(`${PORTAL_BASE}/login`, { replace: true })
+    } finally {
+      submitting.current = false
+      setLoading(false)
+    }
+  }
+
   const submit = async (values: { oldPassword: string; newPassword: string; confirm: string }) => {
+    if (values.newPassword === values.oldPassword) {
+      Message.error('新密码不能与当前密码相同')
+      return
+    }
+    if (submitting.current) return
+    submitting.current = true
     setLoading(true)
     try {
       // A password change revokes every session: sign in again with the new password.
@@ -63,6 +83,7 @@ export function PortalChangePasswordPage() {
       Message.success('密码已修改，请使用新密码重新登录')
       navigate(`${PORTAL_BASE}/login`, { replace: true })
     } finally {
+      submitting.current = false
       setLoading(false)
     }
   }
@@ -89,7 +110,12 @@ export function PortalChangePasswordPage() {
         <Form.Item field="confirm" label="确认新密码" dependencies={['newPassword']} rules={[{ required: true, message: '请再次输入新密码' }, confirmPasswordRule(form)]}>
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />
         </Form.Item>
-        <Button type="primary" size="large" long htmlType="submit" loading={loading}>保存</Button>
+        <div className="auth-actions">
+          <Button long disabled={loading} onClick={mustChangePassword ? () => void exitLogin() : () => navigate(-1)}>
+            {mustChangePassword ? '退出登录' : '返回'}
+          </Button>
+          <Button type="primary" long htmlType="submit" loading={loading}>保存</Button>
+        </div>
       </Form>
     </AuthShell>
   )

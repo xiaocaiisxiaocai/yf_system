@@ -309,6 +309,43 @@ public sealed class SupplierWithdrawalTests
         Json(await files.ListAsync(Context(viewer), projectId, ct)).GetProperty("list").EnumerateArray()
             .ToDictionary(item => item.GetProperty("id").GetUInt64());
 
+    /// <summary>
+    /// The file table's 类型 filter sends extensions; they must narrow the query itself, otherwise only one page
+    /// would be filtered while the total still describes every file of the project.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheFileListFiltersByTheRequestedExtensionsTogetherWithItsTotal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("files_list_ext", ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync(Fixture + """
+            INSERT INTO file_blobs(id,sha256,size_bytes,storage_path,state,created_at)
+            VALUES(900,REPEAT('a',64),4,'blobs/sha256/aa/fixture','READY',UTC_TIMESTAMP(6));
+            INSERT INTO files(id,project_id,uploader_id,blob_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status,created_at)
+            VALUES
+                (3101,1001,101,900,'C2S','总装图.step','s31','step',4,'blobs/sha256/aa/fixture','AVAILABLE',UTC_TIMESTAMP(6)),
+                (3102,1001,101,900,'C2S','说明.pdf','s32','pdf',4,'blobs/sha256/aa/fixture','AVAILABLE',UTC_TIMESTAMP(6)),
+                (3103,1001,101,900,'C2S','旧图.STEP','s33','STEP',4,'blobs/sha256/aa/fixture','AVAILABLE',UTC_TIMESTAMP(6));
+            """, ct);
+        var files = Files(database.Options);
+
+        var all = await files.ListAsync(Context(Owner), 1001, ct);
+        Assert.Equal(3UL, all.Total);
+
+        // 扩展名前面的点与大小写都不影响匹配，total 必须描述筛选后的这一批。
+        var models = await files.ListAsync(Context(Owner, "?ext=step"), 1001, ct);
+        Assert.Equal(2UL, models.Total);
+        Assert.Equal(new ulong[] { 3101, 3103 }, models.List.Select(item => item.Id).OrderBy(id => id).ToArray());
+
+        var dotted = await files.ListAsync(Context(Owner, "?ext=.PDF,step"), 1001, ct);
+        Assert.Equal(3UL, dotted.Total);
+
+        var none = await files.ListAsync(Context(Owner, "?ext=dwg"), 1001, ct);
+        Assert.Equal(0UL, none.Total);
+        Assert.Empty(none.List);
+    }
+
     private const string Fixture = """
         UPDATE users SET must_change_password=0 WHERE id=1;
         INSERT INTO suppliers(id,name,status,created_by) VALUES(100,'撤回供应商','ACTIVE',1);
@@ -339,10 +376,11 @@ public sealed class SupplierWithdrawalTests
             new MediaGrantService(options), new DownloadGrantService(), identity, NullLogger<FileService>.Instance);
     }
 
-    private static DefaultHttpContext Context(CurrentUser actor)
+    private static DefaultHttpContext Context(CurrentUser actor, string? query = null)
     {
         var context = new DefaultHttpContext();
         context.Items[typeof(CurrentUser)] = actor;
+        if (query is not null) context.Request.QueryString = new QueryString(query);
         return context;
     }
 

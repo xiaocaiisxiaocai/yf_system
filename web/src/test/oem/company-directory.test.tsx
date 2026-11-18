@@ -12,7 +12,7 @@ vi.mock('../../utils/excelWorkbook', () => ({
   createExcelWorkbook: vi.fn(),
   readExcelTable: vi.fn(),
 }))
-import { downloadExcelWorkbook } from '../../utils/excelWorkbook'
+import { downloadExcelWorkbook, readExcelTable } from '../../utils/excelWorkbook'
 import { MemoryRouter } from 'react-router-dom'
 
 
@@ -422,5 +422,26 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     await waitFor(() => expect(deleteAccount).toHaveBeenCalledTimes(1))
     expect(deleteAccount).toHaveBeenCalledWith(yuankongAccount.id)
     expect(deleteAccount).not.toHaveBeenCalledWith(junchuangAccount.id)
+  })
+
+  it('导入 ODM/OEMA 账号时拦截数值格式的账号列，并在厂商账号全部停用时展示提醒', async () => {
+    const user = userEvent.setup()
+    vi.mocked(readExcelTable).mockResolvedValueOnce([{
+      rowNumber: 2,
+      values: { 厂商名称: '精工制造有限公司', 账号: '12345', 初始密码: 'First#2026' },
+      numericCells: new Set(['账号']),
+    }])
+    const accounts = vi.fn().mockResolvedValue([account({ status: 'DISABLED' })])
+    renderDirectory(baseApi({ accounts }), ['oem:company_manage', 'oem:account_manage'])
+
+    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
+    await user.click(within(row).getByRole('button', { name: '账号管理' }))
+    expect(await screen.findByText('该厂商所有账号均已停用，暂时无法登录门户接收或回传文件。')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: '导入' }))
+    fireEvent.click(await screen.findByText('导入账号'))
+    const dialog = await screen.findByRole('dialog', { name: '导入 ODM/OEMA 厂商账号' })
+    await user.upload(within(dialog).getByLabelText('选择 Excel 文件'), new File(['x'], 'accounts.xlsx'))
+    expect(await within(dialog).findByText('账号列请设置为文本格式，以保留前导零')).toBeVisible()
   })
 })

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Space, Typography,
+  Alert, Button, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Space, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -114,6 +114,9 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
           <Button size="small" loading={loading} onClick={load}>重试</Button>
         </Space>
       )}
+      {!loading && !failed && contacts.length > 0 && contacts.every((item) => item.status !== 'ACTIVE') && (
+        <Alert type="warning" style={{ marginBottom: 12 }} content="该供应商所有联络人均已停用，不能被选为新建项目的供应商负责人。" />
+      )}
       <div className="drawer-toolbar responsive-toolbar">
         <Typography.Text type="secondary">{loading ? '联络人加载中…' : failed ? '联络人列表暂不可用' : `共 ${contacts.length} 位联络人`}</Typography.Text>
         <Space>
@@ -169,7 +172,7 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
                 编辑
               </Button>,
               contact.status === 'ACTIVE' ? (
-                <Popconfirm key="status" title="停用后不能再被选为 Robot 负责人或用于签名，确认停用？" onOk={() => toggle(contact)}>
+                <Popconfirm key="status" title="停用后不能再被选为 Robot 负责人或接收通知邮件，确认停用？" onOk={() => toggle(contact)}>
                   <Button size="mini" type="text" status="danger" loading={togglingIds.has(contact.id)} disabled={togglingIds.has(contact.id)}>停用</Button>
                 </Popconfirm>
               ) : (
@@ -197,7 +200,7 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
         <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
             <Form.Item label="姓名" field="name" rules={[{ required: true, message: '请输入姓名' }, textLengthRule('姓名', 32)]}>
-              <Input autoFocus placeholder="签名时需与此姓名一致" />
+              <Input autoFocus placeholder="请输入联络人姓名" />
             </Form.Item>
             <Form.Item label="邮箱" field="email" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }, textLengthRule('邮箱', 128)]}>
               <Input placeholder="name@example.com" />

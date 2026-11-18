@@ -41,6 +41,7 @@ import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validateInitialPa
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import './CompaniesPage.css'
 import EnterSubmit from '../../../components/EnterSubmit'
+import PasswordInput from '../../../components/PasswordInput'
 import ToolbarMenuButton from '../../../components/ToolbarMenuButton'
 import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../../utils/accountName'
 import StatusTag from '../../../components/StatusTag'
@@ -265,6 +266,9 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
       onCancel={onClose} footer={null} unmountOnExit>
       {!can.manageCompanies ? <span>当前账号没有 ODM/OEMA 厂商管理权限。</span> : <>
         {failed && <Alert type="error" style={{ marginBottom: 12 }} content="联络人列表加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
+        {!loading && !failed && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
+          <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有联络人均已停用，传递单发布后将不会收到邮件通知。" />
+        )}
         <div className="drawer-toolbar responsive-toolbar">
           <Typography.Text type="secondary">共 {rows.length} 位联络人</Typography.Text>
           <Space>
@@ -354,7 +358,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     let password = ''
     Modal.confirm({
       title: `重置账号 ${account.employeeNo} 的密码`,
-      content: <Input.Password autoFocus autoComplete="new-password" placeholder={`新的初始密码（${PASSWORD_MIN_CHARS}-${PASSWORD_MAX_CHARS} 个字符）`}
+      content: <PasswordInput autoFocus autoComplete="new-password" placeholder={`新的初始密码（${PASSWORD_MIN_CHARS}-${PASSWORD_MAX_CHARS} 个字符）`}
         onChange={(value) => { password = value }} />,
       onOk: async () => {
         const invalid = password ? validatePassword(password) : '请输入新的初始密码'
@@ -474,6 +478,9 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       )}
       {can.manageAccounts ? (
         <>
+          {!accountsLoading && !loadError && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
+            <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有账号均已停用，暂时无法登录门户接收或回传文件。" />
+          )}
           {/* 与协作端供应商账号抽屉一致：左侧数量，右侧操作。 */}
           <div className="drawer-toolbar responsive-toolbar">
             <Typography.Text type="secondary">共 {rows.length} 个账号</Typography.Text>
@@ -511,7 +518,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
           <Form.Item field="employeeNo" label="账号" extra="不区分大小写，所有 ODM/OEMA 厂商之间不可重名" rules={[{ required: true }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
             <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
           </Form.Item>
-          <Form.Item field="password" label="初始密码" extra="首次登录需改密" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><Input.Password placeholder="5-20 位" /></Form.Item>
+          <Form.Item field="password" label="初始密码" extra="首次登录需改密" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><PasswordInput placeholder="5-20 位" /></Form.Item>
         <EnterSubmit /></Form>
       </Modal>
     </Drawer>
@@ -622,7 +629,7 @@ export default function CompaniesPage() {
         return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '登录账号已存在，不会覆盖现有资料' }
       if (!employeeNo || !isValidAccountName(employeeNo))
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: ACCOUNT_NAME_MESSAGE }
-      if (row.numericCells.has('登录账号'))
+      if (row.numericCells.has('账号'))
         return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '账号列请设置为文本格式，以保留前导零' }
       const passwordError = validateInitialPassword(initialPassword)
       if (passwordError)

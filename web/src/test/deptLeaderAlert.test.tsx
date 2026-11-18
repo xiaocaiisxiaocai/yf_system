@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -57,5 +57,20 @@ describe('组织树负责人缺失标记', () => {
     render(<DeptManage />)
     await screen.findByText('无主管部')
     expect(screen.queryByText('未设负责人')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '仅看待设主管' })).not.toBeInTheDocument()
+  })
+
+  it('负责人管理者可查看待设主管统计并按仅看待设主管筛选组织树', async () => {
+    mocks.permissions = ['dept:leader_manage']
+    render(<DeptManage />)
+    await screen.findByText('无主管部')
+    expect(screen.getByLabelText('组织统计')).toHaveTextContent('1 个待设主管')
+
+    const filterBtn = screen.getByRole('button', { name: '仅看待设主管' })
+    expect(filterBtn).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(filterBtn)
+    expect(filterBtn).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('无主管部')).toBeInTheDocument()
+    expect(screen.queryByText('停用部')).not.toBeInTheDocument()
   })
 })

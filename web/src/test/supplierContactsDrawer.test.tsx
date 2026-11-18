@@ -39,7 +39,7 @@ describe('SupplierContactsDrawer failures', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /新增联络人/ }))
     const dialog = await screen.findByRole('dialog', { name: '新增联络人' })
-    fireEvent.change(within(dialog).getByPlaceholderText('签名时需与此姓名一致'), { target: { value: '李四' } })
+    fireEvent.change(within(dialog).getByPlaceholderText('请输入联络人姓名'), { target: { value: '李四' } })
     fireEvent.change(within(dialog).getByPlaceholderText('name@example.com'), { target: { value: 'li@example.com' } })
     // 输入框里按 Enter 走 Form onSubmit（返回的 promise 无人接收）。
     fireEvent.submit(dialog.querySelector('form')!)
@@ -48,7 +48,7 @@ describe('SupplierContactsDrawer failures', () => {
     await settle()
     expect(unhandled).toEqual([])
     expect(screen.getByRole('dialog', { name: '新增联络人' })).toBeInTheDocument()
-    expect(within(dialog).getByPlaceholderText('签名时需与此姓名一致')).toHaveValue('李四')
+    expect(within(dialog).getByPlaceholderText('请输入联络人姓名')).toHaveValue('李四')
     // 保存状态已复位，可再次提交。
     await waitFor(() => expect(within(dialog).getByRole('button', { name: '添加联络人' })).not.toBeDisabled())
     mocks.post.mockResolvedValue({ data: {} })
@@ -70,5 +70,6 @@ describe('SupplierContactsDrawer failures', () => {
     await settle()
     expect(unhandled).toEqual([])
     await waitFor(() => expect(screen.getByRole('button', { name: '启用' })).not.toBeDisabled())
+    expect(screen.getByText('该供应商所有联络人均已停用，不能被选为新建项目的供应商负责人。')).toBeInTheDocument()
   })
 })

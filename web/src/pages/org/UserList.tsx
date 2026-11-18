@@ -72,14 +72,26 @@ interface InternalUserImportPayload {
   initialPassword: string
 }
 
-interface DeptTreeData { key: string; title: string; value: string; children?: DeptTreeData[] }
-function toTreeData(nodes: DeptNode[]): DeptTreeData[] {
-  return nodes.map((n) => ({
-    key: String(n.id),
-    title: n.kind && ORG_KIND_LABEL[n.kind] ? `${n.name}（${ORG_KIND_LABEL[n.kind]}）` : n.name,
-    value: String(n.id),
-    children: n.children && n.children.length ? toTreeData(n.children) : undefined,
-  }))
+interface DeptTreeData { key: string; title: string; value: string; disabled?: boolean; children?: DeptTreeData[] }
+function toTreeData(
+  nodes: DeptNode[],
+  options: { disableInactive?: boolean; allowedInactiveId?: number | null; parentActive?: boolean } = {},
+): DeptTreeData[] {
+  const { disableInactive = false, allowedInactiveId = null, parentActive = true } = options
+  return nodes.map((n) => {
+    const active = parentActive && n.status === 'ACTIVE'
+    const baseTitle = n.kind && ORG_KIND_LABEL[n.kind] ? `${n.name}（${ORG_KIND_LABEL[n.kind]}）` : n.name
+    const title = active ? baseTitle : `${baseTitle}（已停用）`
+    return {
+      key: String(n.id),
+      title,
+      value: String(n.id),
+      disabled: disableInactive && !active && n.id !== allowedInactiveId,
+      children: n.children && n.children.length
+        ? toTreeData(n.children, { disableInactive, allowedInactiveId, parentActive: active })
+        : undefined,
+    }
+  })
 }
 
 function departmentSections(nodes: DeptNode[], parentActive = true): DepartmentSectionOption[] {
@@ -179,6 +191,10 @@ export default function UserList() {
   const optionsError = optionsQuery.isError && !optionsQuery.isFetching
   const loadedDepts = authorizationError ? undefined : optionsQuery.data?.depts
   const deptTreeData = useMemo(() => toTreeData(loadedDepts ?? []), [loadedDepts])
+  const formDeptTreeData = useMemo(
+    () => toTreeData(loadedDepts ?? [], { disableInactive: true, allowedInactiveId: editing?.departmentId ?? null }),
+    [editing?.departmentId, loadedDepts],
+  )
   // 账号可以挂在事业部、部门或课别任一层级（如部门主管只属于部门）。
   const activeOrganizations = useMemo(() => departmentSections(loadedDepts ?? [])
     .filter(item => item.active), [loadedDepts])
@@ -448,11 +464,13 @@ export default function UserList() {
           />
           <TreeSelect
             allowClear
+            showSearch
             placeholder="全部组织"
             style={{ width: 180 }}
             treeData={deptTreeData}
             loading={optionsLoading}
             disabled={optionsError}
+            filterTreeNode={(input, node) => String(node.props?.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
             value={departmentId ? String(departmentId) : undefined}
             onChange={(v) => {
               const next = v ? Number(v) : undefined
@@ -648,7 +666,14 @@ export default function UserList() {
               <Input placeholder="name@example.com" />
             </Form.Item>
             <Form.Item label="所属组织" field="departmentId" rules={[{ required: true, message: '请选择所属组织' }]}>
-              <TreeSelect placeholder="选择组织" treeData={deptTreeData} loading={optionsLoading} disabled={optionsError} />
+              <TreeSelect
+                showSearch
+                placeholder="选择组织"
+                treeData={formDeptTreeData}
+                loading={optionsLoading}
+                disabled={optionsError}
+                filterTreeNode={(input, node) => String(node.props?.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
+              />
             </Form.Item>
             <Form.Item label="角色" field="roleId" rules={[{ required: true, message: '请选择角色' }]}>
               <Select showSearch placeholder="选择角色" loading={optionsLoading} disabled={optionsError}>

@@ -56,6 +56,14 @@ const COMPACT_NARROW_WIDTH = 480
 const COMPACT_NAME_MIN_WIDTH = 120
 const COMPACT_NARROW_ACTIONS_WIDTH = 76
 
+const FILE_CATEGORIES: Record<string, { label: string; exts: ReadonlySet<string> }> = {
+  model: { label: '3D与图纸', exts: new Set(['step', 'stp', 'x_t', 'dwg', 'dxf', 'igs', 'iges', 'stl', 'obj', '3ds']) },
+  sheet: { label: '表格与数据', exts: new Set(['xls', 'xlsx', 'xlsm', 'xlsb', 'csv']) },
+  doc: { label: '文档与演示', exts: new Set(['pdf', 'doc', 'docx', 'ppt', 'pptx', 'txt', 'md']) },
+  media: { label: '图片与视频', exts: new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'mp4', 'webm', 'ogv', 'avi', 'mov']) },
+  archive: { label: '压缩包', exts: new Set(['zip', 'rar', '7z']) },
+}
+
 const PDF_PREVIEW_MAX_BYTES = 50 * 1024 * 1024
 /** 文档在浏览器解析；视频由授权接口按需分段播放。 */
 function previewKind(ext: string, sizeBytes = 0): 'excel' | 'pdf' | 'pptx' | 'docx' | 'video' | 'image' | 'none' {
@@ -109,6 +117,7 @@ export default function FileTable({
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
   const [direction, setDirection] = useState<string>()
+  const [category, setCategory] = useState<string>()
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
@@ -123,14 +132,20 @@ export default function FileTable({
   const loadSeq = useRef(0)
   const batchDownloadInFlight = useRef(false)
 
+  // 类型筛选交给服务端：只过滤当前页会让总数和页数描述另一批文件。
+  const categoryExtensions = useMemo(
+    () => (category ? Array.from(FILE_CATEGORIES[category]?.exts ?? []).join(',') : undefined),
+    [category],
+  )
+
   const fetchFiles = useCallback(async (signal: AbortSignal) => {
     const r = await http.get<ApiResponses['GET /projects/{projectId}/files']>(`/projects/${projectId}/files`, {
-      params: { page, pageSize, direction, keyword: keyword || undefined, targetId },
+      params: { page, pageSize, direction, keyword: keyword || undefined, targetId, ext: categoryExtensions || undefined },
       signal,
       quietNetworkError: true,
     } as QuietRequestConfig)
     return r.data as PageResp<FileItem>
-  }, [projectId, page, pageSize, direction, keyword, targetId])
+  }, [projectId, page, pageSize, direction, keyword, targetId, categoryExtensions])
 
   const load = useCallback(() => {
     setLoading(true)
@@ -224,6 +239,10 @@ export default function FileTable({
   // 已撤回的文件内部账号仍可下载、预览；厂商账号只能看到记录（撤回它的账号可以恢复）。
   const internalViewer = user?.userType === 'INTERNAL'
   const readable = useCallback((f: FileItem) => !f.withdrawn || internalViewer, [internalViewer])
+  const selectedBytes = useMemo(
+    () => data.list.filter((file) => selected.includes(file.id)).reduce((sum, file) => sum + file.sizeBytes, 0),
+    [selected, data.list],
+  )
 
   const remove = useCallback(async (f: FileItem) => {
     try {
@@ -338,6 +357,23 @@ export default function FileTable({
             <Select.Option value="C2S">SAA → 供应商</Select.Option>
             <Select.Option value="S2C">供应商 → SAA</Select.Option>
           </Select>
+          <Select
+            allowClear
+            aria-label="文件类型"
+            placeholder="类型"
+            size={compact ? 'small' : undefined}
+            style={{ width: compact ? 110 : 130 }}
+            value={category}
+            onChange={(v) => {
+              setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
+              setPage(1)
+              setCategory(v as string | undefined)
+            }}
+          >
+            {Object.entries(FILE_CATEGORIES).map(([key, item]) => (
+              <Select.Option key={key} value={key}>{item.label}</Select.Option>
+            ))}
+          </Select>
           <Input.Search
             allowClear
             placeholder="文件名"
@@ -357,9 +393,12 @@ export default function FileTable({
         </Space>
         <Space>
           {selected.length > 0 && hasPerm('file:download') && (
-            <Button size={compact ? 'small' : undefined} icon={<IconDownload />} onClick={batchDownload} disabled={loading || batchDownloading} loading={batchDownloading}>
-              打包下载（{selected.length}）
-            </Button>
+            <>
+              <span className="file-selected-summary" aria-label="已选文件大小">共 {fmtSize(selectedBytes)}</span>
+              <Button size={compact ? 'small' : undefined} icon={<IconDownload />} onClick={batchDownload} disabled={loading || batchDownloading} loading={batchDownloading}>
+                打包下载（{selected.length}）
+              </Button>
+            </>
           )}
           {!targetId && canUpload && hasPerm('file:upload') && projectStatus === 'IN_PROGRESS' && (
             <Button type="primary" size={compact ? 'small' : undefined} icon={<IconUpload />} onClick={startUpload}>

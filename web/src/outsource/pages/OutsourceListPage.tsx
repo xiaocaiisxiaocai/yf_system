@@ -151,13 +151,15 @@ export default function OutsourceListPage() {
 
   const changeFilters = (next: Partial<Filters>) => { setFilters((current) => ({ ...current, ...next })); setPage(1) }
   const selectedItems = items.filter((item) => selected.includes(item.id))
+  const openSelectedItems = selectedItems.filter((item) => !item.closed)
+  const openSelected = openSelectedItems.map((item) => item.id)
 
   const syncNow = async () => {
     if (syncing) return
     setSyncing(true)
     try {
       const response = await http.post<ApiResponses['POST /outsource/items/sync']>('/outsource/items/sync', {
-        itemIds: selected.length > 0 ? selected : null,
+        itemIds: openSelected.length > 0 ? openSelected : null,
       })
       setSyncStatus(response.data)
       Message.success(`已同步 ${response.data.lastProcessed} 条，${response.data.lastChanged} 条有变更`)
@@ -295,9 +297,13 @@ export default function OutsourceListPage() {
     {
       title: '操作', width: canManage ? 80 : 56, align: 'center', fixed: 'right',
       render: (_, item) => <Space size={0}>
-        <Button type="text" size="mini" icon={<IconHistory />} aria-label={`工令 ${item.workOrderNo} 变更履历`} onClick={() => setHistory(item)} />
-        {canManage && <Button type="text" size="mini" disabled={item.closed} icon={<IconEdit />}
-          aria-label={`编辑工令 ${item.workOrderNo}`} onClick={() => setEditing(item)} />}
+        <Tooltip content="变更履历">
+          <Button type="text" size="mini" icon={<IconHistory />} aria-label={`工令 ${item.workOrderNo} 变更履历`} onClick={() => setHistory(item)} />
+        </Tooltip>
+        {canManage && <Tooltip content={item.closed ? '已完成记录不可编辑' : '编辑'}>
+          <Button type="text" size="mini" disabled={item.closed} icon={<IconEdit />}
+            aria-label={`编辑工令 ${item.workOrderNo}`} onClick={() => setEditing(item)} />
+        </Tooltip>}
       </Space>,
     },
   ]
@@ -325,7 +331,7 @@ export default function OutsourceListPage() {
         <Select aria-label="外发厂商" placeholder="外发厂商" allowClear showSearch style={{ width: 180 }} value={filters.vendorId}
           onChange={(value) => { changeFilters({ vendorId: value }); setSelected([]) }}
           options={vendors.map((vendor) => ({ label: vendor.status === 'ACTIVE' ? vendor.name : `${vendor.name}（已停用）`, value: vendor.id }))} />
-        <Select aria-label="外发类型" placeholder="外发类型" allowClear style={{ width: 200 }} value={filters.typeId}
+        <Select aria-label="外发类型" placeholder="外发类型" allowClear showSearch style={{ width: 200 }} value={filters.typeId}
           onChange={(value) => changeFilters({ typeId: value })}
           options={types.map((type) => ({ label: `${type.code}【${type.name}】`, value: type.id }))} />
         <Select aria-label="状态" placeholder="状态" allowClear style={{ width: 100 }} value={filters.status}
@@ -338,21 +344,25 @@ export default function OutsourceListPage() {
       </Space>
       <Space wrap>
         {canManage && closedSelected > 0 && <Button onClick={() => void setCompletion(false)}>重新开启 ({closedSelected})</Button>}
-        {canManage && selected.length > 0 && closedSelected === 0 && <>
-          <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(selected)}>发送邮件 ({selected.length})</Button>
-          <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({selected.length})</Button>
-          <Popconfirm title={`将所选 ${selected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
+        {canManage && openSelected.length > 0 && <>
+          <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(openSelected)}>发送邮件 ({openSelected.length})</Button>
+          <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({openSelected.length})</Button>
+          <Popconfirm title={`将所选 ${openSelected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
             <Button icon={<IconCheckCircle />}>标记完成</Button>
           </Popconfirm>
-          <Popconfirm title={sentSelected > 0
-            ? `所选含 ${sentSelected} 条已发送给厂商的记录，删除后不会通知厂商，且无法恢复。确定删除 ${selected.length} 条？`
-            : `删除所选 ${selected.length} 条记录？`} onOk={removeSelected}>
+        </>}
+        {canManage && selected.length > 0 && (
+          <Popconfirm title={[
+            sentSelected > 0 ? `所选含 ${sentSelected} 条已发送给厂商的记录，删除后不会通知厂商` : '',
+            closedSelected > 0 ? `所选含 ${closedSelected} 条已完成记录` : '',
+            `确定删除所选 ${selected.length} 条？删除后无法恢复。`,
+          ].filter(Boolean).join('；')} onOk={removeSelected}>
             <Button status="danger">删除</Button>
           </Popconfirm>
-        </>}
+        )}
         {syncStatus && <SyncBadge status={syncStatus} />}
-        {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running || closedSelected > 0}
-          onClick={() => void syncNow()}>{selected.length > 0 ? `同步所选 (${selected.length})` : '立即同步'}</Button>}
+        {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running || (selected.length > 0 && openSelected.length === 0)}
+          onClick={() => void syncNow()}>{openSelected.length > 0 ? `同步所选 (${openSelected.length})` : '立即同步'}</Button>}
         <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
         {canImport && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>汇入</Button>}
       </Space>
@@ -372,8 +382,8 @@ export default function OutsourceListPage() {
     <ItemHistoryDrawer item={history} onClose={() => setHistory(null)} />
     <EditDialog item={editing} vendors={vendors} types={types} onClose={() => setEditing(null)}
       onSaved={async () => { const ids = editing ? [editing.id] : []; setEditing(null); await load(); offerMail(ids) }} />
-    <BatchDialog visible={batchOpen} items={selectedItems} vendors={vendors} types={types} onClose={() => setBatchOpen(false)}
-      onSaved={async () => { const ids = selectedItems.map((item) => item.id); setBatchOpen(false); await load(); offerMail(ids) }} />
+    <BatchDialog visible={batchOpen} items={openSelectedItems} vendors={vendors} types={types} onClose={() => setBatchOpen(false)}
+      onSaved={async () => { const ids = openSelectedItems.map((item) => item.id); setBatchOpen(false); await load(); offerMail(ids) }} />
     <SendMailDialog itemIds={mailing} onClose={() => setMailing(null)}
       onSent={() => { setMailing(null); setSelected([]); void load() }} />
     <ExcelImportDialog<ImportRow> visible={importOpen} title="汇入外协清单" templateName="外协清单汇入模板.xlsx"
@@ -471,10 +481,18 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
     okButtonProps={{ disabled: nothing }} onCancel={() => { if (!saving) { reset(); onClose() } }} confirmLoading={saving}
     okText="保存" cancelText="取消">
     <Form layout="vertical" disabled={saving}>
-      <Form.Item label="外发厂商"><Select allowClear placeholder="不修改" value={vendorId} onChange={setVendorId}
-        options={vendors.filter((vendor) => vendor.status === 'ACTIVE').map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>
-      <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId} onChange={setTypeId}
+      <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId}
+        onChange={(value: number | undefined) => {
+          setTypeId(value)
+          if (value !== undefined && vendorId !== undefined) {
+            const allowed = types.find((type) => type.id === value)?.vendorIds ?? []
+            if (!allowed.includes(vendorId)) setVendorId(undefined)
+          }
+        }}
         options={typeOptions(types)} /></Form.Item>
+      <Form.Item label="外发厂商"><Select aria-label="外发厂商" allowClear placeholder="不修改" value={vendorId} onChange={setVendorId}
+        options={vendors.filter((vendor) => vendor.status === 'ACTIVE' && (typeId === undefined || (types.find((type) => type.id === typeId)?.vendorIds ?? []).includes(vendor.id)))
+          .map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>
       <Form.Item label="BOM时间"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={bomOn} onChange={(value) => setBomOn(value || undefined)} /></Form.Item>
       <Form.Item label="发图"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={drawingReleasedOn} onChange={(value) => setDrawingReleasedOn(value || undefined)} /></Form.Item>
       <Form.Item label="状态"><Select allowClear placeholder="不修改" value={status} onChange={setStatus} options={STATUS_OPTIONS} /></Form.Item>

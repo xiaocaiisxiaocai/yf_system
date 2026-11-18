@@ -1,5 +1,11 @@
 # 项目踩坑记录
 
+## 服务端分页表格的筛选必须走服务端（2026-11-17）
+
+- 现象：给 `FileTable` 加"文件类型"下拉后，筛选只作用于当前这 10 条，分页器仍显示未筛选的总数，第 2 页起可能整页空白；空表与"N 条"并存。
+- 根因：列表是 `GET /projects/{id}/files?page=&pageSize=` 的服务端分页，`data.list` 只是一页；前端 `filter` 得到的结果集与 `data.total` 不是同一个东西。
+- 规避：`FileService.ListAsync` 增加 `ext`（逗号分隔扩展名，大小写不敏感）查询参数，筛选和总数在同一条 SQL 里；前端只把类别映射成 `ext` 并重置 `page`，不再本地过滤。给任何服务端分页表格加筛选时，先确认后端支持该维度。
+
 ## Arco 组织树搜索默认匹配编号（2026-11-11）
 
 - `TreeSelect showSearch` 默认按节点的 `value/key` 搜索，选项值是组织编号时按中文名称搜不到。需提供 `filterTreeNode` 按 `node.props.title` 匹配，编号仍作为选中值。

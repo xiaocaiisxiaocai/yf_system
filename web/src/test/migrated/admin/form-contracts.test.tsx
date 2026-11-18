@@ -85,7 +85,12 @@ describe('管理员表单契约', () => {
     mocks.permissions = ['dept:manage', 'dept:delete', 'user:delete', 'role:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'project:create', 'project:update']
     mocks.user = { id: 1, employeeNo: 'admin', realName: '管理员', email: 'admin@example.invalid', userType: 'INTERNAL', isSystemAdmin: true }
     mocks.get.mockImplementation(async (url: string) => {
-      if (url === '/departments') return { data: [{ id: 4, name: '研发部', kind: 'DEPARTMENT', status: 'ACTIVE', sortNo: 1, children: [] }] }
+      if (url === '/departments') return {
+        data: [
+          { id: 4, name: '研发部', kind: 'DEPARTMENT', status: 'ACTIVE', sortNo: 1, children: [] },
+          { id: 5, name: '历史部', kind: 'DEPARTMENT', status: 'DISABLED', sortNo: 2, children: [] },
+        ],
+      }
       if (url === '/admin/user-role-options') return { data: [{ id: 7, name: '内部成员' }] }
       if (url === '/permissions' || url === '/supplier-options' || url === '/project-dictionaries') return { data: [] }
       if (url === '/admin/roles') return { data: page([], 20) }
@@ -229,6 +234,7 @@ describe('管理员表单契约', () => {
     await user.type(screen.getByPlaceholderText('5-20 位'), 'Strong#2026')
     await user.type(screen.getByPlaceholderText('姓名'), '部门主管')
     await openArcoSelect('选择组织', '研发部（部门）')
+    expect((await screen.findAllByText('历史部（部门）（已停用）')).at(-1)!.closest('.arco-tree-node')).toHaveClass('arco-tree-node-disabled')
     await openArcoSelect('选择角色', '内部成员')
     await user.click(screen.getByRole('button', { name: '创建用户' }))
 
@@ -267,6 +273,7 @@ describe('管理员表单契约', () => {
     await user.type(screen.getByPlaceholderText('姓名'), '测试用户')
     await user.type(screen.getByPlaceholderText('name@example.com'), 'employee@example.invalid')
     await openArcoSelect('选择组织', '研发部（部门）')
+    expect((await screen.findAllByText('历史部（部门）（已停用）')).at(-1)!.closest('.arco-tree-node')).toHaveClass('arco-tree-node-disabled')
     await openArcoSelect('选择角色', '内部成员')
     const confirm = screen.getByRole('button', { name: '创建用户' })
 

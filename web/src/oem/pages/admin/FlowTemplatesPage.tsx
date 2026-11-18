@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert, Button, Card, Checkbox, Empty, Form, Input, Message, Modal, Select, Space, Spin, Switch, Tag, Tooltip, TreeSelect, Typography,
 } from '@arco-design/web-react'
@@ -58,8 +58,22 @@ const blankSpecifiedNode = (): EditableNode => ({
   ...blankNode(), name: '审批节点', approverSource: 'SPECIFIED_USERS', approvalMode: 'ANY',
 })
 
-function toTree(nodes: DepartmentNode[]): { key: string; title: string; children: ReturnType<typeof toTree> }[] {
-  return nodes.map((node) => ({ key: String(node.id), title: node.name, children: toTree(node.children) }))
+function toTree(
+  nodes: DepartmentNode[],
+  keep: ReadonlySet<string>,
+  parentActive = true,
+): { key: string; value: string; title: string; disabled: boolean; children: ReturnType<typeof toTree> }[] {
+  return nodes.map((node) => {
+    const active = parentActive && node.status !== 'DISABLED'
+    return {
+      key: String(node.id),
+      value: String(node.id),
+      title: active ? node.name : `${node.name}（已停用）`,
+      // 已停用的组织不能再被新勾选（新建模板用不到），但已保存的范围必须仍可显示和取消。
+      disabled: !active && !keep.has(String(node.id)),
+      children: toTree(node.children, keep, active),
+    }
+  })
 }
 
 function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate | 'new'; onClose: () => void; onSaved: () => void }) {
@@ -71,11 +85,12 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
   const [nodes, setNodes] = useState<EditableNode[]>(existing ? existing.nodes.map((node) => ({ ...node, key: ++nodeKey })) : [blankNode()])
   const [scopes, setScopes] = useState<string[]>(existing?.scopes.map((scope) => String(scope.id)) ?? [])
   const [version, setVersion] = useState(existing?.version ?? 0)
-  const [tree, setTree] = useState<ReturnType<typeof toTree>>([])
+  const [departments, setDepartments] = useState<DepartmentNode[]>([])
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
 
-  useEffect(() => { void api.departments().then((list) => setTree(toTree(list))) }, [api])
+  useEffect(() => { void api.departments().then(setDepartments) }, [api])
+  const tree = useMemo(() => toTree(departments, new Set(scopes)), [departments, scopes])
 
   const patch = (key: number, value: Partial<EditableNode>) => setNodes((list) => list.map((node) => (node.key === key ? { ...node, ...value } : node)))
   const inputs = (): FlowNodeInput[] => nodes.map((node) => {
@@ -131,8 +146,17 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
         </Space>
         <div>
           <Typography.Text bold>适用组织</Typography.Text>
-          <TreeSelect treeData={tree} multiple allowClear value={scopes} onChange={setScopes} placeholder="不选择时仅作为默认模板使用"
-            style={{ width: '100%', marginTop: 4 }} />
+          <TreeSelect
+            treeData={tree}
+            multiple
+            allowClear
+            showSearch
+            filterTreeNode={(input, node) => String(node.props?.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
+            value={scopes}
+            onChange={setScopes}
+            placeholder="不选择时仅作为默认模板使用"
+            style={{ width: '100%', marginTop: 4 }}
+          />
           <Typography.Text type="secondary">发送人所在组织及其上级组织依次匹配，最先匹配到的模板生效；都未匹配时使用默认模板。</Typography.Text>
         </div>
         {nodes.map((node, index) => (

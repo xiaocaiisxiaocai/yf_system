@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Typography,
+  Alert, Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -210,6 +210,9 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
           <Typography.Text type="error">加载失败</Typography.Text>
           <Button size="small" loading={refreshing} onClick={load}>重试</Button>
         </Space>
+      )}
+      {!loading && !accountsFailed && accounts.length > 0 && accounts.every((item) => item.status !== 'ACTIVE') && (
+        <Alert type="warning" style={{ marginBottom: 12 }} content="该供应商所有账号均已停用，无法登录协作平台或被选入新建项目。" />
       )}
       <div className="drawer-toolbar responsive-toolbar">
         <Typography.Text type="secondary">{loading ? '账号加载中…' : accountsFailed ? '账号列表暂不可用' : `共 ${accounts.length} 个账号`}</Typography.Text>

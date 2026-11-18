@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { actionSlots } from '../../components/ActionSlots'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Result, Space, Spin, Table, Typography,
+  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Popover, Result, Space, Spin, Table, Typography,
 } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -129,15 +129,38 @@ function ApprovalPanel({ detail, onChanged, toolbarHost }: { detail: TransferDet
   )
 }
 
-/** 审批列只留状态和时间：时间取最近一次审批处理的时间，还没处理过就不显示。 */
+/** 审批列只留状态和时间：时间取最近一次审批处理的时间，还没处理过就不显示；悬浮可查看各节点详情。 */
 function ApprovalProgress({ approval, status }: { approval: ApprovalInfo; status: ApprovalStatus | null }) {
   const decidedAt = approval.nodes.flatMap((node) => node.tasks).map((task) => task.decidedAt)
     .filter((value): value is string => Boolean(value)).sort().pop()
-  return (
+  const content = (
     <Space direction="vertical" size={2} align="center">
       <ApprovalTag value={status} />
       {decidedAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{fmtTime(decidedAt)}</Typography.Text>}
     </Space>
+  )
+  if (approval.nodes.length === 0) return content
+  return (
+    <Popover
+      trigger="hover"
+      content={
+        <div style={{ maxWidth: 320, fontSize: 13 }}>
+          {approval.nodes.map((node) => (
+            <div key={node.sortNo} style={{ marginBottom: 6 }}>
+              <div><b>{node.sortNo}. {node.name}</b>（<ApprovalTag value={node.status as ApprovalStatus} />）</div>
+              {node.tasks.map((task) => (
+                <div key={task.id} style={{ paddingLeft: 12, color: 'var(--color-text-2)' }}>
+                  {task.approverName}{task.approverEmployeeNo ? `（${task.approverEmployeeNo}）` : ''}
+                  {task.reason ? `：${task.reason}` : ''}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      }
+    >
+      <span tabIndex={0}>{content}</span>
+    </Popover>
   )
 }
 
@@ -287,22 +310,21 @@ export default function TransferDetailPage() {
 
   const send = async () => {
     if (sendLocked.current || uploader.current?.isBusy()) return
+    const choosing = realm === 'oem' && summary.direction === 'OEM_TO_INTERNAL'
+    if (choosing && (recipientChoices.data?.length ?? 0) > 0 && notifyUserIds.length === 0) {
+      Message.warning('请选择要通知的公司人员')
+      return
+    }
+    if (choosing && !signerName.trim()) {
+      Message.warning('请填写签名')
+      return
+    }
     sendLocked.current = true
     setSending(true)
     try {
       const latest = await api.transfer(id)
       if (latest.summary.lifecycleStatus !== 'DRAFT') {
         handleNoLongerDraft(latest)
-        return
-      }
-      // A vendor names the company staff to notify; required whenever anyone can be notified.
-      const choosing = realm === 'oem' && latest.summary.direction === 'OEM_TO_INTERNAL'
-      if (choosing && (recipientChoices.data?.length ?? 0) > 0 && notifyUserIds.length === 0) {
-        Message.warning('请选择要通知的公司人员')
-        return
-      }
-      if (choosing && !signerName.trim()) {
-        Message.warning('请填写签名')
         return
       }
       try {

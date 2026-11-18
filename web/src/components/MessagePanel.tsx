@@ -287,12 +287,12 @@ export default function MessagePanel({
     const draft = content
     const text = draft.trim()
     const draftImages = images
-    if (!canWrite || (!text && !draftImages.length) || sendInFlight.current || feedQuery.isPending) return
+    const signature = signsMessages ? signerName.trim() : ''
+    if (!canWrite || (!text && !draftImages.length) || (signsMessages && !signature) || sendInFlight.current || feedQuery.isPending) return
     const requestFeedKey = feedKey
     const addMessage = addConfirmedMessage
     const requestSyncRoot = sync.rootKey
     const requestDraftScope = draftScope.current
-    const signature = signsMessages ? signerName.trim() : ''
     // 签名也是留言内容的一部分：换了签名就换新的 clientMessageId，避免与上次失败的请求冲突。
     const clientMessageId = clientMessageIdFor(sentDraft, `${signature}\u0000${text}`, draftImages)
     sendInFlight.current = true

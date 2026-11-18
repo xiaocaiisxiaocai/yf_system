@@ -99,6 +99,10 @@ describe('外协邮件发送', () => {
     const row = (await screen.findByText('厂商收件地址全部被拒收')).closest('tr')!
     expect(within(row).getByText('失败')).toBeInTheDocument()
     expect(within(row).getByText('（拒收 1）')).toBeInTheDocument()
+    await user.click(within(row).getByRole('button', { name: '详情' }))
+    const detailDialog = await screen.findByRole('dialog', { name: '邮件发送详情' })
+    expect(within(detailDialog).getByText('d1@vendor.test（被拒收）')).toBeInTheDocument()
+    expect(within(detailDialog).getByText('外发清单_鼎亚_20261110.xlsx')).toBeInTheDocument()
     await user.click(within(row).getByRole('button', { name: '重新发送' }))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/mails/5/retry'))
   })

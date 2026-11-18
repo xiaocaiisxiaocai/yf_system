@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { documentNavigation } from '../components/documentNavigation'
 import RouteErrorBoundary from '../components/RouteErrorBoundary'
+import SectionShell from '../layouts/SectionShell'
 
 function Boom(): JSX.Element {
   throw new Error('boom')
@@ -92,6 +93,20 @@ describe('RouteErrorBoundary', () => {
     first.unmount()
     render(tree)
     expect(reload).toHaveBeenCalledOnce()
+    expect(screen.getByText('页面出错')).toBeInTheDocument()
+  })
+
+  it('SectionShell wraps child routes in RouteErrorBoundary so header and menu remain visible on error', () => {
+    render(
+      <MemoryRouter initialEntries={['/oem/transfers']}>
+        <Routes>
+          <Route path="/oem" element={<SectionShell title="ODM/OEMA 文件传递" menu={[{ path: '/oem/transfers', label: '传递记录', icon: null, visible: true }]} account={<span>账号</span>} />}>
+            <Route path="transfers" element={<Boom />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(screen.getByText('ODM/OEMA 文件传递')).toBeInTheDocument()
     expect(screen.getByText('页面出错')).toBeInTheDocument()
   })
 })

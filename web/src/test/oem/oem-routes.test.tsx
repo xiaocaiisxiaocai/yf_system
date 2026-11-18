@@ -577,4 +577,37 @@ describe('ODM/OEMA 前端入口与路由', () => {
     await waitFor(() => expect(trigger).toHaveFocus())
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
+
+  it('门户修改密码拦截与当前密码相同的新密码，并在首次改密时提供退出登录入口', async () => {
+    const user = userEvent.setup()
+    usePortalAuth.setState({
+      token: 'portal-token',
+      account: { id: 31, employeeNo: 'OEM31', companyId: 9, companyName: '测试代工厂' },
+      mustChangePassword: true,
+      booted: true,
+      generation: 3,
+    })
+    const put = vi.spyOn(portalHttp, 'put')
+    vi.spyOn(portalHttp, 'post').mockResolvedValue({ data: {} } as never)
+    const client = createAppQueryClient()
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/oem-portal/change-password']}>
+          <App />
+          <CurrentLocation />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('首次登录请修改密码')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('当前密码'), 'Same#2026')
+    await user.type(screen.getByLabelText('新密码'), 'Same#2026')
+    await user.type(screen.getByLabelText('确认新密码'), 'Same#2026')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    expect(await screen.findByText('新密码不能与当前密码相同')).toBeInTheDocument()
+    expect(put).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: '退出登录' }))
+    await waitFor(() => expect(screen.getByLabelText('当前地址')).toHaveTextContent('/oem-portal/login'))
+  })
 })
