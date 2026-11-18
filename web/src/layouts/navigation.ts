@@ -13,10 +13,10 @@ interface NavigationGrants {
 export const COLLABORATION_PAGES = [
   { code: 'dashboard', path: '/', label: '工作台', anyPermission: ['project:list'] },
   { code: 'project:list', path: '/projects', label: 'Robot仿真协作', anyPermission: ['project:list'] },
-  { code: 'supplier:list', path: '/suppliers', label: '供应商管理', anyPermission: ['supplier:manage', 'supplier:account'] },
-  { code: 'org:user', path: '/org/users', label: '用户管理', anyPermission: ['user:manage'] },
+  { code: 'supplier:list', path: '/suppliers', label: '供应商管理', anyPermission: ['supplier:manage', 'supplier:account', 'supplier:view'] },
+  { code: 'org:user', path: '/org/users', label: '用户管理', anyPermission: ['user:manage', 'user:view'] },
   { code: 'org:dept', path: '/org/depts', label: '组织架构', anyPermission: [] },
-  { code: 'rbac:role', path: '/rbac/roles', label: '角色与权限', anyPermission: ['role:manage'] },
+  { code: 'rbac:role', path: '/rbac/roles', label: '角色与权限', anyPermission: ['role:manage', 'role:view'] },
   { code: 'log:audit', path: '/logs', label: '操作日志', anyPermission: ['log:view'] },
   { code: 'system:config', path: '/system/config', label: '系统参数', anyPermission: ['config:manage'] },
   { code: 'system:dict', path: '/system/dictionaries', label: '数据字典', anyPermission: ['dict:manage'] },

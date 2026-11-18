@@ -63,7 +63,7 @@ public sealed partial class OemUploadService(
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
         await OemTransferService.EnsureOwnDraftAsync(uow, current, transfer, ct);
-        if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+        if (current is InternalOemActor) await EnsureDraftWriteAsync(uow, current, ct);
         var settings = await OemSettings.LoadAsync(uow.Db, ct);
         if (settings.ReconcileRequired) throw new ApiException(503, 50302, "系统正在进行存储核对，暂时不能上传");
         if (!settings.AllowedExtensions(transfer.Direction).Contains(extension)) throw ApiException.BadRequest($"不允许上传 .{extension} 类型的文件");
@@ -156,7 +156,7 @@ public sealed partial class OemUploadService(
         {
             var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
             session = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: false, ct);
-            if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+            if (current is InternalOemActor) await EnsureDraftWriteAsync(uow, current, ct);
             await OemSettings.EnsureStorageSettledAsync(uow.Db, "上传", ct);
             if (session.Status != UploadStatuses.Uploading) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
             if (session.ExpiresAt <= uow.Now) throw ApiException.Conflict("上传会话已过期，请重新发起");
@@ -186,7 +186,7 @@ public sealed partial class OemUploadService(
             // wait for the session row, while the business gate still protects this transaction.
             await swap.RefreshNowAsync(ct);
             var uploader = await OemAuthorizer.RecheckAsync(swap, actor, ct);
-            if (uploader is InternalOemActor) await OemAuthorizer.RequireAsync(swap, uploader, OemPermissions.TransferCreate, ct);
+            if (uploader is InternalOemActor) await EnsureDraftWriteAsync(swap, uploader, ct);
             if (locked.Status != UploadStatuses.Uploading) throw ApiException.Conflict("会话不可上传（可能已合并或放弃）");
             if (locked.ExpiresAt <= swap.Now) throw ApiException.Conflict("上传会话已过期，请重新发起");
             File.Move(temporary, path, overwrite: true);
@@ -264,7 +264,7 @@ public sealed partial class OemUploadService(
         {
             current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
             session = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: true, ct);
-            if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+            if (current is InternalOemActor) await EnsureDraftWriteAsync(uow, current, ct);
             if (session.Status == UploadStatuses.Completed && session.ResultFileId is ulong done)
             {
                 await uow.CommitAsync(ct);
@@ -308,7 +308,7 @@ public sealed partial class OemUploadService(
                 current = await OemAuthorizer.RecheckAsync(uow, current, ct);
                 var transfer = await OemTransferProgression.LockTransferAsync(uow, session.TransferId, ct);
                 await OemTransferService.EnsureOwnDraftAsync(uow, current, transfer, ct);
-                if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+                if (current is InternalOemActor) await EnsureDraftWriteAsync(uow, current, ct);
                 var locked = await LoadOwnSessionAsync(uow, current, sessionId, forUpdate: true, ct);
                 if (locked.Status != UploadStatuses.Merging) throw ApiException.Conflict("上传会话状态已变化，请重新查询");
                 // The new file references the uploader; lock order transfer → session → account (see OemLocks).
@@ -476,6 +476,17 @@ public sealed partial class OemUploadService(
             await connection.DisposeAsync();
             throw;
         }
+    }
+
+    /// <summary>
+    /// Writing to a draft needs creation or update rights: the creator always writes its own draft, and a holder of
+    /// the separate update grant may edit it too. Keeping both here matches what the detail view offers.
+    /// </summary>
+    private static async Task EnsureDraftWriteAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct)
+    {
+        if (actor is not InternalOemActor) return;
+        if (await OemAuthorizer.HasAsync(uow, actor, OemPermissions.TransferCreate, ct)) return;
+        await OemAuthorizer.RequireAsync(uow, actor, OemPermissions.TransferUpdate, ct);
     }
 
     private static async Task<OemUploadSession> LoadOwnSessionAsync(OemUnitOfWork uow, OemActor actor, string sessionId, bool forUpdate, CancellationToken ct)

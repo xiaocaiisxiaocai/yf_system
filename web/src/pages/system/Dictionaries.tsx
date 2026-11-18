@@ -7,6 +7,7 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import './Dictionaries.css'
 import type { ApiResponses, ProjectDictionaryOption, RobotPart } from '../../api/types'
+import { useAuth } from '../../store/auth'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
 
@@ -133,6 +134,8 @@ export default function Dictionaries() {
   const hasFilter = Boolean(search || type === 'ROBOT_PART' && supplierId)
   const activeSuppliers = suppliers.filter((item) => item.status === 'ACTIVE')
   const canCreate = !loading && !error && (type !== 'ROBOT_PART' || activeSuppliers.length > 0)
+  // 删除是独立权限点：只有 dict:manage 的账号可以维护条目，但删除按钮必须按 dict:delete 渲染。
+  const canDeleteItems = useAuth((state) => state.hasPerm('dict:delete'))
   const resetFilters = () => { setKeyword(''); setSupplierId(undefined) }
   const emptyContent = <div className="dictionary-empty">
     <Empty description={hasFilter ? '未找到匹配项' : `暂无${label}数据`} />
@@ -149,7 +152,7 @@ export default function Dictionaries() {
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: RobotPart) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
       { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: RobotPart) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
-        item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <Popconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
+        canDeleteItems && (item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <Popconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>),
       ], 'single') },
     ]
     : [
@@ -158,7 +161,7 @@ export default function Dictionaries() {
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
       { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
-        <Popconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
+        canDeleteItems && <Popconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
       ], 'single') },
     ]
 

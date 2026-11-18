@@ -15,7 +15,7 @@ import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule, validateInitialPassword } from '../../utils/password'
 import type { ApiResponses } from '../../api/types'
-import type { DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
+import type { DataScopeResponse, DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../components/ExcelImportDialog'
@@ -55,6 +55,14 @@ type DeptNode = Omit<ApiDepartmentTreeNode, 'kind' | 'children'> & {
 }
 
 const ORG_KIND_LABEL = { DIVISION: '事业部', DEPARTMENT: '部门', SECTION: '课别' } as const
+// 数据范围与动作权限分开：管理员在这里按人覆盖角色默认值，不需要新增权限点或改代码。
+const SCOPE_DOMAINS = [
+  { domain: 'project', label: '项目范围' },
+  { domain: 'oem_transfer', label: 'ODM/OEMA 传递单范围' },
+] as const
+const SCOPE_LABELS: Record<string, string> = {
+  SELF: '仅本人', ORG: '本组织及下级', ALL: '全部',
+}
 const USER_IMPORT_HEADERS = ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码'] as const
 // 2026-11 之前的模板第 4 列叫“课别”，旧文件仍可导入。
 const USER_IMPORT_HEADER_ALIASES = { 课别: '所属组织' } as const
@@ -135,6 +143,8 @@ export default function UserList() {
     mustChangePassword: state.mustChangePassword,
   })))
   const canDelete = useAuth((state) => state.hasPerm('user:delete'))
+  // 编辑（含数据范围）需要 user:manage；只有 user:view 的账号只看列表，不给一个必然 403 的入口。
+  const canManageUsers = useAuth((state) => state.hasPerm('user:manage'))
   const [sessionUserId, sessionGeneration, sessionGrants] = createSessionQueryScope(auth)
   const sessionScope = useMemo(
     () => [sessionUserId, sessionGeneration, sessionGrants] as const,
@@ -151,6 +161,11 @@ export default function UserList() {
   const [exporting, setExporting] = useState(false)
   const [editing, setEditing] = useState<UserRow | null>(null)
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null)
+  const [scopeValues, setScopeValues] = useState<Record<string, string>>({})
+  const [scopeOriginal, setScopeOriginal] = useState<Record<string, string>>({})
+  const [scopeEffective, setScopeEffective] = useState<Record<string, string>>({})
+  const [scopesLoading, setScopesLoading] = useState(false)
+  const [scopeLoadedFor, setScopeLoadedFor] = useState<number | null>(null)
   const saveInFlight = useRef(false)
   const passwordResetInFlight = useRef(false)
   const [form] = Form.useForm()
@@ -169,6 +184,8 @@ export default function UserList() {
   }, queryClient)
   const optionsQuery = useQuery({
     queryKey: optionsQueryKey,
+    // 只读账号（user:view）不需要编辑用的组织/角色选项；请求它只会 403 并连带清空列表。
+    enabled: canManageUsers,
     queryFn: async ({ signal }) => {
       const config: QuietRequestConfig = { signal, quietNetworkError: true }
       const [departmentsResponse, rolesResponse] = await Promise.all([
@@ -179,17 +196,17 @@ export default function UserList() {
     },
   }, queryClient)
 
-  const authorizationError = isAuthorizationError(usersQuery.error) || isAuthorizationError(optionsQuery.error)
+  const authorizationError = isAuthorizationError(usersQuery.error)
   const data = !authorizationError && usersQuery.data ? usersQuery.data : { list: [], total: 0, page, pageSize }
   const loading = usersQuery.isFetching
   // 只有在还没有任何数据时才用错误视图替换表格；后台刷新失败保留上次加载的列表并在上方提示。
   const usersFailed = usersQuery.isError && !usersQuery.isFetching
   const loadError = usersFailed && (authorizationError || !usersQuery.data)
   const refreshError = usersFailed && !loadError
-  const roles = authorizationError ? EMPTY_ROLE_OPTIONS : optionsQuery.data?.roles ?? EMPTY_ROLE_OPTIONS
-  const optionsLoading = optionsQuery.isFetching
-  const optionsError = optionsQuery.isError && !optionsQuery.isFetching
-  const loadedDepts = authorizationError ? undefined : optionsQuery.data?.depts
+  const roles = authorizationError || optionsQuery.isError ? EMPTY_ROLE_OPTIONS : optionsQuery.data?.roles ?? EMPTY_ROLE_OPTIONS
+  const optionsLoading = canManageUsers && optionsQuery.isFetching
+  const optionsError = canManageUsers && optionsQuery.isError && !optionsQuery.isFetching
+  const loadedDepts = authorizationError || optionsQuery.isError ? undefined : optionsQuery.data?.depts
   const deptTreeData = useMemo(() => toTreeData(loadedDepts ?? []), [loadedDepts])
   const formDeptTreeData = useMemo(
     () => toTreeData(loadedDepts ?? [], { disableInactive: true, allowedInactiveId: editing?.departmentId ?? null }),
@@ -345,6 +362,31 @@ export default function UserList() {
   const saving = saveMutation.isPending
   const resettingPassword = passwordMutation.isPending
 
+  // 打开编辑时读取该账号的显式覆盖值；加载失败就保持“跟随角色默认”，避免误清空已有设置。
+  const loadScopes = async (userId: number) => {
+    setScopesLoading(true)
+    setScopeLoadedFor(null)
+    try {
+      const response = await http.get<ApiResponses['GET /admin/users/{id}/data-scopes']>(
+        `/admin/users/${userId}/data-scopes`, { quietNetworkError: true } as QuietRequestConfig)
+      const rows = response.data as DataScopeResponse[]
+      const values: Record<string, string> = {}
+      const effective: Record<string, string> = {}
+      for (const row of rows) {
+        values[row.domain] = row.localScope ?? ''
+        effective[row.domain] = row.effectiveScopeLabel
+      }
+      setScopeValues(values)
+      setScopeOriginal(values)
+      setScopeEffective(effective)
+      setScopeLoadedFor(userId)
+    } catch {
+      Message.error('数据范围加载失败，本次保存不会修改数据范围')
+    } finally {
+      setScopesLoading(false)
+    }
+  }
+
   const submit = async () => {
     if (saveInFlight.current) return
     saveInFlight.current = true
@@ -373,7 +415,26 @@ export default function UserList() {
         roleId: Number(roleId),
       }
       if (editing) {
-        // 资料与角色同一接口事务提交，避免两次 PUT 的半失败
+        // 只提交真正改过的业务域：另一域可能已被他人调整，整份写回会把它恢复成旧值。
+        // 范围草稿只在确实加载完成（属于当前编辑对象）时参与比较，避免切换账号时沿用上一人的草稿。
+        const changedScopes = scopeLoadedFor === editing.id
+          ? SCOPE_DOMAINS
+            .filter(({ domain }) => (scopeValues[domain] ?? '') !== (scopeOriginal[domain] ?? ''))
+            .map(({ domain }) => ({ domain, value: scopeValues[domain] ?? '' }))
+          : []
+        if (changedScopes.length > 0) {
+          // The range may have changed since the dialog opened (another administrator tightened it).
+          // Re-read before writing so an old form cannot silently restore a wider range.
+          const latest = await http.get<ApiResponses['GET /admin/users/{id}/data-scopes']>(
+            `/admin/users/${editing.id}/data-scopes`, { quietNetworkError: true } as QuietRequestConfig)
+          const remote = new Map((latest.data as DataScopeResponse[]).map((row) => [row.domain, row.localScope ?? '']))
+          const conflict = changedScopes.some(({ domain }) => (remote.get(domain) ?? '') !== (scopeOriginal[domain] ?? ''))
+          if (conflict) {
+            Message.error('数据范围已被他人修改，请关闭编辑框后重新打开再保存')
+            return
+          }
+        }
+        // 资料与范围同一接口、同一事务提交：任何一步被拒绝都不会留下半状态。
         await saveMutation.mutateAsync({
           id: editing.id,
           payload: {
@@ -381,6 +442,9 @@ export default function UserList() {
             email: payload.email,
             departmentId: payload.departmentId,
             roleId: payload.roleId,
+            ...(changedScopes.length > 0
+              ? { scopes: changedScopes.map(({ domain, value }) => ({ domain, scope: value || null })) }
+              : {}),
           },
         })
         Message.success('用户已更新')
@@ -503,15 +567,19 @@ export default function UserList() {
           <Button size="small" disabled={optionsLoading || optionsError || roles.length === 0} onClick={() => setImportOpen(true)}>
             导入 Excel
           </Button>
-          <Button size="small" loading={exporting} disabled={optionsLoading || optionsError} onClick={() => void exportUsers()}>
+          <Button size="small" loading={exporting} disabled={!canManageUsers || optionsLoading || optionsError} onClick={() => void exportUsers()}>
             导出 Excel
           </Button>
           <Button
             type="primary"
             icon={<IconPlus />}
-            disabled={optionsLoading || optionsError || roles.length === 0}
+            disabled={!canManageUsers || optionsLoading || optionsError || roles.length === 0}
             onClick={() => {
               setEditing(null)
+              setScopeValues({})
+              setScopeOriginal({})
+              setScopeEffective({})
+              setScopeLoadedFor(null)
               form.resetFields()
               setEditOpen(true)
             }}
@@ -565,12 +633,18 @@ export default function UserList() {
             width: 200,
             fixed: 'right' as const,
             render: (_: unknown, r: UserRow) => actionSlots([
-                <Button
+                canManageUsers && <Button
                   key="edit"
                   size="mini"
                   type="text"
                   onClick={() => {
+                    // 切换编辑对象时清掉上一人的范围草稿：加载失败时旧草稿不能被当成本次编辑的输入。
+                    setScopeValues({})
+                    setScopeOriginal({})
+                    setScopeEffective({})
+                    setScopeLoadedFor(null)
                     setEditing(r)
+                    void loadScopes(r.id)
                     form.setFieldsValue({
                       realName: r.realName,
                       email: r.email,
@@ -582,11 +656,11 @@ export default function UserList() {
                 >
                   编辑
                 </Button>,
-                <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(r)}>
+                canManageUsers && <Button key="reset-password" size="mini" type="text" onClick={() => openPasswordReset(r)}>
                   重置密码
                 </Button>,
                 // 内置管理员和自己的账号不能停用或删除：按钮保留但不可用，各行操作上下对齐。
-                <Popconfirm key="status" disabled={r.employeeNo === 'admin' || r.id === me?.id}
+                canManageUsers && <Popconfirm key="status" disabled={r.employeeNo === 'admin' || r.id === me?.id}
                   title={r.status === 'ACTIVE' ? '停用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
                   <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled={r.employeeNo === 'admin' || r.id === me?.id}>
                     {r.status === 'ACTIVE' ? '停用' : '启用'}
@@ -689,7 +763,29 @@ export default function UserList() {
                 ))}
               </Select>
             </Form.Item>
+            {editing && SCOPE_DOMAINS.map(({ domain, label }) => (
+              <Form.Item key={domain} label={label}>
+                <Select
+                  value={scopeValues[domain] ?? ''}
+                  loading={scopesLoading}
+                  disabled={!canManageUsers || scopesLoading || scopeLoadedFor !== editing.id}
+                  onChange={(value) => setScopeValues((prev) => ({ ...prev, [domain]: value }))}
+                >
+                  <Select.Option value="">
+                    跟随角色默认{scopeEffective[domain] ? `（当前：${scopeEffective[domain]}）` : ''}
+                  </Select.Option>
+                  <Select.Option value="SELF">{SCOPE_LABELS.SELF}</Select.Option>
+                  <Select.Option value="ORG">{SCOPE_LABELS.ORG}</Select.Option>
+                  <Select.Option value="ALL">{SCOPE_LABELS.ALL}</Select.Option>
+                </Select>
+              </Form.Item>
+            ))}
           </div>
+          {editing && (
+            <div className="dialog-note">
+              数据范围决定能看到谁的项目/传递单；“全部”只扩大可见范围，不会让账号获得编辑他人数据的权限。
+            </div>
+          )}
           {!editing && <div className="dialog-note">新用户首次登录时需要修改初始密码。</div>}
         <EnterSubmit /></Form>
       </Modal>

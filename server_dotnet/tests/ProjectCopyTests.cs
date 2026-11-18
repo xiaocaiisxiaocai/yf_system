@@ -415,6 +415,8 @@ public sealed class ProjectCopyTests
               (4,'copy-supplier','unused','源文件上传人','','SUPPLIER',6101,NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
         INSERT INTO roles(id,name,is_built_in,status) VALUES(6001,'复制受限角色',0,'ACTIVE');
         INSERT INTO role_permissions(role_id,permission_id) SELECT 6001,id FROM permissions WHERE code IN ('project:list','project:create','project:delete');
+        -- The colleague owns neither side of a copied project but, like every internal account in this fixture, sees both.
+        INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(6001,'project','ALL');
         INSERT INTO user_roles(user_id,role_id) VALUES(1,1),(3,6001),(4,4);
         INSERT INTO robot_parts(id,supplier_id,part_number,model,sort_no,status)
         VALUES(6202,6101,'COPY-PART','复制型号',1,'ACTIVE');

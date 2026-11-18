@@ -322,6 +322,8 @@ public sealed class BackgroundProjectCopyTests
                 INSERT INTO roles(id,name,is_built_in,status) VALUES(@RoleId,'受限复制角色',0,'ACTIVE');
                 INSERT INTO role_permissions(role_id,permission_id)
                 SELECT @RoleId,id FROM permissions WHERE code IN ('project:list','project:create');
+                -- The copy source belongs to someone else; ALL keeps the original "internal accounts see every project" premise.
+                INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(@RoleId,'project','ALL');
                 INSERT INTO user_roles(user_id,role_id) VALUES(@UserId,@RoleId);
                 """, new { UserId = limitedId, RoleId = limitedRoleId }, cancellationToken: ct));
             var limited = new CurrentUser(limitedId, "limited-copy-owner", "INTERNAL", null);

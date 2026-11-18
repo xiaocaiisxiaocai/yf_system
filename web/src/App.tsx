@@ -151,7 +151,7 @@ export default function App() {
             <Route path="transfers/:id" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create', 'oem:flow_approve', 'oem:approval_recover']}><OemTransferDetail /></Guard>} />
             <Route path="approvals" element={<Guard anyPermission={['oem:flow_approve', 'oem:approval_recover']}><OemApprovals /></Guard>} />
             <Route path="recovery" element={<Navigate to="/oem/approvals?tab=blocked" replace />} />
-            <Route path="admin/companies" element={<Guard anyPermission={['oem:company_manage', 'oem:account_manage']}><OemCompanies /></Guard>} />
+            <Route path="admin/companies" element={<Guard anyPermission={['oem:company_manage', 'oem:account_manage', 'oem:directory_view']}><OemCompanies /></Guard>} />
             <Route path="admin/flow-templates" element={<Navigate to="/oem/admin/settings?tab=flow" replace />} />
             <Route path="admin/retention" element={<Navigate to="/oem/admin/settings?tab=retention" replace />} />
             <Route path="admin/settings" element={<Guard anyPermission={OEM_SETTINGS_PERMISSIONS}><OemSettings /></Guard>} />

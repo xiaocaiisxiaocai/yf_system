@@ -437,7 +437,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     { key: 'lastLoginAt', title: '最近登录', render: (_: unknown, row: VendorAccount) => (row.lastLoginAt ? fmtTime(row.lastLoginAt) : '-') },
     {
       key: 'actions', title: '操作', fixed: 'right' as const,
-      render: (_: unknown, row: VendorAccount) => (
+      render: (_: unknown, row: VendorAccount) => (can.manageAccounts ? (
         <Space size={4}>
           <Button size="mini" type="text" onClick={() => reset(row)}>重置密码</Button>
           <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}
@@ -457,7 +457,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
             </Button>
           )}
         </Space>
-      ),
+      ) : <span>只读</span>),
     },
   ]
 
@@ -476,7 +476,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
         <Alert type="error" style={{ marginBottom: 12 }} content={loadError}
           action={<Button size="small" loading={accountsLoading} onClick={() => void load()}>重试</Button>} />
       )}
-      {can.manageAccounts ? (
+      {can.viewDirectory ? (
         <>
           {!accountsLoading && !loadError && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
             <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有账号均已停用，暂时无法登录门户接收或回传文件。" />
@@ -485,7 +485,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
           <div className="drawer-toolbar responsive-toolbar">
             <Typography.Text type="secondary">共 {rows.length} 个账号</Typography.Text>
             <Space>
-              <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setAdding(true) }}>新增账号</Button>
+              <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setAdding(true) }} disabled={!can.manageAccounts}>新增账号</Button>
             </Space>
           </div>
           {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
@@ -556,7 +556,7 @@ export default function CompaniesPage() {
   const [form] = Form.useForm()
 
   const load = useCallback(async () => {
-    if (!can.manageCompanies && !can.manageAccounts) return
+    if (!can.viewDirectory) return
     const isLatest = beginRequest()
     setListLoading(true)
     try {
@@ -571,7 +571,7 @@ export default function CompaniesPage() {
     } finally {
       if (isLatest()) setListLoading(false)
     }
-  }, [api, page, pageSize, keyword, status, can.manageCompanies, can.manageAccounts, beginRequest])
+  }, [api, page, pageSize, keyword, status, can.viewDirectory, beginRequest])
   useLoadEffect(load)
 
   const fetchAllCompanies = useCallback(async (search?: string, filterStatus?: string) => {
@@ -915,7 +915,7 @@ export default function CompaniesPage() {
       render: (_: unknown, row: Company) => (
         <Space size={4}>
           {can.viewTransfers && <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers?companyId=${row.id}`)}>传递记录</Button>}
-          {can.manageAccounts && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号管理</Button>}
+          {(can.manageAccounts || can.viewDirectory) && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号管理</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => setContactsOf(row)}>联络人</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
           {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}

@@ -27,6 +27,8 @@ public static class AdminModule
         admin.MapPut("/users/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, UserService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapPut("/users/{id:long}/password", async (ulong id, PasswordRequest r, HttpContext c, UserService s, CancellationToken ct) => { await s.ResetPasswordAsync(AccessService.GetCurrent(c), id, r.NewPassword, ct); return EmptyResponse.Instance; });
         admin.MapPut("/users/{id:long}/roles", async (ulong id, RoleAssign r, HttpContext c, UserService s, CancellationToken ct) => { await s.AssignRoleAsync(AccessService.GetCurrent(c), id, r.RoleIds, ct); return EmptyResponse.Instance; });
+        admin.MapGet("/users/{id:long}/data-scopes", (ulong id, HttpContext c, UserService s, CancellationToken ct) => s.GetDataScopesAsync(AccessService.GetCurrent(c), id, ct));
+        admin.MapPut("/users/{id:long}/data-scopes", (ulong id, DataScopeAssign r, HttpContext c, UserService s, CancellationToken ct) => s.SetDataScopesAsync(AccessService.GetCurrent(c), id, r, ct));
         admin.MapDelete("/users/{id:long}", async (ulong id, HttpContext c, UserService s, CancellationToken ct) => { await s.DeleteAsync(AccessService.GetCurrent(c), id, ct); return EmptyResponse.Instance; });
 
         admin.MapPost("/departments", (DepartmentUpsert r, HttpContext c, DepartmentService s, CancellationToken ct) => s.CreateAsync(AccessService.GetCurrent(c), r, ct));
@@ -41,6 +43,9 @@ public static class AdminModule
         admin.MapPut("/roles/{id:long}", (ulong id, RoleUpsert r, HttpContext c, RoleService s, CancellationToken ct) => s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
         admin.MapPut("/roles/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, RoleService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapPut("/roles/{id:long}/permissions", async (ulong id, PermissionAssign r, HttpContext c, RoleService s, CancellationToken ct) => { await s.AssignPermissionsAsync(AccessService.GetCurrent(c), id, r.PermissionIds, ct); return EmptyResponse.Instance; });
+        admin.MapGet("/roles/{id:long}/data-scopes", (ulong id, HttpContext c, RoleService s, CancellationToken ct) => s.GetDataScopesAsync(AccessService.GetCurrent(c), id, ct));
+        admin.MapPut("/roles/{id:long}/data-scopes", (ulong id, DataScopeAssign r, HttpContext c, RoleService s, CancellationToken ct) => s.SetDataScopesAsync(AccessService.GetCurrent(c), id, r, ct));
+        admin.MapPut("/roles/{id:long}/authorization", (ulong id, RoleAuthorizationUpdate r, HttpContext c, RoleService s, CancellationToken ct) => s.SetAuthorizationAsync(AccessService.GetCurrent(c), id, r, ct));
         admin.MapDelete("/roles/{id:long}", async (ulong id, HttpContext c, RoleService s, CancellationToken ct) => { await s.DeleteAsync(AccessService.GetCurrent(c), id, ct); return EmptyResponse.Instance; });
 
         admin.MapGet("/suppliers", (HttpContext c, SupplierService s, CancellationToken ct) => { var p = QueryValues.Page(c.Request); return s.ListAsync(AccessService.GetCurrent(c), p.Page, p.Size, p.Offset, c.Request.Query["keyword"], c.Request.Query["status"], ct); });

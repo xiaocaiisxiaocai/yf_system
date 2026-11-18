@@ -355,6 +355,8 @@ public sealed class SupplierWithdrawalTests
         SELECT 9001,p.id FROM permissions p WHERE p.code IN ('project:list','file:upload','file:download','message:create')
         UNION ALL
         SELECT 9002,p.id FROM permissions p WHERE p.code IN ('project:list','file:upload','file:download','message:create');
+        -- 夹具沿用“内部账号可跨项目读取”的前提：数据范围是可见性的唯一来源。
+        INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(9001,'project','ALL');
         INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
         VALUES
             (101,'wd-owner','unused','负责人','owner@example.invalid','INTERNAL',NULL,'ACTIVE',0),

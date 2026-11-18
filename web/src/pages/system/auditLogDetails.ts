@@ -121,6 +121,8 @@ export const ACTIONS: Record<string, ActionMeta> = {
   USER_RESET_PASSWORD: action('重置用户密码', 'ORG', '组织与权限', 'orange'),
   USER_ASSIGN_ROLE: action('调整用户角色', 'ORG', '组织与权限', 'purple'),
   USER_ASSIGN_ROLES: action('调整用户角色（旧）', 'ORG', '组织与权限', 'purple'),
+  USER_DATA_SCOPE: action('调整用户数据范围', 'ORG', '组织与权限', 'purple'),
+  ROLE_DATA_SCOPE: action('调整角色数据范围', 'ORG', '组织与权限', 'purple'),
   DEPT_CREATE: action('创建组织', 'ORG', '组织与权限', 'arcoblue'),
   DEPT_UPDATE: action('更新组织', 'ORG', '组织与权限', 'purple'),
   DEPT_STATUS: action('变更组织状态', 'ORG', '组织与权限', 'orange'),

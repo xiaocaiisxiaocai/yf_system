@@ -97,6 +97,8 @@ public sealed class RealtimeSecurityTests
             VALUES(9001,'实时项目负责人','实时权限复核',0,'ACTIVE');
             INSERT INTO role_permissions(role_id,permission_id)
             SELECT 9001,id FROM permissions WHERE code='project:list';
+            -- The role keeps seeing the project after a transfer, which is what the delivery assertions exercise.
+            INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(9001,'project','ALL');
             INSERT INTO users
                 (id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
             VALUES(101,'realtime-owner','unused','实时负责人','','INTERNAL',NULL,'ACTIVE',0);

@@ -16,13 +16,18 @@ public sealed class OemInspectionTests
     private static TransferFacts Inbound(string lifecycle) => new(TransferDirections.OemToInternal, Company, lifecycle, null, 7);
     private static ActorFacts Vendor(ulong id = 8, ulong company = Company) => new(OemRealms.Oem, id, company, false, false, false, false, false);
     private static ActorFacts Staff(ulong id, bool view = false, bool download = false, bool create = false,
-        bool activeTask = false, bool anyTask = false, bool recover = false, bool admin = false, bool notified = false, bool scope = false) =>
-        new(OemRealms.Internal, id, null, view, download, create, activeTask, anyTask, recover, admin, notified, scope);
+        bool activeTask = false, bool anyTask = false, bool recover = false, bool admin = false, bool notified = false,
+        bool scope = false, bool updateDraft = false, bool deleteDraft = false) =>
+        new(OemRealms.Internal, id, null, view, download, create, activeTask, anyTask, recover, admin, notified, scope,
+            updateDraft, deleteDraft);
 
     [Fact]
     public void DraftsArePrivateToTheirAuthor()
     {
-        Assert.True(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(1)).EditDraft);
+        // 草稿写操作各自独立授权：编辑要 update，删除要 delete（create 持有者保留重试能力）。
+        Assert.True(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(1, updateDraft: true)).EditDraft);
+        Assert.True(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(1, deleteDraft: true)).DeleteDraft);
+        Assert.False(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(1)).EditDraft);
         Assert.False(TransferAccess.Evaluate(Outbound(TransferLifecycle.Draft), Staff(2, view: true, download: true)).View);
         Assert.False(TransferAccess.Evaluate(Inbound(TransferLifecycle.Draft), Vendor()).View);
         Assert.True(TransferAccess.Evaluate(Inbound(TransferLifecycle.Draft), Vendor(7)).EditDraft);

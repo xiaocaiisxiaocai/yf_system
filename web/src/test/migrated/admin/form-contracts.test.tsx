@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   logout: vi.fn(),
   setUser: vi.fn(),
-  permissions: ['dept:manage', 'dept:delete', 'user:delete', 'role:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'project:create', 'project:update'],
+  permissions: ['dept:manage', 'dept:delete', 'user:manage', 'user:delete', 'role:manage', 'role:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'project:create', 'project:update'],
   user: { id: 1, employeeNo: 'admin', realName: '管理员', email: 'admin@example.invalid', userType: 'INTERNAL', isSystemAdmin: true },
 }))
 
@@ -82,7 +82,7 @@ async function openArcoSelect(placeholder: string, option: string) {
 
 describe('管理员表单契约', () => {
   beforeEach(() => {
-    mocks.permissions = ['dept:manage', 'dept:delete', 'user:delete', 'role:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'project:create', 'project:update']
+    mocks.permissions = ['dept:manage', 'dept:delete', 'user:manage', 'user:delete', 'role:manage', 'role:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'project:create', 'project:update']
     mocks.user = { id: 1, employeeNo: 'admin', realName: '管理员', email: 'admin@example.invalid', userType: 'INTERNAL', isSystemAdmin: true }
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/departments') return {

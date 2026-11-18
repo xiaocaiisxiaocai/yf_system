@@ -40,6 +40,14 @@ internal static class HandwrittenTestSchemas
         );
         CREATE TABLE user_roles(user_id BIGINT UNSIGNED NOT NULL, role_id BIGINT UNSIGNED NOT NULL);
         CREATE TABLE role_permissions(role_id BIGINT UNSIGNED NOT NULL, permission_id BIGINT UNSIGNED NOT NULL);
+        CREATE TABLE role_data_scopes(
+            role_id BIGINT UNSIGNED NOT NULL, domain VARCHAR(32) NOT NULL, scope VARCHAR(16) NOT NULL,
+            PRIMARY KEY(role_id,domain)
+        );
+        CREATE TABLE user_data_scopes(
+            user_id BIGINT UNSIGNED NOT NULL, domain VARCHAR(32) NOT NULL, scope VARCHAR(16) NOT NULL,
+            PRIMARY KEY(user_id,domain)
+        );
         CREATE TABLE projects(
             id BIGINT UNSIGNED PRIMARY KEY,
             supplier_id BIGINT UNSIGNED NOT NULL,
@@ -172,8 +180,17 @@ internal static class HandwrittenTestSchemas
             email VARCHAR(128) NOT NULL DEFAULT '',
             user_type VARCHAR(16) NOT NULL,
             supplier_id BIGINT UNSIGNED NULL,
+            department_id BIGINT UNSIGNED NULL,
             status VARCHAR(16) NOT NULL,
             must_change_password TINYINT(1) NOT NULL DEFAULT 0
+        );
+        CREATE TABLE role_data_scopes(
+            role_id BIGINT UNSIGNED NOT NULL, domain VARCHAR(32) NOT NULL, scope VARCHAR(16) NOT NULL,
+            PRIMARY KEY(role_id,domain)
+        );
+        CREATE TABLE user_data_scopes(
+            user_id BIGINT UNSIGNED NOT NULL, domain VARCHAR(32) NOT NULL, scope VARCHAR(16) NOT NULL,
+            PRIMARY KEY(user_id,domain)
         );
         CREATE TABLE permissions(
             id BIGINT UNSIGNED PRIMARY KEY,

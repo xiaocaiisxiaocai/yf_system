@@ -23,7 +23,8 @@ public sealed class OemTransferFlowTests
         var admin = await host.LoginAdminAsync(ct);
         var org = await host.CreateOrgPathAsync("装配", ct);
         var leaderId = await host.CreateInternalUserAsync("zp_leader", "Leader#2026x", ["oem:flow_approve", "oem:transfer_view"], org.Section, ct);
-        var senderId = await host.CreateInternalUserAsync("zp_sender", "Sender#2026x", ["oem:transfer_create"], org.Section, ct);
+        var senderId = await host.CreateInternalUserAsync("zp_sender", "Sender#2026x",
+            ["oem:transfer_create", "oem:transfer_update", "oem:transfer_delete"], org.Section, ct);
         await host.CreateInternalUserAsync("zp_viewer", "Viewer#2026x", ["oem:transfer_view", "oem:file_download"], org.Section, ct);
         await admin.PutAsync($"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = leaderId }, ct).Ok();
         var vendor = await host.CreateVendorAsync(admin, "精工代工", "vendor_out", ct);

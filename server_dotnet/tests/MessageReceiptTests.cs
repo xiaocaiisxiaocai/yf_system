@@ -31,8 +31,8 @@ public sealed class MessageReceiptTests
             CROSS JOIN permissions p
             WHERE p.code='project:list'
                OR (test_roles.role_id IN (9001,9003) AND p.code='project:confirm')
-               OR (test_roles.role_id=9002 AND p.code IN ('file:delete','message:delete_any'))
-               OR (test_roles.role_id=9003 AND p.code='project:view_all');
+               OR (test_roles.role_id=9002 AND p.code IN ('file:delete','message:delete_any'));
+            INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(9001,'project','ALL');
             INSERT INTO users
                 (id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password)
             VALUES

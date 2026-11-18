@@ -288,7 +288,9 @@ public sealed class SupplierService(IDbContextFactory<YfDbContext> dbFactory, Pe
     private async Task RequireSupplierReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct)
     {
         var codes = await permissions.GetCodesAsync(context.Database.Connection(), context.Database.Transaction(), actor.Id, ct);
-        if (!codes.Contains("supplier:manage", StringComparer.Ordinal) && !codes.Contains("supplier:account", StringComparer.Ordinal)) throw ApiException.Forbidden();
+        if (!codes.Contains("supplier:view", StringComparer.Ordinal)
+            && !codes.Contains("supplier:manage", StringComparer.Ordinal)
+            && !codes.Contains("supplier:account", StringComparer.Ordinal)) throw ApiException.Forbidden();
     }
 
     private static async Task<ulong> FallbackSupplierRoleIdAsync(YfDbContext context, CancellationToken ct) =>

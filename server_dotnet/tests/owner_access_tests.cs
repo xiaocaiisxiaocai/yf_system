@@ -26,7 +26,7 @@ public sealed class OwnerAccessTests
     private const ulong OtherSupplierUserId = 9_202;
 
     [Fact(Timeout = 120_000)]
-    public async Task EveryInternalAccountSeesEveryProjectWhileOnlyTheResponsibleUserChangesIt()
+    public async Task InternalAccountsSeeOnlyTheirOwnProjectsUnlessTheDataRangeIsWider()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await OwnerAccessDatabase.CreateOrSkipAsync(ct);
@@ -37,6 +37,7 @@ public sealed class OwnerAccessTests
         var colleague = Internal(OldMemberId, "owner-old-member");
         var oldOwner = Internal(OldOwnerId, "owner-old");
         var newOwner = Internal(NewOwnerId, "owner-new");
+        var viewAll = Internal(ViewAllId, "owner-view-all");
         var ownerWithoutList = Internal(NoPermissionOwnerId, "owner-no-permission");
         var matchingSupplier = new CurrentUser(SupplierUserId, "owner-supplier", "SUPPLIER", 8_001);
         var otherSupplier = new CurrentUser(OtherSupplierUserId, "owner-other-supplier", "SUPPLIER", 8_002);
@@ -48,31 +49,38 @@ public sealed class OwnerAccessTests
 
         await using var conn = await database.Database.OpenAsync(ct);
         Assert.Equal(OldOwnerId, (await ProjectAccessService.RequireViewAsync(conn, null, oldOwner, ProjectId, ct)).ResponsibleUserId);
-        // Every internal account with project:list sees every project, owned or not.
-        await ProjectAccessService.RequireViewAsync(conn, null, creator, ProjectId, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, colleague, ProjectId, ct);
-        await ProjectAccessService.RequireViewAsync(conn, null, colleague, OwnerlessProjectId, ct);
+        // SELF is the default: an internal account only opens the projects it is responsible for.
+        await AssertNotVisibleAsync(() => ProjectAccessService.RequireViewAsync(conn, null, creator, ProjectId, ct));
+        await AssertNotVisibleAsync(() => ProjectAccessService.RequireViewAsync(conn, null, colleague, ProjectId, ct));
+        // An ALL range (role default here) opens every project, including historical ones without an owner.
+        await ProjectAccessService.RequireViewAsync(conn, null, viewAll, ProjectId, ct);
+        await ProjectAccessService.RequireViewAsync(conn, null, viewAll, OwnerlessProjectId, ct);
         await ProjectAccessService.RequireViewAsync(conn, null, matchingSupplier, ProjectId, ct);
         await AssertOutOfScopeAsync(() => ProjectAccessService.RequireViewAsync(conn, null, otherSupplier, ProjectId, ct));
         await AssertForbiddenAsync(() => ProjectAccessService.RequireViewAsync(conn, null, ownerWithoutList, 10_003, ct));
 
-        Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId }, await ListedProjectIdsAsync(projects, conn, colleague, ct));
+        Assert.Empty(await ListedProjectIdsAsync(projects, conn, colleague, ct));
+        Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId }, await ListedProjectIdsAsync(projects, conn, viewAll, ct));
         Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId }, await ListedProjectIdsAsync(projects, conn, matchingSupplier, ct));
         Assert.Empty(await ListedProjectIdsAsync(projects, conn, otherSupplier, ct));
+        Assert.Equal(new ulong[] { ProjectId }, await ListedProjectIdsAsync(projects, conn, oldOwner, ct));
         Assert.Equal(new ulong[] { ProjectId }, await ListedProjectIdsAsync(projects, conn, oldOwner, ct, mine: true));
         Assert.Empty(await ListedProjectIdsAsync(projects, conn, colleague, ct, mine: true));
 
-        using (var detail = Json(await projects.DetailAsync(conn, colleague, ProjectId, ct)))
+        // Seeing is not changing: a wide range never grants write authority.
+        using (var detail = Json(await projects.DetailAsync(conn, viewAll, ProjectId, ct)))
         {
             Assert.Equal(OldOwnerId, detail.RootElement.GetProperty("responsibleUserId").GetUInt64());
             Assert.False(detail.RootElement.GetProperty("canManage").GetBoolean());
             Assert.False(detail.RootElement.TryGetProperty("members", out _));
         }
+        await AssertNotVisibleAsync(() => projects.DetailAsync(conn, colleague, ProjectId, ct));
         Assert.True((await projects.DetailAsync(conn, oldOwner, ProjectId, ct)).CanManage);
 
         var files = FileService(database, audit);
         Assert.Equal(0UL, Total(await files.ListAsync(Context(oldOwner), ProjectId, ct)));
-        Assert.Equal(0UL, Total(await files.ListAsync(Context(colleague), ProjectId, ct)));
+        Assert.Equal(0UL, Total(await files.ListAsync(Context(viewAll), ProjectId, ct)));
+        await AssertNotVisibleAsync(() => files.ListAsync(Context(colleague), ProjectId, ct));
 
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.SetStatusAsync(admin, OldOwnerId, "DISABLED", ct));
         using (var department = JsonDocument.Parse("7002"))
@@ -84,16 +92,18 @@ public sealed class OwnerAccessTests
 
         var updatedAt = await conn.ExecuteScalarAsync<DateTime>(new CommandDefinition(
             "SELECT updated_at FROM projects WHERE id=@Id", new { Id = ProjectId }, cancellationToken: ct));
-        var colleagueEdit = await Assert.ThrowsAsync<ApiException>(() =>
-            projects.UpdateAsync(conn, colleague, ProjectId, UpdateRequest(updatedAt), null, ct));
-        Assert.Equal((403, ProjectAccessService.OwnerOnlyMessage), (colleagueEdit.Status, colleagueEdit.Message));
+        // A wide reader still cannot edit someone else's project.
+        var viewAllEdit = await Assert.ThrowsAsync<ApiException>(() =>
+            projects.UpdateAsync(conn, viewAll, ProjectId, UpdateRequest(updatedAt), null, ct));
+        Assert.Equal((403, ProjectAccessService.OwnerOnlyMessage), (viewAllEdit.Status, viewAllEdit.Message));
         await projects.UpdateAsync(conn, oldOwner, ProjectId, UpdateRequest(updatedAt), null, ct);
 
         var created = await projects.CreateAsync(conn, creator, CreateRequest(), null, ct);
         Assert.Equal(CreatorId, created.ResponsibleUserId);
         Assert.Equal(7001UL, created.SectionId);
         Assert.Equal("IN_PROGRESS", created.Status);
-        Assert.False((await projects.DetailAsync(conn, newOwner, created.Id, ct)).CanManage);
+        Assert.False((await projects.DetailAsync(conn, viewAll, created.Id, ct)).CanManage);
+        await AssertNotVisibleAsync(() => projects.DetailAsync(conn, newOwner, created.Id, ct));
     }
 
     [Fact(Timeout = 120_000)]
@@ -139,7 +149,8 @@ public sealed class OwnerAccessTests
         Assert.Equal(NewOwnerId, transferred.ResponsibleUserId);
         Assert.Equal(7001UL, transferred.SectionId);
         Assert.True((await projects.DetailAsync(conn, newOwner, ProjectId, ct)).CanManage);
-        Assert.False((await projects.DetailAsync(conn, oldOwner, ProjectId, ct)).CanManage);
+        // The previous owner is no longer responsible, so the project leaves their SELF range.
+        await AssertNotVisibleAsync(() => projects.DetailAsync(conn, oldOwner, ProjectId, ct));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>(new CommandDefinition(
             "SELECT COUNT(*) FROM audit_logs WHERE action='PROJECT_UPDATE' AND target_type='project' AND target_id=@Id",
             new { Id = ProjectId.ToString(CultureInfo.InvariantCulture) }, cancellationToken: ct)));
@@ -224,8 +235,11 @@ public sealed class OwnerAccessTests
         SELECT 9004,id FROM permissions WHERE code IN ('project:list','file:upload','message:create');
         INSERT INTO role_permissions(role_id,permission_id)
         SELECT 9001,id FROM permissions WHERE code IN ('project:list','project:create','project:update');
+        -- Role 9002 sees everything and may attempt edits; ownership is still required by the service.
         INSERT INTO role_permissions(role_id,permission_id)
-        SELECT 9002,id FROM permissions WHERE code IN ('project:list');
+        SELECT 9002,id FROM permissions WHERE code IN ('project:list','project:update');
+        -- Role 9002 carries the ALL data range; role 9001 keeps the SELF default.
+        INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(9002,'project','ALL');
         INSERT INTO users
           (id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
         VALUES
@@ -338,6 +352,14 @@ public sealed class OwnerAccessTests
         var error = await Assert.ThrowsAsync<ApiException>(action);
         Assert.Equal(403, error.Status);
         Assert.Equal(40301, error.Code);
+    }
+
+    /// <summary>The account holds project:list but the project is outside its data range.</summary>
+    private static async Task AssertNotVisibleAsync(Func<Task> action)
+    {
+        var error = await Assert.ThrowsAsync<ApiException>(action);
+        Assert.Equal((403, 40301), (error.Status, error.Code));
+        Assert.Equal(ProjectAccessService.NotVisibleMessage, error.Message);
     }
 
     private static async Task AssertActiveResponsibilityBlocksChangeAsync(Func<Task> action)

@@ -119,6 +119,23 @@ export interface DashboardSummaryResponse {
   recentMessages: Array<DashboardMessage>
 }
 
+export interface DataScopeAssign {
+  scopes: Array<DataScopeEntry>
+}
+
+export interface DataScopeEntry {
+  domain: string
+  scope?: string | null
+}
+
+export interface DataScopeResponse {
+  domain: string
+  domainLabel: string
+  localScope: string | null
+  effectiveScope: string
+  effectiveScopeLabel: string
+}
+
 export interface DepartmentLeaderBrief {
   id: number
   employeeNo: string
@@ -1722,6 +1739,16 @@ export interface RoleAssign {
   roleIds: Array<number>
 }
 
+export interface RoleAuthorizationResponse {
+  role: RoleResponse
+  scopes: Array<DataScopeResponse>
+}
+
+export interface RoleAuthorizationUpdate {
+  permissionIds?: Array<number> | null
+  scopes?: Array<DataScopeEntry> | null
+}
+
 export interface RoleOption {
   id: number
   name: string
@@ -2008,6 +2035,7 @@ export interface UserUpdate {
   departmentId: unknown
   roleId?: number | null
   roleIds?: Array<number> | null
+  scopes?: Array<DataScopeEntry> | null
 }
 
 /** Success body of each endpoint, keyed by "METHOD path" relative to /api/v1 (the axios baseURL). */
@@ -2023,6 +2051,9 @@ export interface ApiResponses {
   "POST /admin/roles": RoleResponse
   "DELETE /admin/roles/{id}": EmptyResponse
   "PUT /admin/roles/{id}": RoleResponse
+  "PUT /admin/roles/{id}/authorization": RoleAuthorizationResponse
+  "GET /admin/roles/{id}/data-scopes": Array<DataScopeResponse>
+  "PUT /admin/roles/{id}/data-scopes": Array<DataScopeResponse>
   "PUT /admin/roles/{id}/permissions": EmptyResponse
   "PUT /admin/roles/{id}/status": RoleResponse
   "GET /admin/storage-locations": StorageLocationsResponse
@@ -2062,6 +2093,8 @@ export interface ApiResponses {
   "POST /admin/users/import": AdminImportResponse
   "DELETE /admin/users/{id}": EmptyResponse
   "PUT /admin/users/{id}": UserResponse
+  "GET /admin/users/{id}/data-scopes": Array<DataScopeResponse>
+  "PUT /admin/users/{id}/data-scopes": Array<DataScopeResponse>
   "PUT /admin/users/{id}/password": EmptyResponse
   "PUT /admin/users/{id}/roles": EmptyResponse
   "PUT /admin/users/{id}/status": UserResponse

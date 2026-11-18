@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure.Entities;
+using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Data;
 
 namespace Yf.Api.Infrastructure;
@@ -74,6 +75,13 @@ internal static class BootstrapSeedCatalog
         (219, "outsource:import", "汇入外协清单", "ACTION", 217, 67),
         (220, "outsource:manage", "编辑与发送外协清单", "ACTION", 217, 68),
         (221, "outsource:settings", "外协清单设定维护", "ACTION", 217, 69),
+        (224, "user:view", "查看用户", "ACTION", 4, 71),
+        (225, "supplier:view", "查看供应商", "ACTION", 3, 72),
+        (226, "role:view", "查看角色", "ACTION", 6, 73),
+        (227, "oem:transfer_update", "编辑 ODM/OEMA 传递单", "ACTION", 200, 74),
+        (228, "oem:transfer_delete", "删除 ODM/OEMA 传递单", "ACTION", 200, 75),
+        (229, "oem:directory_view", "查看 ODM/OEMA 厂商与账号", "ACTION", 200, 76),
+        (230, "dict:delete", "删除数据字典项", "ACTION", 48, 77),
     ];
 
     private static readonly (string Key, string Value, string Description)[] Configs =
@@ -191,6 +199,14 @@ internal static class BootstrapSeedCatalog
         {
             RoleId = AdministratorRoleId,
             PermissionId = permissionId,
+        }));
+        // The built-in administrator always sees every record; other roles start at SELF and are widened by the
+        // administrator through the user/role data-range settings.
+        db.RoleDataScopes.AddRange(DataScopeDomains.All.Select(domain => new RoleDataScope
+        {
+            RoleId = AdministratorRoleId,
+            Domain = domain,
+            Scope = DataScopeValues.All,
         }));
         db.UserRoles.Add(new UserRole { UserId = administrator.Id, RoleId = AdministratorRoleId });
         await db.SaveChangesAsync(ct);

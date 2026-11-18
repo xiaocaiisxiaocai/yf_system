@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
+using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Tests;
 
@@ -73,6 +74,7 @@ public sealed class SchemaShapeTests
         "20261117021148_AddOutsourceItemModifiedBy",
         "20261117031058_UseOemCompaniesAsOutsourceVendors",
         "20261117064432_AddOutsourceCustomerAliases",
+        "20261118025341_AddDataScopesAndCrudPermissions",
     ];
 
     [Fact]
@@ -345,13 +347,13 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(55, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(55, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(62, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(62, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='project:view_all'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code IN ('project:submit','project:confirm','project:withdraw')"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE id BETWEEN 100 AND 113"));
-            Assert.Equal(16, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
+            Assert.Equal(19, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='oem' OR code LIKE 'oem:%' OR code='dept:leader_manage'"));
             Assert.Equal(44, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs"));
             Assert.Equal(24, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.%'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM system_configs WHERE cfg_key LIKE 'oem.scan.%'"));
@@ -713,6 +715,13 @@ public sealed class SchemaShapeTests
             var permissions = await db.Permissions.AsNoTracking().ToDictionaryAsync(item => item.Code, ct);
             db.RolePermissions.AddRange(grants.SelectMany(role => role.Value.Select(code =>
                 new RolePermission { RoleId = role.Key, PermissionId = permissions[code].Id })));
+            // 与部署迁移一致：能看项目列表的角色默认拿到「全部」数据范围，夹具沿用原来的“能看全部项目”前提。
+            db.RoleDataScopes.AddRange(grants.Where(role => role.Value.Contains("project:list")).Select(role => new RoleDataScope
+            {
+                RoleId = role.Key,
+                Domain = DataScopeDomains.Project,
+                Scope = DataScopeValues.All,
+            }));
             await db.SaveChangesAsync(ct);
         }
 

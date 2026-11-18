@@ -18,15 +18,19 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261117064432_AddOutsourceCustomerAliases";
+    private const string Latest = "20261118025341_AddDataScopesAndCrudPermissions";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
     [
         "dept:leader_manage", "oem", "oem:account_delete", "oem:account_manage", "oem:approval_recover", "oem:audit_view",
-        "oem:company_delete", "oem:company_manage", "oem:file_download", "oem:file_policy_manage", "oem:flow_approve",
-        "oem:flow_template_manage", "oem:notify_manage", "oem:retention_template_manage", "oem:transfer_create", "oem:transfer_view",
+        "oem:company_delete", "oem:company_manage", "oem:directory_view", "oem:file_download", "oem:file_policy_manage",
+        "oem:flow_approve", "oem:flow_template_manage", "oem:notify_manage", "oem:retention_template_manage",
+        "oem:transfer_create", "oem:transfer_delete", "oem:transfer_update", "oem:transfer_view",
     ];
+
+    /// <summary>CRUD codes outside the OEM prefix that the data-scope migration adds to the administrator.</summary>
+    private static readonly string[] NonOemCrudCodes = ["dict:delete", "role:view", "supplier:view", "user:view"];
 
     [Fact(Timeout = 180_000)]
     public async Task RestoreOemPlatformDownThenUpReturnsToTheSameSchemaAndReferenceData()
@@ -96,6 +100,8 @@ public sealed class MigrationRoundTripTests
         // + AddOutsourceItemModifiedBy (Down drops outsource_items.modified_by and modified_at).
         // + UseOemCompaniesAsOutsourceVendors (Down brings back the empty outsourcing vendor tables).
         // + AddOutsourceCustomerAliases (Down drops outsource_customer_aliases).
+        // + AddDataScopesAndCrudPermissions (Down drops the two data-range tables, keeping the CRUD permission
+        //   rows and grants so reference data still matches the freshest catalog).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -244,7 +250,8 @@ public sealed class MigrationRoundTripTests
             WHERE rp.role_id=1 GROUP BY p.code ORDER BY p.code
             """)).ToArray();
         Assert.All(adminGrants, row => Assert.Equal(1, row.Count));
-        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Concat(OutsourceCodes).Order(StringComparer.Ordinal).ToArray(),
+        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Concat(OutsourceCodes).Concat(NonOemCrudCodes)
+                .Order(StringComparer.Ordinal).ToArray(),
             adminGrants.Select(row => row.Code).Order(StringComparer.Ordinal).ToArray());
         var outsourceCatalog = (await connection.QueryAsync<(string Code, int Count)>("""
             SELECT code, COUNT(*) FROM permissions
@@ -257,7 +264,9 @@ public sealed class MigrationRoundTripTests
             WHERE child.code LIKE 'outsource:%' AND parent.code='outsource'
             """));
         // Neither a custom role (even one holding every pre-upgrade permission) nor another built-in role is widened.
-        Assert.Equal(PreOemCodes.Order(StringComparer.Ordinal).ToArray(), (await connection.QueryAsync<string>(
+        // The CRUD split preserves ability: a role that could already manage users also gains the read-only code.
+        Assert.Equal(PreOemCodes.Append("user:view").Order(StringComparer.Ordinal).ToArray(),
+            (await connection.QueryAsync<string>(
             "SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=2")).Order(StringComparer.Ordinal).ToArray());
         Assert.Equal(["dashboard"], (await connection.QueryAsync<string>(
             "SELECT p.code FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id WHERE rp.role_id=3")).ToArray());

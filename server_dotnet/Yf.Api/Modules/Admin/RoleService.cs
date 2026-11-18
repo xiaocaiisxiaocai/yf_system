@@ -24,7 +24,7 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.OpenConnectionAsync(ct);
-        await AccessService.RequirePermissionAsync(context.Database.Connection(), null, actor, "role:manage", ct);
+        await RequireRoleReadAsync(context, actor, ct);
         var owned = (await ceiling.GetCodesAsync(context.Database.Connection(), null, actor.Id, ct)).ToHashSet(StringComparer.Ordinal);
         var isAdmin = await AccessService.IsSystemAdminAsync(context.Database.Connection(), null, actor.Id, ct);
         var all = await context.Permissions.AsNoTracking().OrderBy(p => p.SortNo).ThenBy(p => p.Id).ToListAsync(ct);
@@ -34,12 +34,181 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             SupplierPermissionCodes.Contains(x.Code))).ToArray();
     }
 
+    private static async Task RequireRoleReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct)
+    {
+        var connection = context.Database.Connection();
+        if (!await AccessService.HasPermissionAsync(connection, null, actor.Id, "role:view", ct)
+            && !await AccessService.HasPermissionAsync(connection, null, actor.Id, "role:manage", ct))
+            throw ApiException.Forbidden();
+    }
+
+    public async Task<DataScopeResponse[]> GetDataScopesAsync(CurrentUser actor, ulong id, CancellationToken ct)
+    {
+        AccessService.RequireInternal(actor);
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await context.Database.OpenConnectionAsync(ct);
+        await RequireRoleReadAsync(context, actor, ct);
+        _ = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
+        return await DescribeScopesAsync(context, id, ct);
+    }
+
+    /// <summary>
+    /// Replaces the role's default data ranges. A null scope removes the default so members fall back to SELF
+    /// (or to ORG while they lead an organisation). A non-administrator cannot grant more than they hold.
+    /// </summary>
+    public async Task<DataScopeResponse[]> SetDataScopesAsync(
+        CurrentUser actor, ulong id, DataScopeAssign request, CancellationToken ct)
+    {
+        AccessService.RequireInternal(actor);
+        ValidateScopeEntries(request.Scopes);
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await context.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.ReadCommitted, ct);
+        await GateAsync(context, actor, "role:manage", ct);
+        await ceiling.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
+        var role = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
+        await ApplyScopeAssignmentAsync(context, actor, role, id, request.Scopes, ct);
+        var result = await DescribeScopesAsync(context, id, ct);
+        await tx.CommitAsync(ct);
+        return result;
+    }
+
+    /// <summary>
+    /// Saves a role's action permissions and data ranges in one transaction, so the drawer can no longer leave a
+    /// half-applied grant behind when the second write fails. A null member leaves that part untouched.
+    /// </summary>
+    public async Task<RoleAuthorizationResponse> SetAuthorizationAsync(
+        CurrentUser actor, ulong id, RoleAuthorizationUpdate request, CancellationToken ct)
+    {
+        AccessService.RequireInternal(actor);
+        if (request.PermissionIds is null && request.Scopes is null)
+            throw ApiException.BadRequest("请提供权限或数据范围");
+        if (request.PermissionIds is { Count: > 500 }) throw ApiException.BadRequest("权限点数量超过上限");
+        if (request.Scopes is not null) ValidateScopeEntries(request.Scopes);
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var tx = await context.Database.BeginTransactionAsync(
+            System.Data.IsolationLevel.ReadCommitted, ct);
+        await GateAsync(context, actor, "role:manage", ct);
+        await ceiling.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
+        var role = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
+        if (request.PermissionIds is { } permissionIds)
+            await ApplyPermissionAssignmentAsync(context, actor, role, id, permissionIds.Distinct().ToArray(), ct);
+        if (request.Scopes is { } scopes)
+            await ApplyScopeAssignmentAsync(context, actor, role, id, scopes, ct);
+        var result = new RoleAuthorizationResponse(
+            await JsonAsync(context, role, canManage: true, ct),
+            await DescribeScopesAsync(context, id, ct));
+        await tx.CommitAsync(ct);
+        return result;
+    }
+
+    /// <summary>Writes a role's default data ranges; the caller owns the transaction and the gate.</summary>
+    private async Task ApplyScopeAssignmentAsync(
+        YfDbContext context, CurrentUser actor, Role role, ulong id,
+        IReadOnlyList<DataScopeEntry> scopes, CancellationToken ct)
+    {
+        // The built-in system administrator always sees every transfer, so a narrower OEM default here would be a
+        // value the query ignores; the range is fixed and the editor must not pretend otherwise.
+        if (role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
+            throw ApiException.BadRequest("系统管理员角色的数据范围固定为全部");
+        if (!await AccessService.IsSystemAdminAsync(
+                context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, ct))
+        {
+            // Clearing a role default is a grant as well: members without an explicit override fall back to SELF,
+            // or to ORG when they lead an active organisation. That fallback is only wider than the actor when such
+            // a leader sits outside the actor's own subtree, so the check compares the real departments.
+            foreach (var entry in scopes)
+            {
+                var grantor = await DataScopeService.ResolveAsync(context, actor.Id, entry.Domain, ct);
+                if (entry.Scope is not null)
+                {
+                    if (!DataScopeService.CanGrant(grantor.Scope, entry.Scope))
+                        throw ApiException.Forbidden("不能授予高于自身的数据范围");
+                    continue;
+                }
+                if (grantor.IsAll) continue;
+                foreach (var departmentId in await UncoveredLeadingMemberDepartmentsAsync(context, id, entry.Domain, ct))
+                {
+                    if (!grantor.IsOrg || !grantor.OrgIds.Contains(departmentId))
+                        throw ApiException.Forbidden("不能授予高于自身的数据范围");
+                }
+            }
+        }
+        var before = await context.RoleDataScopes.AsNoTracking()
+            .Where(setting => setting.RoleId == id)
+            .ToDictionaryAsync(setting => setting.Domain, setting => setting.Scope, ct);
+        var existing = await context.RoleDataScopes.Where(setting => setting.RoleId == id).ToArrayAsync(ct);
+        foreach (var entry in scopes)
+        {
+            var row = existing.FirstOrDefault(setting => setting.Domain == entry.Domain);
+            if (entry.Scope is null)
+            {
+                if (row is not null) context.RoleDataScopes.Remove(row);
+            }
+            else if (row is null)
+            {
+                context.RoleDataScopes.Add(new RoleDataScope
+                {
+                    RoleId = id, Domain = entry.Domain, Scope = entry.Scope,
+                });
+            }
+            else row.Scope = entry.Scope;
+        }
+        await context.SaveChangesAsync(ct);
+        var after = await context.RoleDataScopes.AsNoTracking()
+            .Where(setting => setting.RoleId == id)
+            .ToDictionaryAsync(setting => setting.Domain, setting => setting.Scope, ct);
+        await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
+            "ROLE_DATA_SCOPE", "role", id, new
+            {
+                role.Name,
+                targetName = role.Name,
+                before = OrderedScopes(before),
+                after = OrderedScopes(after),
+                changes = AuditChange.OnlyChanged(new AuditChange(
+                    "dataScopes", "数据范围", OrderedScopes(before), OrderedScopes(after))),
+            }, null, ct);
+    }
+
+    private static void ValidateScopeEntries(IReadOnlyList<DataScopeEntry>? entries)
+    {
+        if (entries is null || entries.Count == 0) throw ApiException.BadRequest("请提供数据范围");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in entries)
+        {
+            if (!DataScopeDomains.IsValid(entry.Domain))
+                throw ApiException.BadRequest($"未知的数据范围: {entry.Domain}");
+            if (!seen.Add(entry.Domain))
+                throw ApiException.BadRequest($"数据范围重复: {entry.Domain}");
+            if (entry.Scope is not null && !DataScopeValues.IsValid(entry.Scope))
+                throw ApiException.BadRequest("数据范围只能为 SELF、ORG 或 ALL");
+        }
+    }
+
+    private static async Task<DataScopeResponse[]> DescribeScopesAsync(
+        YfDbContext context, ulong roleId, CancellationToken ct)
+    {
+        var local = await context.RoleDataScopes.AsNoTracking()
+            .Where(setting => setting.RoleId == roleId)
+            .ToDictionaryAsync(setting => setting.Domain, setting => setting.Scope, ct);
+        return DataScopeDomains.All.Select(domain =>
+        {
+            var scope = local.GetValueOrDefault(domain) ?? DataScopeValues.Self;
+            return new DataScopeResponse(domain, DataScopeDomains.Label(domain),
+                local.GetValueOrDefault(domain), scope, DataScopeValues.Label(scope));
+        }).ToArray();
+    }
+
+    private static Dictionary<string, string> OrderedScopes(IReadOnlyDictionary<string, string> scopes) =>
+        scopes.OrderBy(setting => setting.Key, StringComparer.Ordinal)
+            .ToDictionary(setting => setting.Key, setting => setting.Value);
+
     public async Task<PageResponse<RoleResponse>> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.OpenConnectionAsync(ct);
-        await AccessService.RequirePermissionAsync(context.Database.Connection(), null, actor, "role:manage", ct);
+        await RequireRoleReadAsync(context, actor, ct);
         var total = await context.Roles.LongCountAsync(ct);
         var rows = offset > int.MaxValue ? []
             : await context.Roles.AsNoTracking().OrderBy(r => r.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
@@ -144,6 +313,14 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await GateAsync(context, actor, "role:manage", ct);
         await ceiling.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
         var role = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
+        await ApplyPermissionAssignmentAsync(context, actor, role, id, ids, ct);
+        await tx.CommitAsync(ct);
+    }
+
+    /// <summary>Writes a role's action permissions; the caller owns the transaction and the gate.</summary>
+    private async Task ApplyPermissionAssignmentAsync(
+        YfDbContext context, CurrentUser actor, Role role, ulong id, ulong[] ids, CancellationToken ct)
+    {
         var assignedToSupplier = await context.UserRoles.Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur, u })
             .AnyAsync(x => x.ur.RoleId == id && x.u.UserType == UserTypes.Supplier, ct);
         var supplierRestricted = assignedToSupplier || role.IsBuiltIn && role.Name == AdminBuiltIns.SupplierRoleName;
@@ -195,7 +372,6 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             removedPermissions,
             changes = AuditChange.OnlyChanged(new AuditChange("permissions", "权限", oldPermissionDetails, newPermissionDetails))
         }, null, ct);
-        await tx.CommitAsync(ct);
     }
 
     public async Task DeleteAsync(CurrentUser actor, ulong id, CancellationToken ct)
@@ -232,6 +408,19 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
     {
         await ManagementAuthorization.RequireAsync(context, actor, permission, ct);
     }
+
+    /// <summary>
+    /// Organisations led by a member of this role that has no personal override for the domain: clearing the role
+    /// default really hands these organisations the ORG fallback.
+    /// </summary>
+    private static Task<ulong[]> UncoveredLeadingMemberDepartmentsAsync(
+        YfDbContext context, ulong roleId, string domain, CancellationToken ct) =>
+        (from userRole in context.UserRoles
+         join department in context.Departments on userRole.UserId equals department.LeaderAccountId!.Value
+         where userRole.RoleId == roleId && department.Status == AccountStatuses.Active
+             && !context.UserDataScopes.Any(setting => setting.UserId == userRole.UserId
+                 && setting.Domain == domain)
+         select department.Id).Distinct().ToArrayAsync(ct);
 
     private static void Validate(RoleUpsert r) { if (string.IsNullOrWhiteSpace(r.Name) || r.Name.Trim().EnumerateRunes().Count() > 64) throw ApiException.BadRequest("角色名称需为 1~64 个字符"); if (r.Description?.EnumerateRunes().Count() > 255) throw ApiException.BadRequest("角色说明不能超过 255 个字符"); }
 

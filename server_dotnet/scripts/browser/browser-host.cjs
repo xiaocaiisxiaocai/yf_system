@@ -2,7 +2,9 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 (async () => {
-  const server = await chromium.launchServer({ channel: 'chrome', headless: true, args: [
+  // 默认使用已安装的 Chrome；本机只装了 Edge 时用 YF_BROWSER_CHANNEL=msedge 复用同一套步骤。
+  const channel = process.env.YF_BROWSER_CHANNEL || 'chrome';
+  const server = await chromium.launchServer({ channel, headless: true, args: [
     '--auth-server-allowlist=__yf_no_integrated_auth.invalid',
     '--auth-negotiate-delegate-allowlist=__yf_no_integrated_auth.invalid',
   ] });

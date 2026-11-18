@@ -531,12 +531,24 @@ internal sealed class ProjectCopyService(
         ProjectCopyHistoryItem? sourceItem = null;
         var copies = new List<ProjectCopyHistoryItem>();
         var restricted = false;
+        // Resolve visibility for the related projects only: loading every visible project id would grow with the whole
+        // library for an ALL-range account and still be wasted when this history has no rows.
+        var relatedIds = rows.Select(row => row.SourceProjectId == projectId ? row.TargetProjectId : row.SourceProjectId)
+            .Distinct().ToArray();
+        var visibleRelatedIds = current.IsInternal && relatedIds.Length > 0
+            ? await (await ProjectAccessService.VisibleQueryAsync(db, current, ct))
+                .Where(project => relatedIds.Contains(project.Id))
+                .Select(project => project.Id).ToHashSetAsync(ct)
+            : null;
         foreach (var row in rows)
         {
             var relatedId = row.SourceProjectId == projectId ? row.TargetProjectId : row.SourceProjectId;
             var relatedSupplierId = relatedId == row.SourceProjectId ? row.SourceSupplierId : row.TargetSupplierId;
-            var canViewRelated = current.IsInternal
-                || current.SupplierId is not null && current.SupplierId == relatedSupplierId;
+            // The related project is only named when the caller could open it themselves: internal access follows
+            // the project data range, so "internal" alone is no longer enough to name someone else's copy source.
+            var canViewRelated = visibleRelatedIds is not null
+                ? visibleRelatedIds.Contains(relatedId)
+                : current.SupplierId is not null && current.SupplierId == relatedSupplierId;
             if (!canViewRelated) { restricted = true; continue; }
             var item = HistoryItem(row, relatedId, relatedId == row.SourceProjectId ? row.SourceName : row.TargetName);
             if (row.TargetProjectId == projectId) sourceItem = item; else copies.Add(item);

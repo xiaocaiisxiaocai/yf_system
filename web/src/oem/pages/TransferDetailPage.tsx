@@ -466,7 +466,7 @@ export default function TransferDetailPage() {
       </Card>
 
       <Card className="oem-transfer-files-card" title="附件" extra={<span ref={setFilesToolbar} />}>
-        {caps.canEdit && <div style={{ marginBottom: 16 }}><OemUploader ref={uploader} transferId={id} disabled={sending}
+        {(caps.canEdit || caps.canSend) && <div style={{ marginBottom: 16 }}><OemUploader ref={uploader} transferId={id} disabled={sending}
           onBusyChange={setUploadBusy} onUploaded={() => void load()} /></div>}
         {can.recover && !caps.canReadContent && detail.files.length === 0 ? (
           <Alert type="info" content="异常处置权限不包含附件内容。" />
@@ -475,7 +475,7 @@ export default function TransferDetailPage() {
             files={detail.files}
             approval={realm === 'internal' ? detail.approval : null}
             approvalStatus={summary.approvalStatus}
-            canEdit={caps.canEdit}
+            canEdit={caps.canEdit || caps.canSend}
             onDownload={(file) => void download(file).catch(() => undefined)}
             onPreview={(file) => void preview(file)}
             onRemove={removeFile}

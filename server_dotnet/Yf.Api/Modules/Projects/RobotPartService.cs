@@ -110,6 +110,7 @@ internal sealed class RobotPartService(AuditService audit)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await ProjectDictionaryService.RequireWriteAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "dict:delete", ct);
         await using var db = EfDb.Use(conn, tx);
         var before = await LockAsync(db, id, ct) ?? throw ApiException.NotFound();
         if (await InUseAsync(db, id, ct))

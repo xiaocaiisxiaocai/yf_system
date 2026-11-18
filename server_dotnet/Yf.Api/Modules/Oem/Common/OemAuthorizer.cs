@@ -56,7 +56,7 @@ internal static class OemAuthorizer
         return codes.Contains(permission, StringComparer.Ordinal);
     }
 
-    /// <summary>Whether the caller is a system administrator: the only internal staff who see every transfer.</summary>
+    /// <summary>Whether the caller is a system administrator: always inside the ALL transfer range.</summary>
     public static async Task<bool> IsSystemAdminAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct) =>
         actor is InternalOemActor internalActor
         && await AccessService.IsSystemAdminAsync(uow.Connection, uow.Transaction, internalActor.User.Id, ct);

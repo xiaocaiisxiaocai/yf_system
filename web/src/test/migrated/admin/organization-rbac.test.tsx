@@ -463,8 +463,9 @@ describe('组织、角色与权限行为', () => {
     expect(treeCheckbox('部门').parentElement).toHaveClass('arco-checkbox-indeterminate')
 
     await user.click(screen.getByRole('button', { name: '保存权限' }))
-    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/roles/7/permissions', {
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/roles/7/authorization', {
       permissionIds: expect.arrayContaining([1, 5, 25]),
+      scopes: null,
     }))
   })
 

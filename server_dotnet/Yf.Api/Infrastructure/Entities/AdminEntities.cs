@@ -83,6 +83,25 @@ public sealed class UserRole
     public ulong RoleId { get; set; }
 }
 
+/// <summary>
+/// Default data range for one business domain, carried by a role. A user-level row overrides it.
+/// Kept apart from permissions: permissions say what an account may do, this says whose records it sees.
+/// </summary>
+public sealed class RoleDataScope
+{
+    public ulong RoleId { get; set; }
+    public string Domain { get; set; } = null!;
+    public string Scope { get; set; } = null!;
+}
+
+/// <summary>Explicit per-person data range override (SELF / ORG / ALL) for one business domain.</summary>
+public sealed class UserDataScope
+{
+    public ulong UserId { get; set; }
+    public string Domain { get; set; } = null!;
+    public string Scope { get; set; } = null!;
+}
+
 public sealed class DepartmentConfig : IEntityTypeConfiguration<Department>
 {
     public void Configure(EntityTypeBuilder<Department> b)
@@ -207,5 +226,33 @@ public sealed class UserRoleConfig : IEntityTypeConfiguration<UserRole>
         b.HasIndex(x => x.RoleId).HasDatabaseName("fk_ur_role");
         b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).HasConstraintName("fk_ur_user").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<Role>().WithMany().HasForeignKey(x => x.RoleId).HasConstraintName("fk_ur_role").OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class RoleDataScopeConfig : IEntityTypeConfiguration<RoleDataScope>
+{
+    public void Configure(EntityTypeBuilder<RoleDataScope> b)
+    {
+        b.ToTable("role_data_scopes");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.RoleId, x.Domain });
+        b.Property(x => x.RoleId).HasColumnName("role_id");
+        b.Property(x => x.Domain).HasColumnName("domain").HasMaxLength(32).IsRequired();
+        b.Property(x => x.Scope).HasColumnName("scope").HasMaxLength(16).IsRequired();
+        b.HasOne<Role>().WithMany().HasForeignKey(x => x.RoleId).HasConstraintName("fk_rds_role").OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class UserDataScopeConfig : IEntityTypeConfiguration<UserDataScope>
+{
+    public void Configure(EntityTypeBuilder<UserDataScope> b)
+    {
+        b.ToTable("user_data_scopes");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.UserId, x.Domain });
+        b.Property(x => x.UserId).HasColumnName("user_id");
+        b.Property(x => x.Domain).HasColumnName("domain").HasMaxLength(32).IsRequired();
+        b.Property(x => x.Scope).HasColumnName("scope").HasMaxLength(16).IsRequired();
+        b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).HasConstraintName("fk_uds_user").OnDelete(DeleteBehavior.Cascade);
     }
 }

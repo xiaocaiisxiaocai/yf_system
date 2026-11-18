@@ -14,6 +14,13 @@ vi.mock('../../../api/client', () => ({
   default: mocks,
 }))
 
+vi.mock('../../../store/auth', () => ({
+  useAuth: (selector?: (state: { hasPerm: (code: string) => boolean }) => unknown) => {
+    const state = { hasPerm: (code: string) => code === 'dict:manage' || code === 'dict:delete' }
+    return selector ? selector(state) : state
+  },
+}))
+
 import Dictionaries from '../../../pages/system/Dictionaries'
 
 const suppliers = [{ id: 8, name: '珞石', status: 'ACTIVE' }]

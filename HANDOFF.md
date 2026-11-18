@@ -1,5 +1,35 @@
 # 项目踩坑记录
 
+## 授权保存必须一次请求、一个事务（2026-11-18）
+
+- 现象：角色抽屉与用户编辑框各自把"数据范围"和"权限/资料"拆成两次 PUT；第二步被拒绝时第一步已落库，出现"只生效一半"，旧页面还可能把别人刚撤销的授权写回去。
+- 根因：把范围当成独立资源分笔提交，且前端按打开时的快照整份提交。
+- 规避：角色用 `PUT /admin/roles/{id}/authorization`（`permissionIds`/`scopes` 任一为 null 表示不改），用户把 `scopes` 并入 `PUT /admin/users/{id}`；前端只发送实际变化的业务域，并在写前复核服务端当前值。
+
+## 权限拆分的回填只能按旧接口的真实能力（2026-11-18）
+
+- 现象：给"只有菜单码"的角色（`org:user`、`supplier:list`、`rbac:role`）或只有 `oem:transfer_view` 的角色回填读取码后，升级当天这些角色获得了原本没有的能力：用户/供应商/角色列表可读，OEM 厂商联系人邮箱与共享账号可读。
+- 根因：把菜单码、相邻动作码当成旧读能力的证据；旧读接口实际检查的是 `user:manage`/`supplier:manage|account`/`role:manage`/`oem:company_manage|account_manage`。
+- 规避：回填来源只取旧接口真正检查的码；新读码默认不回填（`oem:directory_view` 尤其只显式授予）。新增读码时逐个域核对"旧接口是否允许"，并给夹具角色显式补 `role_data_scopes`。
+
+## 数据范围是授权，不是显示项（2026-11-18）
+
+- 现象：只修了"用户覆盖"的委派上限，仍有三个入口能扩大范围：分配/更换角色（目标角色默认 ALL）、清空角色默认（成员是组织主管则回退 ORG）、旧表单整份回写（把他人已收窄的范围改回 ALL）。
+- 根因：范围被当成角色/用户的附属数据，写入路径各自实现；前端按表单快照整体提交。
+- 规避：任何"授予"路径都按**写入后的有效范围**校验（`ScopeWithRoleAsync`、清空回退、`CanGrant`）；前端只提交改过的业务域并在写前复核；角色保存先写范围再写权限。
+
+## 权限迁移不要写死权限 ID（2026-11-18）
+
+- 现象：`AddDataScopesAndCrudPermissions` 用 `INSERT INTO permissions(id,...)` 插入 224–230；在升级库上可能主键冲突，`--migrate-database` 失败，站点无法启动。
+- 根因：早期权限迁移一律按 code 插入、让 MySQL 自增分配 ID，升级库的自增游标可能已经越过这些固定值；固定 ID 只属于全新库的 `BootstrapSeedCatalog`。
+- 规避：新增权限统一写 `INSERT INTO permissions(code,name,type,parent_id,sort_no)` 并用 `NOT EXISTS` 判重；上线前在备份库上实跑一次迁移。迁移的 `Down` 会连表删掉已配置的数据范围，回滚后要重新配置。
+
+## 数据范围必须覆盖所有"展示另一个项目"的读路径（2026-11-18）
+
+- 现象：项目列表和详情已按数据范围过滤，复制履历里仍显示范围外关联项目的名称、供应商和负责人；只有 `user:view` 的账号还能点开一个必然 403 的用户编辑框。
+- 根因：`ProjectCopyService.HistoryAsync` 用 `current.IsInternal` 判断关联项目可见性（引入数据范围后"内部账号"不再等于"能看"）；前端入口只按"能否进入页面"渲染。
+- 规避：任何展示另一个项目的位置都走 `ProjectAccessService`（复制履历、文件映射、实时受众同源）；新增项目读接口先确认它用 `VisibleQueryAsync` 或 `RequireViewForValidatedActorAsync`。管理页的编辑/数据范围入口按 `user:manage` 渲染，别只按"页面可见"。
+
 ## 服务端分页表格的筛选必须走服务端（2026-11-17）
 
 - 现象：给 `FileTable` 加"文件类型"下拉后，筛选只作用于当前这 10 条，分页器仍显示未筛选的总数，第 2 页起可能整页空白；空表与"N 条"并存。

@@ -38,6 +38,9 @@ export function useCan() {
     deleteCompanies: permissions.has('oem:company_delete'),
     manageAccounts: permissions.has('oem:account_manage'),
     deleteAccounts: permissions.has('oem:account_delete'),
+    // Read-only directory access: company and account lists (contacts stay an administration read).
+    viewDirectory: permissions.has('oem:directory_view') || permissions.has('oem:company_manage')
+      || permissions.has('oem:account_manage'),
     manageFlows: permissions.has('oem:flow_template_manage'),
     manageRetention: permissions.has('oem:retention_template_manage'),
     manageFilePolicy: permissions.has('oem:file_policy_manage'),

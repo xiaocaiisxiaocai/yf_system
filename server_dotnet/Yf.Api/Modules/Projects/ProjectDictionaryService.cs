@@ -97,6 +97,7 @@ internal sealed class ProjectDictionaryService(AuditService audit)
     {
         await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
         var current = await RequireWriteAsync(conn, tx, actor, ct);
+        await AccessService.RequirePermissionAsync(conn, tx, current, "dict:delete", ct);
         await using var db = EfDb.Use(conn, tx);
         var row = await FindAsync(db, id, ct, true) ?? throw ApiException.NotFound();
         if (row.ProjectInUse) throw ApiException.Conflict("字典项已被项目引用，可停用但不能删除");

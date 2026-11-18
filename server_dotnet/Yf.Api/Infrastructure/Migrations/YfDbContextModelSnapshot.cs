@@ -2502,6 +2502,30 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.RoleDataScope", b =>
+                {
+                    b.Property<ulong>("RoleId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("role_id");
+
+                    b.Property<string>("Domain")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("domain");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("scope");
+
+                    b.HasKey("RoleId", "Domain");
+
+                    b.ToTable("role_data_scopes", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.RolePermission", b =>
                 {
                     b.Property<ulong>("RoleId")
@@ -2997,6 +3021,30 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_users_supplier");
 
                     b.ToTable("users", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.UserDataScope", b =>
+                {
+                    b.Property<ulong>("UserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("user_id");
+
+                    b.Property<string>("Domain")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("domain");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("scope");
+
+                    b.HasKey("UserId", "Domain");
+
+                    b.ToTable("user_data_scopes", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
@@ -5010,6 +5058,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasConstraintName("fk_robot_parts_supplier");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.RoleDataScope", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Role", null)
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_rds_role");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.RolePermission", b =>
                 {
                     b.HasOne("Yf.Api.Infrastructure.Entities.Permission", null)
@@ -5079,6 +5137,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasForeignKey("SupplierId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_users_supplier");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.UserDataScope", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_uds_user");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.UserRole", b =>

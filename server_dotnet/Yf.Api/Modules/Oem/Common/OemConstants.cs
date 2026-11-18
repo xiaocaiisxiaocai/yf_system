@@ -20,6 +20,9 @@ public static class OemPermissions
 {
     public const string TransferCreate = "oem:transfer_create";
     public const string TransferView = "oem:transfer_view";
+    public const string TransferUpdate = "oem:transfer_update";
+    public const string TransferDelete = "oem:transfer_delete";
+    public const string DirectoryView = "oem:directory_view";
     public const string FileDownload = "oem:file_download";
     public const string FlowApprove = "oem:flow_approve";
     public const string ApprovalRecover = "oem:approval_recover";
@@ -38,7 +41,8 @@ public static class OemPermissions
 
     public static readonly IReadOnlySet<string> All = new HashSet<string>(StringComparer.Ordinal)
     {
-        TransferCreate, TransferView, FileDownload, FlowApprove, ApprovalRecover, CompanyManage, AccountManage, CompanyDelete, AccountDelete,
+        TransferCreate, TransferView, TransferUpdate, TransferDelete, DirectoryView, FileDownload, FlowApprove, ApprovalRecover,
+        CompanyManage, AccountManage, CompanyDelete, AccountDelete,
         FlowTemplateManage, RetentionTemplateManage, FilePolicyManage, NotifyManage, AuditView, MenuCode,
     };
 }

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Approval;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
@@ -40,11 +41,9 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         {
             var userId = current.Id;
             var canView = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct);
-            // Only administrators see everyone's transfers; others see inbound ones the vendor chose to notify them about.
-            var seesAll = await OemAuthorizer.IsSystemAdminAsync(uow, current, ct);
+            // ALL range sees everyone's transfers; others see inbound ones the vendor chose to notify them about.
+            var (seesAll, scopedUserIds) = await TransferRangeAsync(uow, (InternalOemActor)current, ct);
             var notified = db.OemTransferInternalRecipients.Where(item => item.UserId == userId).Select(item => item.TransferId);
-            // A supervisor also sees what the people in their organisations (and below) sent or were notified about.
-            var supervised = await SupervisedUserIdsAsync(db, userId, ct);
             var canRecover = await OemAuthorizer.HasAsync(uow, current, OemPermissions.ApprovalRecover, ct);
             var canApprove = await OemAuthorizer.HasAsync(uow, current, OemPermissions.FlowApprove, ct);
             var taskTransfers = db.OemFlowTasks.Where(task => canApprove && task.ApproverUserId == userId
@@ -57,9 +56,10 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     && (seesAll
                         || (transfer.Direction == TransferDirections.OemToInternal && notified.Contains(transfer.Id))
                         || (transfer.Direction == TransferDirections.InternalToOem && transfer.InternalSenderUserId != null
-                            && supervised.Contains(transfer.InternalSenderUserId.Value))
+                            && Enumerable.Contains(scopedUserIds, transfer.InternalSenderUserId.Value))
                         || (transfer.Direction == TransferDirections.OemToInternal
-                            && db.OemTransferInternalRecipients.Any(item => item.TransferId == transfer.Id && supervised.Contains(item.UserId)))))
+                            && db.OemTransferInternalRecipients.Any(item => item.TransferId == transfer.Id
+                                && Enumerable.Contains(scopedUserIds, item.UserId)))))
                 || (transfer.LifecycleStatus != TransferLifecycle.Draft && taskTransfers.Contains(transfer.Id))
                 || (canRecover && approvalStatus == FlowInstanceStatuses.ApprovalBlocked
                     && transfer.Direction == TransferDirections.InternalToOem
@@ -134,23 +134,19 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         return new OemPageResponse<OemTransferSummaryResponse>(rows.Select(transfer => summaries[transfer.Id]).ToArray(), total, page, size);
     }
 
-    /// <summary>The people in the organisations this user leads, including every organisation below them (current membership).</summary>
-    internal static async Task<ulong[]> SupervisedUserIdsAsync(YfDbContext db, ulong leaderId, CancellationToken ct)
+    /// <summary>
+    /// The transfer data range of an internal caller: ALL sees every transfer; ORG also sees what the people in
+    /// the organisations it covers sent or were notified about; SELF sees only its own and notified rows.
+    /// </summary>
+    internal static async Task<(bool SeesAll, ulong[] ScopedUserIds)> TransferRangeAsync(
+        OemUnitOfWork uow, InternalOemActor actor, CancellationToken ct)
     {
-        var led = await db.Departments.AsNoTracking().Where(item => item.LeaderAccountId == leaderId).Select(item => item.Id).ToArrayAsync(ct);
-        if (led.Length == 0) return [];
-        var departments = await db.Departments.AsNoTracking().Select(item => new { item.Id, item.ParentId }).ToArrayAsync(ct);
-        var children = departments.Where(item => item.ParentId.HasValue).ToLookup(item => item.ParentId!.Value, item => item.Id);
-        var visited = new HashSet<ulong>();
-        var pending = new Queue<ulong>(led);
-        while (pending.TryDequeue(out var current))
-        {
-            if (!visited.Add(current)) continue;
-            foreach (var child in children[current]) pending.Enqueue(child);
-        }
-        var ids = visited.ToArray();
-        return await db.Users.AsNoTracking().Where(user => user.UserType == "INTERNAL" && user.DepartmentId != null
-            && Enumerable.Contains(ids, user.DepartmentId.Value)).Select(user => user.Id).ToArrayAsync(ct);
+        if (await OemAuthorizer.IsSystemAdminAsync(uow, actor, ct)) return (true, []);
+        var scope = await DataScopeService.ResolveAsync(uow.Db, actor.Id, DataScopeDomains.OemTransfer, ct);
+        if (scope.IsAll) return (true, []);
+        return scope.IsOrg
+            ? (false, await DataScopeService.OrgUserIdsAsync(uow.Db, scope.OrgIds, ct))
+            : (false, []);
     }
 
     private static async Task<ulong[]> DepartmentSubtreeAsync(YfDbContext db, ulong id, CancellationToken ct)
@@ -222,8 +218,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             transfer.ClosedAt,
             new OemTransferCapabilitiesResponse(
                 CanEdit: capabilities.EditDraft,
-                CanSend: capabilities.EditDraft,
-                CanDelete: capabilities.EditDraft,
+                CanSend: capabilities.SendDraft,
+                CanDelete: capabilities.DeleteDraft,
                 CanReadContent: capabilities.CanReadContent,
                 ContentPurpose: capabilities.ContentAccess.ToString().ToUpperInvariant()),
             files.Select(file =>
@@ -264,13 +260,15 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         if (actor is InternalOemActor)
         {
             permissions = await OemAuthorizer.InternalPermissionsAsync(uow, actor.Id, ct);
-            seesAll = await OemAuthorizer.IsSystemAdminAsync(uow, actor, ct);
-            var supervised = await SupervisedUserIdsAsync(uow.Db, actor.Id, ct);
-            if (supervised.Length > 0)
+            var range = await TransferRangeAsync(uow, (InternalOemActor)actor, ct);
+            seesAll = range.SeesAll;
+            if (range.ScopedUserIds.Length > 0)
                 inScope = transfer.Direction == TransferDirections.InternalToOem
-                    ? transfer.InternalSenderUserId is ulong senderId && supervised.Contains(senderId)
+                    ? transfer.InternalSenderUserId is ulong senderId
+                        && Enumerable.Contains(range.ScopedUserIds, senderId)
                     : await uow.Db.OemTransferInternalRecipients.AsNoTracking()
-                        .AnyAsync(item => item.TransferId == transfer.Id && Enumerable.Contains(supervised, item.UserId), ct);
+                        .AnyAsync(item => item.TransferId == transfer.Id
+                            && Enumerable.Contains(range.ScopedUserIds, item.UserId), ct);
             notified = transfer.Direction == TransferDirections.OemToInternal && await uow.Db.OemTransferInternalRecipients.AsNoTracking()
                 .AnyAsync(item => item.TransferId == transfer.Id && item.UserId == actor.Id, ct);
             if (transfer.Direction == TransferDirections.InternalToOem)
@@ -363,21 +361,23 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         if (actor is InternalOemActor)
         {
             permissions = await OemAuthorizer.InternalPermissionsAsync(uow, actor.Id, ct);
-            seesAll = await OemAuthorizer.IsSystemAdminAsync(uow, actor, ct);
+            var range = await TransferRangeAsync(uow, (InternalOemActor)actor, ct);
+            seesAll = range.SeesAll;
             var notifiedActorId = actor.Id;
             notified = (await db.OemTransferInternalRecipients.AsNoTracking()
                 .Where(item => item.UserId == notifiedActorId && Enumerable.Contains(ids, item.TransferId))
                 .Select(item => item.TransferId).ToArrayAsync(ct)).ToHashSet();
-            var supervised = await SupervisedUserIdsAsync(db, notifiedActorId, ct);
-            if (supervised.Length > 0)
+            if (range.ScopedUserIds.Length > 0)
             {
                 var inboundIds = transfers.Where(transfer => transfer.Direction == TransferDirections.OemToInternal).Select(transfer => transfer.Id).ToArray();
-                var supervisedRecipients = inboundIds.Length == 0 ? [] : await db.OemTransferInternalRecipients.AsNoTracking()
-                    .Where(item => Enumerable.Contains(inboundIds, item.TransferId) && Enumerable.Contains(supervised, item.UserId))
+                var scopedRecipients = inboundIds.Length == 0 ? [] : await db.OemTransferInternalRecipients.AsNoTracking()
+                    .Where(item => Enumerable.Contains(inboundIds, item.TransferId)
+                        && Enumerable.Contains(range.ScopedUserIds, item.UserId))
                     .Select(item => item.TransferId).ToArrayAsync(ct);
                 inScope = transfers.Where(transfer => transfer.Direction == TransferDirections.InternalToOem
-                        ? transfer.InternalSenderUserId is ulong senderId && supervised.Contains(senderId)
-                        : supervisedRecipients.Contains(transfer.Id))
+                        ? transfer.InternalSenderUserId is ulong senderId
+                            && Enumerable.Contains(range.ScopedUserIds, senderId)
+                        : scopedRecipients.Contains(transfer.Id))
                     .Select(transfer => transfer.Id).ToHashSet();
             }
             var outboundIds = transfers.Where(transfer => transfer.Direction == TransferDirections.InternalToOem).Select(transfer => transfer.Id).ToArray();

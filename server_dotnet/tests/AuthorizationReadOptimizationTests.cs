@@ -67,8 +67,7 @@ public sealed class AuthorizationReadOptimizationTests
         await AccessService.RequirePermissionAsync(connection, tx, current, "project:list", ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(connection, tx, current, 9_400, false, ct);
 
-        // Visibility no longer follows the responsible user: the project stays readable after a transfer,
-        // while the live ownership check refuses writes.
+        // 数据范围为「全部」的账号在转让后仍可读（可见性不再跟随负责人），而负责人写权限的实时检查会拒绝写入。
         await database.ExecuteAsync("UPDATE projects SET responsible_user_id=9201 WHERE id=9400", null, ct);
         await ProjectAccessService.RequireViewForValidatedActorAsync(connection, tx, current, 9_400, false, ct);
         var notOwner = await Assert.ThrowsAsync<ApiException>(() => ProjectAccessService.RequireViewForValidatedActorAsync(
@@ -127,6 +126,7 @@ public sealed class AuthorizationReadOptimizationTests
         INSERT INTO roles(id,name,status,is_built_in) VALUES(9100,'read role','ACTIVE',0);
         INSERT INTO role_permissions(role_id,permission_id)
             SELECT 9100,id FROM permissions WHERE code='project:list';
+        INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(9100,'project','ALL');
         INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
             VALUES(9200,'read-actor','unused','Read Actor','','INTERNAL','ACTIVE',0),
                   (9201,'other-owner','unused','Other Owner','','INTERNAL','ACTIVE',0);

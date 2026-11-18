@@ -96,6 +96,7 @@ public sealed class OemTransferService(
         var version = OemValidation.ExpectedVersion(request.Version);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferUpdate, ct);
         var transfer = await LockOwnDraftAsync(uow, current, id, version, ct);
         var title = string.IsNullOrWhiteSpace(request.Title)
             ? transfer.Title
@@ -121,6 +122,14 @@ public sealed class OemTransferService(
         var version = OemValidation.ExpectedVersion(expectedVersion);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        if (current is InternalOemActor)
+        {
+            // The sender's retry flow deletes its own failed draft first, so a create holder keeps that ability;
+            // the separate delete grant only widens who may remove a draft inside the sender's own scope.
+            var mayDelete = await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferDelete, ct)
+                || await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferCreate, ct);
+            if (!mayDelete) throw ApiException.Forbidden();
+        }
         var transfer = await LockOwnDraftAsync(uow, current, id, version, ct);
         await AbandonAsync(uow, transfer, current, "发送人删除草稿", PurgeReasons.DraftDeleted, ct);
         await dispatcher.CommitAsync(uow, ct);
@@ -258,6 +267,7 @@ public sealed class OemTransferService(
             ?? throw ApiException.NotFound();
         var transfer = await OemTransferProgression.LockTransferAsync(uow, transferId, ct);
         await EnsureOwnDraftAsync(uow, current, transfer, ct);
+        await EnsureDraftWriteAsync(uow, current, ct);
         var file = await OemLocks.ForUpdate<OemTransferFile>(uow.Db, fileId).SingleAsync(ct);
         if (file.PurgeReason == PurgeReasons.FileRemoved) throw ApiException.NotFound();
         file.PurgeReason = PurgeReasons.FileRemoved;
@@ -269,6 +279,16 @@ public sealed class OemTransferService(
         await audit.WriteAsync(uow, current, "OEM_FILE_REMOVE", "oem_file", fileId,
             new { targetName = file.OriginalName, transferId, file.Sha256, file.SizeBytes }, ct);
         await dispatcher.CommitAsync(uow, ct);
+    }
+
+    /// <summary>
+    /// Draft attachments may be written by the creator or by an update holder; the detail view offers the same set.
+    /// </summary>
+    private static async Task EnsureDraftWriteAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct)
+    {
+        if (actor is not InternalOemActor) return;
+        if (await OemAuthorizer.HasAsync(uow, actor, OemPermissions.TransferCreate, ct)) return;
+        await OemAuthorizer.RequireAsync(uow, actor, OemPermissions.TransferUpdate, ct);
     }
 
     /// <summary>

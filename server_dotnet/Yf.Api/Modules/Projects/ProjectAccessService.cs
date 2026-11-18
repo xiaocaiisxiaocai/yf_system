@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Identity;
 using ProjectEntity = Yf.Api.Infrastructure.Entities.Project;
 
 namespace Yf.Api.Modules.Projects;
@@ -11,16 +12,20 @@ public sealed record ProjectAccess(
     ulong CreatedBy,
     string Status,
     ulong? ResponsibleUserId = null,
-    ulong? SectionId = null);
+    ulong? SectionId = null,
+    ulong? ResponsibleDepartmentId = null);
 
 /// <summary>
-/// Every internal account with <c>project:list</c> sees every project; supplier accounts see their company's
-/// projects. Internal writes additionally require the project's responsible user (<see cref="RequireOwner"/>),
-/// checked against the locked row inside the write transaction.
+/// An internal account sees the projects in its <see cref="DataScopeDomains.Project"/> data range: its own by
+/// default, its organisation subtree when the range is ORG, everything when it is ALL. Supplier accounts see their
+/// company's projects. Internal writes additionally require the project's responsible user
+/// (<see cref="RequireOwner"/>), checked against the locked row inside the write transaction.
 /// </summary>
 public static class ProjectAccessService
 {
     internal const string OwnerOnlyMessage = "仅项目负责人可以操作该项目";
+
+    internal const string NotVisibleMessage = "该项目不在当前账号的数据范围内";
 
     internal static async Task<IQueryable<ProjectEntity>> VisibleQueryAsync(
         YfDbContext db,
@@ -29,10 +34,21 @@ public static class ProjectAccessService
     {
         if (!await HasPermissionAsync(db, current.Id, "project:list", ct))
             throw ApiException.Forbidden();
-        if (current.IsInternal) return db.Projects;
-        if (current.SupplierId is null) throw ApiException.OutOfScope();
-        var supplierId = current.SupplierId.Value;
-        return db.Projects.Where(project => project.SupplierId == supplierId);
+        if (!current.IsInternal)
+        {
+            if (current.SupplierId is null) throw ApiException.OutOfScope();
+            var supplierId = current.SupplierId.Value;
+            return db.Projects.Where(project => project.SupplierId == supplierId);
+        }
+        var userId = current.Id;
+        var scope = await DataScopeService.ResolveAsync(db, userId, DataScopeDomains.Project, ct);
+        if (scope.IsAll) return db.Projects;
+        if (!scope.IsOrg) return db.Projects.Where(project => project.ResponsibleUserId == userId);
+        var orgIds = scope.OrgIds.ToArray();
+        return db.Projects.Where(project => project.ResponsibleUserId == userId
+            || (project.SectionId != null && Enumerable.Contains(orgIds, project.SectionId.Value))
+            || (project.ResponsibleUserId != null && db.Users.Any(user => user.Id == project.ResponsibleUserId
+                && user.DepartmentId != null && Enumerable.Contains(orgIds, user.DepartmentId.Value))));
     }
 
     /// <summary>
@@ -163,13 +179,19 @@ public static class ProjectAccessService
     {
         await AccessService.RequirePermissionAsync(conn, tx, current, "project:list", ct);
         await using var db = EfDb.Use(conn, tx);
+        var scope = current.IsInternal
+            ? await DataScopeService.ResolveAsync(db, current.Id, DataScopeDomains.Project, ct)
+            : null;
         var row = await db.Projects.Where(item => item.Id == projectId).Select(item => new ProjectAccess(
             item.Id, item.SupplierId, item.CreatedBy, item.Status,
-            item.ResponsibleUserId, item.SectionId)).SingleOrDefaultAsync(ct);
+            item.ResponsibleUserId, item.SectionId,
+            item.ResponsibleUserId == null ? null
+                : db.Users.Where(user => user.Id == item.ResponsibleUserId).Select(user => user.DepartmentId).FirstOrDefault()))
+            .SingleOrDefaultAsync(ct);
         if (row is null) throw ApiException.NotFound();
         // Scope is checked on an unlocked read first: a caller outside the project's scope must not be
         // able to queue behind, or hold, the row lock of a project it cannot see.
-        var visible = Authorize(current, row);
+        var visible = Authorize(current, row, scope);
         if (ownerOnly) RequireOwner(current, visible);
         if (!forUpdate) return visible;
 
@@ -180,20 +202,36 @@ public static class ProjectAccessService
             FROM projects WHERE id={projectId} FOR UPDATE
             """).SingleOrDefaultAsync(ct);
         if (locked is null) throw ApiException.NotFound();
+        // The owner's department is read after the project lock instead of inside the FOR UPDATE statement:
+        // a subquery there would take a row lock on users, adding a second lock to every project write and a
+        // new edge to the existing lock order.
+        var lockedDepartmentId = locked.ResponsibleUserId is ulong lockedOwnerId
+            ? await db.Users.Where(user => user.Id == lockedOwnerId)
+                .Select(user => user.DepartmentId).FirstOrDefaultAsync(ct)
+            : null;
         // Ownership can change between the unlocked read and the lock, so authorise the locked values again.
         var lockedAccess = Authorize(current, new ProjectAccess(
             locked.Id, locked.SupplierId, locked.CreatedBy,
-            locked.Status, locked.ResponsibleUserId, locked.SectionId));
+            locked.Status, locked.ResponsibleUserId, locked.SectionId, lockedDepartmentId), scope);
         if (ownerOnly) RequireOwner(current, lockedAccess);
         return lockedAccess;
     }
 
-    private static ProjectAccess Authorize(CurrentUser current, ProjectAccess access)
+    private static ProjectAccess Authorize(
+        CurrentUser current, ProjectAccess access, DataScopeResolution? scope)
     {
-        if (current.IsInternal) return access;
-        if (current.SupplierId is null || current.SupplierId.Value != access.SupplierId)
-            throw ApiException.OutOfScope();
-        return access;
+        if (!current.IsInternal)
+        {
+            if (current.SupplierId is null || current.SupplierId.Value != access.SupplierId)
+                throw ApiException.OutOfScope();
+            return access;
+        }
+        if (scope!.IsAll || access.ResponsibleUserId == current.Id) return access;
+        if (scope.IsOrg
+            && (access.ResponsibleDepartmentId is ulong departmentId && scope.OrgIds.Contains(departmentId)
+                || access.SectionId is ulong sectionId && scope.OrgIds.Contains(sectionId)))
+            return access;
+        throw ApiException.Forbidden(NotVisibleMessage);
     }
 
     private sealed class LockedProjectAccess

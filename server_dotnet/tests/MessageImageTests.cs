@@ -150,6 +150,8 @@ public sealed class MessageImageTests
             INSERT INTO roles(id,name,description,is_built_in,status) VALUES(9001,'图片范围用户','图片测试',0,'ACTIVE');
             INSERT INTO role_permissions(role_id,permission_id)
             SELECT 9001,id FROM permissions WHERE code='project:list';
+            -- 项目数据范围是可见性的唯一来源：夹具沿用"内部账号能看该项目"的前提。
+            INSERT INTO role_data_scopes(role_id,domain,scope) VALUES(9001,'project','ALL');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
             VALUES(101,'image-outsider','unused','范围外用户','','INTERNAL','ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(101,9001);

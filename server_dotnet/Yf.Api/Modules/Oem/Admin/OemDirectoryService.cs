@@ -63,6 +63,17 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     internal const int MaximumAccountImportRows = 100;
     internal const int MaximumContactsPerCompany = 100;
 
+    /// <summary>Recheck the actor and accept any one of the given permissions (read-only code or the managing code).</summary>
+    private static async Task RequireAnyAsync(
+        OemUnitOfWork uow, OemActor actor, CancellationToken ct, params string[] permissions)
+    {
+        var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        if (current is not InternalOemActor) throw ApiException.Forbidden("仅公司内部账号可以执行该操作");
+        foreach (var permission in permissions)
+            if (await OemAuthorizer.HasAsync(uow, current, permission, ct)) return;
+        throw ApiException.Forbidden();
+    }
+
     public async Task<OemPageResponse<OemCompanyListItemResponse>> ListCompaniesAsync(OemActor actor, ulong page, uint size, ulong offset, string? keyword, string? status, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
@@ -70,7 +81,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         if (actor is not InternalOemActor) throw ApiException.Forbidden("仅公司内部账号可以执行该操作");
         var current = (InternalOemActor)await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var codes = await OemAuthorizer.InternalPermissionsAsync(uow, current.User.Id, ct);
-        if (!codes.Contains(OemPermissions.CompanyManage) && !codes.Contains(OemPermissions.AccountManage)) throw ApiException.Forbidden();
+        if (!codes.Contains(OemPermissions.CompanyManage) && !codes.Contains(OemPermissions.AccountManage)
+            && !codes.Contains(OemPermissions.DirectoryView)) throw ApiException.Forbidden();
         var query = uow.Db.OemCompanies.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(keyword))
         {
@@ -100,7 +112,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         if (!await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferCreate, ct)
-            && !await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct))
+            && !await OemAuthorizer.HasAsync(uow, current, OemPermissions.TransferView, ct)
+            && !await OemAuthorizer.HasAsync(uow, current, OemPermissions.DirectoryView, ct))
             throw ApiException.Forbidden();
         var companies = await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Status == OemStatus.Active)
             .OrderBy(company => company.Name).Select(company => new
@@ -115,7 +128,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     public async Task<OemCompanyResponse> CompanyDetailAsync(OemActor actor, ulong id, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
-        await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+        await RequireAnyAsync(uow, actor, ct, OemPermissions.DirectoryView, OemPermissions.CompanyManage);
         var company = await uow.Db.OemCompanies.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, ct) ?? throw ApiException.NotFound();
         return CompanyJson(company);
     }
@@ -312,6 +325,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     public async Task<OemCompanyContactResponse[]> ListCompanyContactsAsync(OemActor actor, ulong companyId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        // Contact e-mail addresses stay an administration read: `oem:directory_view` covers the company and its
+        // accounts only, so a read-only role can never harvest vendor notification addresses.
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
         if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId, ct)) throw ApiException.NotFound();
         return await uow.Db.OemCompanyContacts.AsNoTracking()
@@ -471,7 +486,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     public async Task<IReadOnlyList<OemAccountResponse>> ListAccountsAsync(OemActor actor, ulong companyId, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
-        await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
+        await RequireAnyAsync(uow, actor, ct, OemPermissions.DirectoryView, OemPermissions.AccountManage);
         if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId, ct)) throw ApiException.NotFound();
         var accounts = await uow.Db.OemAccounts.AsNoTracking().Where(account => account.OemCompanyId == companyId)
             .OrderBy(account => account.Id).ToArrayAsync(ct);
@@ -548,7 +563,7 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     public async Task<OemAccountResponse> AccountDetailAsync(OemActor actor, ulong id, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
-        await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.AccountManage, ct);
+        await RequireAnyAsync(uow, actor, ct, OemPermissions.DirectoryView, OemPermissions.AccountManage);
         var account = await uow.Db.OemAccounts.AsNoTracking().SingleOrDefaultAsync(item => item.Id == id, ct) ?? throw ApiException.NotFound();
         return AccountJson(account, uow.Now);
     }
@@ -753,6 +768,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     public async Task<OemInternalRecipientResponse[]> ListAllInternalRecipientsAsync(OemActor actor, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        // Stays an administration action: the list enumerates internal staff and their addresses, which the
+        // read-only directory permission must not expose.
         await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
         var candidates = (await OemRecipients.InboundCandidatesAsync(uow.Db, ct)).Select(item => item.Id).ToArray();
         var removed = (await uow.Db.OemInternalRecipientExclusions.AsNoTracking().Select(item => item.UserId).ToArrayAsync(ct)).ToHashSet();

@@ -24,6 +24,8 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
+    public DbSet<RoleDataScope> RoleDataScopes => Set<RoleDataScope>();
+    public DbSet<UserDataScope> UserDataScopes => Set<UserDataScope>();
 
     public DbSet<ProjectRobotOwner> ProjectRobotOwners => Set<ProjectRobotOwner>();
     public DbSet<Project> Projects => Set<Project>();

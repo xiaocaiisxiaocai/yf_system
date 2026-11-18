@@ -115,8 +115,8 @@ internal enum ProjectRealtimeAuthorization
 }
 
 /// <summary>
-/// Who may be told that a project changed: every active internal account with <c>project:list</c> (internal
-/// accounts see every project) and the active accounts of the project's supplier.
+/// Who may be told that a project changed: the active internal accounts whose project data range covers it
+/// and the active accounts of the project's supplier.
 /// </summary>
 internal sealed record ProjectRealtimeAudience(
     ulong ProjectId,
@@ -124,6 +124,8 @@ internal sealed record ProjectRealtimeAudience(
     ulong? ResponsibleUserId,
     IReadOnlySet<ulong> InternalUserIds,
     IReadOnlySet<ulong> SupplierUserIds);
+
+internal sealed record InternalViewerRow(ulong Id, ulong? DepartmentId);
 
 internal sealed class ProjectRealtimeAuthorizer(AppDb database)
 {
@@ -171,8 +173,9 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
 
     /// <summary>
     /// Everyone who could currently see the project, read from the database rather than from the identity
-    /// cached when a connection was opened: internal accounts with project:list and the accounts that
-    /// belong to the project's supplier right now. It only narrows candidates; delivery is re-authorized.
+    /// cached when a connection was opened: internal accounts whose project data range covers it and the
+    /// accounts that belong to the project's supplier right now. It only narrows candidates; delivery is
+    /// re-authorized.
     /// </summary>
     internal Task<ProjectRealtimeAudience?> ResolveAudienceAsync(ulong projectId, CancellationToken ct) =>
         ResolveAudienceAsync(projectId, null, ct);
@@ -185,34 +188,61 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         await using var db = await database.OpenAsync(ct);
         await using var context = EfDb.Use(db);
         var project = await context.Projects.Where(item => item.Id == projectId)
-            .Select(item => new { item.SupplierId, item.ResponsibleUserId })
+            .Select(item => new { item.SupplierId, item.ResponsibleUserId, item.SectionId })
             .SingleOrDefaultAsync(ct);
         if (project is null) return null;
         var candidateUserIds = candidates?.Select(connection => connection.UserId).Distinct().ToArray();
-        var viewAllQuery = InternalViewers(context);
         var supplierQuery = context.Users.Where(user => user.SupplierId == project.SupplierId
             && user.Status == AccountStatuses.Active);
-        if (candidateUserIds is { Length: > 0 })
+        if (candidateUserIds is not null)
         {
-            viewAllQuery = viewAllQuery.Where(id => Enumerable.Contains(candidateUserIds, id));
+            if (candidateUserIds.Length == 0)
+                return new(projectId, project.SupplierId, project.ResponsibleUserId,
+                    new HashSet<ulong>(), new HashSet<ulong>());
             supplierQuery = supplierQuery.Where(user => Enumerable.Contains(candidateUserIds, user.Id));
         }
-        else if (candidates is not null)
-        {
-            return new(projectId, project.SupplierId, project.ResponsibleUserId, new HashSet<ulong>(),
-                new HashSet<ulong>());
-        }
-        var viewAll = await viewAllQuery.ToArrayAsync(ct);
-        var supplierUsers = await supplierQuery
-            .Select(user => user.Id).ToArrayAsync(ct);
-        return new(projectId, project.SupplierId, project.ResponsibleUserId, viewAll.ToHashSet(), supplierUsers.ToHashSet());
+        // Filter before projecting: a Contains over a record-constructor projection is not translatable.
+        var viewersQuery = InternalViewerRows(context, candidateUserIds);
+        var viewers = await viewersQuery.ToArrayAsync(ct);
+        var scopes = await DataScopeService.ResolveManyAsync(
+            context, viewers.Select(row => row.Id).ToArray(), DataScopeDomains.Project, ct);
+        var ownerDepartmentId = await OwnerDepartmentAsync(context, project.ResponsibleUserId, ct);
+        var internalIds = viewers
+            .Where(row => scopes.TryGetValue(row.Id, out var scope)
+                && CoversProject(scope, row.Id, project.ResponsibleUserId, project.SectionId, ownerDepartmentId))
+            .Select(row => row.Id).ToHashSet();
+        var supplierUsers = await supplierQuery.Select(user => user.Id).ToArrayAsync(ct);
+        return new(projectId, project.SupplierId, project.ResponsibleUserId, internalIds, supplierUsers.ToHashSet());
     }
 
-    /// <summary>Active internal accounts granted project:list, who see every project.</summary>
-    internal static IQueryable<ulong> InternalViewers(YfDbContext db) =>
-        db.Users.Where(user => user.UserType == UserTypes.Internal && user.Status == AccountStatuses.Active
-                && AccessService.UsersWithPermission(db, "project:list").Contains(user.Id))
-            .Select(user => user.Id);
+    /// <summary>Active internal accounts granted project:list, with the organisation used by their data range.</summary>
+    internal static IQueryable<InternalViewerRow> InternalViewerRows(
+        YfDbContext db, IReadOnlyCollection<ulong>? userIds = null)
+    {
+        var query = db.Users.Where(user => user.UserType == UserTypes.Internal
+            && user.Status == AccountStatuses.Active
+            && AccessService.UsersWithPermission(db, "project:list").Contains(user.Id));
+        if (userIds is { Count: > 0 })
+        {
+            var ids = userIds.Distinct().ToArray();
+            query = query.Where(user => Enumerable.Contains(ids, user.Id));
+        }
+        return query.Select(user => new InternalViewerRow(user.Id, user.DepartmentId));
+    }
+
+    internal static bool CoversProject(
+        DataScopeResolution scope, ulong userId, ulong? responsibleUserId, ulong? sectionId, ulong? ownerDepartmentId)
+    {
+        if (scope.IsAll || responsibleUserId == userId) return true;
+        if (!scope.IsOrg) return false;
+        return ownerDepartmentId is ulong departmentId && scope.OrgIds.Contains(departmentId)
+            || sectionId is ulong section && scope.OrgIds.Contains(section);
+    }
+
+    private static async Task<ulong?> OwnerDepartmentAsync(YfDbContext db, ulong? responsibleUserId, CancellationToken ct) =>
+        responsibleUserId is not ulong ownerId
+            ? null
+            : await db.Users.Where(user => user.Id == ownerId).Select(user => user.DepartmentId).SingleOrDefaultAsync(ct);
 
     internal static RealtimeConnection[] SelectCandidates(
         IEnumerable<RealtimeConnection> connections, ProjectRealtimeAudience audience) =>
@@ -231,18 +261,37 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
         var ids = projectIds.Distinct().ToArray();
         var projects = await db.Projects.Where(project => Enumerable.Contains(ids, project.Id))
             .OrderBy(project => project.Id)
-            .Select(project => new { project.Id, project.SupplierId, project.ResponsibleUserId }).ToArrayAsync(ct);
+            .Select(project => new { project.Id, project.SupplierId, project.ResponsibleUserId, project.SectionId })
+            .ToArrayAsync(ct);
         if (projects.Length == 0) return [];
-        var viewAll = (await InternalViewers(db).ToArrayAsync(ct)).ToHashSet();
+        var viewers = await InternalViewerRows(db).ToArrayAsync(ct);
+        var scopes = await DataScopeService.ResolveManyAsync(
+            db, viewers.Select(row => row.Id).ToArray(), DataScopeDomains.Project, ct);
+        var ownerIds = projects.Where(project => project.ResponsibleUserId.HasValue)
+            .Select(project => project.ResponsibleUserId!.Value).Distinct().ToArray();
+        var ownerDepartments = ownerIds.Length == 0
+            ? new Dictionary<ulong, ulong?>()
+            : await db.Users.Where(user => Enumerable.Contains(ownerIds, user.Id))
+                .Select(user => new { user.Id, user.DepartmentId })
+                .ToDictionaryAsync(user => user.Id, user => user.DepartmentId, ct);
         var supplierIds = projects.Select(project => project.SupplierId).Distinct().ToArray();
         var supplierUsers = (await db.Users.Where(user => user.SupplierId != null
                 && Enumerable.Contains(supplierIds, user.SupplierId.Value)
                 && user.Status == AccountStatuses.Active)
             .Select(user => new { user.Id, SupplierId = user.SupplierId!.Value }).ToArrayAsync(ct))
             .ToLookup(user => user.SupplierId, user => user.Id);
-        return projects.Select(project => new ProjectRealtimeAudience(project.Id, project.SupplierId,
-                project.ResponsibleUserId, viewAll, supplierUsers[project.SupplierId].ToHashSet()))
-            .ToArray();
+        return projects.Select(project =>
+        {
+            var ownerDepartmentId = project.ResponsibleUserId is ulong ownerId
+                ? ownerDepartments.GetValueOrDefault(ownerId)
+                : null;
+            var internalIds = viewers
+                .Where(row => scopes.TryGetValue(row.Id, out var scope)
+                    && CoversProject(scope, row.Id, project.ResponsibleUserId, project.SectionId, ownerDepartmentId))
+                .Select(row => row.Id).ToHashSet();
+            return new ProjectRealtimeAudience(project.Id, project.SupplierId,
+                project.ResponsibleUserId, internalIds, supplierUsers[project.SupplierId].ToHashSet());
+        }).ToArray();
     }
 
     internal async Task<IReadOnlyDictionary<(ulong UserId, string SessionId), ProjectRealtimeAuthorization>> AuthorizeProjectAsync(
@@ -306,8 +355,11 @@ internal sealed class ProjectRealtimeAuthorizer(AppDb database)
             }
             var fact = sessionFacts[0];
             if (!fact.HasProjectList || fact.ProjectSupplierId is null) continue;
-            var visible = fact.UserType == UserTypes.Internal
-                || fact.SupplierId is ulong supplierId && supplierId == fact.ProjectSupplierId;
+            // Membership in the audience already encodes the project data range (and the supplier boundary);
+            // the facts query above only re-validates that the account and its session are still current.
+            var visible = fact.UserType == UserTypes.Internal && audience.InternalUserIds.Contains(fact.UserId)
+                || fact.UserType == UserTypes.Supplier && fact.SupplierId is ulong supplierId
+                    && supplierId == fact.ProjectSupplierId && audience.SupplierUserIds.Contains(fact.UserId);
             if (visible) decisions[key] = ProjectRealtimeAuthorization.Deliver;
         }
         return decisions;

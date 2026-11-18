@@ -1,7 +1,7 @@
 import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Space, Tag, Tooltip, Tree, Typography,
+  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Tree, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -11,7 +11,7 @@ import { actionSlots } from '../../components/ActionSlots'
 import { useAuth } from '../../store/auth'
 import { type PageResp } from '../../api/types'
 import type { ApiResponses } from '../../api/types'
-import type { PermissionResponse } from '../../api/generated/api-types'
+import type { DataScopeResponse, PermissionResponse } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
 import StatusTag from '../../components/StatusTag'
@@ -31,8 +31,19 @@ interface Role {
 // Permission points from the API, with type narrowed to the two kinds the tree distinguishes.
 type Perm = Omit<PermissionResponse, 'type'> & { type: 'MENU' | 'ACTION' }
 
+// 数据范围是独立维度：角色只给默认值，管理员可在用户上覆盖。
+const SCOPE_DOMAINS = [
+  { domain: 'project', label: '项目范围' },
+  { domain: 'oem_transfer', label: 'ODM/OEMA 传递单范围' },
+] as const
+const SCOPE_LABELS: Record<string, string> = {
+  SELF: '仅本人', ORG: '本组织及下级', ALL: '全部',
+}
+
 export default function RoleList() {
   const canDelete = useAuth((state) => state.hasPerm('role:delete'))
+  // 只读（role:view）账号可以查看权限，但新增/编辑角色需要 role:manage。
+  const canManageRoles = useAuth((state) => state.hasPerm('role:manage'))
   const [data, setData] = useState<PageResp<Role>>({ list: [], total: 0, page: 1, pageSize: 20 })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
@@ -50,8 +61,13 @@ export default function RoleList() {
   const [savingPerms, setSavingPerms] = useState(false)
   const [editing, setEditing] = useState<Role | null>(null)
   const [permTarget, setPermTarget] = useState<Role | null>(null)
+  const [roleScopes, setRoleScopes] = useState<Record<string, string>>({})
+  const [roleScopesOriginal, setRoleScopesOriginal] = useState<Record<string, string>>({})
+  const [roleScopesLoading, setRoleScopesLoading] = useState(false)
+  const [roleScopesLoadedFor, setRoleScopesLoadedFor] = useState<number | null>(null)
   // 保存实际权限；父节点的半选显示不改变已有的仅菜单授权。
   const [checked, setChecked] = useState<string[]>([])
+  const [permOriginal, setPermOriginal] = useState<string[]>([])
   const [form] = Form.useForm()
 
   const fetchRoles = useCallback(async () => {
@@ -198,13 +214,54 @@ export default function RoleList() {
     }
   }
 
+  // 打开抽屉时读取角色的默认数据范围；读取失败就不提交范围，避免把已有设置清空。
+  const loadRoleScopes = async (roleId: number) => {
+    setRoleScopesLoading(true)
+    setRoleScopesLoadedFor(null)
+    try {
+      const response = await http.get<ApiResponses['GET /admin/roles/{id}/data-scopes']>(
+        `/admin/roles/${roleId}/data-scopes`, { quietNetworkError: true } as QuietRequestConfig)
+      const values: Record<string, string> = {}
+      for (const row of response.data as DataScopeResponse[]) values[row.domain] = row.localScope ?? ''
+      setRoleScopes(values)
+      setRoleScopesOriginal(values)
+      setRoleScopesLoadedFor(roleId)
+    } catch {
+      Message.error('数据范围加载失败，本次保存不会修改数据范围')
+    } finally {
+      setRoleScopesLoading(false)
+    }
+  }
+
   const savePerms = async () => {
     if (permissionSaveInFlight.current || permsLoading || permsError || perms.length === 0 || permTarget?.canManage === false) return
     permissionSaveInFlight.current = true
     const ids = Array.from(new Set(checked)).map(Number)
     setSavingPerms(true)
     try {
-      await http.put<ApiResponses['PUT /admin/roles/{id}/permissions']>(`/admin/roles/${permTarget!.id}/permissions`, { permissionIds: ids })
+      // 只提交改过的业务域：另一域可能已被他人调整，整份写回会把它恢复成旧值。
+      const changedScopes = roleScopesLoadedFor === permTarget!.id
+        ? SCOPE_DOMAINS
+          .filter(({ domain }) => (roleScopes[domain] ?? '') !== (roleScopesOriginal[domain] ?? ''))
+          .map(({ domain }) => ({ domain, value: roleScopes[domain] ?? '' }))
+        : []
+      // 只改范围时不重写整组动作权限：否则旧页面可能把另一位管理员刚撤销的授权恢复回去。
+      const permsChanged = ids.length !== permOriginal.length
+        || ids.some((id) => !permOriginal.includes(String(id)))
+      if (!permsChanged && changedScopes.length === 0) {
+        Message.success('没有需要保存的修改')
+        setPermTarget(null)
+        return
+      }
+      // 一次请求、一个事务：动作权限与数据范围要么都生效，要么都不生效。
+      await http.put<ApiResponses['PUT /admin/roles/{id}/authorization']>(
+        `/admin/roles/${permTarget!.id}/authorization`,
+        {
+          permissionIds: permsChanged ? ids : null,
+          scopes: changedScopes.length > 0
+            ? changedScopes.map(({ domain, value }) => ({ domain, scope: value || null }))
+            : null,
+        })
       Message.success('权限已保存')
       setPermTarget(null)
       load()
@@ -234,7 +291,7 @@ export default function RoleList() {
       <h1 className="visually-hidden">角色与权限</h1>
       <div className="page-toolbar responsive-toolbar">
         <span />
-        <Button
+        {canManageRoles && <Button
           type="primary"
           icon={<IconPlus />}
           onClick={() => {
@@ -244,7 +301,7 @@ export default function RoleList() {
           }}
         >
           新增角色
-        </Button>
+        </Button>}
       </div>
       {loadError ? (
         <LoadError onRetry={load} />
@@ -296,6 +353,8 @@ export default function RoleList() {
                 onClick={() => {
                   setPermTarget(r)
                   setChecked(r.permissionIds.map(String))
+                  setPermOriginal(r.permissionIds.map(String))
+                  void loadRoleScopes(r.id)
                 }}
               >
                 {r.canManage === false ? '查看权限' : '分配权限'}
@@ -446,6 +505,33 @@ export default function RoleList() {
               setChecked(Array.from(next))
             }}
           />
+        )}
+        {permTarget && (
+          <>
+            <div className="section-heading" style={{ marginTop: 20 }}>默认数据范围</div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              角色成员的默认可见范围；管理员可在用户上单独覆盖。留空表示“仅本人”，组织主管仍按所辖组织自动扩大。
+            </Typography.Text>
+            <div style={{ marginTop: 12 }}>
+              {SCOPE_DOMAINS.map(({ domain, label }) => (
+                <div key={domain} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <span style={{ width: 150 }}>{label}</span>
+                  <Select
+                    style={{ width: 200 }}
+                    value={roleScopes[domain] ?? ''}
+                    loading={roleScopesLoading}
+                    disabled={permTarget.canManage === false || roleScopesLoading || roleScopesLoadedFor !== permTarget.id}
+                    onChange={(value) => setRoleScopes((prev) => ({ ...prev, [domain]: value }))}
+                  >
+                    <Select.Option value="">仅本人（默认）</Select.Option>
+                    <Select.Option value="SELF">{SCOPE_LABELS.SELF}</Select.Option>
+                    <Select.Option value="ORG">{SCOPE_LABELS.ORG}</Select.Option>
+                    <Select.Option value="ALL">{SCOPE_LABELS.ALL}</Select.Option>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          </>
         )}
         {permTarget?.canManage === false && (
           <div className="dialog-note">该角色超出当前账号的委派范围，仅可查看。</div>

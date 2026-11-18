@@ -71,7 +71,7 @@ describe('UI 事件失败保护', () => {
     let attempts = 0
     mocks.get.mockImplementation(async (url: string) => ({ data: url === '/permissions' ? permissions : { list: [role], total: 1, page: 1, pageSize: 20 } }))
     mocks.put.mockImplementation(async (url: string) => {
-      expect(url).toBe('/admin/roles/7/permissions')
+      expect(url).toBe('/admin/roles/7/authorization')
       attempts += 1
       return attempts === 1 ? firstSave.promise : { data: {} }
     })
@@ -105,7 +105,7 @@ describe('UI 事件失败保护', () => {
   it('empty permission catalog disables saving but an intentionally cleared role remains saveable', async () => {
     const role = { id: 7, name: '测试角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [1], assignedUserCount: 0, canManage: true }
     for (const catalogAvailable of [false, true]) {
-      const writes: Array<{ permissionIds: number[] }> = []
+      const writes: Array<{ permissionIds: number[]; scopes?: unknown }> = []
       mocks.get.mockImplementation(async (url: string) => ({
         data: url === '/permissions'
           ? catalogAvailable ? [{ id: 1, code: 'project', name: '项目协作', type: 'MENU', parentId: null, grantable: true }] : []
@@ -124,7 +124,7 @@ describe('UI 事件失败保护', () => {
         const rootNode = screen.getByText('项目协作').closest('.arco-tree-node') as HTMLElement
         await user.click(rootNode.querySelector<HTMLInputElement>('input[type="checkbox"]') as HTMLInputElement)
         await user.click(save)
-        await waitFor(() => expect(writes).toEqual([{ permissionIds: [] }]))
+        await waitFor(() => expect(writes).toEqual([{ permissionIds: [], scopes: null }]))
       }
       expect(writes).toHaveLength(catalogAvailable ? 1 : 0)
       view.unmount()

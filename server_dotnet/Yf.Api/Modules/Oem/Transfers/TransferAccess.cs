@@ -21,7 +21,7 @@ public sealed record TransferFacts(
 public sealed record ActorFacts(
     string Realm, ulong Id, ulong? CompanyId, bool CanView, bool CanDownload, bool CanCreate,
     bool HasActiveReviewTask, bool HasAnyTask, bool CanRecover = false, bool SeesAll = false, bool IsNotified = false,
-    bool InScope = false)
+    bool InScope = false, bool CanUpdateDraft = false, bool CanDeleteDraft = false)
 {
     public static ActorFacts For(OemActor actor, IReadOnlySet<string> permissions, bool hasActiveReviewTask, bool hasAnyTask,
         bool seesAll = false, bool isNotified = false, bool inScope = false) => actor switch
@@ -30,7 +30,10 @@ public sealed record ActorFacts(
         _ => new(OemRealms.Internal, actor.Id, null,
             permissions.Contains(OemPermissions.TransferView), permissions.Contains(OemPermissions.FileDownload),
             permissions.Contains(OemPermissions.TransferCreate), hasActiveReviewTask, hasAnyTask,
-            permissions.Contains(OemPermissions.ApprovalRecover), seesAll, isNotified, inScope),
+            permissions.Contains(OemPermissions.ApprovalRecover), seesAll, isNotified, inScope,
+            // Draft writes are independent grants: update, delete (create holders keep it for retries) and send.
+            permissions.Contains(OemPermissions.TransferUpdate),
+            permissions.Contains(OemPermissions.TransferDelete) || permissions.Contains(OemPermissions.TransferCreate)),
     };
 
     /// <summary>View permission over this transfer although it is not the actor's own: administrators and supervisors in scope.</summary>
@@ -39,7 +42,9 @@ public sealed record ActorFacts(
 
 public enum ContentPurpose { None, Recipient, Sender, Review }
 
-public sealed record TransferCapabilities(bool View, bool EditDraft, ContentPurpose ContentAccess, bool RecoveryOnly = false)
+public sealed record TransferCapabilities(
+    bool View, bool EditDraft, ContentPurpose ContentAccess, bool RecoveryOnly = false,
+    bool DeleteDraft = false, bool SendDraft = false)
 {
     public bool CanReadContent => ContentAccess != ContentPurpose.None;
     public bool IsRecipient => ContentAccess == ContentPurpose.Recipient;
@@ -65,9 +70,16 @@ public static class TransferAccess
         var recoveryView = !isOem && actor.CanRecover && outbound
             && transfer.Lifecycle == TransferLifecycle.Sealed && transfer.ApprovalBlocked;
 
-        // Drafts are private to the person who is writing them.
+        // Drafts are private to the person who is writing them; each draft write is gated by its own grant so the
+        // detail view can never offer an action the corresponding endpoint refuses.
         if (transfer.Lifecycle == TransferLifecycle.Draft)
-            return new(isActualSender, isActualSender, isActualSender ? ContentPurpose.Sender : ContentPurpose.None);
+        {
+            var canEdit = isActualSender && (isOem || actor.CanUpdateDraft);
+            var canSend = isActualSender && (isOem || actor.CanCreate);
+            var canDelete = isActualSender && (isOem || actor.CanDeleteDraft);
+            return new(isActualSender, canEdit, isActualSender ? ContentPurpose.Sender : ContentPurpose.None,
+                DeleteDraft: canDelete, SendDraft: canSend);
+        }
 
         // Internal staff see their own transfers, the ones they approve and the inbound ones the vendor chose to notify
         // them about; only administrators (with view permission) see everyone's.

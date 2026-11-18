@@ -11,6 +11,21 @@ public sealed record DepartmentUpsert([property: JsonRequired] string Name, ulon
 public sealed record RoleUpsert([property: JsonRequired] string Name, string? Description);
 public sealed record PermissionAssign([property: JsonRequired] IReadOnlyList<ulong> PermissionIds);
 public sealed record RoleAssign([property: JsonRequired] IReadOnlyList<ulong> RoleIds);
+/// <param name="Scope">SELF / ORG / ALL; null clears an explicit setting so the role default applies. The member is
+/// required so a client that forgets it cannot clear an override by accident.</param>
+public sealed record DataScopeEntry([property: JsonRequired] string Domain, [property: JsonRequired] string? Scope);
+public sealed record DataScopeAssign([property: JsonRequired] IReadOnlyList<DataScopeEntry> Scopes);
+public sealed record DataScopeResponse(
+    string Domain,
+    string DomainLabel,
+    string? LocalScope,
+    string EffectiveScope,
+    string EffectiveScopeLabel);
+/// <summary>Atomic role authorization write: a null member leaves that part untouched.</summary>
+public sealed record RoleAuthorizationUpdate(
+    IReadOnlyList<ulong>? PermissionIds = null,
+    IReadOnlyList<DataScopeEntry>? Scopes = null);
+public sealed record RoleAuthorizationResponse(RoleResponse Role, IReadOnlyList<DataScopeResponse> Scopes);
 public sealed record UserCreate(
     [property: JsonRequired] string EmployeeNo,
     [property: JsonRequired] string Password,
@@ -24,7 +39,8 @@ public sealed record UserUpdate(
     string? Email = null,
     JsonElement DepartmentId = default,
     ulong? RoleId = null,
-    IReadOnlyList<ulong>? RoleIds = null);
+    IReadOnlyList<ulong>? RoleIds = null,
+    IReadOnlyList<DataScopeEntry>? Scopes = null);
 public sealed record SupplierUpsert([property: JsonRequired] string Name, string? Remark);
 public sealed record SupplierAccountCreate(
     [property: JsonRequired] string EmployeeNo,

@@ -534,12 +534,12 @@ public sealed class FilesRecoveryTests
               (4,'S002','SUPPLIER',1,'ACTIVE',0,NULL,'SupplierPeer'),
               (5,'T005','INTERNAL',NULL,'ACTIVE',0,NULL,'StatusUser');
             INSERT INTO permissions(id,code) VALUES
-              (4,'file:delete'),(5,'project:status'),(6,'project:submit'),(7,'project:view_all');
+              (4,'file:delete'),(5,'project:status'),(6,'project:submit');
             INSERT INTO roles(id,name,status,is_built_in) VALUES
               (2,'只读','ACTIVE',0),(3,'供应商提交','ACTIVE',0),(4,'状态管理','ACTIVE',0);
             INSERT INTO user_roles(user_id,role_id) VALUES(2,2),(3,3),(4,3),(5,4);
             INSERT INTO role_permissions(role_id,permission_id) VALUES
-              (2,2),(3,1),(3,2),(3,6),(4,2),(4,5),(4,7);
+              (2,2),(3,1),(3,2),(3,6),(4,2),(4,5);
             """, ct);
         var active = Guid.NewGuid().ToString("D");
         var expired = Guid.NewGuid().ToString("D");
