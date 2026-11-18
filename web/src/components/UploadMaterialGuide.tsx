@@ -16,7 +16,7 @@ export default function UploadMaterialGuide({ direction }: { direction: UploadDi
           content={(
             <ol className="upload-material-guide-list">
               <li>
-                <b>A. STEP 格式 3D 图（必需，.step/.stp/.x_t，文件多时可打包为 .zip/.rar/.7z）</b>：机台与 ROBOT 相关总装图，
+                <b>A. 3D 图（必需，STEP .step/.stp 或 Parasolid .x_t，文件多时可打包为 .zip/.rar/.7z）</b>：机台与 ROBOT 相关总装图，
                 有干涉风险的机构都要在总图内，如载具对接机构、输送机构、空压盒和手臂会经过的机构等。
               </li>
               <li>

@@ -6,7 +6,7 @@ namespace Yf.Api.Modules.Files;
 public static class UploadMaterialRules
 {
     public const string MaterialRequiredMessage =
-        "发给供应商的资料需要同时包含动作流程 Excel 和 STEP 格式 3D 图（.step/.stp/.x_t）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传";
+        "发给供应商的资料需要同时包含动作流程 Excel 和 3D 图（STEP .step/.stp 或 Parasolid .x_t）或压缩文件（.zip/.rar/.7z），请与本批文件一起上传";
 
     /// <summary>3D 图：STEP（.step/.stp），以及 2026-11-17 起的 Parasolid（.x_t）。</summary>
     private static readonly string[] StepExtensions = ["step", "stp", "x_t"];
