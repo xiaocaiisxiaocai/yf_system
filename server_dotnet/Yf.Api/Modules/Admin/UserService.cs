@@ -295,7 +295,6 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await EnsureRoleAssignableAsync(context, roleId, ct);
         }
         else if (user.Status == AccountStatuses.Active) await EnsureRoleAssignableAsync(context, oldRoleId, ct);
-        if (departmentChanged) await EnsureNoActiveProjectResponsibilityWithSectionAsync(context, id, ct);
         if (roleChanged && !await RoleHasPermissionAsync(context, roleId, "project:list", ct))
             await EnsureNoActiveProjectResponsibilityAsync(context, id, ct);
         var leaderBaseline = departmentChanged ? await DepartmentService.LeaderViolationsAsync(context, ct) : null;
@@ -307,6 +306,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (request.Scopes is { Count: > 0 })
             await ApplyUserScopeAssignmentAsync(context, actor, user, id, request.Scopes, ct);
         if (departmentChanged) await DepartmentService.EnsureLeaderRulesAsync(context, leaderBaseline!, ct);
+        // Every save re-aligns the user's projects, so a section left stale by older data is fixed by saving the user.
+        await SyncProjectSectionsAsync(context, id, ct);
         if (roleChanged)
         {
             await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);
@@ -493,13 +494,16 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (count > 0) throw ApiException.BadRequest($"该用户仍负责 {count} 个未结束项目，请先结束相关项目");
     }
 
-    private static async Task EnsureNoActiveProjectResponsibilityWithSectionAsync(
-        YfDbContext context, ulong id, CancellationToken ct)
+    /// <summary>
+    /// A project's section follows its responsible user (项目负责人转交与数据字典权限 2026-09-23: the section decides
+    /// who sees the project). When the user moves, every project they are responsible for takes their new effective
+    /// section, or none when they are no longer in an active section.
+    /// </summary>
+    private static async Task SyncProjectSectionsAsync(YfDbContext context, ulong id, CancellationToken ct)
     {
-        var count = await context.Projects.LongCountAsync(x => x.ResponsibleUserId == id
-            && x.SectionId != null && x.Status == "IN_PROGRESS", ct);
-        if (count > 0)
-            throw ApiException.BadRequest($"该用户仍负责 {count} 个带课别的未结束项目，请先结束相关项目");
+        var section = await Projects.ProjectService.ResolveActorSectionAsync(context, id, ct);
+        await context.Projects.Where(x => x.ResponsibleUserId == id && x.SectionId != section)
+            .ExecuteUpdateAsync(x => x.SetProperty(project => project.SectionId, section), ct);
     }
 
     private static Task<bool> RoleHasPermissionAsync(YfDbContext context, ulong roleId, string permission, CancellationToken ct) =>

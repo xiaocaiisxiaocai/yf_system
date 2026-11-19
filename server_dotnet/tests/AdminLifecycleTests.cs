@@ -127,6 +127,19 @@ public sealed class AdminLifecycleTests
         Assert.Equal("ACTIVE", persisted.Status);
         Assert.Equal("ACTIVE", await conn.QuerySingleAsync<string>(
             "SELECT status FROM departments WHERE id=7300"));
+
+        // A project's section follows its responsible user: moving the user re-sections every project they own
+        // (none while they sit outside an active section) instead of refusing the move or leaving a stale section.
+        var users = new UserService(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), new AuditService([]));
+        await users.UpdateAsync(actor, 7103, new UserUpdate(DepartmentId: JsonSerializer.SerializeToElement(7301UL)), ct);
+        Assert.Null(await conn.QuerySingleAsync<ulong?>("SELECT section_id FROM projects WHERE id=7400"));
+        await users.UpdateAsync(actor, 7103, new UserUpdate(DepartmentId: JsonSerializer.SerializeToElement(7102UL)), ct);
+        Assert.Equal(7102UL, await conn.QuerySingleAsync<ulong?>("SELECT section_id FROM projects WHERE id=7400"));
+        Assert.Equal(7202UL, await conn.QuerySingleAsync<ulong?>("SELECT section_id FROM projects WHERE id=7401"));
+        // A stale section from older data is fixed by saving the user without moving them.
+        await database.ExecuteAsync("UPDATE projects SET section_id=NULL WHERE id=7400", ct);
+        await users.UpdateAsync(actor, 7103, new UserUpdate(RealName: "在用负责人"), ct);
+        Assert.Equal(7102UL, await conn.QuerySingleAsync<ulong?>("SELECT section_id FROM projects WHERE id=7400"));
     }
 
     private static JsonElement Json(object value) =>
