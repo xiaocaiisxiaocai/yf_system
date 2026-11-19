@@ -156,6 +156,15 @@ public sealed class DepartmentLeaderTests
         }
         // Moving inside the led subtree stays allowed.
         await admin.PutAsync($"/api/v1/admin/users/{sectionMember}", new { departmentId = org.Department }, ct).Ok();
+
+        // Old inconsistent data (a leader already outside what they lead) never blocks an unrelated save; only a
+        // violation the save itself introduces is refused.
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE users SET department_id=@section WHERE id=@sectionMember", new { section = otherOrg.Section, sectionMember });
+        await admin.PutAsync($"/api/v1/admin/users/{departmentMember}", new { departmentId = org.Section }, ct).Ok();
+        Assert.Contains("不能担任该组织主管", Message(await admin.PutAsync(
+            $"/api/v1/admin/users/{sectionMember}", new { departmentId = otherOrg.Department }, ct).Status(HttpStatusCode.BadRequest)));
+        await admin.PutAsync($"/api/v1/admin/users/{sectionMember}", new { departmentId = org.Section }, ct).Ok();
     }
 
     [Fact(Timeout = 180_000)]
