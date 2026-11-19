@@ -105,9 +105,13 @@ public sealed class OwnerAccessTests
         await AssertNotVisibleAsync(() => files.ListAsync(Context(colleague), ProjectId, ct));
 
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.SetStatusAsync(admin, OldOwnerId, "DISABLED", ct));
-        using (var department = JsonDocument.Parse("7002"))
-            await AssertActiveResponsibilityBlocksChangeAsync(() => users.UpdateAsync(admin, OldOwnerId,
-                new UserUpdate(DepartmentId: department.RootElement.Clone()), ct));
+        // Moving the owner is allowed: the project's section follows them there and back (2026-11-18).
+        foreach (var (target, expected) in new[] { ("7002", 7002UL), ("7001", 7001UL) })
+        {
+            using var department = JsonDocument.Parse(target);
+            await users.UpdateAsync(admin, OldOwnerId, new UserUpdate(DepartmentId: department.RootElement.Clone()), ct);
+            Assert.Equal(expected, await conn.ExecuteScalarAsync<ulong>("SELECT section_id FROM projects WHERE id=@ProjectId", new { ProjectId }));
+        }
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.AssignRoleAsync(admin, OldOwnerId, [9_003], ct));
         await AssertActiveResponsibilityBlocksChangeAsync(() => users.DeleteAsync(admin, OldOwnerId, ct));
         await AssertActiveResponsibilityBlocksChangeAsync(() => roles.AssignPermissionsAsync(admin, 9_001, [], ct));
