@@ -90,6 +90,8 @@ export default function ProjectList() {
   const materialState = parseMaterialParam(searchParams.get('material'))
   const overdue = searchParams.get('overdue') === '1'
   const mine = searchParams.get('mine') === '1'
+  const ownerParam = parsePositiveIntParam(searchParams.get('owner'))
+  const sectionParam = parsePositiveIntParam(searchParams.get('section'))
   const page = parsePositiveIntParam(searchParams.get('page')) ?? 1
   const pageSize = parsePageSizeParam(searchParams.get('pageSize'))
   /** 写入地址栏；返回条件是否真的变化（未变化时调用方需自行重新加载）。 */
@@ -116,17 +118,20 @@ export default function ProjectList() {
   const isInternal = user?.userType === 'INTERNAL'
   // 供应商账号看不到厂商筛选，地址栏里的 supplier 参数对其无效。
   const supplierId = isInternal ? supplierParam : undefined
+  const responsibleUserId = isInternal ? ownerParam : undefined
+  const sectionId = isInternal ? sectionParam : undefined
+  const [filterOptions, setFilterOptions] = useState<ApiResponses['GET /project-filter-options']>({ responsibleUsers: [], sections: [] })
 
   const fetchProjects = useCallback(async () => {
     const response = await http.get<ApiResponses['GET /projects']>('/projects', {
       params: {
         page, pageSize, keyword: keyword || undefined, status, supplierId, materialState,
-        overdue: overdue || undefined, mine: (isInternal && mine) || undefined,
+        overdue: overdue || undefined, mine: (isInternal && mine) || undefined, responsibleUserId, sectionId,
       },
       quietNetworkError: true,
     } as QuietRequestConfig)
     return response.data as PageResp<ProjectSummary>
-  }, [isInternal, keyword, materialState, mine, overdue, page, pageSize, status, supplierId])
+  }, [isInternal, keyword, materialState, mine, overdue, page, pageSize, responsibleUserId, sectionId, status, supplierId])
 
   const load = useCallback(() => {
     setLoading(true); setLoadError(false); setListStale(false); setReloadKey((value) => value + 1)
@@ -139,7 +144,7 @@ export default function ProjectList() {
 
   useEffect(() => {
     let active = true
-    const queryKey = `${page}|${pageSize}|${keyword}|${status ?? ''}|${supplierId ?? ''}|${materialState ?? ''}|${overdue}|${mine}`
+    const queryKey = `${page}|${pageSize}|${keyword}|${status ?? ''}|${supplierId ?? ''}|${materialState ?? ''}|${overdue}|${mine}|${responsibleUserId ?? ''}|${sectionId ?? ''}`
     const background = loadedQueryKey.current === queryKey
     fetchProjects().then((next) => {
       if (!active) return
@@ -153,7 +158,22 @@ export default function ProjectList() {
       else { setLoadError(true); setListStale(false) }
     }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [fetchProjects, keyword, materialState, mine, overdue, page, pageSize, reloadKey, revision, setPage, status, supplierId])
+  }, [fetchProjects, keyword, materialState, mine, overdue, page, pageSize, reloadKey, responsibleUserId, revision, sectionId, setPage, status, supplierId])
+
+  // 负责人 / 课别选项只来自当前账号看得到的项目；只看本人的账号选项不足两项，不显示这两个筛选。
+  useEffect(() => {
+    if (!isInternal) return
+    let active = true
+    http.get<ApiResponses['GET /project-filter-options']>('/project-filter-options', { quietNetworkError: true } as QuietRequestConfig)
+      .then((response) => {
+        const options = response.data
+        if (active && Array.isArray(options?.responsibleUsers) && Array.isArray(options?.sections)) setFilterOptions(options)
+      })
+      .catch(() => {})
+    return () => { active = false }
+  }, [isInternal])
+  const showOwnerFilter = filterOptions.responsibleUsers.length > 1 || responsibleUserId !== undefined
+  const showSectionFilter = filterOptions.sections.length > 1 || sectionId !== undefined
 
   const loadSupplierOptions = useCallback(() => {
     const seq = ++supplierOptionsSeq.current
@@ -234,6 +254,8 @@ export default function ProjectList() {
         <Space wrap>
           <Input.Search allowClear placeholder="项目名称 / 工令号 / 机型 / 料号" style={{ width: 280 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />
           {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => applyQuery({ supplier: value as number | undefined, page: 1 })}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
+          {showOwnerFilter && <Select allowClear showSearch placeholder="负责人" style={{ width: 160 }} value={responsibleUserId} filterOption={(input, option) => String((option as { props?: { children?: unknown } })?.props?.children ?? '').toLowerCase().includes(input.trim().toLowerCase())} onChange={(value) => applyQuery({ owner: value as number | undefined, page: 1 })}>{filterOptions.responsibleUsers.map((owner) => <Select.Option key={owner.id} value={owner.id}>{`${owner.realName}（${owner.employeeNo}）`}</Select.Option>)}</Select>}
+          {showSectionFilter && <Select allowClear showSearch placeholder="课别" style={{ width: 160 }} value={sectionId} onChange={(value) => applyQuery({ section: value as number | undefined, page: 1 })}>{filterOptions.sections.map((section) => <Select.Option key={section.id} value={section.id}>{section.name}</Select.Option>)}</Select>}
           <Select allowClear placeholder="资料状态" style={{ width: 130 }} value={materialState} onChange={(value) => applyQuery({ material: value as string | undefined, page: 1 })}>
             {(['NO_MATERIAL', 'PENDING', 'RETURNED'] as const).map((key) => <Select.Option key={key} value={key}>{MATERIAL_REVIEW[key].text}</Select.Option>)}
           </Select>

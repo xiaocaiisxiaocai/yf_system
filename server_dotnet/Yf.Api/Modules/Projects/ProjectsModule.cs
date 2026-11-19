@@ -52,6 +52,8 @@ public static class ProjectsModule
                 QueryString(context, "materialState"),
                 QueryBool(context, "overdue", false),
                 QueryBool(context, "mine", false),
+                QueryNullableUlong(context, "responsibleUserId"),
+                QueryNullableUlong(context, "sectionId"),
                 ct)));
         api.MapPost("/projects", (HttpContext context, ProjectUpsertRequest request, ProjectService service) =>
             WithDb(context, (conn, actor, ip, ct) => service.CreateAsync(conn, actor, request, ip, ct)));
@@ -234,6 +236,8 @@ public static class ProjectsModule
             WithDb(context, (conn, actor, _, ct) => Empty(service.MarkReadAsync(conn, actor, request, ct))));
         api.MapGet("/supplier-options", (HttpContext context, ProjectService service) =>
             WithDb(context, (conn, actor, _, ct) => service.SupplierOptionsAsync(conn, actor, ct)));
+        api.MapGet("/project-filter-options", (HttpContext context, ProjectService service) =>
+            WithDb(context, (conn, actor, _, ct) => service.FilterOptionsAsync(conn, actor, ct)));
         api.MapGet("/project-owner-options", (HttpContext context, ProjectService service) =>
             WithDb(context, (conn, actor, _, ct) => service.ProjectOwnerOptionsAsync(conn, actor, ct)));
         api.MapGet("/project-dictionaries", (HttpContext context, ProjectDictionaryService service) =>

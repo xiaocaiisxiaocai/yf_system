@@ -65,7 +65,7 @@ public sealed class ProjectLifecycleTests
 
         var newerFileId = await InsertFileAsync(conn, projectId, supplier.Id, "S2C", "a2.txt", ct);
         await AssertPendingTasksAsync(conn, owner, ["PENDING"], ct);
-        using (var pendingList = Json(await projects.ListAsync(conn, owner, 1, 20, null, null, null, "PENDING", false, false, ct)))
+        using (var pendingList = Json(await projects.ListAsync(conn, owner, 1, 20, null, null, null, "PENDING", false, false, null, null, ct)))
             Assert.Equal(projectId, Assert.Single(pendingList.RootElement.GetProperty("list").EnumerateArray()).GetProperty("id").GetUInt64());
 
         var approved = await projects.ApproveMaterialsAsync(conn, owner, projectId,
@@ -133,12 +133,12 @@ public sealed class ProjectLifecycleTests
         var other = fixture.Colleague;
 
         // The colleague finds the project in the full list and its detail, read-only.
-        var page = await projects.ListAsync(conn, other, 1, 20, null, null, null, null, false, false, ct);
+        var page = await projects.ListAsync(conn, other, 1, 20, null, null, null, null, false, false, null, null, ct);
         var listed = Assert.Single(page.List);
         Assert.Equal(created.Id, listed.Id);
         Assert.False(listed.CanManage);
-        Assert.Empty((await projects.ListAsync(conn, other, 1, 20, null, null, null, null, false, true, ct)).List);
-        Assert.Single((await projects.ListAsync(conn, fixture.Owner, 1, 20, null, null, null, null, false, true, ct)).List);
+        Assert.Empty((await projects.ListAsync(conn, other, 1, 20, null, null, null, null, false, true, null, null, ct)).List);
+        Assert.Single((await projects.ListAsync(conn, fixture.Owner, 1, 20, null, null, null, null, false, true, null, null, ct)).List);
         var detail = await projects.DetailAsync(conn, other, created.Id, ct);
         Assert.False(detail.CanManage);
 
@@ -179,7 +179,7 @@ public sealed class ProjectLifecycleTests
         await AssertOwnerOnlyAsync(() => messages.CreateAsync(conn, fixture.Owner, created.Id,
             new MessageCreateRequest { Content = "原负责人留言" }, null, ct));
         await messages.CreateAsync(conn, other, created.Id, new MessageCreateRequest { Content = "新负责人留言" }, null, ct);
-        Assert.Single((await projects.ListAsync(conn, other, 1, 20, null, null, null, null, false, true, ct)).List);
+        Assert.Single((await projects.ListAsync(conn, other, 1, 20, null, null, null, null, false, true, null, null, ct)).List);
     }
 
     [Fact(Timeout = 90_000)]
@@ -289,7 +289,7 @@ public sealed class ProjectLifecycleTests
         Assert.Null(supplierDetail.ResponsibleUserEmployeeNo);
         Assert.False(supplierDetail.CanManage);
         Assert.Equal("负责人8700", supplierDetail.ResponsibleUserName);
-        var supplierPage = await fixture.Projects.ListAsync(conn, fixture.Supplier, 1, 20, null, null, null, null, false, false, ct);
+        var supplierPage = await fixture.Projects.ListAsync(conn, fixture.Supplier, 1, 20, null, null, null, null, false, false, null, null, ct);
         Assert.Null(Assert.Single(supplierPage.List).ResponsibleUserEmployeeNo);
     }
 
@@ -310,7 +310,7 @@ public sealed class ProjectLifecycleTests
         }, null, ct);
 
         async Task<ulong[]> Search(CurrentUser actor, string keyword) =>
-            (await projects.ListAsync(conn, actor, 1, 20, keyword, null, null, null, false, false, ct)).List
+            (await projects.ListAsync(conn, actor, 1, 20, keyword, null, null, null, false, false, null, null, ct)).List
                 .Select(project => project.Id).Order().ToArray();
         ulong[] both = [first.Id, second.Id];
 

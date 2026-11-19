@@ -3521,6 +3521,35 @@
         }
       }
     },
+    "/api/v1/project-filter-options": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectFilterOptionsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/project-owner-options": {
       "get": {
         "tags": [
@@ -16097,6 +16126,66 @@
           },
           "enabled": {
             "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectFilterOptionsResponse": {
+        "required": [
+          "responsibleUsers",
+          "sections"
+        ],
+        "type": "object",
+        "properties": {
+          "responsibleUsers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectFilterUserOption"
+            }
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectFilterSectionOption"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectFilterSectionOption": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectFilterUserOption": {
+        "required": [
+          "employeeNo",
+          "id",
+          "realName"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "realName": {
+            "type": "string"
           }
         },
         "additionalProperties": false

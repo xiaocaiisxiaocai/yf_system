@@ -67,6 +67,28 @@ public sealed class OwnerAccessTests
         Assert.Equal(new ulong[] { ProjectId }, await ListedProjectIdsAsync(projects, conn, oldOwner, ct, mine: true));
         Assert.Empty(await ListedProjectIdsAsync(projects, conn, colleague, ct, mine: true));
 
+        // The responsible-user and section filters narrow the visible projects only.
+        Assert.Equal(new ulong[] { ProjectId },
+            await ListedProjectIdsAsync(projects, conn, viewAll, ct, responsibleUserId: OldOwnerId));
+        Assert.Equal(new ulong[] { 10_003UL, OwnerlessProjectId, ProjectId },
+            await ListedProjectIdsAsync(projects, conn, viewAll, ct, sectionId: 7001));
+        Assert.Empty(await ListedProjectIdsAsync(projects, conn, viewAll, ct, sectionId: 7002));
+        Assert.Equal(new ulong[] { ProjectId },
+            await ListedProjectIdsAsync(projects, conn, viewAll, ct, responsibleUserId: OldOwnerId, sectionId: 7001));
+        Assert.Empty(await ListedProjectIdsAsync(projects, conn, colleague, ct, responsibleUserId: OldOwnerId));
+        Assert.Empty(await ListedProjectIdsAsync(projects, conn, colleague, ct, sectionId: 7001));
+
+        // Filter options come from the visible projects, so they never name anyone outside the data range.
+        var wideOptions = await projects.FilterOptionsAsync(conn, viewAll, ct);
+        Assert.Equal(new[] { NoPermissionOwnerId, OldOwnerId }.Order(), wideOptions.ResponsibleUsers.Select(user => user.Id).Order());
+        Assert.Equal(7001UL, Assert.Single(wideOptions.Sections).Id);
+        var narrowOptions = await projects.FilterOptionsAsync(conn, colleague, ct);
+        Assert.Empty(narrowOptions.ResponsibleUsers);
+        Assert.Empty(narrowOptions.Sections);
+        var ownOptions = await projects.FilterOptionsAsync(conn, oldOwner, ct);
+        Assert.Equal(OldOwnerId, Assert.Single(ownOptions.ResponsibleUsers).Id);
+        await AssertForbiddenAsync(() => projects.FilterOptionsAsync(conn, matchingSupplier, ct));
+
         // Seeing is not changing: a wide range never grants write authority.
         using (var detail = Json(await projects.DetailAsync(conn, viewAll, ProjectId, ct)))
         {
@@ -333,9 +355,12 @@ public sealed class OwnerAccessTests
         MySqlConnection conn,
         CurrentUser actor,
         CancellationToken ct,
-        bool mine = false)
+        bool mine = false,
+        ulong? responsibleUserId = null,
+        ulong? sectionId = null)
     {
-        using var json = Json(await service.ListAsync(conn, actor, 1, 100, null, null, null, null, false, mine, ct));
+        using var json = Json(await service.ListAsync(
+            conn, actor, 1, 100, null, null, null, null, false, mine, responsibleUserId, sectionId, ct));
         return json.RootElement.GetProperty("list").EnumerateArray()
             .Select(item => item.GetProperty("id").GetUInt64()).ToArray();
     }
