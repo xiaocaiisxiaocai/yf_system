@@ -438,7 +438,7 @@ public sealed class SupplierWithdrawalTests
         }
 
         public async Task InitializeAsync(CancellationToken ct) =>
-            await SchemaBootstrap.InitializeEmptyAsync(Database, "Withdraw#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
+            await TestSchemaTemplate.InitializeEmptyAsync(Database, "Withdraw#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
 
         public async Task SeedAsync(string sql, CancellationToken ct)
         {

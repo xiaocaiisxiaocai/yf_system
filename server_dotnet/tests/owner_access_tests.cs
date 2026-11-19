@@ -454,7 +454,7 @@ public sealed class OwnerAccessTests
 
         internal async Task InitializeAsync(CancellationToken ct)
         {
-            await SchemaBootstrap.InitializeEmptyAsync(Database, "Owner#" + Guid.NewGuid().ToString("N")[..12], ct);
+            await TestSchemaTemplate.InitializeEmptyAsync(Database, "Owner#" + Guid.NewGuid().ToString("N")[..12], ct);
         }
 
         internal async Task SeedAsync(string sql, CancellationToken ct)

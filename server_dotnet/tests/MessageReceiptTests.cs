@@ -308,7 +308,7 @@ public sealed class MessageReceiptTests
 
         public async Task InitializeAsync(CancellationToken ct)
         {
-            await SchemaBootstrap.InitializeEmptyAsync(Database, "Receipt#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
+            await TestSchemaTemplate.InitializeEmptyAsync(Database, "Receipt#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
         }
 
         public async Task SeedAsync(string sql, CancellationToken ct)

@@ -288,7 +288,7 @@ public sealed class RealtimeSecurityTests
 
         internal async Task InitializeAsync(CancellationToken ct)
         {
-            await SchemaBootstrap.InitializeEmptyAsync(Database, "Realtime#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
+            await TestSchemaTemplate.InitializeEmptyAsync(Database, "Realtime#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
         }
 
         internal async Task SeedAsync(string sql, CancellationToken ct)
