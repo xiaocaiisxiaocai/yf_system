@@ -54,12 +54,16 @@ public sealed class MesMirrorSyncService(
         DiscardStalePendingResult();
 
         var crawl = new Crawl();
+        // Shown on the status as a running fetch, so the page does not offer a manual fetch the lease would refuse.
+        var progress = new ScheduledRun(options.Ipms.MesPageSize);
+        lock (gate) { scheduled = progress; }
+        void Report(Crawl c) { lock (gate) { progress.Fetched = c.Seen.Count; progress.Pages = c.Pages; progress.Total = c.Total; } }
         string? error = null;
         try
         {
             var previous = await context.MesMirrorState.AsNoTracking().Where(x => x.Id == 1).Select(x => x.LastCount).SingleAsync(ct);
             await context.MesWorkOrdersStaging.ExecuteDeleteAsync(ct);
-            await CrawlAsync(context, crawl, options.Ipms.MesPageSize, null, null, ct);
+            await CrawlAsync(context, crawl, options.Ipms.MesPageSize, null, Report, ct);
             error = Validate(crawl, previous);
             if (error is null) await ReplaceMirrorAsync(context, ct);
         }
@@ -75,7 +79,8 @@ public sealed class MesMirrorSyncService(
         finally
         {
             // Release even when cancelled so the next run is not blocked for the lease period.
-            await FinishAsync(context, error, error is null ? crawl.Seen.Count : null);
+            try { await FinishAsync(context, error, error is null ? crawl.Seen.Count : null); }
+            finally { lock (gate) { if (ReferenceEquals(scheduled, progress)) scheduled = null; } }
         }
         await WriteAuditAsync(context, null, new { targetName = "IPMS 资料抓取", trigger, fetched = crawl.Seen.Count, pages = crawl.Pages, error }, ct);
         return new(crawl.Seen.Count, crawl.Pages, error);
@@ -228,8 +233,19 @@ public sealed class MesMirrorSyncService(
         public Task Task = Task.CompletedTask;
     }
 
+    /// <summary>Progress of the scheduled fetch under way in this process (it cannot be stopped from the page).</summary>
+    private sealed class ScheduledRun(int pageSize)
+    {
+        public int PageSize { get; } = pageSize;
+        public int Fetched, Pages, Total = -1;
+        public DateTime StartedAt = DateTime.UtcNow;
+    }
+
     private readonly object gate = new();
     private ManualRun? manual;
+    private ScheduledRun? scheduled;
+    /// <summary>A connection test holds the lease while it logs in; counted so the refusal of a fetch can say why.</summary>
+    private int testing;
 
     public async Task<MesMirrorStatusResponse> StatusAsync(CurrentUser actor, CancellationToken ct)
     {
@@ -248,7 +264,7 @@ public sealed class MesMirrorSyncService(
 
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await context.Database.OpenConnectionAsync(ct);
-        if (!await ClaimLeaseAsync(context, "MANUAL", null, ct)) throw ApiException.Conflict("已有抓取任务进行中或等待确认");
+        if (!await ClaimLeaseAsync(context, "MANUAL", null, ct)) throw ApiException.Conflict(BusyMessage());
         var run = new ManualRun(mode, mode == "PAGE" ? request.Page : null, pageSize);
         lock (gate)
         {
@@ -407,6 +423,16 @@ public sealed class MesMirrorSyncService(
         }
         lock (gate) { if (ReferenceEquals(manual, run)) manual = null; }
         run.Cts.Dispose();
+    }
+
+    private string BusyMessage()
+    {
+        lock (gate)
+        {
+            if (scheduled is not null) return "定时抓取进行中，请等它完成";
+            if (testing > 0) return "正在测试连接，请等测试完成";
+            return "已有抓取任务进行中或等待确认";
+        }
     }
 
     private static async Task<bool> LeaseHeldAsync(YfDbContext context, CancellationToken ct)
@@ -568,17 +594,33 @@ public sealed class MesMirrorSyncService(
         var account = NormalizeAccount(request.Account);
         var password = string.IsNullOrEmpty(request.Password) ? null : NormalizePassword(request.Password);
         await AuthorizeAsync(actor, ct);
-        await using (var context = await dbFactory.CreateDbContextAsync(ct))
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await context.Database.OpenConnectionAsync(ct);
+        await context.Database.ExecuteSqlRawAsync("INSERT IGNORE INTO mes_mirror_state(id) VALUES(1)", ct);
+        // A login from here must not knock a running fetch out of its session, and a fetch (the daily one included) must
+        // not start while the test is logged in: the test holds the lease for its duration without touching the run history.
+        // Outlasts the test's own timeout; released as soon as the test returns.
+        var leaseSeconds = options.Ipms.MesPageTimeoutSeconds + 60;
+        var claimed = await context.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE mes_mirror_state SET lease_until=UTC_TIMESTAMP(3) + INTERVAL {leaseSeconds} SECOND
+            WHERE id=1 AND (lease_until IS NULL OR lease_until < UTC_TIMESTAMP(3))
+            """, ct);
+        if (claimed == 0) throw ApiException.Conflict("抓取任务进行中或等待确认时不能测试连接");
+        lock (gate) { testing++; }
+        try
         {
-            await context.Database.OpenConnectionAsync(ct);
-            // A login from here must not knock a running fetch out of its session.
-            if (await LeaseHeldAsync(context, ct)) throw ApiException.Conflict("抓取任务进行中或等待确认时不能测试连接");
+            var current = await settings.ConnectionAsync(ct);
+            // A typed account brings its own password; the saved password only goes with the saved account.
+            var testAccount = account ?? current.Account;
+            var testPassword = password ?? (testAccount == current.Account ? current.Password : "");
+            return await source.TestAsync(new MesConnection(url ?? current.BaseUrl, testAccount, testPassword), ct);
         }
-        var current = await settings.ConnectionAsync(ct);
-        // A typed account brings its own password; the saved password only goes with the saved account.
-        var testAccount = account ?? current.Account;
-        var testPassword = password ?? (testAccount == current.Account ? current.Password : "");
-        return await source.TestAsync(new MesConnection(url ?? current.BaseUrl, testAccount, testPassword), ct);
+        finally
+        {
+            lock (gate) { testing--; }
+            try { await context.Database.ExecuteSqlRawAsync("UPDATE mes_mirror_state SET lease_until=NULL WHERE id=1", CancellationToken.None); }
+            catch (Exception release) { logger.LogWarning(release, "Could not release the IPMS lease after a connection test."); }
+        }
     }
 
     /// <summary>Blank clears the address; otherwise a complete http or https address without credentials, query or fragment.</summary>
@@ -654,30 +696,32 @@ public sealed class MesMirrorSyncService(
         var leaseHeld = state.LeaseUntil is { } lease && lease > now;
         var mirrorCount = await context.MesWorkOrders.CountAsync(ct);
 
-        ManualRun? run;
-        lock (gate)
-        {
-            if (manual is { Phase: AwaitingConfirm } && !leaseHeld) manual = null;
-            run = manual;
-        }
-        string phase = Idle, runMode = null!;
+        string phase = Idle;
+        string? runMode = null;
         int? page = null, total = null;
         int fetched = 0, pages = 0, size = options.Ipms.MesPageSize;
         string? reason = null;
         DateTime? startedAt = null;
-        if (run is not null)
+        lock (gate)
         {
-            lock (gate)
+            if (manual is { Phase: AwaitingConfirm } && !leaseHeld) manual = null;
+            if (manual is { } run)
             {
                 phase = run.Phase; runMode = run.Mode; page = run.Page; size = run.PageSize; fetched = run.Fetched; pages = run.Pages;
                 total = run.Total >= 0 ? run.Total : null; reason = run.PendingReason; startedAt = run.StartedAt;
+            }
+            else if (scheduled is { } daily)
+            {
+                // lastTrigger is SCHEDULED for the run under way, which is how the page tells it apart from a manual one.
+                phase = Running; runMode = "ALL"; size = daily.PageSize; fetched = daily.Fetched; pages = daily.Pages;
+                total = daily.Total >= 0 ? daily.Total : null; startedAt = daily.StartedAt;
             }
         }
         var preview = phase == AwaitingConfirm
             ? (await context.MesWorkOrdersStaging.AsNoTracking().OrderBy(x => x.Seq).ThenBy(x => x.WorkOrderNo).Take(PreviewRows)
                 .Select(x => new MesMirrorPreviewRow(x.WorkOrderNo, x.CustomerName, x.DeviceModels)).ToArrayAsync(ct))
             : [];
-        return new(phase, run is null ? null : runMode, page, size, fetched, pages, total, phase == AwaitingConfirm ? reason : null,
+        return new(phase, runMode, page, size, fetched, pages, total, phase == AwaitingConfirm ? reason : null,
             startedAt is { } started ? DateTime.SpecifyKind(started, DateTimeKind.Utc) : null,
             Utc(state.LastFinishedAt), Utc(state.LastSuccessAt), state.LastError, state.LastTrigger, state.LastCount, mirrorCount, preview);
     }

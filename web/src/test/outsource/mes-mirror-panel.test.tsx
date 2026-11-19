@@ -14,7 +14,8 @@ const idle: Status = {
   startedAt: null, lastFinishedAt: '2026-11-13T03:10:00Z', lastSuccessAt: '2026-11-13T03:10:00Z', lastError: null, lastTrigger: 'SCHEDULED',
   lastCount: 1778, mirrorCount: 1778, preview: [],
 }
-const running: Status = { ...idle, phase: 'RUNNING', runMode: 'ALL', fetched: 200, pages: 2, total: 1778, startedAt: '2026-11-13T05:00:00Z' }
+const running: Status = { ...idle, phase: 'RUNNING', runMode: 'ALL', fetched: 200, pages: 2, total: 1778, startedAt: '2026-11-13T05:00:00Z', lastTrigger: 'MANUAL' }
+const dailyRunning: Status = { ...running, lastTrigger: 'SCHEDULED' }
 const preview = [
   { workOrderNo: '21074672', customerName: 'Delton Technology', deviceModels: 'CSLR-606AD' },
   { workOrderNo: '21074704', customerName: 'Delton Technology', deviceModels: 'CSUR-6638F' },
@@ -78,6 +79,28 @@ describe('IPMS 连接与手动抓取', () => {
     expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
     expect(screen.getByRole('textbox', { name: 'IPMS 账号' })).toBeDisabled()
+  })
+
+  it('定时抓取进行中显示进度，不能手动抓取也没有停止', async () => {
+    mock(dailyRunning)
+    render(<MesMirrorPanel />)
+    expect(await screen.findByText(/定时抓取中，已抓取 200 \/ 1778 笔/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '停止' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '抓取全部' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
+  })
+
+  it('抓取被拒（定时抓取刚开始）后刷新状态，显示正在进行的定时抓取', async () => {
+    const user = userEvent.setup()
+    const { get, post } = mock(idle)
+    render(<MesMirrorPanel />)
+    await screen.findByText('1778')
+
+    post.mockRejectedValueOnce(new Error('409'))
+    get.mockImplementation((url: string) => Promise.resolve({ data: url.endsWith('/settings') ? settings : dailyRunning } as never))
+    await user.click(screen.getByRole('button', { name: '抓取全部' }))
+    expect(await screen.findByText(/定时抓取中，已抓取 200 \/ 1778 笔/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '抓取全部' })).toBeDisabled()
   })
 
   it('停止后要二次确认：合并已抓部分', async () => {
