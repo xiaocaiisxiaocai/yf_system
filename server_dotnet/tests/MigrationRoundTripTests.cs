@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261119030550_SplitOutsourceSendPermission";
+    private const string Latest = "20261119060000_SimplifyOutsourcePermissions";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -106,6 +106,7 @@ public sealed class MigrationRoundTripTests
         //   the outsource:field_settings permission and its grant).
         // + AddOutsourceFieldEditorUsers (Down drops outsource_field_editor_users).
         // + SplitOutsourceSendPermission (Down keeps outsource:send, its grants and the new outsource:manage name).
+        // + SimplifyOutsourcePermissions (Down does not bring back outsource:view/import/field_settings or the old names).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -293,9 +294,8 @@ public sealed class MigrationRoundTripTests
 
     private static readonly string[] PreOemCodes = ["dashboard", "org:dept", "org:user", "user:manage", "dept:manage"];
 
-    /// <summary>Codes AddOutsourceSettings grants to the built-in administrator on an existing install.</summary>
-    private static readonly string[] OutsourceCodes =
-        ["outsource", "outsource:field_settings", "outsource:import", "outsource:manage", "outsource:send", "outsource:settings", "outsource:view"];
+    /// <summary>The outsourcing codes the built-in administrator holds after SimplifyOutsourcePermissions.</summary>
+    private static readonly string[] OutsourceCodes = ["outsource", "outsource:manage", "outsource:send", "outsource:settings"];
 
     private static async Task<NotSupportedException> AssertRollbackRefusedAsync(
         SchemaShapeTests.SchemaDatabaseScope database,

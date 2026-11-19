@@ -9,17 +9,21 @@ using Yf.Api.Modules.Outsource.Ipms.Mes;
 
 namespace Yf.Api.Modules.Outsource;
 
+/// <summary>
+/// Three permissions since 2026-11-19 (外协清单契约 → 权限): every internal account sees the list without one; who fills
+/// a column in is decided per column on the field settings page.
+/// </summary>
 internal static class OutsourcePermissions
 {
-    internal const string View = "outsource:view";
-    internal const string Import = "outsource:import";
-    /// <summary>Edits, batch edits, completion, deletion and the manual IPMS sync (not mailing vendors).</summary>
+    /// <summary>
+    /// Manages records: import, delete, complete/reopen and the manual IPMS sync; also fills in every column whose
+    /// editor setting is ALL. Columns limited to roles or people need no permission.
+    /// </summary>
     internal const string Manage = "outsource:manage";
-    /// <summary>Previews and sends vendor mails and queues failed ones again (2026-11-19, split from Manage).</summary>
+    /// <summary>Previews and sends vendor mails, queues failed ones again, sees the mail records and the send queue.</summary>
     internal const string Send = "outsource:send";
+    /// <summary>The settings pages, field settings included, and the IPMS data page.</summary>
     internal const string Settings = "outsource:settings";
-    /// <summary>The field settings page: which columns exist, who fills each in and what vendors see.</summary>
-    internal const string FieldSettings = "outsource:field_settings";
 }
 
 /// <summary>
@@ -426,19 +430,9 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
 
     // ---- helpers ----
 
-    /// <summary>Reads need any outsourcing permission: list users see vendor tabs, type filters and the copy list.</summary>
-    private static async Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct)
-    {
-        AccessService.RequireInternal(actor);
-        await context.Database.OpenConnectionAsync(ct);
-        var connection = context.Database.Connection();
-        actor = await AccessService.ReadActorAsync(connection, null, actor, ct);
-        AccessService.RequireInternal(actor);
-        var codes = await AccessService.PermissionCodesAsync(connection, null, actor.Id, ct);
-        if (!codes.Any(code => code is OutsourcePermissions.View or OutsourcePermissions.Settings
-                or OutsourcePermissions.Manage or OutsourcePermissions.Send or OutsourcePermissions.Import))
-            throw ApiException.Forbidden();
-    }
+    /// <summary>Every internal account reads the list's vendor tabs, type filters and copy list.</summary>
+    private static Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct) =>
+        OutsourceItemService.AuthorizeReadAsync(context, actor, null, ct);
 
     private static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, CancellationToken ct)
     {

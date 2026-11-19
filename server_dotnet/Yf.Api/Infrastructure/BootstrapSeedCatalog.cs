@@ -71,10 +71,9 @@ internal static class BootstrapSeedCatalog
         (215, "oem:account_delete", "删除 ODM/OEMA 账号", "ACTION", 200, 64),
         (216, "storage:manage", "存储位置管理", "ACTION", 8, 65),
         (217, "outsource", "外协清单", "MENU", null, 10),
-        (218, "outsource:view", "查看外协清单", "ACTION", 217, 66),
-        (219, "outsource:import", "汇入外协清单", "ACTION", 217, 67),
-        (220, "outsource:manage", "编辑外协清单", "ACTION", 217, 68),
-        (221, "outsource:settings", "外协清单设定维护", "ACTION", 217, 69),
+        // 218 outsource:view, 219 outsource:import and 231 outsource:field_settings were retired by SimplifyOutsourcePermissions.
+        (220, "outsource:manage", "管理外协清单", "ACTION", 217, 68),
+        (221, "outsource:settings", "外协清单设定", "ACTION", 217, 69),
         (224, "user:view", "查看用户", "ACTION", 4, 71),
         (225, "supplier:view", "查看供应商", "ACTION", 3, 72),
         (226, "role:view", "查看角色", "ACTION", 6, 73),
@@ -82,7 +81,6 @@ internal static class BootstrapSeedCatalog
         (228, "oem:transfer_delete", "删除 ODM/OEMA 传递单", "ACTION", 200, 75),
         (229, "oem:directory_view", "查看 ODM/OEMA 厂商与账号", "ACTION", 200, 76),
         (230, "dict:delete", "删除数据字典项", "ACTION", 48, 77),
-        (231, "outsource:field_settings", "外协栏位设定", "ACTION", 217, 78),
         (232, "outsource:send", "发送外协清单邮件", "ACTION", 217, 79),
     ];
 

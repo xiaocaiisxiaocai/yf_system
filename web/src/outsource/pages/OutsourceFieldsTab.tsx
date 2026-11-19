@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Empty, Form, Input, Message, Modal, Radio, Select, Space, Switch, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconArrowDown, IconArrowUp, IconPlus } from '@arco-design/web-react/icon'
+import { IconArrowDown, IconArrowUp } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import type { ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
@@ -17,20 +17,22 @@ const FIELD_TYPE_LABEL: Record<string, string> = {
   TEXT: '文字', BOOLEAN: '是/否', DATE: '日期', NUMBER: '数字', SELECT: '下拉选项',
 }
 const SCOPE_OPTIONS = [
-  { label: '所有有编辑权限的人员', value: 'ALL' },
+  { label: '有管理外协清单权限的人员', value: 'ALL' },
   { label: '指定角色', value: 'ROLES' },
   { label: '指定人员', value: 'USERS' },
   { label: '内部不填写', value: 'NONE' },
 ]
 
-/** Which columns the outsourcing list has, who fills each one in and what vendors see (外协清单契约 → 栏位设定). */
+/**
+ * Who fills each column of the outsourcing list in and what vendors see (外协清单契约 → 栏位设定). Columns are not added
+ * here: a new column arrives with a release.
+ */
 export default function OutsourceFieldsTab() {
   const [data, setData] = useState<Settings | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Field | null>(null)
-  const [creating, setCreating] = useState(false)
   const lock = useRef(false)
 
   const load = useCallback(async () => {
@@ -115,44 +117,36 @@ export default function OutsourceFieldsTab() {
 
   if (error) return <LoadError message="栏位设定加载失败" onRetry={load} />
   return <>
-    <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">
-      <span />
-      <Button type="primary" icon={<IconPlus />} disabled={loading || saving} onClick={() => setCreating(true)}>新增栏位</Button>
-    </div>
     <ResizableTable<Field> tableId="outsource-fields" className="page-table" rowKey="id" loading={loading} data={data?.fields ?? []}
       pagination={false} noDataElement={loading ? <span /> : <Empty description="暂无栏位" />}
       scroll={{ x: 1080, y: 'var(--page-table-scroll-y)' }} columns={columns} />
-    <FieldDialog field={editing} visible={creating || editing !== null} roles={data?.roles ?? []} users={data?.users ?? []}
-      onClose={() => { setCreating(false); setEditing(null) }}
-      onSave={async (body) => {
-        const ok = editing
-          ? await update(editing, body)
-          : await run(async () => (await http.post<ApiResponses['POST /outsource/settings/fields']>('/outsource/settings/fields', body)).data)
-        if (ok) { Message.success('栏位已保存'); setCreating(false); setEditing(null) }
+    <FieldDialog field={editing} roles={data?.roles ?? []} users={data?.users ?? []}
+      onClose={() => setEditing(null)}
+      onSave={async (field, body) => {
+        if (await update(field, body)) { Message.success('栏位已保存'); setEditing(null) }
       }} saving={saving} />
   </>
 }
 
-function FieldDialog({ field, visible, roles, users, saving, onClose, onSave }: {
-  field: Field | null; visible: boolean; roles: Settings['roles']; users: NonNullable<Settings['users']>; saving: boolean
-  onClose: () => void; onSave: (body: Record<string, unknown>) => Promise<void>
+function FieldDialog({ field, roles, users, saving, onClose, onSave }: {
+  field: Field | null; roles: Settings['roles']; users: NonNullable<Settings['users']>; saving: boolean
+  onClose: () => void; onSave: (field: Field, body: Record<string, unknown>) => Promise<void>
 }) {
   const [form] = Form.useForm()
   const dataType = Form.useWatch('dataType', form) as string | undefined
   const scope = Form.useWatch('editorScope', form) as string | undefined
-  const custom = field === null || !field.builtIn
-  const scopeAllowed = field === null || field.editorScopeAllowed
+  const custom = field !== null && !field.builtIn
+  const scopeAllowed = field?.editorScopeAllowed === true
   useEffect(() => {
-    if (!visible) return
+    if (!field) return
     form.resetFields()
-    form.setFieldsValue(field
-      ? {
-          label: field.label, dataType: field.dataType, options: field.options, editorScope: field.editorScope,
-          editorRoleIds: field.editorRoleIds, editorUserIds: field.editorUserIds ?? [],
-        }
-      : { label: '', dataType: 'TEXT', options: [] })
-  }, [visible, field, form])
+    form.setFieldsValue({
+      label: field.label, dataType: field.dataType, options: field.options, editorScope: field.editorScope,
+      editorRoleIds: field.editorRoleIds, editorUserIds: field.editorUserIds ?? [],
+    })
+  }, [field, form])
   const save = async () => {
+    if (!field) return
     const values = await form.validate().catch(() => null)
     if (!values) return
     const body: Record<string, unknown> = {}
@@ -161,16 +155,16 @@ function FieldDialog({ field, visible, roles, users, saving, onClose, onSave }: 
       body.dataType = values.dataType
       body.options = values.dataType === 'SELECT' ? values.options : []
     }
-    if (field && scopeAllowed) {
+    if (scopeAllowed) {
       body.editorScope = values.editorScope
       body.editorRoleIds = values.editorScope === 'ROLES' ? values.editorRoleIds : []
       body.editorUserIds = values.editorScope === 'USERS' ? values.editorUserIds : []
     }
-    await onSave(body)
+    await onSave(field, body)
   }
-  return <Modal className="form-dialog" title={field ? `编辑栏位 ${field.label}` : '新增栏位'} visible={visible} onOk={() => void save()}
+  return <Modal className="form-dialog" title={`编辑栏位 ${field?.label ?? ''}`} visible={field !== null} onOk={() => void save()}
     onCancel={() => { if (!saving) onClose() }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
-    okText={field ? '保存' : '创建'} cancelText="取消" unmountOnExit>
+    okText="保存" cancelText="取消" unmountOnExit>
     <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
       {custom && <>
         <Form.Item field="label" label="栏位名称" rules={[{ required: true, message: '请填写栏位名称' }, { maxLength: 32, message: '最多 32 个字符' }]}>
@@ -184,7 +178,7 @@ function FieldDialog({ field, visible, roles, users, saving, onClose, onSave }: 
           <Select mode="multiple" allowCreate placeholder="输入后回车添加" />
         </Form.Item>}
       </>}
-      {field && scopeAllowed && <>
+      {scopeAllowed && <>
         <Form.Item field="editorScope" label="内部填写">
           <Radio.Group direction="vertical" options={SCOPE_OPTIONS} />
         </Form.Item>

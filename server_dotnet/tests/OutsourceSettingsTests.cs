@@ -18,7 +18,7 @@ public sealed class OutsourceSettingsTests
             INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
               (60,'外协查看',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (61,'外协设定',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 60,id FROM permissions WHERE code IN ('outsource','outsource:view');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 60,id FROM permissions WHERE code IN ('outsource');
             INSERT INTO role_permissions(role_id,permission_id) SELECT 61,id FROM permissions WHERE code IN ('outsource','outsource:settings');
             INSERT INTO suppliers(id,name,status,created_at,updated_at) VALUES(9601,'外协隔离供应商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES

@@ -253,7 +253,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         CurrentUser actor, ulong? vendorId, string? status, ulong page, uint size, ulong offset, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.View, ct);
+        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
         var query = context.OutsourceMails.AsNoTracking();
         if (vendorId is { } vendor) query = query.Where(x => x.VendorId == vendor);
         if (!string.IsNullOrEmpty(status)) query = query.Where(x => x.Status == status);
@@ -295,7 +295,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<(byte[] Content, string Name)> AttachmentAsync(CurrentUser actor, ulong id, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.View, ct);
+        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
         var row = await context.OutsourceMails.AsNoTracking().Where(x => x.Id == id)
             .Select(x => new { x.Attachment, x.AttachmentName }).SingleOrDefaultAsync(ct);
         if (row?.Attachment is null || row.AttachmentName is null) throw ApiException.NotFound("该邮件没有附件");

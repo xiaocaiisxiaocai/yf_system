@@ -9,8 +9,6 @@ import { fmtTime, type ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
 import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
-import { useAuth } from '../../store/auth'
-import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import MesMirrorPanel from './MesMirrorPanel'
 import OutsourceCustomersTab from './OutsourceCustomersTab'
 import OutsourceFieldsTab from './OutsourceFieldsTab'
@@ -37,10 +35,8 @@ const lengthRule = (label: string, max: number, required = true) => ({
 
 /** Purchasing-maintained reference data of the outsourcing list (外协清单契约 → 设定维护). */
 export default function OutsourceSettingsPage() {
-  const permissions = useAuth((state) => state.permissions)
-  const canSettings = permissions.includes(OUTSOURCE_PERMISSIONS.settings)
-  const canFields = permissions.includes(OUTSOURCE_PERMISSIONS.fieldSettings)
-  const [tab, setTab] = useState<TabKey>(canSettings ? 'types' : 'fields')
+  // The route guard requires outsource:settings, which covers every tab here (field settings included).
+  const [tab, setTab] = useState<TabKey>('types')
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [types, setTypes] = useState<OutsourceType[]>([])
   const [cc, setCc] = useState<CcUser[]>([])
@@ -49,7 +45,6 @@ export default function OutsourceSettingsPage() {
   const sequence = useRef(0)
 
   const load = useCallback(async () => {
-    if (!canSettings) { setLoading(false); return }
     const seq = ++sequence.current
     setLoading(true); setError(false)
     try {
@@ -64,7 +59,7 @@ export default function OutsourceSettingsPage() {
     } finally {
       if (seq === sequence.current) setLoading(false)
     }
-  }, [canSettings])
+  }, [])
 
   useEffect(() => {
     let active = true
@@ -75,11 +70,11 @@ export default function OutsourceSettingsPage() {
   return <Card className="page-card page-card--table outsource-settings-page">
     <h1 className="visually-hidden">外协清单设定</h1>
     <Tabs className="outsource-settings-tabs" activeTab={tab} onChange={(value) => setTab(value as TabKey)}>
-      {canSettings && <Tabs.TabPane key="types" title="外发类型" />}
-      {canSettings && <Tabs.TabPane key="customers" title="客户简称" />}
-      {canSettings && <Tabs.TabPane key="cc" title="默认抄送" />}
-      {canSettings && <Tabs.TabPane key="sync" title="IPMS 同步" />}
-      {canFields && <Tabs.TabPane key="fields" title="栏位设定" />}
+      <Tabs.TabPane key="types" title="外发类型" />
+      <Tabs.TabPane key="customers" title="客户简称" />
+      <Tabs.TabPane key="cc" title="默认抄送" />
+      <Tabs.TabPane key="sync" title="IPMS 同步" />
+      <Tabs.TabPane key="fields" title="栏位设定" />
     </Tabs>
     {tab === 'fields' ? <OutsourceFieldsTab />
       : error ? <LoadError message="设定加载失败" onRetry={load} />

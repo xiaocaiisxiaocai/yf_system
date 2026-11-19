@@ -6,7 +6,6 @@ import http from '../../api/client'
 import { fmtTime } from '../../api/types'
 import { normalizeImportDate } from '../../outsource/importDate'
 import * as workbook from '../../utils/excelWorkbook'
-import { outsourceHome } from '../../outsource/outsourceNavigation'
 import OutsourceListPage from '../../outsource/pages/OutsourceListPage'
 import { useAuth } from '../../store/auth'
 
@@ -60,10 +59,13 @@ const fieldLayout = {
   })),
 }
 
-function mockApi() {
+/** The same columns for an account that fills none of them in. */
+const readOnlyLayout = { fields: fieldLayout.fields.map((field) => ({ ...field, canEdit: false })) }
+
+function mockApi(layout: typeof fieldLayout = fieldLayout) {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
     data: url === '/outsource/items' ? { list: items, total: 2, page: 1, pageSize: 20 }
-        : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus
+        : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
           : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
   } as never))
 }
@@ -83,16 +85,23 @@ describe('外协清单页面', () => {
     expect(normalizeImportDate('下周')).toBe('下周')
   })
 
-  it('有查看权限时首页进入清单，只有设定权限时进入设定', () => {
-    expect(outsourceHome(['outsource:view', 'outsource:settings'])).toBe('/outsource/items')
-    expect(outsourceHome(['outsource:settings'])).toBe('/outsource/settings')
-    expect(outsourceHome(['outsource:field_settings'])).toBe('/outsource/settings')
-    expect(outsourceHome(['outsource:import'])).toBeNull()
+  it('没有任何外协权限、但被指定填写某栏的人可以编辑，不能汇入、删除、标记完成或同步', async () => {
+    const user = userEvent.setup()
+    setSession([])
+    mockApi({ fields: readOnlyLayout.fields.map((field) => field.key === 'remark' ? { ...field, canEdit: true } : field) })
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    expect(await screen.findByRole('button', { name: '编辑工令 21089901' })).toBeEnabled()
+    await user.click(within(screen.getByText('21089901').closest('tr')!).getByRole('checkbox'))
+    expect(screen.getByRole('button', { name: /批量修改 \(1\)/ })).toBeInTheDocument()
+    for (const name of ['汇入', '删除', '标记完成', /立即同步|同步所选/, /发送邮件/]) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+    }
   })
 
   it('不分厂商页签，可按厂商筛选，暂停整行标红，类型与厂商不符时提示', async () => {
-    setSession(['outsource:view'])
-    const get = mockApi()
+    setSession([])
+    const get = mockApi(readOnlyLayout)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
     const paused = (await screen.findByText('21089901')).closest('tr')!
@@ -114,7 +123,7 @@ describe('外协清单页面', () => {
 
   it('采购编辑时带上版本，厂商只能选该类型允许的厂商', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     mockApi()
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: items[0] } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -129,7 +138,7 @@ describe('外协清单页面', () => {
 
   it('编辑时可改外发类型，厂商下拉随所选类型过滤，原厂商不适用时要重新选择', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     mockApi()
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: items[0] } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -154,7 +163,7 @@ describe('外协清单页面', () => {
 
   it('类型不在字典中的记录要先选择外发类型才能保存', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items'
         ? { list: [{ ...items[0], typeId: null, typeLabel: 'XYZ', typeCode: 'XYZ', matchState: 'UNKNOWN_TYPE' }], total: 1, page: 1, pageSize: 20 }
@@ -172,7 +181,7 @@ describe('外协清单页面', () => {
 
   it('批量修改可选外发类型，选了才提交', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     mockApi()
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items } } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -192,7 +201,7 @@ describe('外协清单页面', () => {
 
   it('勾选后可标记已完成；已完成的记录只能重新开启', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     mockApi()
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items } } as never)
     const { unmount } = render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -225,7 +234,7 @@ describe('外协清单页面', () => {
 
   it('汇入模板与提交带外发类型，提示里写明要填类型', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:import'])
+    setSession(['outsource:manage'])
     mockApi()
     const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
       rowNumber: 2, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',
@@ -251,7 +260,7 @@ describe('外协清单页面', () => {
 
   it('显示最近一次 IPMS 同步，采购可立即同步所选记录', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     mockApi()
     const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ...syncStatus, lastProcessed: 1, lastChanged: 1 } } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -265,7 +274,7 @@ describe('外协清单页面', () => {
 
   it('同时勾选未完成与已完成记录时，两类批量操作分别按各自集合生效，批量修改按类型过滤厂商', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage', 'outsource:send'])
+    setSession(['outsource:manage', 'outsource:send'])
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [items[0], { ...items[1], closed: true }], total: 2, page: 1, pageSize: 20 }
           : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
@@ -298,7 +307,7 @@ describe('外协清单页面', () => {
 
   it('列与可编辑的栏位来自栏位设定：自定义栏位显示与编辑，不可填写的栏位不出现在编辑框里', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     const robotV = { key: 'hasRobotV', label: '是否有RobotV', dataType: 'BOOLEAN', options: [], category: 'CUSTOM', pinned: false,
       vendorVisible: false, vendorEditable: false, canEdit: true }
     const layout = {
@@ -333,7 +342,7 @@ describe('外协清单页面', () => {
 
   it('编辑与发送是两个权限：只能编辑的看不到发送邮件，只能发送的可以勾选发送但不能编辑', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:manage'])
     mockApi()
     const { unmount } = render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
     const row = (await screen.findByText('21089901')).closest('tr')!
@@ -342,7 +351,8 @@ describe('外协清单页面', () => {
     expect(screen.queryByRole('button', { name: /发送邮件/ })).not.toBeInTheDocument()
     unmount()
 
-    setSession(['outsource:view', 'outsource:send'])
+    setSession(['outsource:send'])
+    mockApi(readOnlyLayout)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
     const sendRow = (await screen.findByText('21089901')).closest('tr')!
     expect(screen.queryByRole('button', { name: /编辑工令/ })).not.toBeInTheDocument()
@@ -353,7 +363,7 @@ describe('外协清单页面', () => {
 
   it('发送人可筛出待发送的记录，并可选择无需通知；从入口带 sendQueue=1 进入时自动筛选', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:send'])
+    setSession(['outsource:send'])
     const get = mockApi()
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items: [] } } as never)
     render(<MemoryRouter initialEntries={['/outsource/items?sendQueue=1']}><OutsourceListPage /></MemoryRouter>)

@@ -66,8 +66,6 @@ public static class OutsourceModule
 
         settings.MapGet("/fields", (HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
             s.SettingsAsync(AccessService.GetCurrent(c), ct));
-        settings.MapPost("/fields", (OutsourceFieldCreate r, HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
-            s.CreateAsync(AccessService.GetCurrent(c), r, ct));
         settings.MapPut("/fields/order", (OutsourceFieldOrderRequest r, HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
             s.SetOrderAsync(AccessService.GetCurrent(c), r, ct));
         settings.MapPut("/fields/{id:long}", (ulong id, OutsourceFieldUpdate r, HttpContext c, OutsourceFieldService s, CancellationToken ct) =>

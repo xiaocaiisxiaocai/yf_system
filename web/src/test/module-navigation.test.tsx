@@ -29,7 +29,7 @@ function renderShell(path = '/') {
           <Route path="/profile" element={<h1>个人资料页面</h1>} />
         </Route>
         <Route path="/oem/admin/audit" element={<><AppRail active="oem" /><h1>OEM 审计页面</h1></>} />
-        <Route path="/outsource/settings" element={<><AppRail active="outsource" /><h1>外协设定页面</h1></>} />
+        <Route path="/outsource/items" element={<><AppRail active="outsource" /><h1>外协清单页面</h1></>} />
         <Route path="/org/depts" element={<h1>组织架构页面</h1>} />
       </Routes>
       <CurrentLocation />
@@ -47,35 +47,23 @@ describe('按可用功能决定模块导航与首页', () => {
 
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('没有任何权限时只显示一个空状态，保留账号入口且不请求业务数据', () => {
-    const get = vi.spyOn(http, 'get')
+  it('没有任何权限的内部员工首页进入外协清单（全员可看），没有无意义的单模块切换', async () => {
     renderShell()
-    expect(screen.getAllByRole('heading', { name: '暂未开通功能权限' })).toHaveLength(1)
+    expect(await screen.findByRole('heading', { name: '外协清单页面' })).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/items')
+    expect(screen.queryByText('暂未开通功能权限')).not.toBeInTheDocument()
     expect(screen.queryByRole('navigation', { name: '业务切换' })).not.toBeInTheDocument()
-    expect(screen.queryByText('工作台不可用')).not.toBeInTheDocument()
-    expect(screen.queryByText('暂无可用功能，请联系管理员')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '账号菜单：导航测试员工' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '打开导航菜单' })).not.toBeInTheDocument()
-    expect(get).not.toHaveBeenCalled()
   })
 
-  it('仅有 OEM 权限时首页进入其获授权页面，不展示仿真或无意义的单模块切换', async () => {
+  it('仅有 OEM 权限时首页进入其获授权页面，切换栏只有 ODM/OEMA 与外协清单', async () => {
     useAuth.setState({ permissions: ['oem:audit_view'] })
     renderShell()
     expect(await screen.findByRole('heading', { name: 'OEM 审计页面' })).toBeInTheDocument()
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/admin/audit')
-    expect(screen.queryByRole('button', { name: 'Robot仿真协作' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('navigation', { name: '业务切换' })).not.toBeInTheDocument()
+    const rail = screen.getByRole('navigation', { name: '业务切换' })
+    expect(within(rail).queryByRole('button', { name: 'Robot仿真协作' })).not.toBeInTheDocument()
+    expect(within(rail).getByRole('button', { name: '外协清单' })).toBeInTheDocument()
     expect(screen.queryByText('暂未开通功能权限')).not.toBeInTheDocument()
-  })
-
-  it('仅有外协设定权限时首页直接进入设定页', async () => {
-    useAuth.setState({ permissions: ['outsource:settings'] })
-    renderShell()
-    expect(await screen.findByRole('heading', { name: '外协设定页面' })).toBeInTheDocument()
-    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/settings')
-    expect(screen.queryByRole('button', { name: 'Robot仿真协作' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('navigation', { name: '业务切换' })).not.toBeInTheDocument()
   })
 
   it.each([
@@ -92,19 +80,19 @@ describe('按可用功能决定模块导航与首页', () => {
     expect(businessHomes({ ...grants, permissions: [menu, permission] }).collaboration).toBe(path)
   })
 
-  it('侧栏不会显示只分配菜单、没有操作权限的管理功能', () => {
+  it('侧栏不会显示只分配菜单、没有操作权限的管理功能', async () => {
     useAuth.setState({ menus: ['org:user', 'system:config'], permissions: ['org:user', 'system:config'] })
     renderShell()
-    expect(screen.getByRole('heading', { name: '暂未开通功能权限' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '外协清单页面' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: '用户管理' })).not.toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: '系统参数' })).not.toBeInTheDocument()
   })
 
-  it('只有工作台菜单、没有项目查看权限时不进入工作台', () => {
+  it('只有工作台菜单、没有项目查看权限时不进入工作台', async () => {
     useAuth.setState({ menus: ['dashboard'], permissions: ['dashboard'] })
     const get = vi.spyOn(http, 'get')
     renderShell()
-    expect(screen.getByRole('heading', { name: '暂未开通功能权限' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '外协清单页面' })).toBeInTheDocument()
     expect(get).not.toHaveBeenCalled()
   })
 
@@ -123,20 +111,22 @@ describe('按可用功能决定模块导航与首页', () => {
     expect(screen.queryByRole('navigation', { name: '业务切换' })).not.toBeInTheDocument()
   })
 
-  it('权限收回时业务入口和导航开关立即消失，个人资料仍保留', async () => {
+  it('权限收回时业务入口立即消失，只留外协清单，个人资料仍保留', async () => {
     useAuth.setState({ menus: ['org:user'], permissions: ['user:manage', 'oem:audit_view'] })
     renderShell('/profile')
     expect(screen.getByRole('button', { name: 'Robot仿真协作' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'ODM/OEMA 文件传递' })).toBeInTheDocument()
     act(() => { useAuth.setState({ permissions: [] }) })
-    await waitFor(() => expect(screen.queryByRole('navigation', { name: '业务切换' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: 'Robot仿真协作' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '外协清单' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: '用户管理' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '打开导航菜单' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '个人资料页面' })).toBeInTheDocument()
   })
 
-  it('无权限空状态可以进入个人资料', async () => {
+  it('厂商账号的无权限空状态可以进入个人资料', async () => {
     const user = userEvent.setup()
+    useAuth.setState({ user: { ...internalUser, userType: 'SUPPLIER', supplierId: 71 } })
     renderShell()
     await user.click(screen.getByRole('button', { name: '个人资料与密码' }))
     expect(await screen.findByRole('heading', { name: '个人资料页面' })).toBeInTheDocument()
@@ -158,16 +148,21 @@ describe('按可用功能决定模块导航与首页', () => {
     expect(await screen.findByRole('heading', { name: 'OEM 审计页面' })).toBeInTheDocument()
   })
 
-  it.each([
-    { menus: [], expected: '暂未开通功能权限', path: '/' },
-    { menus: ['project:list'], expected: '无操作权限', path: '/projects' },
-  ])('实际项目路由在菜单为 $menus、缺少项目权限时不请求业务数据', async ({ menus, expected, path }) => {
-    useAuth.setState({ menus, permissions: [] })
+  it('实际项目路由在有菜单、缺少项目权限时不请求业务数据', async () => {
+    useAuth.setState({ menus: ['project:list'], permissions: [] })
     const get = vi.spyOn(http, 'get')
     render(<MemoryRouter initialEntries={['/projects']}><App /><CurrentLocation /></MemoryRouter>)
-    expect(await screen.findByText(expected)).toBeInTheDocument()
-    expect(screen.getByRole('status', { name: '当前地址' }).textContent).toBe(path)
+    expect(await screen.findByText('无操作权限')).toBeInTheDocument()
+    expect(screen.getByRole('status', { name: '当前地址' }).textContent).toBe('/projects')
     expect(get).not.toHaveBeenCalled()
+  })
+
+  it('实际项目路由在没有菜单时回到首页并进入外协清单，不请求项目数据', async () => {
+    useAuth.setState({ menus: [], permissions: [] })
+    const get = vi.spyOn(http, 'get').mockResolvedValue({ data: [] } as never)
+    render(<MemoryRouter initialEntries={['/projects']}><App /><CurrentLocation /></MemoryRouter>)
+    await waitFor(() => expect(screen.getByRole('status', { name: '当前地址' }).textContent).toBe('/outsource/items'))
+    expect(get.mock.calls.every(([url]) => String(url).startsWith('/outsource/'))).toBe(true)
   })
 })
 
