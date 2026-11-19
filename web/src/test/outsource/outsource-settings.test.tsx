@@ -239,4 +239,20 @@ describe('外协清单入口与设定', () => {
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/18', { editorScope: 'ROLES', editorRoleIds: [72], editorUserIds: [] }))
   })
+
+  it('有发送权限时，业务切换栏的外协清单显示待发送数量，点击直接进入待发送筛选', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['dashboard', 'project:list', 'outsource', 'outsource:view', 'outsource:send'])
+    useAuth.setState({ menus: ['dashboard'] })
+    const get = vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/send-queue' ? { count: 3 } : [],
+    } as never))
+    render(<MemoryRouter initialEntries={['/']}><AppRail active="collaboration" /><CurrentLocation /></MemoryRouter>)
+
+    const entry = await screen.findByRole('button', { name: '外协清单' })
+    expect(await within(entry).findByText('3')).toBeInTheDocument()
+    expect(get).toHaveBeenCalledWith('/outsource/send-queue', expect.anything())
+    await user.click(entry)
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/items')
+  })
 })

@@ -23,8 +23,18 @@ internal static class OutsourceSendStatuses
     internal const string Unsent = "UNSENT";
     internal const string Sent = "SENT";
     internal const string PendingNotice = "PENDING_NOTICE";
-    internal static bool IsValid(string? value) => value is Unsent or Sent or PendingNotice;
-    internal static string Label(string value) => value switch { Sent => "已发送", PendingNotice => "有变更待通知", _ => "未发送" };
+    /// <summary>
+    /// The sender decided an unsent item needs no mail (2026-11-19). Later edits keep it so: only an item that was
+    /// mailed (SENT) turns PENDING_NOTICE again. It can still be mailed at any time.
+    /// </summary>
+    internal const string NotNeeded = "NOT_NEEDED";
+    internal static bool IsValid(string? value) => value is Unsent or Sent or PendingNotice or NotNeeded;
+    internal static string Label(string value) => value switch
+    {
+        Sent => "已发送", PendingNotice => "有变更待通知", NotNeeded => "无需发送", _ => "未发送",
+    };
+    /// <summary>What waits for a sender to decide: mail it or mark it as needing no notice.</summary>
+    internal static bool AwaitsSender(string value) => value is Unsent or PendingNotice;
 }
 
 /// <summary>Whether an item's IPMS type and vendor pass the type/vendor mapping; anything but OK blocks sending.</summary>
@@ -38,7 +48,7 @@ internal static class OutsourceMatchStates
 /// <summary>List filters shared by the paged list and the export.</summary>
 public sealed record OutsourceItemQuery(
     ulong? VendorId, ulong? TypeId, string? Status, string? SendStatus, DateOnly? DateFrom, DateOnly? DateTo,
-    string? Keyword, bool IncludeClosed)
+    string? Keyword, bool IncludeClosed, bool SendQueue = false)
 {
     public static OutsourceItemQuery From(HttpRequest request)
     {
@@ -59,11 +69,17 @@ public sealed record OutsourceItemQuery(
             "true" => true,
             _ => throw ApiException.BadRequest("请求参数错误: includeClosed"),
         };
+        var sendQueue = request.Query["sendQueue"].ToString() switch
+        {
+            "" or "false" => false,
+            "true" => true,
+            _ => throw ApiException.BadRequest("请求参数错误: sendQueue"),
+        };
         var keyword = request.Query["keyword"].ToString().Trim();
         return new(QueryValues.OptionalUInt64(request, "vendorId"), QueryValues.OptionalUInt64(request, "typeId"),
             status.Length == 0 ? null : status, sendStatus.Length == 0 ? null : sendStatus,
             Date(request, "dateFrom"), Date(request, "dateTo"), keyword.Length == 0 ? null : keyword[..Math.Min(keyword.Length, 64)],
-            includeClosed);
+            includeClosed, sendQueue);
     }
 }
 
@@ -299,6 +315,10 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         }
         if (query.Status is { } status) items = items.Where(x => x.Status == status);
         if (query.SendStatus is { } sendStatus) items = items.Where(x => x.SendStatus == sendStatus);
+        // What waits for a sender (外协清单契约 → 待发送提醒): open, never mailed or changed since the last mail.
+        if (query.SendQueue)
+            items = items.Where(x => x.ClosedAt == null
+                && (x.SendStatus == OutsourceSendStatuses.Unsent || x.SendStatus == OutsourceSendStatuses.PendingNotice));
         if (query.DateFrom is { } from) items = items.Where(x => x.OutsourceDate >= from);
         if (query.DateTo is { } to) items = items.Where(x => x.OutsourceDate <= to);
         if (query.Keyword is { } keyword)
@@ -419,6 +439,68 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     }
 
     internal static string CompletionLabel(bool completed) => completed ? "已完成" : "未完成";
+
+    /// <summary>How many open items wait for a sender; shown on the outsourcing entry for accounts that may send.</summary>
+    public async Task<OutsourceSendQueueResponse> SendQueueAsync(CurrentUser actor, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
+        var count = await context.OutsourceItems.AsNoTracking().CountAsync(x => x.ClosedAt == null
+            && (x.SendStatus == OutsourceSendStatuses.Unsent || x.SendStatus == OutsourceSendStatuses.PendingNotice), ct);
+        return new(count);
+    }
+
+    /// <summary>The history value that records a sender's decision not to mail; edits before it are no longer marked.</summary>
+    internal const string SkipNoticeLabel = "无需通知";
+
+    /// <summary>
+    /// A sender decides not to mail these items: a changed, already sent item goes back to SENT, an unsent one becomes
+    /// NOT_NEEDED. Either way the decision is the new baseline, so the cells return to their normal colours: a sent item
+    /// takes its current vendor columns as "as last sent", an unsent one only marks edits made after the decision.
+    /// Nothing is mailed; the decision is kept in the history and the audit log.
+    /// </summary>
+    public async Task<OutsourceBatchResponse> SkipNoticeAsync(CurrentUser actor, OutsourceSkipNoticeRequest request, CancellationToken ct)
+    {
+        var versions = ValidateBatch(request.Items);
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Send, ct);
+        var locked = await LockAsync(context, versions, ct);
+        if (locked.Any(x => x.ClosedAt is not null)) throw ApiException.Conflict("已完成的记录不需要通知");
+        if (locked.FirstOrDefault(x => !OutsourceSendStatuses.AwaitsSender(x.SendStatus)) is { } other)
+            throw ApiException.Conflict($"工令 {other.WorkOrderNo} 不是未发送或有变更待通知的记录");
+        var baseline = await OutsourceReference.LoadAsync(context, ct);
+        await baseline.LoadValuesAsync(context, locked.Select(x => x.Id).ToArray(), ct);
+        var vendorFields = baseline.Layout.WorkbookFields(vendor: true);
+        foreach (var before in locked)
+        {
+            var after = before.SendStatus == OutsourceSendStatuses.PendingNotice ? OutsourceSendStatuses.Sent : OutsourceSendStatuses.NotNeeded;
+            if (after == OutsourceSendStatuses.Sent)
+            {
+                // What the vendor columns show now becomes the comparison for the next mail.
+                var snapshot = System.Text.Json.JsonSerializer.Serialize(OutsourceWorkbook.Snapshot(baseline.Json(before), vendorFields));
+                await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
+                    .SetProperty(x => x.SendStatus, after).SetProperty(x => x.LastSentSnapshot, snapshot), ct);
+            }
+            else await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.SendStatus, after), ct);
+            AuditChange[] changes = [new("sendStatus", "发送状态", OutsourceSendStatuses.Label(before.SendStatus), SkipNoticeLabel)];
+            OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
+            await context.SaveChangesAsync(ct);
+            await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
+                "OUTSOURCE_ITEM_SKIP_NOTICE", "outsource_item", before.Id, new
+                {
+                    targetName = before.WorkOrderNo, changes,
+                    sendStatus = after,
+                    batch = versions.Length > 1 ? versions.Length : (int?)null,
+                }, null, ct);
+        }
+        var reference = await OutsourceReference.LoadAsync(context, ct);
+        var ids = locked.Select(x => x.Id).ToArray();
+        var updated = await context.OutsourceItems.AsNoTracking().Where(x => ids.Contains(x.Id)).ToArrayAsync(ct);
+        await transaction.CommitAsync(ct);
+        var order = versions.Select((x, index) => (x.Id, index)).ToDictionary(x => x.Id, x => x.index);
+        return new(await reference.JsonMarkedAsync(context, updated.OrderBy(x => order[x.Id]).ToArray(), ct));
+    }
 
     private sealed record Change(DateOnly? Date, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateOnly? LatestDue)
     {
@@ -766,9 +848,13 @@ internal sealed class OutsourceReference
         }).ToArray();
         var unsent = items.Where(x => x.NotifiedVendorId != x.VendorId || x.LastSentSnapshot is null).Select(x => x.Id).ToArray();
         if (unsent.Length == 0) return responses;
-        var edited = (await context.OutsourceItemChanges.AsNoTracking()
+        var edits = await context.OutsourceItemChanges.AsNoTracking()
             .Where(x => unsent.Contains(x.ItemId) && x.Source == OutsourceHistory.Edit)
-            .Select(x => new { x.ItemId, x.Field }).Distinct().ToArrayAsync(ct))
+            .Select(x => new { x.Id, x.ItemId, x.Field, x.NewValue }).ToArrayAsync(ct);
+        // A sender's "no notice needed" is a new baseline: only edits made after it are marked.
+        var skipped = edits.Where(x => x.Field == "sendStatus" && x.NewValue == OutsourceItemService.SkipNoticeLabel)
+            .GroupBy(x => x.ItemId).ToDictionary(x => x.Key, x => x.Max(change => change.Id));
+        var edited = edits.Where(x => x.Field is not ("sendStatus" or "completed") && x.Id > skipped.GetValueOrDefault(x.ItemId))
             .ToLookup(x => x.ItemId, x => OutsourceItemService.ColumnKey(x.Field));
         return responses.Select(response => edited[response.Id].Any()
             ? response with { ChangedFields = [.. edited[response.Id].Distinct()] } : response).ToArray();
@@ -874,7 +960,7 @@ internal static class OutsourceHistory
         ["customer"] = "客户", ["machineModel"] = "机型", ["mechanicalSection"] = "机构课别",
         ["mechanicalOwner"] = "机构执行人", ["electricalOwner"] = "电控执行人", ["workOrderIssuedOn"] = "工令下发",
         ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
-        ["latestDueDate"] = "最新交期", ["completed"] = "完成状态",
+        ["latestDueDate"] = "最新交期", ["completed"] = "完成状态", ["sendStatus"] = "发送状态",
     };
 
     internal static string Label(string field) => Labels.GetValueOrDefault(field, field);

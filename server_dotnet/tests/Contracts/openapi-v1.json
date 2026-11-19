@@ -300,6 +300,35 @@
         }
       }
     },
+    "/api/v1/outsource/send-queue": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceSendQueueResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/sync-status": {
       "get": {
         "tags": [
@@ -9232,6 +9261,45 @@
         }
       }
     },
+    "/api/v1/outsource/items/skip-notice": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceSkipNoticeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceBatchResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/items/completion": {
       "put": {
         "tags": [
@@ -15538,6 +15606,35 @@
           "outsourceItems": {
             "type": "integer",
             "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceSendQueueResponse": {
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceSkipNoticeRequest": {
+        "required": [
+          "items"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceItemVersion"
+            },
+            "nullable": true
           }
         },
         "additionalProperties": false

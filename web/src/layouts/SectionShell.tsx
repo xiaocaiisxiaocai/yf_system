@@ -9,7 +9,11 @@ import './SectionShell.css'
 
 const { Header, Content } = Layout
 
-export interface MenuEntry { path: string; label: string; icon: ReactNode; visible: boolean; admin?: boolean }
+export interface MenuEntry {
+  path: string; label: string; icon: ReactNode; visible: boolean; admin?: boolean
+  /** Shown as a count next to the label; with `to`, a click opens that address (e.g. a filtered list) instead of `path`. */
+  badge?: number; to?: string
+}
 
 /**
  * Shell for a self-contained business section (ODM/OEMA, outsourcing list, vendor portal): its own header
@@ -24,8 +28,9 @@ export default function SectionShell({ title, subtitle, menu, account, line }: {
   const mobileMenuTrigger = useRef<HTMLElement | null>(null)
   const items = menu.filter((item) => item.visible)
   const selected = items.filter((item) => location.pathname.startsWith(item.path)).sort((a, b) => b.path.length - a.path.length)[0]?.path
+  const target = (key: string) => items.find((item) => item.path === key)?.to ?? key
   const navItems: NavItem[] = items.map((item, index) => ({
-    key: item.path, label: item.label, icon: item.icon,
+    key: item.path, label: item.label, icon: item.icon, badge: item.badge,
     // A thin rule separates daily work from administration; no heading text.
     dividerBefore: item.admin && index > 0 && !items[index - 1].admin,
   }))
@@ -44,7 +49,7 @@ export default function SectionShell({ title, subtitle, menu, account, line }: {
       </Header>
       <Layout className="layout-main">
         {line && <AppRail active={line} />}
-        {items.length > 0 && <NavSider items={navItems} selectedKey={selected} onSelect={(key) => navigate(key)} />}
+        {items.length > 0 && <NavSider items={navItems} selectedKey={selected} onSelect={(key) => navigate(target(key))} />}
         <Content className="layout-content"><RouteErrorBoundary><Outlet /></RouteErrorBoundary></Content>
       </Layout>
       {items.length > 0 && <Drawer className="mobile-nav-drawer" title={(
@@ -52,7 +57,7 @@ export default function SectionShell({ title, subtitle, menu, account, line }: {
       )} placement="left" width={240} visible={mobileMenuOpen} footer={null} unmountOnExit focusLock autoFocus
         onCancel={() => setMobileMenuOpen(false)} afterClose={() => mobileMenuTrigger.current?.focus({ preventScroll: true })}>
         {line && <AppRail active={line} variant="drawer" onNavigate={() => setMobileMenuOpen(false)} />}
-        <NavMenu items={navItems} selectedKey={selected} onSelect={(key) => { navigate(key); setMobileMenuOpen(false) }} />
+        <NavMenu items={navItems} selectedKey={selected} onSelect={(key) => { navigate(target(key)); setMobileMenuOpen(false) }} />
       </Drawer>}
     </Layout>
   )

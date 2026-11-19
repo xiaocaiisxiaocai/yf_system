@@ -350,4 +350,25 @@ describe('外协清单页面', () => {
     expect(await screen.findByRole('button', { name: '发送邮件 (1)' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /批量修改/ })).not.toBeInTheDocument()
   })
+
+  it('发送人可筛出待发送的记录，并可选择无需通知；从入口带 sendQueue=1 进入时自动筛选', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:view', 'outsource:send'])
+    const get = mockApi()
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items: [] } } as never)
+    render(<MemoryRouter initialEntries={['/outsource/items?sendQueue=1']}><OutsourceListPage /></MemoryRouter>)
+
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ sendQueue: 'true' }),
+    })))
+    expect(screen.getByRole('checkbox', { name: '待发送' })).toBeChecked()
+
+    // 21089901 is unsent and 21089961 already sent: only the unsent one can be marked as needing no notice.
+    for (const no of ['21089901', '21089961']) await user.click(within((await screen.findByText(no)).closest('tr')!).getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: '无需通知 (1)' }))
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/skip-notice', {
+      items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }],
+    }))
+  })
 })

@@ -6,6 +6,7 @@ import { useAuth } from '../store/auth'
 import AccountMenu from '../components/AccountMenu'
 import Shell, { type MenuEntry } from '../layouts/SectionShell'
 import { OUTSOURCE_PERMISSIONS, canOpenOutsourceSettings, outsourceHome } from './outsourceNavigation'
+import { SEND_QUEUE_PATH, useSendQueue, useSendQueuePolling } from './sendQueue'
 
 export function OutsourceLanding() {
   const permissions = useAuth((state) => state.permissions)
@@ -17,9 +18,16 @@ export function OutsourceLanding() {
 export default function OutsourceLayout() {
   const { permissions, user } = useAuth(useShallow((state) => ({ permissions: state.permissions, user: state.user })))
   const navigate = useNavigate()
+  const canSend = user?.userType === 'INTERNAL' && permissions.includes(OUTSOURCE_PERMISSIONS.send)
+  useSendQueuePolling(canSend)
+  const queued = useSendQueue((state) => state.count)
   if (user?.userType !== 'INTERNAL') return <Result status="403" title="外协清单仅供公司员工使用" />
   const menu: MenuEntry[] = [
-    { path: '/outsource/items', label: '外协清单', icon: <IconList />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view) },
+    {
+      path: '/outsource/items', label: '外协清单', icon: <IconList />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view),
+      // Senders see how many items wait for them and open the list filtered to those.
+      badge: canSend ? queued : undefined, to: canSend && queued > 0 ? SEND_QUEUE_PATH : undefined,
+    },
     { path: '/outsource/mails', label: '发送记录', icon: <IconEmail />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view) },
     { path: '/outsource/ipms-data', label: 'IPMS 资料', icon: <IconStorage />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.settings), admin: true },
     { path: '/outsource/settings', label: '设定', icon: <IconSettings />, visible: canOpenOutsourceSettings(permissions), admin: true },

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Layout, Menu } from '@arco-design/web-react'
+import { Badge, Layout, Menu } from '@arco-design/web-react'
 import { IconMenuFold, IconMenuUnfold } from '@arco-design/web-react/icon'
 
 const { Sider } = Layout
@@ -11,6 +11,8 @@ export interface NavItem {
   icon: ReactNode
   /** Starts the administration group; a thin rule separates it from the items above. */
   dividerBefore?: boolean
+  /** A count of things waiting there (e.g. outsourcing items to mail); 0 shows nothing. */
+  badge?: number
 }
 
 /** Second-level navigation menu shared by the desktop sider and the mobile drawer of every section. */
@@ -23,6 +25,7 @@ export function NavMenu({ items, selectedKey, onSelect, collapsed = false }: {
       item.dividerBefore && <div key={`${item.key}:divider`} className="oem-menu-divider" role="separator" />,
       <Menu.Item key={item.key} aria-label={collapsed ? item.label : undefined} renderItemInTooltip={() => item.label}>
         {item.icon}{!collapsed && item.label}
+        {!collapsed && Boolean(item.badge) && <Badge className="nav-menu-badge" count={item.badge} maxCount={99} />}
       </Menu.Item>,
     ])}
   </Menu>

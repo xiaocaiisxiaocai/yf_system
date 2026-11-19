@@ -99,12 +99,16 @@ public static class OutsourceModule
             s.BatchUpdateAsync(AccessService.GetCurrent(c), r, ct));
         items.MapPost("/batch-delete", (OutsourceBatchDelete r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.BatchDeleteAsync(AccessService.GetCurrent(c), r, ct));
+        items.MapPut("/skip-notice", (OutsourceSkipNoticeRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.SkipNoticeAsync(AccessService.GetCurrent(c), r, ct));
         items.MapPut("/completion", (OutsourceCompletionRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.SetCompletionAsync(AccessService.GetCurrent(c), r, ct));
         items.MapGet("/{id:long}/changes", (ulong id, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.ChangesAsync(AccessService.GetCurrent(c), id, ct));
         items.MapPost("/sync", (OutsourceSyncRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
             s.SyncNowAsync(AccessService.GetCurrent(c), r, ct));
+        endpoints.MapGet("/api/v1/outsource/send-queue", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.SendQueueAsync(AccessService.GetCurrent(c), ct));
         endpoints.MapGet("/api/v1/outsource/sync-status", (HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
             s.StatusAsync(AccessService.GetCurrent(c), ct));
         var mails = endpoints.MapGroup("/api/v1/outsource/mails");

@@ -1,9 +1,11 @@
-import { Tooltip } from '@arco-design/web-react'
+import { Badge, Tooltip } from '@arco-design/web-react'
 import { IconList, IconRobot, IconSwap } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import { businessHomes } from './navigation'
+import { OUTSOURCE_PERMISSIONS } from '../outsource/outsourceNavigation'
+import { SEND_QUEUE_PATH, useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
 
 export type BusinessLine = 'collaboration' | 'oem' | 'outsource'
 
@@ -19,10 +21,17 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
   const grants = useAuth(useShallow((state) => ({ menus: state.menus, permissions: state.permissions, user: state.user })))
   const navigate = useNavigate()
   const { collaboration: collaborationPath, oem: oemPath, outsource: outsourcePath } = businessHomes(grants)
+  // Outsourcing items waiting for a sender are counted on the rail from every section, not only inside outsourcing.
+  const canSend = Boolean(outsourcePath) && grants.user?.userType === 'INTERNAL' && grants.permissions.includes(OUTSOURCE_PERMISSIONS.send)
+  useSendQueuePolling(canSend)
+  const queued = useSendQueue((state) => state.count)
   const lines = [
     ...(collaborationPath ? [{ key: 'collaboration' as const, label: 'Robot仿真协作', short: '仿真协作', icon: <IconRobot />, path: collaborationPath }] : []),
     ...(oemPath ? [{ key: 'oem' as const, label: 'ODM/OEMA 文件传递', short: 'ODM/OEMA', icon: <IconSwap />, path: oemPath }] : []),
-    ...(outsourcePath ? [{ key: 'outsource' as const, label: '外协清单', short: '外协清单', icon: <IconList />, path: outsourcePath }] : []),
+    ...(outsourcePath ? [{
+      key: 'outsource' as const, label: '外协清单', short: '外协清单', icon: <IconList />,
+      path: canSend && queued > 0 ? SEND_QUEUE_PATH : outsourcePath, badge: canSend ? queued : 0,
+    }] : []),
   ]
   if (lines.length === 0 || (lines.length === 1 && lines[0].key === active)) return null
   const go = (line: (typeof lines)[number]) => {
@@ -35,7 +44,7 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
         const button = (
           <button key={line.key} type="button" aria-label={line.label} aria-current={line.key === active ? 'page' : undefined}
             className={`app-rail-item${line.key === active ? ' app-rail-item--active' : ''}`} onClick={() => go(line)}>
-            <span className="app-rail-icon">{line.icon}</span>
+            <span className="app-rail-icon">{'badge' in line && line.badge ? <Badge count={line.badge} maxCount={99}>{line.icon}</Badge> : line.icon}</span>
             <span className="app-rail-label">{variant === 'rail' ? line.short : line.label}</span>
           </button>
         )
