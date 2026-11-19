@@ -1380,6 +1380,14 @@ export interface OutsourceMissingCustomerResponse {
   outsourceItems: number
 }
 
+export interface OutsourceSendQueueResponse {
+  count: number
+}
+
+export interface OutsourceSkipNoticeRequest {
+  items?: Array<OutsourceItemVersion> | null
+}
+
 export interface OutsourceSyncRequest {
   itemIds?: Array<number> | null
 }
@@ -2306,6 +2314,7 @@ export interface ApiResponses {
   "GET /outsource/items/export": Blob
   "POST /outsource/items/import": AdminImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse
+  "PUT /outsource/items/skip-notice": OutsourceBatchResponse
   "POST /outsource/items/sync": OutsourceSyncStatusResponse
   "PUT /outsource/items/{id}": OutsourceItemResponse
   "GET /outsource/items/{id}/changes": Array<OutsourceItemChangeResponse>
@@ -2323,6 +2332,7 @@ export interface ApiResponses {
   "GET /outsource/mes-mirror/status": MesMirrorStatusResponse
   "POST /outsource/mes-mirror/stop": MesMirrorStatusResponse
   "POST /outsource/mes-mirror/test": MesTestResult
+  "GET /outsource/send-queue": OutsourceSendQueueResponse
   "GET /outsource/settings/cc-user-options": Array<OutsourceCcUserResponse>
   "GET /outsource/settings/customers": Array<OutsourceCustomerAliasResponse>
   "POST /outsource/settings/customers": OutsourceCustomerAliasResponse

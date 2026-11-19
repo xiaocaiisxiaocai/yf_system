@@ -37,16 +37,19 @@ public sealed class OutsourceFieldTests
             INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
               (70,'生管',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (71,'采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
-              (72,'机构',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+              (72,'机构',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (73,'发信',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
             INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:import');
             INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage','outsource:settings');
             INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 73,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:send');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9741,'of_planner','unused','生管甲','planner@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9742,'of_buyer','unused','采购乙','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9743,'of_mechanic','unused','机构丙','mechanic@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9740,'of_admin','unused','管理员','admin@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO user_roles(user_id,role_id) VALUES(9741,70),(9742,71),(9743,72);
+              (9740,'of_admin','unused','管理员','admin@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9744,'of_sender','unused','发信丁','sender@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9741,70),(9742,71),(9743,72),(9744,73);
             INSERT INTO user_roles(user_id,role_id) SELECT 9740,id FROM roles WHERE is_built_in=1 AND name='系统管理员';
             """, ct);
         var factory = EfTestSupport.DbContextFactory(database.Options);
@@ -252,5 +255,59 @@ public sealed class OutsourceFieldTests
         Assert.Equal("否", snapshot["hasRobotV"]);
         Assert.False(snapshot.ContainsKey("remark"));
         Assert.Contains("remark", layout.WorkbookFields(vendor: false).Select(x => x.Key));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task SendersSeeWhatWaitsForThemAndMayDecideNotToMail()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_send_queue", ct);
+        await using var _ = f.Database;
+        var sender = new CurrentUser(9744, "of_sender", "INTERNAL", null);
+        foreach (var no in new[] { "W1", "W2", "W3", "W4" }) await ImportOneAsync(f, no, ct);
+        await f.Database.ExecuteAsync("""
+            UPDATE outsource_items SET send_status='SENT', notified_vendor_id=vendor_id WHERE work_order_no='W2';
+            UPDATE outsource_items SET send_status='PENDING_NOTICE', notified_vendor_id=vendor_id WHERE work_order_no='W3';
+            UPDATE outsource_items SET closed_at=UTC_TIMESTAMP(3) WHERE work_order_no='W4';
+            """, ct);
+        Dictionary<string, OutsourceItemResponse> Items(PageResponse<OutsourceItemResponse> page) => page.List.ToDictionary(x => x.WorkOrderNo);
+        var items = Items(await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct));
+
+        // Only accounts that may send see the count: open items never mailed or changed since the last mail.
+        Assert.Equal(2, (await f.Items.SendQueueAsync(sender, ct)).Count);
+        Assert.Equal(403, await StatusOfAsync(() => f.Items.SendQueueAsync(f.Buyer, ct)));
+        var queue = await f.Items.ListAsync(sender, All() with { SendQueue = true }, 1, 50, 0, ct);
+        Assert.Equal(["W1", "W3"], queue.List.Select(x => x.WorkOrderNo).Order(StringComparer.Ordinal));
+
+        // Deciding not to mail needs the send permission and applies only to what waits for a sender.
+        Assert.Equal(403, await StatusOfAsync(() => f.Items.SkipNoticeAsync(f.Buyer, new([new(items["W1"].Id, items["W1"].UpdatedAt)]), ct)));
+        Assert.Equal(409, await StatusOfAsync(() => f.Items.SkipNoticeAsync(sender, new([new(items["W2"].Id, items["W2"].UpdatedAt)]), ct)));
+        // Both carry yellow marks before the decision: W1 was edited by hand, W3 differs from what was mailed.
+        var w1 = await f.Items.UpdateAsync(f.Buyer, items["W1"].Id,
+            new(null, items["W1"].VendorId, null, "未发送时的备注", items["W1"].Status, items["W1"].UpdatedAt), ct);
+        Assert.Contains("remark", w1.ChangedFields!);
+        await f.Database.ExecuteAsync("UPDATE outsource_items SET last_sent_snapshot='{\"remark\":\"旧备注\"}' WHERE work_order_no='W3'", ct);
+        var w3 = Items(await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct))["W3"];
+        Assert.NotEmpty(w3.ChangedFields!);
+        var skipped = (await f.Items.SkipNoticeAsync(sender,
+            new([new(w1.Id, w1.UpdatedAt), new(w3.Id, w3.UpdatedAt)]), ct)).Items.ToDictionary(x => x.WorkOrderNo);
+        Assert.Equal(("NOT_NEEDED", "SENT"), (skipped["W1"].SendStatus, skipped["W3"].SendStatus));
+        // The decision is the new baseline: every cell is back to its normal colour.
+        Assert.True(skipped["W1"].ChangedFields is null or { Length: 0 });
+        Assert.True(skipped["W3"].ChangedFields is null or { Length: 0 });
+        Assert.Equal(0, (await f.Items.SendQueueAsync(sender, ct)).Count);
+        var history = Assert.Single(await f.Items.ChangesAsync(sender, items["W1"].Id, ct), x => x.Field == "sendStatus");
+        Assert.Equal(("发送状态", "未发送", "无需通知"), (history.Label, history.OldValue, history.NewValue));
+
+        // A later edit does not bring a "no mail needed" item back; only a mailed item asks for a new notice.
+        var edited = await f.Items.UpdateAsync(f.Buyer, skipped["W1"].Id,
+            new(null, skipped["W1"].VendorId, null, "再改一次", skipped["W1"].Status, skipped["W1"].UpdatedAt), ct);
+        Assert.Equal("NOT_NEEDED", edited.SendStatus);
+        Assert.Equal(["remark"], edited.ChangedFields!);
+        edited = await f.Items.UpdateAsync(f.Buyer, skipped["W3"].Id,
+            new(null, skipped["W3"].VendorId, null, "再改一次", skipped["W3"].Status, skipped["W3"].UpdatedAt), ct);
+        Assert.Equal("PENDING_NOTICE", edited.SendStatus);
+        Assert.Equal(["remark"], edited.ChangedFields!);
+        Assert.Equal(1, (await f.Items.SendQueueAsync(sender, ct)).Count);
     }
 }

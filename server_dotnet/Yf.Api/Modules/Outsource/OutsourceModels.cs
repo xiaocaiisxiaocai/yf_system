@@ -74,6 +74,12 @@ public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string?
 
 public sealed record OutsourceBatchDelete(OutsourceItemVersion[]? Items);
 
+/// <summary>Items a sender decides not to mail (外协清单契约 → 无需通知).</summary>
+public sealed record OutsourceSkipNoticeRequest(OutsourceItemVersion[]? Items);
+
+/// <summary>Open items that wait for a sender: never mailed, or changed since the last mail.</summary>
+public sealed record OutsourceSendQueueResponse(int Count);
+
 /// <summary><c>completed=true</c> marks the items 已完成; <c>false</c> reopens them.</summary>
 public sealed record OutsourceCompletionRequest(OutsourceItemVersion[]? Items, bool? Completed);
 

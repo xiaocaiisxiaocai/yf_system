@@ -19,6 +19,8 @@ import './OutsourceListPage.css'
 import ResizableTable from '../../components/ResizableTable'
 import { requestErrorMessage } from '../../api/requestError'
 import { saveBlob } from '../../utils/saveBlob'
+import { useSearchParams } from 'react-router-dom'
+import { useSendQueue } from '../sendQueue'
 
 type Item = ApiResponses['GET /outsource/items']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
@@ -36,6 +38,7 @@ const SEND_STATUS_OPTIONS = [
   { label: '未发送', value: 'UNSENT' },
   { label: '已发送', value: 'SENT' },
   { label: '有变更待通知', value: 'PENDING_NOTICE' },
+  { label: '无需发送', value: 'NOT_NEEDED' },
 ]
 const STATUS_TAG: Record<string, { label: string; color: string }> = {
   NORMAL: { label: '正常', color: 'green' },
@@ -46,7 +49,10 @@ const SEND_TAG: Record<string, { label: string; color: string }> = {
   UNSENT: { label: '未发送', color: 'gray' },
   SENT: { label: '已发送', color: 'arcoblue' },
   PENDING_NOTICE: { label: '有变更待通知', color: 'orange' },
+  NOT_NEEDED: { label: '无需发送', color: 'gray' },
 }
+/** What waits for a sender: mail it, or decide it needs no notice. */
+const awaitsSender = (item: { sendStatus: string; closed: boolean }) => !item.closed && (item.sendStatus === 'UNSENT' || item.sendStatus === 'PENDING_NOTICE')
 const MATCH_PROBLEM: Record<string, string> = {
   UNKNOWN_TYPE: '外发类型不在字典中，不能发送',
   VENDOR_MISMATCH: '外发类型与厂商不符，不能发送',
@@ -66,6 +72,8 @@ interface Filters {
   sendStatus?: string
   dateRange?: [string, string]
   includeClosed: boolean
+  /** Only what waits for a sender (opened from the count on the outsourcing entry). */
+  sendQueue: boolean
 }
 
 const today = () => {
@@ -79,7 +87,9 @@ export default function OutsourceListPage() {
   const canImport = permissions.includes(OUTSOURCE_PERMISSIONS.import)
   const canManage = permissions.includes(OUTSOURCE_PERMISSIONS.manage)
   const canSend = permissions.includes(OUTSOURCE_PERMISSIONS.send)
-  const [filters, setFilters] = useState<Filters>({ keyword: '', includeClosed: false })
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [filters, setFilters] = useState<Filters>(() => ({ keyword: '', includeClosed: false, sendQueue: searchParams.get('sendQueue') === '1' }))
+  const refreshQueue = useSendQueue((state) => state.refresh)
   const [keywordDraft, setKeywordDraft] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -110,6 +120,7 @@ export default function OutsourceListPage() {
     dateTo: filters.dateRange?.[1],
     keyword: filters.keyword || undefined,
     includeClosed: filters.includeClosed ? 'true' : undefined,
+    sendQueue: filters.sendQueue ? 'true' : undefined,
   }), [filters])
 
   const loadReference = useCallback(async () => {
@@ -131,13 +142,14 @@ export default function OutsourceListPage() {
       ])
       if (seq !== sequence.current) return
       setItems(listResponse.data.list); setTotal(Number(listResponse.data.total)); setSyncStatus(syncResponse.data)
+      if (canSend) void refreshQueue()
       setSelected((current) => current.filter((id) => listResponse.data.list.some((item) => item.id === id)))
     } catch {
       if (seq === sequence.current) setError(true)
     } finally {
       if (seq === sequence.current) setLoading(false)
     }
-  }, [params, page, pageSize])
+  }, [params, page, pageSize, canSend, refreshQueue])
 
   useEffect(() => {
     let active = true
@@ -152,6 +164,17 @@ export default function OutsourceListPage() {
   }, [load])
 
   const changeFilters = (next: Partial<Filters>) => { setFilters((current) => ({ ...current, ...next })); setPage(1) }
+  const queueParam = searchParams.get('sendQueue') === '1'
+  useEffect(() => {
+    if (!queueParam) return
+    let active = true
+    void Promise.resolve().then(() => {
+      if (!active) return
+      setFilters((current) => current.sendQueue ? current : { ...current, sendQueue: true }); setPage(1)
+      setSearchParams((current) => { const next = new URLSearchParams(current); next.delete('sendQueue'); return next }, { replace: true })
+    })
+    return () => { active = false }
+  }, [queueParam, setSearchParams])
   const selectedItems = items.filter((item) => selected.includes(item.id))
   const openSelectedItems = selectedItems.filter((item) => !item.closed)
   const openSelected = openSelectedItems.map((item) => item.id)
@@ -220,6 +243,15 @@ export default function OutsourceListPage() {
     } catch { /* 统一请求层提示 */ }
   }
   const editable = useMemo(() => layout.filter((field) => field.canEdit), [layout])
+  const skipTargets = selectedItems.filter(awaitsSender)
+  const skipNotice = async () => {
+    try {
+      await http.put<ApiResponses['PUT /outsource/items/skip-notice']>('/outsource/items/skip-notice', {
+        items: skipTargets.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt })),
+      })
+      Message.success(`已将 ${skipTargets.length} 条标记为无需通知`); setSelected([]); await load()
+    } catch { /* 统一请求层提示 */ }
+  }
   const closedSelected = selectedItems.filter((item) => item.closed).length
   const sentSelected = selectedItems.filter((item) => item.sendStatus !== 'UNSENT').length
 
@@ -347,10 +379,15 @@ export default function OutsourceListPage() {
         <DatePicker.RangePicker aria-label="外发日期" style={{ width: 240 }} placeholder={['外发日期起', '外发日期止']}
           value={filters.dateRange} onChange={(value) => changeFilters({ dateRange: value?.length === 2 ? [value[0], value[1]] : undefined })} />
         <Checkbox checked={filters.includeClosed} onChange={(value) => changeFilters({ includeClosed: value })}>显示已完成</Checkbox>
+        {canSend && <Checkbox checked={filters.sendQueue} onChange={(value) => changeFilters({ sendQueue: value })}>待发送</Checkbox>}
       </Space>
       <Space wrap>
         {canManage && closedSelected > 0 && <Button onClick={() => void setCompletion(false)}>重新开启 ({closedSelected})</Button>}
         {canSend && openSelected.length > 0 && <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(openSelected)}>发送邮件 ({openSelected.length})</Button>}
+        {canSend && skipTargets.length > 0 && <Popconfirm
+          title={`将所选 ${skipTargets.length} 条标记为无需通知？不会发送邮件；之后仍可随时发送。`} onOk={skipNotice}>
+          <Button>无需通知 ({skipTargets.length})</Button>
+        </Popconfirm>}
         {canManage && openSelected.length > 0 && <>
           {editable.length > 0 && <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({openSelected.length})</Button>}
           <Popconfirm title={`将所选 ${openSelected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
