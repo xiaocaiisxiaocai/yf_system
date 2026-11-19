@@ -7,6 +7,12 @@
 - 现状：`TestSchemaTemplate` 让每个测试进程只迁移一次模板库 `yf_tpl_*`，各用例从模板复制表、数据和 trigger；`TestSchemaTemplateTests` 保证复制结果与真实迁移一致。只有测初始化／迁移本身的用例（`SchemaDatabaseScope.InitializeWithMigrationsAsync`、迁移测试）仍重放迁移。新增需要已初始化库的 helper 时调用 `TestSchemaTemplate.InitializeEmptyAsync`，不要直接调 `SchemaBootstrap.InitializeEmptyAsync`。
 - 规避：本地只用 `--filter` 跑相关用例，先编译再 `--no-build`，不要整批反复重跑；完整回归交给 PR 的 CI。包装脚本调用 `dotnet test` 时不要设 `$ErrorActionPreference='Stop'`，否则第一条 stderr 就中断整轮、留下临时库。测试结束后清理残留：无活动连接且超过 1 小时未写入的 `yf_t_<32位hex>`、`yf_test_dotnet_files_<32位hex>` 直接 `DROP` 并回报数量；`yf_tpl_*` 由下一次测试进程按锁自动清理。
 
+## 在云测试服务器上跑全量测试会有 2 个启动并发用例超时（2026-11-19）
+
+- 现象：`YF_TEST_DATABASE_URL` 指向云服务器 MySQL（经 SSH 隧道 `127.0.0.1:13306`，2 核 2G）时，全量 1066 个用例只有 `SchemaShapeTests.FirstStartupInitializesMissingOrEmptyDatabaseOnce`（`createDatabase` 为 true／false 各一）失败，约 32 秒报 `Command Timeout expired`，单独重跑稳定复现；其余通过，全量约 43 分钟。
+- 根因：两个并发启动争同一个 `GET_LOCK`，后到者等锁 60 秒，但 MySqlConnector 默认命令超时 30 秒；云端整套迁移耗时远超 30 秒（模板库首次迁移约 2 分 13 秒），先到者没跑完就被打断。是环境耗时差异，不是业务缺陷。
+- 规避：云端验证时把这两个用例视为已知环境失败，其余结果有效；要让它们在云端通过，需在用例里把命令超时调到大于迁移耗时，或把测试放到服务器本机跑。在 `server_dotnet/` 目录执行 `dotnet test`，否则 `global.json` 不生效，会换成 .NET 10 SDK 并报 VSTest 不再支持。
+
 ## picomatch 的 ReDoS 目前没有修复版本（2026-11-18）
 
 - 现象：`npm audit --include=dev` 在 `web/` 报 6 个 high（`vite`、`vitest`、`@vitejs/plugin-react`、`tinyglobby`、`fdir` 都指向 `picomatch`）。
