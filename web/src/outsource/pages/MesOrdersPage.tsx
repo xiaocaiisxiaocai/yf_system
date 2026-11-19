@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Input, Select, Space, Tag } from '@arco-design/web-react'
+import { Button, Card, Empty, Input, Message, Select, Space, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
+import { IconSync } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
@@ -9,11 +10,14 @@ import { isGroup, MES_CODE_TEXT, MES_FIXED_COLUMNS, MES_LAYOUT, MES_PINNED_PROPS
 import './MesOrdersPage.css'
 
 type Order = ApiResponses['POST /outsource/mes-mirror/orders/query']['list'][number]
+type MirrorStatus = ApiResponses['GET /outsource/mes-mirror/status']
 
 const FIRST_ROWS = 12
 const ROWS_PER_STEP = 12
-/** 已启用筛选标签那一行占掉的高度，表格高度要相应缩短。 */
-const FILTER_BAR_HEIGHT = 40
+/** 工具栏（同步按钮与已启用筛选标签）占掉的高度，表格高度要相应缩短。 */
+const TOOLBAR_HEIGHT = 40
+const POLL_MS = 3000
+const RUNNING = new Set(['RUNNING', 'STOPPING'])
 
 const MES_COLUMN_LABELS: Record<string, string> = Object.fromEntries([
   ...MES_FIXED_COLUMNS.map((column) => [column.prop, column.label] as const),
@@ -74,8 +78,7 @@ export default function MesOrdersPage() {
   // 110 columns make a row heavy: the first rows appear at once and the rest of the page is added in small steps,
   // so a 100-row page shows data straight away instead of after one long render.
   const [grown, setGrown] = useState<{ source: Order[]; count: number }>({ source: [], count: FIRST_ROWS })
-  const hasFilters = Object.keys(filters).length > 0
-  const tableHeightFor = useCallback(() => Math.max(280, window.innerHeight - 240 - (hasFilters ? FILTER_BAR_HEIGHT : 0)), [hasFilters])
+  const tableHeightFor = useCallback(() => Math.max(280, window.innerHeight - 240 - TOOLBAR_HEIGHT), [])
   const [tableHeight, setTableHeight] = useState(tableHeightFor)
   useEffect(() => {
     const resize = () => setTableHeight(tableHeightFor())
@@ -104,6 +107,52 @@ export default function MesOrdersPage() {
     void Promise.resolve().then(() => { if (active) void load() })
     return () => { active = false; sequence.current += 1 }
   }, [load])
+
+  // Sync = the full fetch from the settings page; a fetch already under way (also the daily one) is shown, not started again.
+  const [mirror, setMirror] = useState<MirrorStatus | null>(null)
+  const [starting, setStarting] = useState(false)
+  const watching = useRef(false)
+  const reloadRef = useRef(load)
+  useEffect(() => { reloadRef.current = load }, [load])
+  const readMirror = useCallback(async () => {
+    const response = await http.get<ApiResponses['GET /outsource/mes-mirror/status']>('/outsource/mes-mirror/status')
+    const next = response.data
+    if (RUNNING.has(next.phase)) watching.current = true
+    else if (watching.current) {
+      watching.current = false
+      if (next.phase === 'IDLE') {
+        if (next.lastError) Message.error(next.lastError)
+        else Message.success(`已同步，共 ${next.mirrorCount} 笔`)
+        void reloadRef.current()
+      }
+    }
+    setMirror(next)
+  }, [])
+  useEffect(() => {
+    let active = true
+    void Promise.resolve().then(() => { if (active) void readMirror().catch(() => undefined) })
+    return () => { active = false }
+  }, [readMirror])
+  const syncing = mirror !== null && RUNNING.has(mirror.phase)
+  useEffect(() => {
+    if (!syncing) return
+    const timer = setInterval(() => { void readMirror().catch(() => undefined) }, POLL_MS)
+    return () => clearInterval(timer)
+  }, [syncing, readMirror])
+  const sync = async () => {
+    if (starting) return
+    setStarting(true)
+    try {
+      const response = await http.post<ApiResponses['POST /outsource/mes-mirror/run']>('/outsource/mes-mirror/run', { mode: 'ALL' })
+      watching.current = true
+      setMirror(response.data)
+    } catch {
+      void readMirror().catch(() => undefined) // 统一请求层提示；拒绝时显示正在进行的抓取
+    } finally {
+      setStarting(false)
+    }
+  }
+  const syncLabel = syncing && mirror ? `同步中 ${mirror.fetched} / ${mirror.total ?? '—'}` : '同步'
 
   const apply = (prop: string, text: string) => {
     setFilters((current) => {
@@ -141,18 +190,22 @@ export default function MesOrdersPage() {
 
   return <Card className="page-card page-card--table outsource-ipms-data-page">
     <h1 className="visually-hidden">IPMS 资料</h1>
-    {activeFilterEntries.length > 0 && (
-      <div className="page-toolbar responsive-toolbar" role="region" aria-label="已启用筛选">
-        <Space wrap size={8}>
-          {activeFilterEntries.map(([prop, value]) => (
-            <Tag key={prop} closable onClose={() => apply(prop, '')}>
-              {`${MES_COLUMN_LABELS[prop] ?? prop}：${formatFilterValue(prop, value)}`}
-            </Tag>
-          ))}
-          <Button size="mini" onClick={() => { setFilters({}); setPage(1) }}>清空筛选</Button>
-        </Space>
-      </div>
-    )}
+    <div className="page-toolbar responsive-toolbar">
+      <Space wrap size={12}>
+        <Button type="primary" icon={<IconSync />} loading={starting || syncing}
+          disabled={mirror === null || mirror.phase === 'AWAITING_CONFIRM'} onClick={() => void sync()}>{syncLabel}</Button>
+        {activeFilterEntries.length > 0 && <div role="region" aria-label="已启用筛选">
+          <Space wrap size={8}>
+            {activeFilterEntries.map(([prop, value]) => (
+              <Tag key={prop} closable onClose={() => apply(prop, '')}>
+                {`${MES_COLUMN_LABELS[prop] ?? prop}：${formatFilterValue(prop, value)}`}
+              </Tag>
+            ))}
+            <Button size="mini" onClick={() => { setFilters({}); setPage(1) }}>清空筛选</Button>
+          </Space>
+        </div>}
+      </Space>
+    </div>
     {error ? <LoadError message="IPMS 资料加载失败" onRetry={() => void load()} />
       : <ResizableTable<Order> tableId="outsource-ipms-orders" className="page-table" rowKey="workOrderNo" loading={loading} data={shown}
         columns={columns} noDataElement={loading ? <span /> : <Empty description="暂无资料" />} scroll={{ y: tableHeight }}
