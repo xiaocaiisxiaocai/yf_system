@@ -39,7 +39,7 @@ describe('外协邮件发送', () => {
 
   it('二次确认逐封列出收件人与默认抄送，另加的抄送只加在对应那封', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:view', 'outsource:manage', 'outsource:send'])
     const post = vi.spyOn(http, 'post').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/mails/preview' ? preview : { mails: [] },
     } as never))
@@ -71,7 +71,7 @@ describe('外协邮件发送', () => {
   })
 
   it('预览被拒时显示原因，不能确认', async () => {
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:view', 'outsource:manage', 'outsource:send'])
     vi.spyOn(http, 'post').mockRejectedValue({ response: { status: 400, data: { message: '工令 A1 的外发类型与厂商不符' } } })
     render(<SendMailDialog itemIds={[1]} onClose={() => undefined} onSent={() => undefined} />)
     expect(await screen.findByText('工令 A1 的外发类型与厂商不符')).toBeInTheDocument()
@@ -80,7 +80,7 @@ describe('外协邮件发送', () => {
 
   it('发送记录显示状态与被拒地址，失败的邮件可重新发送', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:view', 'outsource:manage', 'outsource:send'])
     const mail = {
       id: 5, batchKey: 'k', kind: 'NOTICE', vendorId: 1, vendorName: '鼎亚', subject: '【外发通知】鼎亚', status: 'FAILED',
       recipients: [

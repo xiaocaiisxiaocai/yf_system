@@ -52,7 +52,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
     {
         var ids = ValidateItems(request.ItemIds);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Manage, ct);
+        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
         var rows = await context.OutsourceItems.AsNoTracking().Where(x => ids.Contains(x.Id)).ToArrayAsync(ct);
         var plan = await PlanAsync(context, ids, rows, ct);
         var day = await BusinessDayAsync(context, ct);
@@ -75,7 +75,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
 
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
+        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Send, ct);
         // A repeated confirmation (double click, retried request) returns what the first one queued.
         if (await context.OutsourceMailBatches.AnyAsync(x => x.RequestKey == requestKey, ct))
         {
@@ -267,7 +267,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
+        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Send, ct);
         var failed = await context.OutsourceMails.AsNoTracking().Where(x => x.Id == id && x.Status == OutsourceMailStatuses.Failed)
             .Select(x => new { x.Kind, x.VendorId, x.UpdatedAt }).SingleOrDefaultAsync(ct);
         var updated = await context.OutsourceMails.Where(x => x.Id == id && x.Status == OutsourceMailStatuses.Failed)

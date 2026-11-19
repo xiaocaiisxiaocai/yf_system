@@ -186,6 +186,30 @@ public sealed class OutsourceFieldTests
         Assert.Equal(400, await StatusOfAsync(() => f.Items.BatchUpdateAsync(f.Admin,
             new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, Values: new() { ["customer"] = "x" }), ct)));
 
+        // 发图 only by named people: 机构丙. Only accounts that can edit the list may be named.
+        var settings = await f.Fields.SettingsAsync(f.Admin, ct);
+        Assert.Equal([9740UL, 9742UL, 9743UL], settings.Users!.Select(x => x.Id).Order());
+        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+            new(null, null, null, null, null, "USERS", null, [9741]), ct)));
+        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+            new(null, null, null, null, null, "USERS", null, []), ct)));
+        var named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+            new(null, null, null, null, null, "USERS", null, [9743, 9742]), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
+        Assert.Equal("USERS", named.EditorScope);
+        Assert.Equal([9742UL, 9743UL], named.EditorUserIds!);
+        named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+            new(null, null, null, null, null, "USERS", null, [9743]), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
+        Assert.Equal([9743UL], named.EditorUserIds!);
+        Assert.Equal(403, await StatusOfAsync(() => f.Items.BatchUpdateAsync(f.Buyer,
+            new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, DrawingReleasedOn: "2026-12-01"), ct)));
+        saved = (await f.Items.BatchUpdateAsync(f.Mechanic,
+            new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, DrawingReleasedOn: "2026-12-01"), ct)).Items.Single();
+        Assert.Equal(new DateOnly(2026, 12, 1), saved.DrawingReleasedOn);
+        // Back to everyone: the named people are dropped.
+        named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+            new(null, null, null, null, null, "ALL", null, null), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
+        Assert.Empty(named.EditorUserIds!);
+
         var history = await f.Items.ChangesAsync(f.Buyer, item.Id, ct);
         var robotV = history.Single(x => x.Field == "hasRobotV");
         Assert.Equal(("是否有RobotV", null, "是", "EDIT"), (robotV.Label, robotV.OldValue, robotV.NewValue, robotV.Source));

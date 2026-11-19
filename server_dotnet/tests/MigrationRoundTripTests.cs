@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261119021026_AddOutsourceFieldSettings";
+    private const string Latest = "20261119030550_SplitOutsourceSendPermission";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -104,6 +104,8 @@ public sealed class MigrationRoundTripTests
         //   rows and grants so reference data still matches the freshest catalog).
         // + AddOutsourceFieldSettings (Down drops the field settings tables and the vendor-update columns, keeping
         //   the outsource:field_settings permission and its grant).
+        // + AddOutsourceFieldEditorUsers (Down drops outsource_field_editor_users).
+        // + SplitOutsourceSendPermission (Down keeps outsource:send, its grants and the new outsource:manage name).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -128,6 +130,7 @@ public sealed class MigrationRoundTripTests
         Assert.DoesNotContain(latestSchema, line => line.StartsWith("column|projects|project_group_id|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|outsource_", StringComparison.Ordinal));
         Assert.Contains(latestSchema, line => line.StartsWith("table|outsource_fields", StringComparison.Ordinal));
+        Assert.Contains(latestSchema, line => line.StartsWith("table|outsource_field_editor_users", StringComparison.Ordinal));
         Assert.Contains(latestSchema, line => line.StartsWith("column|outsource_items|vendor_updated_at|", StringComparison.Ordinal));
         Assert.Contains(latestSchema, line => line.StartsWith("table|oem_internal_recipient_exclusions", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|oem_internal_recipient_exclusions", StringComparison.Ordinal));
@@ -292,7 +295,7 @@ public sealed class MigrationRoundTripTests
 
     /// <summary>Codes AddOutsourceSettings grants to the built-in administrator on an existing install.</summary>
     private static readonly string[] OutsourceCodes =
-        ["outsource", "outsource:field_settings", "outsource:import", "outsource:manage", "outsource:settings", "outsource:view"];
+        ["outsource", "outsource:field_settings", "outsource:import", "outsource:manage", "outsource:send", "outsource:settings", "outsource:view"];
 
     private static async Task<NotSupportedException> AssertRollbackRefusedAsync(
         SchemaShapeTests.SchemaDatabaseScope database,
