@@ -144,6 +144,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
+      - name: Install script self-test dependency
+        # verify-release.py, exercised by test_script_safety, imports the HTTP harness module.
+        run: python -m pip install pymysql==1.1.2
       - name: Run web and script checks
         shell: pwsh
         run: ./server_dotnet/scripts/verify-all.ps1 -Part web
