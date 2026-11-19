@@ -395,7 +395,7 @@ public sealed class MessageImageTests
         public async Task InitializeAsync(CancellationToken ct)
         {
             Directory.CreateDirectory(Options.StorageRoot);
-            await SchemaBootstrap.InitializeEmptyAsync(Database, "Images#" + Guid.NewGuid().ToString("N")[..8], ct);
+            await TestSchemaTemplate.InitializeEmptyAsync(Database, "Images#" + Guid.NewGuid().ToString("N")[..8], ct);
         }
 
         public async Task SeedAsync(string sql, CancellationToken ct)

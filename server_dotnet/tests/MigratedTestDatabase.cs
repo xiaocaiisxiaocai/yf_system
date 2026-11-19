@@ -54,7 +54,7 @@ internal sealed class MigratedTestDatabase : IAsyncDisposable
             applicationConnectionString = AppDb.BuildConnectionString(options);
             var scope = new MigratedTestDatabase(administration, databaseName, options);
             var bootstrapPassword = "Migrated#" + Guid.NewGuid().ToString("N")[..8] + "!";
-            await SchemaBootstrap.InitializeEmptyAsync(scope.Database, bootstrapPassword, ct);
+            await TestSchemaTemplate.InitializeEmptyAsync(scope.Database, bootstrapPassword, ct);
             return scope;
         }
         catch

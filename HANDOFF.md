@@ -1,10 +1,11 @@
 # 项目踩坑记录
 
-## 本地数据库测试会留下大量 `yf_t_*` 临时库（2026-11-18）
+## 本地数据库测试会留下 `yf_t_*` 临时库并大量写盘（2026-11-18，2026-11-19 更新）
 
-- 现象：本地 MySQL 里累积了几十个 `yf_t_<guid>` 库；每跑一次 DB 测试都再多一批。
-- 根因：每个 DB 用例都会在 `YF_TEST_DATABASE_URL` 指向的实例上新建一个临时库，跑完再删。整批运行时库的数量就是用例数；运行被中断（脚本按错误终止、超时、手动停止）时，未跑完的用例来不及删库，库就留下了。用 `--no-build` 跑到旧的 DLL 后再重跑，又会多建一整批。
-- 规避：本地只用 `--filter` 跑这次改动相关的少数用例，跑之前确认测试项目已经按当前源码编译（编译后再 `--no-build`），不要整批反复重跑；完整回归交给 PR 的 CI（GitHub 自带的 MySQL）。包装脚本里调用 `dotnet test` 时不要设置 `$ErrorActionPreference='Stop'`，否则第一条 stderr 就会中断整轮，留下临时库。残留的 `yf_t_*` 由用户自己的进程清理，Agent 不要自行删除。
+- 现象：本地 MySQL 里累积了几十个 `yf_t_<guid>` 库；测试期间 SSD 持续写入约 2 TB/天。
+- 根因：每个 DB 用例都新建一个临时库并重放全部 EF 迁移，几十次表重建乘以用例数；运行被中断（脚本按错误终止、超时、手动停止）时，未跑完的用例来不及删库。
+- 现状：`TestSchemaTemplate` 让每个测试进程只迁移一次模板库 `yf_tpl_*`，各用例从模板复制表、数据和 trigger；`TestSchemaTemplateTests` 保证复制结果与真实迁移一致。只有测初始化／迁移本身的用例（`SchemaDatabaseScope.InitializeWithMigrationsAsync`、迁移测试）仍重放迁移。新增需要已初始化库的 helper 时调用 `TestSchemaTemplate.InitializeEmptyAsync`，不要直接调 `SchemaBootstrap.InitializeEmptyAsync`。
+- 规避：本地只用 `--filter` 跑相关用例，先编译再 `--no-build`，不要整批反复重跑；完整回归交给 PR 的 CI。包装脚本调用 `dotnet test` 时不要设 `$ErrorActionPreference='Stop'`，否则第一条 stderr 就中断整轮、留下临时库。测试结束后清理残留：无活动连接且超过 1 小时未写入的 `yf_t_<32位hex>`、`yf_test_dotnet_files_<32位hex>` 直接 `DROP` 并回报数量；`yf_tpl_*` 由下一次测试进程按锁自动清理。
 
 ## picomatch 的 ReDoS 目前没有修复版本（2026-11-18）
 

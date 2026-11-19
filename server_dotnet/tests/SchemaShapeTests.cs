@@ -155,7 +155,7 @@ public sealed class SchemaShapeTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("bootstrap_warning", ct);
-        await database.InitializeAsync(ct);
+        await database.InitializeWithMigrationsAsync(ct);
         database.Options.AutoInitializeDatabase = autoInitialize;
         database.Options.BootstrapPassword = "PrivateBootstrap#42";
         var original = Console.Error;
@@ -342,7 +342,7 @@ public sealed class SchemaShapeTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("ef_empty_init", ct);
-        await database.InitializeAsync(ct);
+        await database.InitializeWithMigrationsAsync(ct);
         await using (var conn = await database.Database.OpenAsync(ct))
         {
             Assert.Equal(ExpectedMigrations,
@@ -556,7 +556,7 @@ public sealed class SchemaShapeTests
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("ef_init_refuse", ct);
         await database.ExecuteAsync("CREATE TABLE sentinel(id INT NOT NULL PRIMARY KEY)", ct);
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => database.InitializeAsync(ct));
+            () => database.InitializeWithMigrationsAsync(ct));
         await using var conn = await database.Database.OpenAsync(ct);
         Assert.True(await TableExistsAsync(conn, "sentinel", ct));
         Assert.False(await TableExistsAsync(conn, "__EFMigrationsHistory", ct));
@@ -567,7 +567,7 @@ public sealed class SchemaShapeTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("ef_migrate_repeat", ct);
-        await database.InitializeAsync(ct);
+        await database.InitializeWithMigrationsAsync(ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await SchemaMigrations.ApplyAsync(database.Database, ct);
         await using var conn = await database.Database.OpenAsync(ct);
@@ -599,7 +599,7 @@ public sealed class SchemaShapeTests
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaDatabaseScope.CreateOrSkipAsync("ef_history_guard", ct);
-        await database.InitializeAsync(ct);
+        await database.InitializeWithMigrationsAsync(ct);
         await database.ExecuteAsync("DELETE FROM __EFMigrationsHistory", ct);
         await Assert.ThrowsAsync<InvalidOperationException>(() => SchemaBootstrap.ValidateAsync(database.Database, ct));
         await Assert.ThrowsAsync<InvalidOperationException>(() => SchemaMigrations.ApplyAsync(database.Database, ct));
@@ -730,6 +730,12 @@ public sealed class SchemaShapeTests
         }
 
         public async Task InitializeAsync(CancellationToken ct)
+        {
+            await TestSchemaTemplate.InitializeEmptyAsync(Database, "SchemaTest#2026", ct);
+        }
+
+        /// <summary>Replays every EF migration; only for tests of initialization and migration behavior.</summary>
+        public async Task InitializeWithMigrationsAsync(CancellationToken ct)
         {
             await SchemaBootstrap.InitializeEmptyAsync(Database, "SchemaTest#2026", ct);
         }
