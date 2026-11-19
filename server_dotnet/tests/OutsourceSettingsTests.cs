@@ -74,11 +74,11 @@ public sealed class OutsourceSettingsTests
         Assert.Contains(all, x => x.UserId == 9614 && x.Email == "");
         Assert.DoesNotContain(all, x => x.UserId is 9615 or 9616);
 
-        // Viewers read reference data but cannot change it; staff without outsource permissions and suppliers see nothing.
+        // Every internal account reads reference data (2026-11-19) but cannot change it; suppliers see nothing.
         Assert.Equal(2, (await service.VendorsAsync(viewer, ct)).Length);
         Assert.Equal(2, (await service.DefaultCcAsync(viewer, ct)).Length);
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.CreateTypeAsync(viewer, new("HK", "合科", 5), ct))).Status);
-        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.VendorsAsync(member, ct))).Status);
+        Assert.Equal(2, (await service.VendorsAsync(member, ct)).Length);
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.TypesAsync(supplier, ct))).Status);
 
         // Deleting an internal account drops it from the copy list.

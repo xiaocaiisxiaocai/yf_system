@@ -1,5 +1,11 @@
 # 项目踩坑记录
 
+## 本地数据库测试会留下大量 `yf_t_*` 临时库（2026-11-18）
+
+- 现象：本地 MySQL 里累积了几十个 `yf_t_<guid>` 库；每跑一次 DB 测试都再多一批。
+- 根因：每个 DB 用例都会在 `YF_TEST_DATABASE_URL` 指向的实例上新建一个临时库，跑完再删。整批运行时库的数量就是用例数；运行被中断（脚本按错误终止、超时、手动停止）时，未跑完的用例来不及删库，库就留下了。用 `--no-build` 跑到旧的 DLL 后再重跑，又会多建一整批。
+- 规避：本地只用 `--filter` 跑这次改动相关的少数用例，跑之前确认测试项目已经按当前源码编译（编译后再 `--no-build`），不要整批反复重跑；完整回归交给 PR 的 CI（GitHub 自带的 MySQL）。包装脚本里调用 `dotnet test` 时不要设置 `$ErrorActionPreference='Stop'`，否则第一条 stderr 就会中断整轮，留下临时库。残留的 `yf_t_*` 由用户自己的进程清理，Agent 不要自行删除。
+
 ## picomatch 的 ReDoS 目前没有修复版本（2026-11-18）
 
 - 现象：`npm audit --include=dev` 在 `web/` 报 6 个 high（`vite`、`vitest`、`@vitejs/plugin-react`、`tinyglobby`、`fdir` 都指向 `picomatch`）。

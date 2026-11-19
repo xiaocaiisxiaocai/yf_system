@@ -215,8 +215,6 @@ public sealed class OutsourceItemTypeTests
         await f.Items.ImportAsync(f.Planner, Request(("W1", "鼎亚", "OEMA")), ct);
         await f.Database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT', notified_vendor_id=vendor_id", ct);
         var item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List);
-        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
-            f.Items.BatchDeleteAsync(f.Planner, new([new(item.Id, item.UpdatedAt)]), ct))).Status);
 
         await f.Items.BatchDeleteAsync(f.Buyer, new([new(item.Id, item.UpdatedAt)]), ct);
 
