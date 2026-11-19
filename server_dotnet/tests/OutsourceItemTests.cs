@@ -124,9 +124,10 @@ public sealed class OutsourceItemTests
         Assert.Equal(["21089901"], (await service.ListAsync(viewer, Query(typeId: oema.Id), 1, 20, 0, ct)).List.Select(x => x.WorkOrderNo));
         Assert.Equal(["21089902"], (await service.ListAsync(viewer, Query(keyword: "089902"), 1, 20, 0, ct)).List.Select(x => x.WorkOrderNo));
 
-        // Purchasing edits: version check, type/vendor guard, and a sent row becomes "pending notice".
+        // Purchasing edits: version check, type/vendor guard, and a sent row becomes "pending notice". Someone with no
+        // column of theirs (no manage permission, not named on any column) cannot edit.
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.UpdateAsync(planner, first.Id, new("2026-11-04", dingya.Id, null, null, "PAUSED", first.UpdatedAt), ct))).Status);
+            service.UpdateAsync(viewer, first.Id, new("2026-11-04", dingya.Id, null, null, "PAUSED", first.UpdatedAt), ct))).Status);
         var stale = await Assert.ThrowsAsync<ApiException>(() =>
             service.UpdateAsync(buyer, first.Id, new("2026-11-04", dingya.Id, null, null, "PAUSED", first.UpdatedAt.AddSeconds(-1)), ct));
         Assert.Equal(40903, stale.Code);
@@ -170,12 +171,12 @@ public sealed class OutsourceItemTests
             Assert.Contains("<c r=\"A2\" s=\"7\"", sheet, StringComparison.Ordinal);
         }
 
-        // Deletion: only by purchasing; a row already mailed to the vendor can be deleted too (the audit keeps its send status).
+        // Deletion needs outsource:manage; a row already mailed to the vendor can be deleted too (the audit keeps its send status).
         var latest = (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
         var sentRow = latest.Single(x => x.WorkOrderNo == "21089901");
         var unsentRow = latest.Single(x => x.WorkOrderNo == "21089902");
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.BatchDeleteAsync(planner, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct))).Status);
+            service.BatchDeleteAsync(viewer, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct))).Status);
         await service.BatchDeleteAsync(buyer, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct);
         Assert.Equal(1UL, (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).Total);
 
