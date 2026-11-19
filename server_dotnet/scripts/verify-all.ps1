@@ -16,6 +16,11 @@
     or together with -SkipHttp for an explicitly partial run. The real MySQL
     maintenance suite is opt-in with -IncludeMaintenance. Browser automation
     is intentionally not part of this script.
+
+    CI runs the gates as parallel jobs: -Part dotnet (optionally one
+    -TestShard i/n of the .NET tests, see scripts/test-shards.py), -Part http
+    and -Part web. Steps outside the selected part are reported as skipped and
+    do not count against full coverage; the default -Part all runs everything.
 #>
 [CmdletBinding()]
 param(
@@ -23,11 +28,24 @@ param(
     [switch]$IncludeMaintenance,
     [switch]$AllowSkips,
     [switch]$SelfTestNpmCiPreflight,
-    [string]$OutputRoot
+    [string]$OutputRoot,
+    [ValidateSet('all', 'dotnet', 'http', 'web')][string]$Part = 'all',
+    # i/n: run only shard i of n of the .NET tests (requires -Part dotnet).
+    [ValidatePattern('^[1-9][0-9]*/[1-9][0-9]*$')][string]$TestShard
 )
 
 $ErrorActionPreference = 'Stop'
 Import-Module Microsoft.PowerShell.Utility -ErrorAction Stop
+
+if ($TestShard -and $Part -ne 'dotnet') {
+    Write-Error '-TestShard requires -Part dotnet.'
+    exit 1
+}
+
+function Test-Part {
+    param([Parameter(Mandatory = $true)][string[]]$Parts)
+    return $Part -eq 'all' -or $Parts -contains $Part
+}
 
 $scriptFile = [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
 $scriptDirectory = Split-Path -Parent $scriptFile
@@ -591,7 +609,10 @@ try {
     }
     [void](Add-Result -Name 'openapi-update-guard' -Status 'passed' -ExitCode 0 -LogPath $null -Reason $null -Details @{ updateDisabled = $true })
 
-    if ([string]::IsNullOrWhiteSpace($testDatabaseUrl)) {
+    if (-not (Test-Part @('dotnet', 'http'))) {
+        $script:DatabaseMode = 'not-required-for-part'
+        [void](Add-SkippedResult -Name 'database-configuration' -Reason ('-Part ' + $Part + ' runs no database-backed checks.'))
+    } elseif ([string]::IsNullOrWhiteSpace($testDatabaseUrl)) {
         $script:DatabaseMode = 'skipped-no-explicit-local-url'
         [void](Add-SkippedResult -Name 'database-configuration' -Reason 'YF_TEST_DATABASE_URL is not set; database-backed .NET and HTTP checks are skipped.')
         if (-not $AllowSkips) {
@@ -620,57 +641,88 @@ try {
         [void](Add-Result -Name 'database-configuration' -Status 'passed' -ExitCode 0 -LogPath $null -Reason $null -Details @{ configured = $true; host = 'loopback'; scheme = 'mysql' })
     }
 
-    $sdkResult = Invoke-VerificationStep -Name 'dotnet-sdk' -FilePath 'dotnet' -Arguments @('--version') -WorkingDirectory $serverRoot
-    Assert-Passed $sdkResult
-    $sdkOutput = Get-Content -LiteralPath $sdkResult.logPath -Raw
-    $sdkMatch = [Regex]::Match($sdkOutput, '(?m)^\s*(\d+\.\d+\.\d+)\s*$')
-    if (-not $sdkMatch.Success) {
-        $sdkMatch = [Regex]::Match($sdkOutput, '(\d+\.\d+\.\d+)')
+    if (Test-Part @('dotnet', 'http')) {
+        $sdkResult = Invoke-VerificationStep -Name 'dotnet-sdk' -FilePath 'dotnet' -Arguments @('--version') -WorkingDirectory $serverRoot
+        Assert-Passed $sdkResult
+        $sdkOutput = Get-Content -LiteralPath $sdkResult.logPath -Raw
+        $sdkMatch = [Regex]::Match($sdkOutput, '(?m)^\s*(\d+\.\d+\.\d+)\s*$')
+        if (-not $sdkMatch.Success) {
+            $sdkMatch = [Regex]::Match($sdkOutput, '(\d+\.\d+\.\d+)')
+        }
+        if (-not $sdkMatch.Success -or -not $sdkMatch.Groups[1].Value.StartsWith('8.')) {
+            $sdkResult.status = 'failed'
+            $sdkResult.exitCode = 1
+            $sdkResult.reason = 'The active SDK is not a .NET 8 SDK selected by server_dotnet/global.json.'
+            throw 'A verification step failed.'
+        }
+        $script:DotnetSdkVersion = $sdkMatch.Groups[1].Value
+        $sdkResult.details = @{ version = $script:DotnetSdkVersion; globalJson = (Join-Path $serverRoot 'global.json') }
+
+        $apiProject = './Yf.Api/Yf.Api.csproj'
+        $testHostProject = './TestHost/Yf.Api.TestHost.csproj'
+        $testsProject = './tests/Yf.Api.Tests.csproj'
+        $restoreArguments = @('--locked-mode', '--verbosity', 'minimal')
+        $buildArguments = @('--configuration', 'Debug', '--no-restore', '--verbosity', 'minimal')
+
+        $step = Invoke-VerificationStep -Name 'dotnet-tool-restore' -FilePath 'dotnet' -Arguments @('tool', 'restore') -WorkingDirectory $serverRoot
+        Assert-Passed $step
+
+        $step = Invoke-VerificationStep -Name 'restore-api' -FilePath 'dotnet' -Arguments (@('restore', $apiProject) + $restoreArguments) -WorkingDirectory $serverRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'restore-testhost' -FilePath 'dotnet' -Arguments (@('restore', $testHostProject) + $restoreArguments) -WorkingDirectory $serverRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'restore-tests' -FilePath 'dotnet' -Arguments (@('restore', $testsProject) + $restoreArguments) -WorkingDirectory $serverRoot
+        Assert-Passed $step
+
+        $step = Invoke-VerificationStep -Name 'build-api' -FilePath 'dotnet' -Arguments (@('build', $apiProject) + $buildArguments) -WorkingDirectory $serverRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'build-testhost' -FilePath 'dotnet' -Arguments (@('build', $testHostProject) + $buildArguments) -WorkingDirectory $serverRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'build-tests' -FilePath 'dotnet' -Arguments (@('build', $testsProject) + $buildArguments) -WorkingDirectory $serverRoot
+        Assert-Passed $step
+
     }
-    if (-not $sdkMatch.Success -or -not $sdkMatch.Groups[1].Value.StartsWith('8.')) {
-        $sdkResult.status = 'failed'
-        $sdkResult.exitCode = 1
-        $sdkResult.reason = 'The active SDK is not a .NET 8 SDK selected by server_dotnet/global.json.'
-        throw 'A verification step failed.'
+
+    if (Test-Part @('dotnet')) {
+        $testArguments = @('test', $testsProject, '--configuration', 'Debug', '--no-build', '--no-restore', '--results-directory', $runRoot, '--logger', 'console;verbosity=normal', '--logger', 'trx;LogFileName=dotnet-test.trx')
+        if ($TestShard) {
+            $shardParts = $TestShard.Split('/')
+            $previousErrorAction = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+                $shardFilter = (& python (Join-Path $scriptDirectory 'test-shards.py') 'filter' '--shard' $shardParts[0] '--shards' $shardParts[1] 2>&1 | ForEach-Object { [string]$_ }) -join ''
+                $shardExit = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousErrorAction
+            }
+            if ($shardExit -ne 0 -or [string]::IsNullOrWhiteSpace($shardFilter)) {
+                throw ('test-shards.py could not build the filter for shard ' + $TestShard + ': ' + $shardFilter)
+            }
+            $testArguments += @('--filter', $shardFilter)
+        }
+        $step = Invoke-VerificationStep -Name 'dotnet-test' -FilePath 'dotnet' -Arguments $testArguments -WorkingDirectory $serverRoot
+        Update-DotnetTestSummary -Result $step -TrxPath $script:TestResultsPath -DatabaseConfigured (-not [string]::IsNullOrWhiteSpace($testDatabaseUrl)) -PerformanceBenchmarkEnabled ([Environment]::GetEnvironmentVariable('YF_PERF_BENCHMARK', 'Process') -eq '1')
+        if ($TestShard -and $null -ne $script:TestSummary -and $script:TestSummary.Contains('total')) {
+            $script:TestSummary.shard = $TestShard
+            if ([int]$script:TestSummary.total -eq 0) {
+                $step.status = 'failed'
+                $step.exitCode = 1
+                $step.reason = 'The test shard ran no tests; regenerate tests/test-shards.json.'
+            }
+        }
+        Assert-Passed $step
+
+        # The design-time factory is deliberately pointed at a disposable-looking
+        # loopback name.  has-pending-model-changes compares the compiled model and
+        # snapshot; it must never apply a migration or use a project connection.
+        [Environment]::SetEnvironmentVariable('YF_EF_DESIGN_CONNECTION', $safeEfDesignConnection, 'Process')
+        $step = Invoke-VerificationStep -Name 'ef-model-check' -FilePath 'dotnet' -Arguments @('ef', 'migrations', 'has-pending-model-changes', '--project', $apiProject, '--startup-project', $apiProject, '--configuration', 'Debug', '--no-build') -WorkingDirectory $serverRoot
+        Assert-Passed $step
     }
-    $script:DotnetSdkVersion = $sdkMatch.Groups[1].Value
-    $sdkResult.details = @{ version = $script:DotnetSdkVersion; globalJson = (Join-Path $serverRoot 'global.json') }
 
-    $apiProject = './Yf.Api/Yf.Api.csproj'
-    $testHostProject = './TestHost/Yf.Api.TestHost.csproj'
-    $testsProject = './tests/Yf.Api.Tests.csproj'
-    $restoreArguments = @('--locked-mode', '--verbosity', 'minimal')
-    $buildArguments = @('--configuration', 'Debug', '--no-restore', '--verbosity', 'minimal')
-
-    $step = Invoke-VerificationStep -Name 'dotnet-tool-restore' -FilePath 'dotnet' -Arguments @('tool', 'restore') -WorkingDirectory $serverRoot
-    Assert-Passed $step
-
-    $step = Invoke-VerificationStep -Name 'restore-api' -FilePath 'dotnet' -Arguments (@('restore', $apiProject) + $restoreArguments) -WorkingDirectory $serverRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'restore-testhost' -FilePath 'dotnet' -Arguments (@('restore', $testHostProject) + $restoreArguments) -WorkingDirectory $serverRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'restore-tests' -FilePath 'dotnet' -Arguments (@('restore', $testsProject) + $restoreArguments) -WorkingDirectory $serverRoot
-    Assert-Passed $step
-
-    $step = Invoke-VerificationStep -Name 'build-api' -FilePath 'dotnet' -Arguments (@('build', $apiProject) + $buildArguments) -WorkingDirectory $serverRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'build-testhost' -FilePath 'dotnet' -Arguments (@('build', $testHostProject) + $buildArguments) -WorkingDirectory $serverRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'build-tests' -FilePath 'dotnet' -Arguments (@('build', $testsProject) + $buildArguments) -WorkingDirectory $serverRoot
-    Assert-Passed $step
-
-    $step = Invoke-VerificationStep -Name 'dotnet-test' -FilePath 'dotnet' -Arguments @('test', $testsProject, '--configuration', 'Debug', '--no-build', '--no-restore', '--results-directory', $runRoot, '--logger', 'console;verbosity=normal', '--logger', 'trx;LogFileName=dotnet-test.trx') -WorkingDirectory $serverRoot
-    Update-DotnetTestSummary -Result $step -TrxPath $script:TestResultsPath -DatabaseConfigured (-not [string]::IsNullOrWhiteSpace($testDatabaseUrl)) -PerformanceBenchmarkEnabled ([Environment]::GetEnvironmentVariable('YF_PERF_BENCHMARK', 'Process') -eq '1')
-    Assert-Passed $step
-
-    # The design-time factory is deliberately pointed at a disposable-looking
-    # loopback name.  has-pending-model-changes compares the compiled model and
-    # snapshot; it must never apply a migration or use a project connection.
-    [Environment]::SetEnvironmentVariable('YF_EF_DESIGN_CONNECTION', $safeEfDesignConnection, 'Process')
-    $step = Invoke-VerificationStep -Name 'ef-model-check' -FilePath 'dotnet' -Arguments @('ef', 'migrations', 'has-pending-model-changes', '--project', $apiProject, '--startup-project', $apiProject, '--configuration', 'Debug', '--no-build') -WorkingDirectory $serverRoot
-    Assert-Passed $step
-
-    if ($SkipHttp) {
+    if (-not (Test-Part @('http'))) {
+        # Reported by Mark-PendingStepsSkipped below.
+    } elseif ($SkipHttp) {
         [void](Add-SkippedResult -Name 'http-isolated' -Reason 'HTTP contract validation was disabled with -SkipHttp.')
     } elseif ([string]::IsNullOrWhiteSpace($testDatabaseUrl)) {
         [void](Add-SkippedResult -Name 'http-isolated' -Reason 'YF_TEST_DATABASE_URL is not set; HTTP contract validation requires an explicit local test database.')
@@ -685,7 +737,9 @@ try {
         Assert-Passed $step
     }
 
-    if (-not $IncludeMaintenance) {
+    if (-not (Test-Part @('http'))) {
+        # Reported by Mark-PendingStepsSkipped below.
+    } elseif (-not $IncludeMaintenance) {
         [void](Add-SkippedResult -Name 'maintenance' -Reason 'Real MySQL maintenance validation is optional; use -IncludeMaintenance to run it.')
     } elseif ([string]::IsNullOrWhiteSpace($testDatabaseUrl)) {
         [void](Add-SkippedResult -Name 'maintenance' -Reason 'YF_TEST_DATABASE_URL is not set; maintenance validation requires an explicit local test database.')
@@ -698,30 +752,37 @@ try {
         }
     }
 
-    $scriptSelfTests = @(
-        'test_script_safety',
-        'test_publish_defaults',
-        'test_browser_step_evidence',
-        'test_test_host_artifacts',
-        'test_maintenance_optimization_guard',
-        'test_verify_all_guards'
-    )
-    $step = Invoke-VerificationStep -Name 'python-script-self-tests' -FilePath 'python' -Arguments (@('-m', 'unittest') + $scriptSelfTests) -WorkingDirectory $scriptDirectory
-    Assert-Passed $step
+    if (Test-Part @('web')) {
+        $scriptSelfTests = @(
+            'test_script_safety',
+            'test_publish_defaults',
+            'test_browser_step_evidence',
+            'test_test_host_artifacts',
+            'test_maintenance_optimization_guard',
+            'test_verify_all_guards',
+            'test_test_shards'
+        )
+        $step = Invoke-VerificationStep -Name 'python-script-self-tests' -FilePath 'python' -Arguments (@('-m', 'unittest') + $scriptSelfTests) -WorkingDirectory $scriptDirectory
+        Assert-Passed $step
 
-    $npmCommand = if ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') { 'npm.cmd' } else { 'npm' }
-    $step = Invoke-NpmCiNativeBindingPreflight -NodeModulesRoot (Join-Path $webRoot 'node_modules')
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'npm-ci' -FilePath $npmCommand -Arguments @('ci') -WorkingDirectory $webRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'npm-lint' -FilePath $npmCommand -Arguments @('run', 'lint') -WorkingDirectory $webRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'npm-test' -FilePath $npmCommand -Arguments @('test') -WorkingDirectory $webRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'npm-test-precompression' -FilePath $npmCommand -Arguments @('run', 'test:precompression') -WorkingDirectory $webRoot
-    Assert-Passed $step
-    $step = Invoke-VerificationStep -Name 'npm-build' -FilePath $npmCommand -Arguments @('run', 'build') -WorkingDirectory $webRoot
-    Assert-Passed $step
+        $npmCommand = if ($IsWindows -or $PSVersionTable.PSEdition -eq 'Desktop') { 'npm.cmd' } else { 'npm' }
+        $step = Invoke-NpmCiNativeBindingPreflight -NodeModulesRoot (Join-Path $webRoot 'node_modules')
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'npm-ci' -FilePath $npmCommand -Arguments @('ci') -WorkingDirectory $webRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'npm-lint' -FilePath $npmCommand -Arguments @('run', 'lint') -WorkingDirectory $webRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'npm-test' -FilePath $npmCommand -Arguments @('test') -WorkingDirectory $webRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'npm-test-precompression' -FilePath $npmCommand -Arguments @('run', 'test:precompression') -WorkingDirectory $webRoot
+        Assert-Passed $step
+        $step = Invoke-VerificationStep -Name 'npm-build' -FilePath $npmCommand -Arguments @('run', 'build') -WorkingDirectory $webRoot
+        Assert-Passed $step
+    }
+
+    if ($Part -ne 'all') {
+        Mark-PendingStepsSkipped -Reason ('Not part of -Part ' + $Part + '.')
+    }
 } catch {
     $script:ExitCode = 1
     $script:FailureMessage = 'A verification step failed; inspect the failed step log in the run directory.'
@@ -755,7 +816,12 @@ try {
             $unexpectedTestSkipped = [int]$script:TestSummary.unexpectedSkipped
         }
     }
-    $coverageRequiredSteps = @('database-configuration', 'http-isolated')
+    $coverageRequiredSteps = switch ($Part) {
+        'dotnet' { @('database-configuration', 'dotnet-test') }
+        'http' { @('database-configuration', 'http-isolated') }
+        'web' { @('python-script-self-tests', 'npm-test') }
+        default { @('database-configuration', 'http-isolated') }
+    }
     $coverageSkips = @($skipped | Where-Object { $_.name -in $coverageRequiredSteps })
     $fullCoverage = ($failed.Count -eq 0 -and $coverageSkips.Count -eq 0 -and
         $databaseTestSkipped -eq 0 -and $unexpectedTestSkipped -eq 0)
@@ -771,6 +837,8 @@ try {
         status = $overall
         fullCoverage = $fullCoverage
         allowSkips = [bool]$AllowSkips
+        part = $Part
+        testShard = if ($TestShard) { $TestShard } else { $null }
         databaseChecks = $script:DatabaseMode
         browserAutomation = 'not-run'
         dotnetSdk = $script:DotnetSdkVersion
