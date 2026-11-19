@@ -1110,6 +1110,26 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceFieldEditorUser", b =>
+                {
+                    b.Property<ulong>("FieldId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("field_id");
+
+                    b.Property<ulong>("UserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("FieldId", "UserId");
+
+                    b.HasIndex("UserId")
+                        .HasDatabaseName("idx_outsource_field_editor_users_user");
+
+                    b.ToTable("outsource_field_editor_users", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItem", b =>
                 {
                     b.Property<ulong>("Id")
@@ -4992,6 +5012,23 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_outsource_field_editor_roles_role");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceFieldEditorUser", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceField", null)
+                        .WithMany()
+                        .HasForeignKey("FieldId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_field_editor_users_field");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_field_editor_users_user");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItem", b =>

@@ -78,6 +78,7 @@ export default function OutsourceListPage() {
   const permissions = useAuth((state) => state.permissions)
   const canImport = permissions.includes(OUTSOURCE_PERMISSIONS.import)
   const canManage = permissions.includes(OUTSOURCE_PERMISSIONS.manage)
+  const canSend = permissions.includes(OUTSOURCE_PERMISSIONS.send)
   const [filters, setFilters] = useState<Filters>({ keyword: '', includeClosed: false })
   const [keywordDraft, setKeywordDraft] = useState('')
   const [page, setPage] = useState(1)
@@ -174,7 +175,7 @@ export default function OutsourceListPage() {
 
   /** After saving, ask whether to mail the vendors about the edited items right away. */
   const offerMail = (ids: number[]) => {
-    if (ids.length === 0) return
+    if (ids.length === 0 || !canSend) return
     Modal.confirm({
       title: `是否发送邮件通知厂商？`,
       content: `已保存 ${ids.length} 条记录。`,
@@ -349,8 +350,8 @@ export default function OutsourceListPage() {
       </Space>
       <Space wrap>
         {canManage && closedSelected > 0 && <Button onClick={() => void setCompletion(false)}>重新开启 ({closedSelected})</Button>}
+        {canSend && openSelected.length > 0 && <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(openSelected)}>发送邮件 ({openSelected.length})</Button>}
         {canManage && openSelected.length > 0 && <>
-          <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(openSelected)}>发送邮件 ({openSelected.length})</Button>
           {editable.length > 0 && <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({openSelected.length})</Button>}
           <Popconfirm title={`将所选 ${openSelected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
             <Button icon={<IconCheckCircle />}>标记完成</Button>
@@ -376,7 +377,7 @@ export default function OutsourceListPage() {
       : <ResizableTable<Item> tableId="outsource-items" className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
         rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : 'outsource-row--normal',
           item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
-        rowSelection={canManage ? {
+        rowSelection={canManage || canSend ? {
           type: 'checkbox', selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]),
         } : undefined}
         noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}

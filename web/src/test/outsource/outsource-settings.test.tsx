@@ -237,6 +237,6 @@ describe('外协清单入口与设定', () => {
     const option = (await screen.findAllByRole('option', { name: '机构' })).at(-1)!
     fireEvent.click(option.querySelector('.arco-select-option') ?? option)
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
-    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/18', { editorScope: 'ROLES', editorRoleIds: [72] }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/18', { editorScope: 'ROLES', editorRoleIds: [72], editorUserIds: [] }))
   })
 })

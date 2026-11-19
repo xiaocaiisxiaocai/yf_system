@@ -26,8 +26,10 @@ internal static class OutsourceEditorScopes
     internal const string All = "ALL";
     /// <summary>Only members of the field's editor roles (and system administrators).</summary>
     internal const string Roles = "ROLES";
+    /// <summary>Only the field's editor accounts (and system administrators).</summary>
+    internal const string Users = "USERS";
     internal const string None = "NONE";
-    internal static bool IsValid(string? value) => value is All or Roles or None;
+    internal static bool IsValid(string? value) => value is All or Roles or Users or None;
 }
 
 /// <summary>
@@ -126,7 +128,8 @@ internal static class OutsourceFieldValues
 /// </summary>
 internal sealed class OutsourceFieldLayout
 {
-    internal sealed record Column(OutsourceField Field, OutsourceBuiltInField? BuiltIn, IReadOnlySet<ulong> EditorRoles, string[] Options)
+    internal sealed record Column(OutsourceField Field, OutsourceBuiltInField? BuiltIn, IReadOnlySet<ulong> EditorRoles,
+        IReadOnlySet<ulong> EditorUsers, string[] Options)
     {
         public string Key => Field.FieldKey;
         public string Label => Field.Label;
@@ -182,6 +185,7 @@ internal sealed class OutsourceFieldLayout
         {
             OutsourceEditorScopes.All => true,
             OutsourceEditorScopes.Roles => column.EditorRoles.Overlaps(editor.RoleIds),
+            OutsourceEditorScopes.Users => column.EditorUsers.Contains(editor.UserId),
             _ => false,
         };
     }
@@ -190,13 +194,14 @@ internal sealed class OutsourceFieldLayout
     {
         var fields = await context.OutsourceFields.AsNoTracking().OrderBy(x => x.SortNo).ThenBy(x => x.Id).ToArrayAsync(ct);
         var editors = (await context.OutsourceFieldEditorRoles.AsNoTracking().ToArrayAsync(ct)).ToLookup(x => x.FieldId, x => x.RoleId);
+        var editorUsers = (await context.OutsourceFieldEditorUsers.AsNoTracking().ToArrayAsync(ct)).ToLookup(x => x.FieldId, x => x.UserId);
         var columns = new List<Column>(fields.Length);
         foreach (var field in fields)
         {
             OutsourceBuiltInField? builtIn = null;
             // A built-in row whose key this version does not know is skipped rather than shown without a value.
             if (field.BuiltIn && !OutsourceBuiltInFields.ByKey.TryGetValue(field.FieldKey, out builtIn)) continue;
-            columns.Add(new(field, builtIn, editors[field.Id].ToHashSet(), Options(field.Options)));
+            columns.Add(new(field, builtIn, editors[field.Id].ToHashSet(), editorUsers[field.Id].ToHashSet(), Options(field.Options)));
         }
         // Defensive: a built-in column always exists, even when its row is missing (it is then shown and internal).
         foreach (var missing in OutsourceBuiltInFields.All.Where(x => columns.All(column => column.Key != x.Key)))
@@ -205,7 +210,7 @@ internal sealed class OutsourceFieldLayout
             {
                 FieldKey = missing.Key, BuiltIn = true, Label = OutsourceHistory.Label(missing.Key), DataType = OutsourceFieldTypes.Text,
                 Status = AccountStatuses.Active, VendorVisible = true, EditorScope = OutsourceEditorScopes.All, SortNo = int.MaxValue,
-            }, missing, new HashSet<ulong>(), []));
+            }, missing, new HashSet<ulong>(), new HashSet<ulong>(), []));
         }
         return new(columns);
     }
@@ -219,14 +224,14 @@ internal sealed class OutsourceFieldLayout
 }
 
 /// <summary>The roles of an internal editor, resolved once per write for the per-field checks.</summary>
-internal sealed record OutsourceEditor(IReadOnlySet<ulong> RoleIds, bool IsSystemAdmin)
+internal sealed record OutsourceEditor(ulong UserId, IReadOnlySet<ulong> RoleIds, bool IsSystemAdmin)
 {
     internal static async Task<OutsourceEditor> LoadAsync(YfDbContext context, ulong userId, CancellationToken ct)
     {
         var roles = await context.UserRoles.AsNoTracking().Where(x => x.UserId == userId)
             .Join(context.Roles.Where(x => x.Status == AccountStatuses.Active), x => x.RoleId, x => x.Id, (_, role) => role)
             .Select(x => new { x.Id, x.IsBuiltIn, x.Name }).ToArrayAsync(ct);
-        return new(roles.Select(x => x.Id).ToHashSet(),
+        return new(userId, roles.Select(x => x.Id).ToHashSet(),
             roles.Any(x => x.IsBuiltIn && x.Name == BuiltInRoleNames.SystemAdministrator));
     }
 }
@@ -241,17 +246,22 @@ public sealed record OutsourceFieldLayoutResponse(OutsourceFieldColumnResponse[]
 public sealed record OutsourceFieldSettingResponse(
     ulong Id, string Key, bool BuiltIn, string Label, string DataType, string[] Options, string Category, int SortNo, string Status,
     bool Pinned, bool VendorVisible, bool VendorVisibleLocked, bool VendorEditable, bool VendorEditableAllowed,
-    string EditorScope, bool EditorScopeAllowed, ulong[] EditorRoleIds, bool InUse, DateTime UpdatedAt);
+    string EditorScope, bool EditorScopeAllowed, ulong[] EditorRoleIds, bool InUse, DateTime UpdatedAt, ulong[]? EditorUserIds = null);
 
 public sealed record OutsourceFieldRoleOption(ulong Id, string Name);
 
-public sealed record OutsourceFieldSettingsResponse(OutsourceFieldSettingResponse[] Fields, OutsourceFieldRoleOption[] Roles);
+/// <summary>An account that may be named as an editor: active, internal and able to edit the list (or a system administrator).</summary>
+public sealed record OutsourceFieldUserOption(ulong Id, string EmployeeNo, string RealName);
+
+public sealed record OutsourceFieldSettingsResponse(OutsourceFieldSettingResponse[] Fields, OutsourceFieldRoleOption[] Roles,
+    OutsourceFieldUserOption[]? Users = null);
 
 public sealed record OutsourceFieldCreate(string? Label, string? DataType, string[]? Options);
 
 /// <summary>Each member left null is not changed. Label, type and options apply to custom fields only.</summary>
 public sealed record OutsourceFieldUpdate(
-    string? Label, string? DataType, string[]? Options, bool? VendorVisible, bool? VendorEditable, string? EditorScope, ulong[]? EditorRoleIds);
+    string? Label, string? DataType, string[]? Options, bool? VendorVisible, bool? VendorEditable, string? EditorScope, ulong[]? EditorRoleIds,
+    ulong[]? EditorUserIds = null);
 
 /// <summary>Every field that is not pinned to the left, in the new order.</summary>
 public sealed record OutsourceFieldOrderRequest(ulong[]? FieldIds);
@@ -362,7 +372,7 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
         // Vendors filling columns in is reserved (外协清单契约 → 栏位设定): the column and the rules are kept, the switch is not offered yet.
         if (request.VendorEditable == true) throw ApiException.BadRequest("厂商填写栏位尚未开放");
         if (request.VendorEditable == false) field.VendorEditable = false;
-        if (request.EditorScope is not null || request.EditorRoleIds is not null)
+        if (request.EditorScope is not null || request.EditorRoleIds is not null || request.EditorUserIds is not null)
         {
             if (!OutsourceFieldCategories.InternalEditable(category)) throw ApiException.BadRequest($"「{field.Label}」不能由人工填写");
             var scope = request.EditorScope ?? field.EditorScope;
@@ -376,9 +386,20 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
                 if (known != roleIds.Length) throw ApiException.BadRequest("所选角色不存在或已停用，请刷新后重新选择");
             }
             else roleIds = [];
+            var userIds = (request.EditorUserIds ?? (await context.OutsourceFieldEditorUsers.Where(x => x.FieldId == field.Id)
+                .Select(x => x.UserId).ToArrayAsync(ct))).Distinct().ToArray();
+            if (scope == OutsourceEditorScopes.Users)
+            {
+                if (userIds.Length == 0) throw ApiException.BadRequest("请至少选择一位可填写的人员");
+                var eligible = await EligibleUserIdsAsync(context, ct);
+                if (!userIds.All(eligible.Contains)) throw ApiException.BadRequest("所选人员已停用或没有外协编辑权限，请刷新后重新选择");
+            }
+            else userIds = [];
             field.EditorScope = scope;
             await context.OutsourceFieldEditorRoles.Where(x => x.FieldId == field.Id).ExecuteDeleteAsync(ct);
             context.OutsourceFieldEditorRoles.AddRange(roleIds.Select(roleId => new OutsourceFieldEditorRole { FieldId = field.Id, RoleId = roleId }));
+            await context.OutsourceFieldEditorUsers.Where(x => x.FieldId == field.Id).ExecuteDeleteAsync(ct);
+            context.OutsourceFieldEditorUsers.AddRange(userIds.Select(userId => new OutsourceFieldEditorUser { FieldId = field.Id, UserId = userId }));
         }
         field.UpdatedBy = actor.Id;
         await context.SaveChangesAsync(ct);
@@ -461,12 +482,36 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
         var inUse = (await context.OutsourceItemValues.AsNoTracking().Select(x => x.FieldId).Distinct().ToArrayAsync(ct)).ToHashSet();
         var roles = await context.Roles.AsNoTracking().Where(x => x.Status == AccountStatuses.Active)
             .OrderBy(x => x.Id).Select(x => new OutsourceFieldRoleOption(x.Id, x.Name)).ToArrayAsync(ct);
+        var eligible = await EligibleUserIdsAsync(context, ct);
+        var users = await context.Users.AsNoTracking().Where(x => eligible.Contains(x.Id))
+            .OrderBy(x => x.RealName).ThenBy(x => x.Id)
+            .Select(x => new OutsourceFieldUserOption(x.Id, x.EmployeeNo, x.RealName)).ToArrayAsync(ct);
         return new(layout.Everything.Where(x => x.Field.Id != 0).Select(column => new OutsourceFieldSettingResponse(
             column.Field.Id, column.Key, column.Field.BuiltIn, column.Label, column.Field.DataType, column.Options, column.Category,
             column.Field.SortNo, column.Field.Status, column.Pinned, column.VendorVisible, column.BuiltIn?.AlwaysVendorVisible == true,
             column.VendorEditable, OutsourceFieldCategories.VendorEditable(column.Category), column.EditorScope,
             OutsourceFieldCategories.InternalEditable(column.Category), column.EditorRoles.Order().ToArray(),
-            inUse.Contains(column.Field.Id), DateTime.SpecifyKind(column.Field.UpdatedAt, DateTimeKind.Utc))).ToArray(), roles);
+            inUse.Contains(column.Field.Id), DateTime.SpecifyKind(column.Field.UpdatedAt, DateTimeKind.Utc),
+            column.EditorUsers.Order().ToArray())).ToArray(), roles, users);
+    }
+
+    /// <summary>
+    /// Accounts that can be named as editors: active internal accounts that hold outsource:manage through an active role,
+    /// or are system administrators. Anyone else could not open the edit dialog anyway.
+    /// </summary>
+    private static async Task<HashSet<ulong>> EligibleUserIdsAsync(YfDbContext context, CancellationToken ct)
+    {
+        var ids = await (
+            from user in context.Users
+            where user.Status == AccountStatuses.Active && user.UserType == UserTypes.Internal
+            join userRole in context.UserRoles on user.Id equals userRole.UserId
+            join role in context.Roles on userRole.RoleId equals role.Id
+            where role.Status == AccountStatuses.Active
+                && ((role.IsBuiltIn && role.Name == BuiltInRoleNames.SystemAdministrator)
+                    || context.RolePermissions.Any(grant => grant.RoleId == role.Id
+                        && context.Permissions.Any(permission => permission.Id == grant.PermissionId && permission.Code == OutsourcePermissions.Manage)))
+            select user.Id).Distinct().ToArrayAsync(ct);
+        return ids.ToHashSet();
     }
 
     private sealed record Described(string Field, string Label, string? Before);
@@ -476,11 +521,14 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
     {
         var roleIds = await context.OutsourceFieldEditorRoles.Where(x => x.FieldId == field.Id).Select(x => x.RoleId).ToArrayAsync(ct);
         var roleNames = await context.Roles.Where(x => roleIds.Contains(x.Id)).OrderBy(x => x.Id).Select(x => x.Name).ToArrayAsync(ct);
+        var userIds = await context.OutsourceFieldEditorUsers.Where(x => x.FieldId == field.Id).Select(x => x.UserId).ToArrayAsync(ct);
+        var userNames = await context.Users.Where(x => userIds.Contains(x.Id)).OrderBy(x => x.Id).Select(x => x.RealName).ToArrayAsync(ct);
         static string YesNo(bool value) => value ? "是" : "否";
         var scope = field.EditorScope switch
         {
             OutsourceEditorScopes.All => "所有有编辑权限的人员",
             OutsourceEditorScopes.Roles => "指定角色：" + string.Join("、", roleNames),
+            OutsourceEditorScopes.Users => "指定人员：" + string.Join("、", userNames),
             _ => "内部不填写",
         };
         return

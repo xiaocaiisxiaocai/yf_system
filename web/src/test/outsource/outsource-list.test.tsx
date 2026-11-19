@@ -265,7 +265,7 @@ describe('外协清单页面', () => {
 
   it('同时勾选未完成与已完成记录时，两类批量操作分别按各自集合生效，批量修改按类型过滤厂商', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:view', 'outsource:manage'])
+    setSession(['outsource:view', 'outsource:manage', 'outsource:send'])
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [items[0], { ...items[1], closed: true }], total: 2, page: 1, pageSize: 20 }
           : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
@@ -329,5 +329,25 @@ describe('外协清单页面', () => {
       vendorId: 1, typeId: 5, status: 'PAUSED', bomOn: '', drawingReleasedOn: '', remark: '内部备注',
       values: { hasRobotV: 'false' }, expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
+  })
+
+  it('编辑与发送是两个权限：只能编辑的看不到发送邮件，只能发送的可以勾选发送但不能编辑', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:view', 'outsource:manage'])
+    mockApi()
+    const { unmount } = render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    const row = (await screen.findByText('21089901')).closest('tr')!
+    await user.click(within(row).getByRole('checkbox'))
+    expect(await screen.findByRole('button', { name: /批量修改/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /发送邮件/ })).not.toBeInTheDocument()
+    unmount()
+
+    setSession(['outsource:view', 'outsource:send'])
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    const sendRow = (await screen.findByText('21089901')).closest('tr')!
+    expect(screen.queryByRole('button', { name: /编辑工令/ })).not.toBeInTheDocument()
+    await user.click(within(sendRow).getByRole('checkbox'))
+    expect(await screen.findByRole('button', { name: '发送邮件 (1)' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /批量修改/ })).not.toBeInTheDocument()
   })
 })

@@ -16,12 +16,10 @@ type Field = Settings['fields'][number]
 const FIELD_TYPE_LABEL: Record<string, string> = {
   TEXT: '文字', BOOLEAN: '是/否', DATE: '日期', NUMBER: '数字', SELECT: '下拉选项',
 }
-const CATEGORY_LABEL: Record<string, string> = {
-  FIXED: '固定', IPMS: 'IPMS', PROCESS: '流程', MANUAL: '人工', CUSTOM: '自定义',
-}
 const SCOPE_OPTIONS = [
   { label: '所有有编辑权限的人员', value: 'ALL' },
   { label: '指定角色', value: 'ROLES' },
+  { label: '指定人员', value: 'USERS' },
   { label: '内部不填写', value: 'NONE' },
 ]
 
@@ -69,6 +67,7 @@ export default function OutsourceFieldsTab() {
   }
 
   const roleName = new Map((data?.roles ?? []).map((role) => [role.id, role.name]))
+  const userName = new Map((data?.users ?? []).map((user) => [user.id, user.realName]))
   const movable = (data?.fields ?? []).filter((item) => !item.pinned)
   const columns: TableColumnProps<Field>[] = [
     {
@@ -83,7 +82,6 @@ export default function OutsourceFieldsTab() {
       render: (_, field) => field.dataType === 'SELECT' && field.options.length
         ? `${FIELD_TYPE_LABEL.SELECT}：${field.options.join('、')}` : FIELD_TYPE_LABEL[field.dataType] ?? field.dataType,
     },
-    { title: '类别', width: 90, align: 'center', render: (_, field) => CATEGORY_LABEL[field.category] ?? field.category },
     {
       title: '厂商可见', width: 100, align: 'center',
       render: (_, field) => <Switch size="small" aria-label={`${field.label} 厂商可见`} checked={field.vendorVisible}
@@ -93,6 +91,7 @@ export default function OutsourceFieldsTab() {
       title: '内部填写', width: 260, ellipsis: true,
       render: (_, field) => !field.editorScopeAllowed ? <span className="outsource-muted">—</span>
         : field.editorScope === 'ROLES' ? `指定角色：${field.editorRoleIds.map((id) => roleName.get(id) ?? id).join('、')}`
+          : field.editorScope === 'USERS' ? `指定人员：${(field.editorUserIds ?? []).map((id) => userName.get(id) ?? id).join('、')}`
           : SCOPE_OPTIONS.find((option) => option.value === field.editorScope)?.label,
     },
     { title: '状态', width: 80, align: 'center', render: (_, field) => <StatusTag status={field.status} /> },
@@ -122,8 +121,8 @@ export default function OutsourceFieldsTab() {
     </div>
     <ResizableTable<Field> tableId="outsource-fields" className="page-table" rowKey="id" loading={loading} data={data?.fields ?? []}
       pagination={false} noDataElement={loading ? <span /> : <Empty description="暂无栏位" />}
-      scroll={{ x: 1170, y: 'var(--page-table-scroll-y)' }} columns={columns} />
-    <FieldDialog field={editing} visible={creating || editing !== null} roles={data?.roles ?? []}
+      scroll={{ x: 1080, y: 'var(--page-table-scroll-y)' }} columns={columns} />
+    <FieldDialog field={editing} visible={creating || editing !== null} roles={data?.roles ?? []} users={data?.users ?? []}
       onClose={() => { setCreating(false); setEditing(null) }}
       onSave={async (body) => {
         const ok = editing
@@ -134,8 +133,8 @@ export default function OutsourceFieldsTab() {
   </>
 }
 
-function FieldDialog({ field, visible, roles, saving, onClose, onSave }: {
-  field: Field | null; visible: boolean; roles: Settings['roles']; saving: boolean
+function FieldDialog({ field, visible, roles, users, saving, onClose, onSave }: {
+  field: Field | null; visible: boolean; roles: Settings['roles']; users: NonNullable<Settings['users']>; saving: boolean
   onClose: () => void; onSave: (body: Record<string, unknown>) => Promise<void>
 }) {
   const [form] = Form.useForm()
@@ -147,7 +146,10 @@ function FieldDialog({ field, visible, roles, saving, onClose, onSave }: {
     if (!visible) return
     form.resetFields()
     form.setFieldsValue(field
-      ? { label: field.label, dataType: field.dataType, options: field.options, editorScope: field.editorScope, editorRoleIds: field.editorRoleIds }
+      ? {
+          label: field.label, dataType: field.dataType, options: field.options, editorScope: field.editorScope,
+          editorRoleIds: field.editorRoleIds, editorUserIds: field.editorUserIds ?? [],
+        }
       : { label: '', dataType: 'TEXT', options: [] })
   }, [visible, field, form])
   const save = async () => {
@@ -162,6 +164,7 @@ function FieldDialog({ field, visible, roles, saving, onClose, onSave }: {
     if (field && scopeAllowed) {
       body.editorScope = values.editorScope
       body.editorRoleIds = values.editorScope === 'ROLES' ? values.editorRoleIds : []
+      body.editorUserIds = values.editorScope === 'USERS' ? values.editorUserIds : []
     }
     await onSave(body)
   }
@@ -188,6 +191,13 @@ function FieldDialog({ field, visible, roles, saving, onClose, onSave }: {
         {scope === 'ROLES' && <Form.Item field="editorRoleIds" label="可填写的角色"
           rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一个角色' }]}>
           <Select aria-label="可填写的角色" mode="multiple" showSearch options={roles.map((role) => ({ label: role.name, value: role.id }))} />
+        </Form.Item>}
+        {scope === 'USERS' && <Form.Item field="editorUserIds" label="可填写的人员"
+          rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一位人员' }]}>
+          <Select aria-label="可填写的人员" mode="multiple" showSearch
+            filterOption={(input, option) => String((option as { props?: { children?: unknown } })?.props?.children ?? '').toLowerCase().includes(input.trim().toLowerCase())}>
+            {users.map((user) => <Select.Option key={user.id} value={user.id}>{`${user.realName}（${user.employeeNo}）`}</Select.Option>)}
+          </Select>
         </Form.Item>}
       </>}
       <EnterSubmit />

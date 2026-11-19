@@ -3,6 +3,7 @@ export const OUTSOURCE_PERMISSIONS = {
   view: 'outsource:view',
   import: 'outsource:import',
   manage: 'outsource:manage',
+  send: 'outsource:send',
   settings: 'outsource:settings',
   fieldSettings: 'outsource:field_settings',
 } as const

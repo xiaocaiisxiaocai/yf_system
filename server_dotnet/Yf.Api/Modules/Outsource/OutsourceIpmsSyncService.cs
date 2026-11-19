@@ -309,7 +309,7 @@ public sealed class OutsourceIpmsSyncService(
         actor = await AccessService.ReadActorAsync(connection, null, actor, ct);
         AccessService.RequireInternal(actor);
         var codes = await AccessService.PermissionCodesAsync(connection, null, actor.Id, ct);
-        if (!codes.Any(code => code is OutsourcePermissions.View or OutsourcePermissions.Settings or OutsourcePermissions.Manage))
+        if (!codes.Any(code => code is OutsourcePermissions.View or OutsourcePermissions.Settings or OutsourcePermissions.Manage or OutsourcePermissions.Send))
             throw ApiException.Forbidden();
     }
 }

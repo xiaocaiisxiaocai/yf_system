@@ -14569,6 +14569,7 @@
           "editorRoleIds",
           "editorScope",
           "editorScopeAllowed",
+          "editorUserIds",
           "id",
           "inUse",
           "key",
@@ -14651,6 +14652,14 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "editorUserIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -14658,7 +14667,8 @@
       "OutsourceFieldSettingsResponse": {
         "required": [
           "fields",
-          "roles"
+          "roles",
+          "users"
         ],
         "type": "object",
         "properties": {
@@ -14673,6 +14683,13 @@
             "items": {
               "$ref": "#/components/schemas/OutsourceFieldRoleOption"
             }
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceFieldUserOption"
+            },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -14682,6 +14699,7 @@
           "dataType",
           "editorRoleIds",
           "editorScope",
+          "editorUserIds",
           "label",
           "options",
           "vendorEditable",
@@ -14723,6 +14741,35 @@
               "format": "int64"
             },
             "nullable": true
+          },
+          "editorUserIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldUserOption": {
+        "required": [
+          "employeeNo",
+          "id",
+          "realName"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "realName": {
+            "type": "string"
           }
         },
         "additionalProperties": false

@@ -13,7 +13,10 @@ internal static class OutsourcePermissions
 {
     internal const string View = "outsource:view";
     internal const string Import = "outsource:import";
+    /// <summary>Edits, batch edits, completion, deletion and the manual IPMS sync (not mailing vendors).</summary>
     internal const string Manage = "outsource:manage";
+    /// <summary>Previews and sends vendor mails and queues failed ones again (2026-11-19, split from Manage).</summary>
+    internal const string Send = "outsource:send";
     internal const string Settings = "outsource:settings";
     /// <summary>The field settings page: which columns exist, who fills each in and what vendors see.</summary>
     internal const string FieldSettings = "outsource:field_settings";
@@ -433,7 +436,7 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         AccessService.RequireInternal(actor);
         var codes = await AccessService.PermissionCodesAsync(connection, null, actor.Id, ct);
         if (!codes.Any(code => code is OutsourcePermissions.View or OutsourcePermissions.Settings
-                or OutsourcePermissions.Manage or OutsourcePermissions.Import))
+                or OutsourcePermissions.Manage or OutsourcePermissions.Send or OutsourcePermissions.Import))
             throw ApiException.Forbidden();
     }
 

@@ -49,14 +49,18 @@ public sealed class OutsourceMailTests
         await database.ExecuteAsync("""
             INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
               (90,'外协采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
-              (91,'外协查看',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+              (91,'外协查看',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (92,'外协编辑',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
             INSERT INTO role_permissions(role_id,permission_id) SELECT 90,id FROM permissions WHERE code LIKE 'outsource%';
             INSERT INTO role_permissions(role_id,permission_id) SELECT 91,id FROM permissions WHERE code IN ('outsource','outsource:view');
+            -- Editing without the send permission (2026-11-19: editing and mailing vendors are separate).
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 92,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9911,'om_buyer','unused','采购','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9912,'om_viewer','unused','主管','viewer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9913,'om_planner','unused','生管','planner@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO user_roles(user_id,role_id) VALUES(9911,90),(9912,91),(9913,91);
+              (9913,'om_planner','unused','生管','planner@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9914,'om_editor','unused','编辑','editor@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9911,90),(9912,91),(9913,91),(9914,92);
             """, ct);
         var buyer = new CurrentUser(9911, "om_buyer", "INTERNAL", null);
         var viewer = new CurrentUser(9912, "om_viewer", "INTERNAL", null);
@@ -89,6 +93,8 @@ public sealed class OutsourceMailTests
 
         // Preview: one mail per vendor, vendor recipients and the default copy list decided by the server.
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => mails.PreviewAsync(viewer, new(all), ct))).Status);
+        var editor = new CurrentUser(9914, "om_editor", "INTERNAL", null);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => mails.PreviewAsync(editor, new(all), ct))).Status);
         var preview = await mails.PreviewAsync(buyer, new(all), ct);
         Assert.Equal(["NOTICE:" + dingya.Id, "NOTICE:" + duopu.Id], preview.Mails.Select(x => x.Key));
         var toDingya = preview.Mails[0];

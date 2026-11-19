@@ -1183,11 +1183,13 @@ export interface OutsourceFieldSettingResponse {
   editorRoleIds: Array<number>
   inUse: boolean
   updatedAt: string
+  editorUserIds: Array<number> | null
 }
 
 export interface OutsourceFieldSettingsResponse {
   fields: Array<OutsourceFieldSettingResponse>
   roles: Array<OutsourceFieldRoleOption>
+  users: Array<OutsourceFieldUserOption> | null
 }
 
 export interface OutsourceFieldUpdate {
@@ -1198,6 +1200,13 @@ export interface OutsourceFieldUpdate {
   vendorEditable?: boolean | null
   editorScope?: string | null
   editorRoleIds?: Array<number> | null
+  editorUserIds?: Array<number> | null
+}
+
+export interface OutsourceFieldUserOption {
+  id: number
+  employeeNo: string
+  realName: string
 }
 
 export interface OutsourceImportPreviewResponse {

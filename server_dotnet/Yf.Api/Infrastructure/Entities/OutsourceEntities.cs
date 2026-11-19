@@ -105,7 +105,10 @@ public sealed class OutsourceField
     public int SortNo { get; set; }
     /// <summary>ACTIVE / DISABLED; only custom fields can be disabled (their values are kept).</summary>
     public string Status { get; set; } = null!;
-    /// <summary>Who fills it in internally: ALL (everyone with outsource:manage), ROLES (only <see cref="OutsourceFieldEditorRole"/>), NONE.</summary>
+    /// <summary>
+    /// Who fills it in internally: ALL (everyone with outsource:manage), ROLES (<see cref="OutsourceFieldEditorRole"/>),
+    /// USERS (<see cref="OutsourceFieldEditorUser"/>), NONE.
+    /// </summary>
     public string EditorScope { get; set; } = null!;
     public bool VendorVisible { get; set; }
     public bool VendorEditable { get; set; }
@@ -119,6 +122,13 @@ public sealed class OutsourceFieldEditorRole
 {
     public ulong FieldId { get; set; }
     public ulong RoleId { get; set; }
+}
+
+/// <summary>With editor scope USERS: an internal account that may fill in the field (system administrators always may).</summary>
+public sealed class OutsourceFieldEditorUser
+{
+    public ulong FieldId { get; set; }
+    public ulong UserId { get; set; }
 }
 
 /// <summary>The value of a custom field on one item; no row means empty.</summary>
@@ -540,5 +550,23 @@ public sealed class OutsourceItemValueConfig : IEntityTypeConfiguration<Outsourc
             .HasConstraintName("fk_outsource_item_values_item").OnDelete(DeleteBehavior.Cascade);
         b.HasOne<OutsourceField>().WithMany().HasForeignKey(x => x.FieldId)
             .HasConstraintName("fk_outsource_item_values_field").OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class OutsourceFieldEditorUserConfig : IEntityTypeConfiguration<OutsourceFieldEditorUser>
+{
+    public void Configure(EntityTypeBuilder<OutsourceFieldEditorUser> b)
+    {
+        b.ToTable("outsource_field_editor_users");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.FieldId, x.UserId });
+        b.Property(x => x.FieldId).HasColumnName("field_id");
+        b.Property(x => x.UserId).HasColumnName("user_id");
+        b.HasIndex(x => x.UserId).HasDatabaseName("idx_outsource_field_editor_users_user");
+        b.HasOne<OutsourceField>().WithMany().HasForeignKey(x => x.FieldId)
+            .HasConstraintName("fk_outsource_field_editor_users_field").OnDelete(DeleteBehavior.Cascade);
+        // Deleting an account removes it from every field's editors.
+        b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId)
+            .HasConstraintName("fk_outsource_field_editor_users_user").OnDelete(DeleteBehavior.Cascade);
     }
 }

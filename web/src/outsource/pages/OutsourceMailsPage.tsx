@@ -40,7 +40,7 @@ function Recipients({ list, kind }: { list: Recipient[]; kind: 'TO' | 'CC' }) {
 
 /** Every vendor mail with its delivery state; failed mails can be sent again with the same content. */
 export default function OutsourceMailsPage() {
-  const canManage = useAuth((state) => state.permissions.includes(OUTSOURCE_PERMISSIONS.manage))
+  const canSend = useAuth((state) => state.permissions.includes(OUTSOURCE_PERMISSIONS.send))
   const [mails, setMails] = useState<Mail[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -138,7 +138,7 @@ export default function OutsourceMailsPage() {
         <Button key="detail" type="text" size="mini" onClick={() => setViewing(mail)}>详情</Button>,
         <Button key="attachment" type="text" size="mini" loading={busy === mail.id} disabled={!mail.attachmentName}
           onClick={() => void download(mail)}>附件</Button>,
-        canManage && <Button key="retry" type="text" size="mini" disabled={mail.status !== 'FAILED' || busy === mail.id}
+        canSend && <Button key="retry" type="text" size="mini" disabled={mail.status !== 'FAILED' || busy === mail.id}
           onClick={() => void retry(mail)}>重新发送</Button>,
       ], 'outsource-mail'),
     },

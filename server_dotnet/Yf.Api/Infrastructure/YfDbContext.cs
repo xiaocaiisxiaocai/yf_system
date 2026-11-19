@@ -85,6 +85,7 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OutsourceItemChange> OutsourceItemChanges => Set<OutsourceItemChange>();
     public DbSet<OutsourceField> OutsourceFields => Set<OutsourceField>();
     public DbSet<OutsourceFieldEditorRole> OutsourceFieldEditorRoles => Set<OutsourceFieldEditorRole>();
+    public DbSet<OutsourceFieldEditorUser> OutsourceFieldEditorUsers => Set<OutsourceFieldEditorUser>();
     public DbSet<OutsourceItemValue> OutsourceItemValues => Set<OutsourceItemValue>();
     public DbSet<MesWorkOrder> MesWorkOrders => Set<MesWorkOrder>();
     public DbSet<MesWorkOrderStaging> MesWorkOrdersStaging => Set<MesWorkOrderStaging>();
