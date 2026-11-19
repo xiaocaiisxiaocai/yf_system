@@ -271,6 +271,35 @@
         }
       }
     },
+    "/api/v1/outsource/fields": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceFieldLayoutResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/sync-status": {
       "get": {
         "tags": [
@@ -8663,6 +8692,211 @@
         }
       }
     },
+    "/api/v1/outsource/settings/fields": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceFieldSettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceFieldCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceFieldSettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/settings/fields/order": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceFieldOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceFieldSettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/settings/fields/{id}": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceFieldUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceFieldSettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/settings/fields/{id}/status": {
+      "put": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceFieldSettingsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/settings/sync-time": {
       "put": {
         "tags": [
@@ -13950,6 +14184,7 @@
           "remark",
           "status",
           "typeId",
+          "values",
           "vendorId"
         ],
         "type": "object",
@@ -13993,6 +14228,14 @@
           },
           "drawingReleasedOn": {
             "type": "string",
+            "nullable": true
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            },
             "nullable": true
           }
         },
@@ -14196,6 +14439,294 @@
         },
         "additionalProperties": false
       },
+      "OutsourceFieldColumnResponse": {
+        "required": [
+          "canEdit",
+          "category",
+          "dataType",
+          "key",
+          "label",
+          "options",
+          "pinned",
+          "vendorEditable",
+          "vendorVisible"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "dataType": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "category": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "vendorVisible": {
+            "type": "boolean"
+          },
+          "vendorEditable": {
+            "type": "boolean"
+          },
+          "canEdit": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldCreate": {
+        "required": [
+          "dataType",
+          "label",
+          "options"
+        ],
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "dataType": {
+            "type": "string",
+            "nullable": true
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldLayoutResponse": {
+        "required": [
+          "fields"
+        ],
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceFieldColumnResponse"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldOrderRequest": {
+        "required": [
+          "fieldIds"
+        ],
+        "type": "object",
+        "properties": {
+          "fieldIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldRoleOption": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldSettingResponse": {
+        "required": [
+          "builtIn",
+          "category",
+          "dataType",
+          "editorRoleIds",
+          "editorScope",
+          "editorScopeAllowed",
+          "id",
+          "inUse",
+          "key",
+          "label",
+          "options",
+          "pinned",
+          "sortNo",
+          "status",
+          "updatedAt",
+          "vendorEditable",
+          "vendorEditableAllowed",
+          "vendorVisible",
+          "vendorVisibleLocked"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          },
+          "builtIn": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "dataType": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "category": {
+            "type": "string"
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "vendorVisible": {
+            "type": "boolean"
+          },
+          "vendorVisibleLocked": {
+            "type": "boolean"
+          },
+          "vendorEditable": {
+            "type": "boolean"
+          },
+          "vendorEditableAllowed": {
+            "type": "boolean"
+          },
+          "editorScope": {
+            "type": "string"
+          },
+          "editorScopeAllowed": {
+            "type": "boolean"
+          },
+          "editorRoleIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "inUse": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldSettingsResponse": {
+        "required": [
+          "fields",
+          "roles"
+        ],
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceFieldSettingResponse"
+            }
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceFieldRoleOption"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceFieldUpdate": {
+        "required": [
+          "dataType",
+          "editorRoleIds",
+          "editorScope",
+          "label",
+          "options",
+          "vendorEditable",
+          "vendorVisible"
+        ],
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "dataType": {
+            "type": "string",
+            "nullable": true
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "vendorVisible": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "vendorEditable": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "editorScope": {
+            "type": "string",
+            "nullable": true
+          },
+          "editorRoleIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "OutsourceImportPreviewResponse": {
         "required": [
           "invalid",
@@ -14347,6 +14878,7 @@
           "label",
           "newValue",
           "oldValue",
+          "signerName",
           "source"
         ],
         "type": "object",
@@ -14379,6 +14911,10 @@
           "changedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "signerName": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -14388,6 +14924,7 @@
           "bomOn",
           "changedFields",
           "closed",
+          "customValues",
           "customer",
           "customerFullName",
           "drawingReleasedOn",
@@ -14559,6 +15096,14 @@
           "customerFullName": {
             "type": "string",
             "nullable": true
+          },
+          "customValues": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            },
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -14573,6 +15118,7 @@
           "remark",
           "status",
           "typeId",
+          "values",
           "vendorId"
         ],
         "type": "object",
@@ -14614,6 +15160,14 @@
           },
           "drawingReleasedOn": {
             "type": "string",
+            "nullable": true
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            },
             "nullable": true
           }
         },

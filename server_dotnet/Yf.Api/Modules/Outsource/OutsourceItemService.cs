@@ -280,7 +280,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var responses = await reference.JsonMarkedAsync(context, rows, ct);
         var changed = responses.Where(x => x.ChangedFields is { Length: > 0 })
             .ToDictionary(x => x.Id, x => (IReadOnlySet<string>)x.ChangedFields!.ToHashSet(StringComparer.Ordinal));
-        var content = OutsourceWorkbook.Build(responses, changed);
+        var content = OutsourceWorkbook.Build(responses, changed, reference.Layout.WorkbookFields(vendor: false));
         var vendorPart = query.VendorId is { } vendorId && reference.VendorNames.TryGetValue(vendorId, out var name) ? "_" + name : "";
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         return new(content, $"外协清单{vendorPart}_{today}.xlsx");
@@ -322,13 +322,15 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await AuthorizeReadAsync(context, actor, OutsourcePermissions.View, ct);
         if (!await context.OutsourceItems.AnyAsync(x => x.Id == id, ct)) throw ApiException.NotFound("外协记录不存在或已被删除");
+        var layout = await OutsourceFieldLayout.LoadAsync(context, ct);
         var rows = await context.OutsourceItemChanges.AsNoTracking().Where(x => x.ItemId == id)
             .OrderByDescending(x => x.Id)
             .GroupJoin(context.Users, change => change.ActorUserId, user => (ulong?)user.Id, (change, users) => new { change, users })
             .SelectMany(x => x.users.DefaultIfEmpty(), (x, user) => new { x.change, Name = user == null ? null : user.RealName })
             .ToArrayAsync(ct);
-        return rows.Select(x => new OutsourceItemChangeResponse(x.change.Id, x.change.Field, OutsourceHistory.Label(x.change.Field),
-            x.change.OldValue, x.change.NewValue, x.change.Source, x.Name, DateTime.SpecifyKind(x.change.ChangedAt, DateTimeKind.Utc))).ToArray();
+        return rows.Select(x => new OutsourceItemChangeResponse(x.change.Id, x.change.Field, layout.Label(x.change.Field == "typeCode" ? "type" : x.change.Field),
+            x.change.OldValue, x.change.NewValue, x.change.Source, x.Name, DateTime.SpecifyKind(x.change.ChangedAt, DateTimeKind.Utc),
+            x.change.SignerName)).ToArray();
     }
 
     // ---- edits and deletion ----
@@ -337,7 +339,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     {
         if (request.ExpectedUpdatedAt is not { } expected) throw ApiException.BadRequest("expectedUpdatedAt 必须为当前记录的 updatedAt");
         var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: true)
-            with { BomOn = ParseManualDate(request.BomOn, "BOM时间"), DrawingReleasedOn = ParseManualDate(request.DrawingReleasedOn, "发图") };
+            with { BomOn = ParseManualDate(request.BomOn, "BOM时间"), DrawingReleasedOn = ParseManualDate(request.DrawingReleasedOn, "发图"), Custom = request.Values };
         var result = await ApplyAsync(actor, [new OutsourceItemVersion(id, expected)], change, ct);
         return result.Items.Single();
     }
@@ -346,9 +348,9 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     {
         var items = ValidateBatch(request.Items);
         var change = ParseChange(request.OutsourceDate, request.VendorId, request.TypeId, request.Remark, request.Status, request.LatestDueDate, requireAll: false)
-            with { BomOn = ParseManualDate(request.BomOn, "BOM时间"), DrawingReleasedOn = ParseManualDate(request.DrawingReleasedOn, "发图") };
+            with { BomOn = ParseManualDate(request.BomOn, "BOM时间"), DrawingReleasedOn = ParseManualDate(request.DrawingReleasedOn, "发图"), Custom = request.Values };
         if (change.Date is null && change.VendorId is null && change.TypeId is null && change.Remark is null && change.Status is null && change.LatestDue is null
-            && change.BomOn is null && change.DrawingReleasedOn is null)
+            && change.BomOn is null && change.DrawingReleasedOn is null && change.Custom is not { Count: > 0 })
             throw ApiException.BadRequest("请至少选择一项要修改的内容");
         return ApplyAsync(actor, items, change, ct);
     }
@@ -423,6 +425,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         /// <summary>BOM时间 and 发图 are filled in by hand: null keeps the value, <see cref="ManualDate.Value"/> null clears it.</summary>
         public ManualDate? BomOn { get; init; }
         public ManualDate? DrawingReleasedOn { get; init; }
+        /// <summary>Custom field values by key: a key that is absent keeps its value, an empty text clears it.</summary>
+        public IReadOnlyDictionary<string, string?>? Custom { get; init; }
     }
 
     private sealed record ManualDate(DateOnly? Value);
@@ -501,6 +505,11 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             if (match == OutsourceMatchStates.VendorMismatch)
                 throw ApiException.BadRequest($"工令 {item.WorkOrderNo}：{reference.Label(typeCode)} 不可配{reference.VendorNames[vendor]}");
         }
+        var layout = reference.Layout;
+        var editor = await OutsourceEditor.LoadAsync(context, actor.Id, ct);
+        var custom = CustomChanges(layout, change.Custom);
+        await reference.LoadValuesAsync(context, locked.Select(x => x.Id).ToArray(), ct);
+        var vendorKeys = layout.VendorKeys;
         var modifiedAt = await DbClock.UtcNowAsync(context, ct, 3);
         foreach (var before in locked)
         {
@@ -521,13 +530,29 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 new AuditChange("latestDueDate", "最新交期", before.LatestDueDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), latestDue?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
                 new AuditChange("bomOn", "BOM时间", before.BomOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), bomOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
                 new AuditChange("drawingReleasedOn", "发图", before.DrawingReleasedOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), drawingReleasedOn?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)));
+            var current = reference.ValuesOf(before.Id);
+            var customChanges = custom.Where(x => current.GetValueOrDefault(x.Column.Key) != x.Value)
+                .Select(x => new AuditChange(x.Column.Key, x.Column.Label,
+                    OutsourceFieldValues.Display(x.Column.Field.DataType, current.GetValueOrDefault(x.Column.Key)),
+                    OutsourceFieldValues.Display(x.Column.Field.DataType, x.Value))).ToArray();
+            changes = [.. changes, .. customChanges];
             if (changes.Length == 0) continue;
-            var sendStatus = before.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : before.SendStatus;
+            // Each changed column must be one this account may fill in (外协清单契约 → 栏位设定); an unchanged one is never checked.
+            foreach (var key in changes.Select(x => ColumnKey(x.Field)))
+            {
+                if (layout.Find(key) is not { } column || !OutsourceFieldLayout.CanEdit(column, editor))
+                    throw ApiException.Forbidden($"无权修改栏位「{layout.Label(key)}」");
+            }
+            // Only what vendors see needs a new notice; a change to an internal-only column keeps the send status.
+            var noticeNeeded = changes.Any(x => vendorKeys.Contains(ColumnKey(x.Field)));
+            var sendStatus = noticeNeeded && before.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : before.SendStatus;
             await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor).SetProperty(x => x.TypeCode, typeCode)
                 .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status).SetProperty(x => x.LatestDueDate, latestDue)
                 .SetProperty(x => x.BomOn, bomOn).SetProperty(x => x.DrawingReleasedOn, drawingReleasedOn)
                 .SetProperty(x => x.SendStatus, sendStatus).SetProperty(x => x.ModifiedBy, actor.Id).SetProperty(x => x.ModifiedAt, modifiedAt), ct);
+            await OutsourceItemValues.WriteAsync(context, before.Id,
+                custom.Where(x => customChanges.Any(c => c.Field == x.Column.Key)).Select(x => (x.Column.Field.Id, x.Value)), ct);
             OutsourceHistory.Add(context, before.Id, changes, OutsourceHistory.Edit, actor.Id);
             await context.SaveChangesAsync(ct);
             await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
@@ -539,9 +564,27 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         }
         var ids = locked.Select(x => x.Id).ToArray();
         var updated = await context.OutsourceItems.AsNoTracking().Where(x => ids.Contains(x.Id)).ToArrayAsync(ct);
+        reference.ForgetValues(ids);
         await transaction.CommitAsync(ct);
         var order = versions.Select((x, index) => (x.Id, index)).ToDictionary(x => x.Id, x => x.index);
         return new(await reference.JsonMarkedAsync(context, updated.OrderBy(x => order[x.Id]).ToArray(), ct));
+    }
+
+    /// <summary>The column key an audit change belongs to (the type is recorded as <c>typeCode</c>).</summary>
+    internal static string ColumnKey(string field) => field == "typeCode" ? "type" : field;
+
+    private sealed record CustomChange(OutsourceFieldLayout.Column Column, string? Value);
+
+    /// <summary>Validates requested custom values: only active custom columns, each value valid for its type.</summary>
+    private static CustomChange[] CustomChanges(OutsourceFieldLayout layout, IReadOnlyDictionary<string, string?>? values)
+    {
+        if (values is null || values.Count == 0) return [];
+        return values.Select(entry =>
+        {
+            var column = layout.Find(entry.Key);
+            if (column is null || column.BuiltIn is not null || !column.Active) throw ApiException.BadRequest($"栏位「{entry.Key}」不存在或已停用");
+            return new CustomChange(column, OutsourceFieldValues.Normalize(column.Field.DataType, column.Options, column.Label, entry.Value));
+        }).ToArray();
     }
 
     /// <summary>Whether choosing <paramref name="newTypeCode"/> changes the item's type (the same dictionary type spelled differently is not a change).</summary>
@@ -574,7 +617,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
 
     // ---- authorization ----
 
-    private static async Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
+    internal static async Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         await context.Database.OpenConnectionAsync(ct);
@@ -584,7 +627,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         await AccessService.RequirePermissionAsync(connection, null, actor, permission, ct);
     }
 
-    private static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
+    internal static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
         var connection = context.Database.Connection();
@@ -609,12 +652,16 @@ internal sealed class OutsourceReference
     private readonly Dictionary<string, string> customerShortNames;
     /// <summary>The same key → the full name as stored in the table.</summary>
     private readonly Dictionary<string, string> customerFullNames;
+    /// <summary>The configured columns (外协清单契约 → 栏位设定).</summary>
+    public OutsourceFieldLayout Layout { get; }
+    /// <summary>Custom values of the items loaded with <see cref="LoadValuesAsync"/>, by item id and field key.</summary>
+    private readonly Dictionary<ulong, Dictionary<string, string?>> values = [];
 
     private OutsourceReference(Dictionary<string, (ulong, string, string)> types, HashSet<(ulong, ulong)> mapping,
         Dictionary<ulong, string> vendorNames, HashSet<ulong> activeVendorIds,
-        Dictionary<string, (string FullName, string ShortName)> customerShortNames)
+        Dictionary<string, (string FullName, string ShortName)> customerShortNames, OutsourceFieldLayout layout)
     {
-        this.types = types; this.mapping = mapping; VendorNames = vendorNames; ActiveVendorIds = activeVendorIds;
+        this.types = types; this.mapping = mapping; VendorNames = vendorNames; ActiveVendorIds = activeVendorIds; Layout = layout;
         this.customerShortNames = customerShortNames.ToDictionary(x => x.Key, x => x.Value.ShortName, StringComparer.Ordinal);
         customerFullNames = customerShortNames.ToDictionary(x => x.Key, x => x.Value.FullName, StringComparer.Ordinal);
     }
@@ -636,12 +683,45 @@ internal sealed class OutsourceReference
         var mapping = await context.OutsourceTypeVendors.AsNoTracking().Select(x => new { x.TypeId, x.VendorId }).ToArrayAsync(ct);
         var vendors = await context.OemCompanies.AsNoTracking().Select(x => new { x.Id, x.Name, x.Status }).ToArrayAsync(ct);
         var aliases = await context.OutsourceCustomerAliases.AsNoTracking().Select(x => new { x.FullName, x.ShortName }).ToArrayAsync(ct);
+        var layout = await OutsourceFieldLayout.LoadAsync(context, ct);
         return new(types.ToDictionary(x => Normalize(x.Code)!, x => (x.Id, x.Code, x.Name)),
             mapping.Select(x => (x.TypeId, x.VendorId)).ToHashSet(),
             vendors.ToDictionary(x => x.Id, x => x.Name),
             vendors.Where(x => x.Status == AccountStatuses.Active).Select(x => x.Id).ToHashSet(),
             aliases.GroupBy(x => OutsourceSettingsService.CustomerKey(x.FullName))
-                .ToDictionary(x => x.Key, x => (x.First().FullName, x.First().ShortName), StringComparer.Ordinal));
+                .ToDictionary(x => x.Key, x => (x.First().FullName, x.First().ShortName), StringComparer.Ordinal), layout);
+    }
+
+    /// <summary>Loads the custom values of these items (active and disabled fields) so <see cref="Json"/> includes them.</summary>
+    public async Task LoadValuesAsync(YfDbContext context, IReadOnlyCollection<ulong> itemIds, CancellationToken ct)
+    {
+        var missing = itemIds.Where(id => !values.ContainsKey(id)).Distinct().ToArray();
+        if (missing.Length == 0) return;
+        var keys = Layout.Everything.Where(x => x.BuiltIn is null).ToDictionary(x => x.Field.Id, x => x.Key);
+        var rows = await context.OutsourceItemValues.AsNoTracking().Where(x => missing.Contains(x.ItemId)).ToArrayAsync(ct);
+        foreach (var id in missing) values[id] = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            if (keys.TryGetValue(row.FieldId, out var key)) values[row.ItemId][key] = row.Value;
+        }
+    }
+
+    /// <summary>Drops loaded values after a write, so the next <see cref="LoadValuesAsync"/> reads them again.</summary>
+    public void ForgetValues(IEnumerable<ulong> itemIds)
+    {
+        foreach (var id in itemIds) values.Remove(id);
+    }
+
+    /// <summary>The stored custom values of a loaded item by field key.</summary>
+    public IReadOnlyDictionary<string, string?> ValuesOf(ulong itemId) =>
+        values.TryGetValue(itemId, out var found) ? found : new Dictionary<string, string?>(StringComparer.Ordinal);
+
+    /// <summary>The active custom values the list shows, by field key.</summary>
+    private Dictionary<string, string?> ActiveValuesOf(ulong itemId)
+    {
+        var stored = ValuesOf(itemId);
+        return Layout.Columns.Where(x => x.BuiltIn is null)
+            .ToDictionary(x => x.Key, x => stored.GetValueOrDefault(x.Key), StringComparer.Ordinal);
     }
 
     /// <summary>IPMS may report "OEMA" or "OEMA【进料+制造】"; both resolve to the dictionary code.</summary>
@@ -672,6 +752,7 @@ internal sealed class OutsourceReference
     /// </summary>
     public async Task<OutsourceItemResponse[]> JsonMarkedAsync(YfDbContext context, IReadOnlyList<OutsourceItem> items, CancellationToken ct)
     {
+        await LoadValuesAsync(context, items.Select(x => x.Id).ToArray(), ct);
         var responses = items.Select(Json).ToArray();
         // Who imported and who last edited each row, by name.
         var userIds = items.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }).OfType<ulong>().Distinct().ToArray();
@@ -688,7 +769,7 @@ internal sealed class OutsourceReference
         var edited = (await context.OutsourceItemChanges.AsNoTracking()
             .Where(x => unsent.Contains(x.ItemId) && x.Source == OutsourceHistory.Edit)
             .Select(x => new { x.ItemId, x.Field }).Distinct().ToArrayAsync(ct))
-            .ToLookup(x => x.ItemId, x => x.Field == "typeCode" ? "type" : x.Field);
+            .ToLookup(x => x.ItemId, x => OutsourceItemService.ColumnKey(x.Field));
         return responses.Select(response => edited[response.Id].Any()
             ? response with { ChangedFields = [.. edited[response.Id].Distinct()] } : response).ToArray();
     }
@@ -699,7 +780,8 @@ internal sealed class OutsourceReference
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
         item.Remark, item.Status, item.SendStatus, Match(item.TypeCode, item.VendorId), item.ClosedAt is not null,
-        item.IpmsSyncedAt, item.UpdatedAt, null, null, CreatedAtOf(item), null, item.ModifiedAt, item.Customer).WithChangedFields(item);
+        item.IpmsSyncedAt, item.UpdatedAt, null, null, CreatedAtOf(item), null, item.ModifiedAt, item.Customer,
+        ActiveValuesOf(item.Id)).Marked(item, Layout);
 
     private static DateTime? CreatedAtOf(OutsourceItem item) => item.CreatedBy is null ? null : item.CreatedAt;
 }
@@ -710,14 +792,17 @@ internal sealed class OutsourceReference
 /// </summary>
 internal static class OutsourceChangeMarks
 {
-    /// <summary>Marks the fields that differ from the last mail to the item's current vendor (none before it was ever sent).</summary>
-    internal static OutsourceItemResponse WithChangedFields(this OutsourceItemResponse response, OutsourceItem item)
+    /// <summary>
+    /// Marks the columns that differ from the last mail to the item's current vendor (none before it was ever sent).
+    /// Only the columns vendors see are compared: that is what the mail showed.
+    /// </summary>
+    internal static OutsourceItemResponse Marked(this OutsourceItemResponse response, OutsourceItem item, OutsourceFieldLayout layout)
     {
         if (item.NotifiedVendorId != item.VendorId || item.LastSentSnapshot is not { } json) return response;
         try
         {
             var snapshot = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string?>>(json);
-            return response with { ChangedFields = [.. OutsourceWorkbook.Changed(response, snapshot)] };
+            return response with { ChangedFields = [.. OutsourceWorkbook.Changed(response, snapshot, layout.WorkbookFields(vendor: true))] };
         }
         catch (System.Text.Json.JsonException) { return response; }
     }
@@ -726,30 +811,6 @@ internal static class OutsourceChangeMarks
 internal static class OutsourceWorkbook
 {
     internal sealed record Field(string Key, string Header, double Width, Func<OutsourceItemResponse, string?> Value);
-
-    private static string? Date(DateOnly? value) => value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-
-    /// <summary>Every business column in the list page's order (without the row number), 2026-11-17.</summary>
-    internal static readonly Field[] Fields =
-    [
-        new("outsourceDate", "外发日期", 12, x => Date(x.OutsourceDate)),
-        new("status", "状态", 8, x => OutsourceItemStatuses.Label(x.Status)),
-        new("workOrderNo", "工令", 12, x => x.WorkOrderNo),
-        new("customer", "客户", 18, x => x.Customer),
-        new("machineModel", "机型", 14, x => x.MachineModel),
-        new("type", "外发类型", 24, x => x.TypeLabel ?? x.TypeCode),
-        new("vendor", "外发厂商", 14, x => x.VendorName),
-        new("mechanicalSection", "机构课别", 14, x => x.MechanicalSection),
-        new("mechanicalOwner", "机构执行人", 12, x => x.MechanicalOwner),
-        new("electricalOwner", "电控执行人", 12, x => x.ElectricalOwner),
-        new("workOrderIssuedOn", "工令下发", 12, x => Date(x.WorkOrderIssuedOn)),
-        new("bomOn", "BOM时间", 12, x => Date(x.BomOn)),
-        new("drawingReleasedOn", "发图", 12, x => Date(x.DrawingReleasedOn)),
-        new("originalDueDate", "原始交期", 12, x => Date(x.OriginalDueDate)),
-        new("latestDueDate", "最新交期", 12, x => Date(x.LatestDueDate)),
-        new("quantity", "数量", 8, x => x.Quantity?.ToString(CultureInfo.InvariantCulture)),
-        new("remark", "备注", 24, x => x.Remark),
-    ];
 
     private static readonly Field SendStatus = new("sendStatus", "发送状态", 14, x => OutsourceSendStatuses.Label(x.SendStatus));
 
@@ -763,24 +824,25 @@ internal static class OutsourceWorkbook
         _ => XlsxFill.Green,
     };
 
-    /// <summary>Field values as mailed; stored per item and compared at the next send.</summary>
-    internal static Dictionary<string, string?> Snapshot(OutsourceItemResponse item) =>
-        Fields.ToDictionary(field => field.Key, field => field.Value(item), StringComparer.Ordinal);
+    /// <summary>Values of the vendor columns as mailed; stored per item and compared at the next send.</summary>
+    internal static Dictionary<string, string?> Snapshot(OutsourceItemResponse item, IReadOnlyList<Field> fields) =>
+        fields.ToDictionary(field => field.Key, field => field.Value(item), StringComparer.Ordinal);
 
     /// <summary>Keys whose value differs from the snapshot; empty when there is no snapshot.</summary>
-    internal static IReadOnlySet<string> Changed(OutsourceItemResponse item, IReadOnlyDictionary<string, string?>? snapshot)
+    internal static IReadOnlySet<string> Changed(OutsourceItemResponse item, IReadOnlyDictionary<string, string?>? snapshot, IReadOnlyList<Field> fields)
     {
         if (snapshot is null) return new HashSet<string>(StringComparer.Ordinal);
-        return Fields.Where(field => !snapshot.TryGetValue(field.Key, out var before) || before != field.Value(item))
+        return fields.Where(field => !snapshot.TryGetValue(field.Key, out var before) || before != field.Value(item))
             .Select(field => field.Key).ToHashSet(StringComparer.Ordinal);
     }
 
     /// <param name="changed">Per item id, the changed field keys (yellow cells); null for none.</param>
+    /// <param name="columns">The configured columns: every active one for the internal export, the vendor's for an attachment.</param>
     /// <param name="forVendor">Vendor attachments leave out the internal send status.</param>
     internal static byte[] Build(IReadOnlyList<OutsourceItemResponse> items, IReadOnlyDictionary<ulong, IReadOnlySet<string>>? changed,
-        bool forVendor = false)
+        IReadOnlyList<Field> columns, bool forVendor = false)
     {
-        var fields = forVendor ? Fields : [.. Fields, SendStatus];
+        var fields = forVendor ? columns.ToArray() : [.. columns, SendStatus];
         var headers = new[] { "序号" }.Concat(fields.Select(field => field.Header)).ToArray();
         var widths = new[] { 6d }.Concat(fields.Select(field => field.Width)).ToArray();
         var rows = items.Select(item =>
@@ -802,6 +864,8 @@ internal static class OutsourceHistory
     internal const string Edit = "EDIT";
     internal const string IpmsScheduled = "IPMS_SCHEDULED";
     internal const string IpmsManual = "IPMS_MANUAL";
+    /// <summary>Filled in by the vendor in the portal; the change records the account and its signature.</summary>
+    internal const string Vendor = "VENDOR";
     private const int MaximumValueLength = 500;
 
     private static readonly Dictionary<string, string> Labels = new(StringComparer.Ordinal)
@@ -815,7 +879,8 @@ internal static class OutsourceHistory
 
     internal static string Label(string field) => Labels.GetValueOrDefault(field, field);
 
-    internal static void Add(YfDbContext context, ulong itemId, IEnumerable<AuditChange> changes, string source, ulong? actorUserId)
+    internal static void Add(YfDbContext context, ulong itemId, IEnumerable<AuditChange> changes, string source, ulong? actorUserId,
+        ulong? oemAccountId = null, string? signerName = null)
     {
         static string? Value(object? value) => value switch
         {
@@ -827,7 +892,21 @@ internal static class OutsourceHistory
         context.OutsourceItemChanges.AddRange(changes.Select(change => new OutsourceItemChange
         {
             ItemId = itemId, Field = change.Field, OldValue = Value(change.Before), NewValue = Value(change.After),
-            Source = source, ActorUserId = actorUserId,
+            Source = source, ActorUserId = actorUserId, ActorOemAccountId = oemAccountId, SignerName = signerName,
         }));
+    }
+}
+
+/// <summary>Writes custom field values: a null value deletes the row (empty), anything else replaces it.</summary>
+internal static class OutsourceItemValues
+{
+    internal static async Task WriteAsync(YfDbContext context, ulong itemId, IEnumerable<(ulong FieldId, string? Value)> values, CancellationToken ct)
+    {
+        foreach (var (fieldId, value) in values)
+        {
+            await context.OutsourceItemValues.Where(x => x.ItemId == itemId && x.FieldId == fieldId).ExecuteDeleteAsync(ct);
+            if (value is not null) context.OutsourceItemValues.Add(new OutsourceItemValue { ItemId = itemId, FieldId = fieldId, Value = value });
+        }
+        await context.SaveChangesAsync(ct);
     }
 }

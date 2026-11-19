@@ -79,6 +79,54 @@ public sealed class OutsourceItem
     /// <summary>Who last changed the item by hand (an edit or marking it finished) and when; IPMS syncs and sending do not count.</summary>
     public ulong? ModifiedBy { get; set; }
     public DateTime? ModifiedAt { get; set; }
+    /// <summary>Reserved for vendors filling columns in (not offered yet): when the vendor last did, and the name it signed with.</summary>
+    public DateTime? VendorUpdatedAt { get; set; }
+    public string? VendorUpdatedSigner { get; set; }
+    /// <summary>Reserved: when internal staff marked the vendor's update as seen.</summary>
+    public DateTime? VendorSeenAt { get; set; }
+}
+
+/// <summary>
+/// One column of the outsourcing list and how it is handled (外协清单契约 → 栏位设定, 2026-11-19). Built-in rows are the
+/// fixed columns (their key is the column key, their label and type never change); custom rows are added on the field
+/// settings page and keep their values in <see cref="OutsourceItemValue"/>. Who may fill a column in is
+/// <see cref="EditorScope"/> (internal staff) and <see cref="VendorEditable"/>.
+/// </summary>
+public sealed class OutsourceField
+{
+    public ulong Id { get; set; }
+    public string FieldKey { get; set; } = null!;
+    public bool BuiltIn { get; set; }
+    public string Label { get; set; } = null!;
+    /// <summary>TEXT / BOOLEAN / DATE / NUMBER / SELECT.</summary>
+    public string DataType { get; set; } = null!;
+    /// <summary>JSON array of the choices of a SELECT field.</summary>
+    public string? Options { get; set; }
+    public int SortNo { get; set; }
+    /// <summary>ACTIVE / DISABLED; only custom fields can be disabled (their values are kept).</summary>
+    public string Status { get; set; } = null!;
+    /// <summary>Who fills it in internally: ALL (everyone with outsource:manage), ROLES (only <see cref="OutsourceFieldEditorRole"/>), NONE.</summary>
+    public string EditorScope { get; set; } = null!;
+    public bool VendorVisible { get; set; }
+    public bool VendorEditable { get; set; }
+    public ulong? UpdatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+/// <summary>With editor scope ROLES: an internal role whose members may fill in the field (system administrators always may).</summary>
+public sealed class OutsourceFieldEditorRole
+{
+    public ulong FieldId { get; set; }
+    public ulong RoleId { get; set; }
+}
+
+/// <summary>The value of a custom field on one item; no row means empty.</summary>
+public sealed class OutsourceItemValue
+{
+    public ulong ItemId { get; set; }
+    public ulong FieldId { get; set; }
+    public string Value { get; set; } = null!;
 }
 
 /// <summary>
@@ -117,6 +165,9 @@ public sealed class OutsourceItemChange
     /// <summary>EDIT, IPMS_SCHEDULED or IPMS_MANUAL.</summary>
     public string Source { get; set; } = null!;
     public ulong? ActorUserId { get; set; }
+    /// <summary>Reserved for a change the vendor makes in the portal (<c>VENDOR</c>): the account and the name it signed with.</summary>
+    public ulong? ActorOemAccountId { get; set; }
+    public string? SignerName { get; set; }
     public DateTime ChangedAt { get; set; }
 }
 
@@ -288,6 +339,9 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.Property(x => x.LastSentAt).HasColumnName("last_sent_at").HasColumnType("datetime(3)");
         b.Property(x => x.ModifiedBy).HasColumnName("modified_by");
         b.Property(x => x.ModifiedAt).HasColumnName("modified_at").HasColumnType("datetime(3)");
+        b.Property(x => x.VendorUpdatedAt).HasColumnName("vendor_updated_at").HasColumnType("datetime(3)");
+        b.Property(x => x.VendorUpdatedSigner).HasColumnName("vendor_updated_signer").HasMaxLength(32);
+        b.Property(x => x.VendorSeenAt).HasColumnName("vendor_seen_at").HasColumnType("datetime(3)");
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
@@ -337,6 +391,8 @@ public sealed class OutsourceItemChangeConfig : IEntityTypeConfiguration<Outsour
         b.Property(x => x.NewValue).HasColumnName("new_value").HasMaxLength(500);
         b.Property(x => x.Source).HasColumnName("source").HasMaxLength(16).IsRequired();
         b.Property(x => x.ActorUserId).HasColumnName("actor_user_id");
+        b.Property(x => x.ActorOemAccountId).HasColumnName("actor_oem_account_id");
+        b.Property(x => x.SignerName).HasColumnName("signer_name").HasMaxLength(32);
         b.Property(x => x.ChangedAt).HasColumnName("changed_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.HasIndex(x => new { x.ItemId, x.Id }).HasDatabaseName("idx_outsource_item_changes_item");
         // History belongs to the item; deleting an item deletes its history (the audit log keeps the deletion).
@@ -424,5 +480,65 @@ public sealed class OutsourceMailItemConfig : IEntityTypeConfiguration<Outsource
         b.HasIndex(x => x.ItemId).HasDatabaseName("idx_outsource_mail_items_item");
         b.HasOne<OutsourceMail>().WithMany().HasForeignKey(x => x.MailId)
             .HasConstraintName("fk_outsource_mail_items_mail").OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class OutsourceFieldConfig : IEntityTypeConfiguration<OutsourceField>
+{
+    public void Configure(EntityTypeBuilder<OutsourceField> b)
+    {
+        b.ToTable("outsource_fields");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.FieldKey).HasColumnName("field_key").HasMaxLength(32).IsRequired();
+        b.Property(x => x.BuiltIn).HasColumnName("built_in").HasDefaultValue(false);
+        b.Property(x => x.Label).HasColumnName("label").HasMaxLength(32).IsRequired();
+        b.Property(x => x.DataType).HasColumnName("data_type").HasMaxLength(16).IsRequired();
+        b.Property(x => x.Options).HasColumnName("options").HasMaxLength(2000);
+        b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
+        b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);
+        b.Property(x => x.EditorScope).HasColumnName("editor_scope").HasMaxLength(16).IsRequired().HasDefaultValue("ALL");
+        b.Property(x => x.VendorVisible).HasColumnName("vendor_visible").HasDefaultValue(false);
+        b.Property(x => x.VendorEditable).HasColumnName("vendor_editable").HasDefaultValue(false);
+        b.Property(x => x.UpdatedBy).HasColumnName("updated_by");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
+        b.HasIndex(x => x.FieldKey).IsUnique().HasDatabaseName("uk_outsource_fields_key");
+    }
+}
+
+public sealed class OutsourceFieldEditorRoleConfig : IEntityTypeConfiguration<OutsourceFieldEditorRole>
+{
+    public void Configure(EntityTypeBuilder<OutsourceFieldEditorRole> b)
+    {
+        b.ToTable("outsource_field_editor_roles");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.FieldId, x.RoleId });
+        b.Property(x => x.FieldId).HasColumnName("field_id");
+        b.Property(x => x.RoleId).HasColumnName("role_id");
+        b.HasIndex(x => x.RoleId).HasDatabaseName("idx_outsource_field_editor_roles_role");
+        b.HasOne<OutsourceField>().WithMany().HasForeignKey(x => x.FieldId)
+            .HasConstraintName("fk_outsource_field_editor_roles_field").OnDelete(DeleteBehavior.Cascade);
+        // Deleting a role removes it from every field's editors.
+        b.HasOne<Role>().WithMany().HasForeignKey(x => x.RoleId)
+            .HasConstraintName("fk_outsource_field_editor_roles_role").OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class OutsourceItemValueConfig : IEntityTypeConfiguration<OutsourceItemValue>
+{
+    public void Configure(EntityTypeBuilder<OutsourceItemValue> b)
+    {
+        b.ToTable("outsource_item_values");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.ItemId, x.FieldId });
+        b.Property(x => x.ItemId).HasColumnName("item_id");
+        b.Property(x => x.FieldId).HasColumnName("field_id");
+        b.Property(x => x.Value).HasColumnName("value").HasMaxLength(500).IsRequired();
+        b.HasIndex(x => x.FieldId).HasDatabaseName("idx_outsource_item_values_field");
+        b.HasOne<OutsourceItem>().WithMany().HasForeignKey(x => x.ItemId)
+            .HasConstraintName("fk_outsource_item_values_item").OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<OutsourceField>().WithMany().HasForeignKey(x => x.FieldId)
+            .HasConstraintName("fk_outsource_item_values_field").OnDelete(DeleteBehavior.Restrict);
     }
 }

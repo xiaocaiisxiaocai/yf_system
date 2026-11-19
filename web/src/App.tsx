@@ -171,7 +171,7 @@ export default function App() {
           <Route path="items" element={<Guard permission="outsource:view"><OutsourceList /></Guard>} />
           <Route path="mails" element={<Guard permission="outsource:view"><OutsourceMails /></Guard>} />
           <Route path="ipms-data" element={<Guard permission="outsource:settings"><OutsourceIpmsData /></Guard>} />
-          <Route path="settings" element={<Guard permission="outsource:settings"><OutsourceSettings /></Guard>} />
+          <Route path="settings" element={<Guard anyPermission={['outsource:settings', 'outsource:field_settings']}><OutsourceSettings /></Guard>} />
         </Route>
         <Route
           path="/"

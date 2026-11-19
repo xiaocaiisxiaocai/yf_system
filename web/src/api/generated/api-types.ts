@@ -1080,6 +1080,7 @@ export interface OutsourceBatchUpdate {
   latestDueDate?: string | null
   bomOn?: string | null
   drawingReleasedOn?: string | null
+  values?: Record<string, string | null> | null
 }
 
 export interface OutsourceCcUserResponse {
@@ -1131,6 +1132,74 @@ export interface OutsourceExtraCc {
   emails?: Array<string> | null
 }
 
+export interface OutsourceFieldColumnResponse {
+  key: string
+  label: string
+  dataType: string
+  options: Array<string>
+  category: string
+  pinned: boolean
+  vendorVisible: boolean
+  vendorEditable: boolean
+  canEdit: boolean
+}
+
+export interface OutsourceFieldCreate {
+  label?: string | null
+  dataType?: string | null
+  options?: Array<string> | null
+}
+
+export interface OutsourceFieldLayoutResponse {
+  fields: Array<OutsourceFieldColumnResponse>
+}
+
+export interface OutsourceFieldOrderRequest {
+  fieldIds?: Array<number> | null
+}
+
+export interface OutsourceFieldRoleOption {
+  id: number
+  name: string
+}
+
+export interface OutsourceFieldSettingResponse {
+  id: number
+  key: string
+  builtIn: boolean
+  label: string
+  dataType: string
+  options: Array<string>
+  category: string
+  sortNo: number
+  status: string
+  pinned: boolean
+  vendorVisible: boolean
+  vendorVisibleLocked: boolean
+  vendorEditable: boolean
+  vendorEditableAllowed: boolean
+  editorScope: string
+  editorScopeAllowed: boolean
+  editorRoleIds: Array<number>
+  inUse: boolean
+  updatedAt: string
+}
+
+export interface OutsourceFieldSettingsResponse {
+  fields: Array<OutsourceFieldSettingResponse>
+  roles: Array<OutsourceFieldRoleOption>
+}
+
+export interface OutsourceFieldUpdate {
+  label?: string | null
+  dataType?: string | null
+  options?: Array<string> | null
+  vendorVisible?: boolean | null
+  vendorEditable?: boolean | null
+  editorScope?: string | null
+  editorRoleIds?: Array<number> | null
+}
+
 export interface OutsourceImportPreviewResponse {
   ready: number
   skipped: number
@@ -1173,6 +1242,7 @@ export interface OutsourceItemChangeResponse {
   source: string
   actorName: string | null
   changedAt: string
+  signerName: string | null
 }
 
 export interface OutsourceItemResponse {
@@ -1209,6 +1279,7 @@ export interface OutsourceItemResponse {
   modifiedBy: string | null
   modifiedAt: string | null
   customerFullName: string | null
+  customValues: Record<string, string | null> | null
 }
 
 export interface OutsourceItemUpdate {
@@ -1221,6 +1292,7 @@ export interface OutsourceItemUpdate {
   latestDueDate?: string | null
   bomOn?: string | null
   drawingReleasedOn?: string | null
+  values?: Record<string, string | null> | null
 }
 
 export interface OutsourceItemVersion {
@@ -2217,6 +2289,7 @@ export interface ApiResponses {
   "GET /oem/uploads/{sessionId}": OemUploadSessionResponse
   "PUT /oem/uploads/{sessionId}/chunks/{index}": EmptyResponse
   "POST /oem/uploads/{sessionId}/merge": OemUploadedFileResponse
+  "GET /outsource/fields": OutsourceFieldLayoutResponse
   "GET /outsource/items": PageResponseOfOutsourceItemResponse
   "PUT /outsource/items/batch": OutsourceBatchResponse
   "POST /outsource/items/batch-delete": EmptyResponse
@@ -2250,6 +2323,11 @@ export interface ApiResponses {
   "PUT /outsource/settings/customers/{id}": OutsourceCustomerAliasResponse
   "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
+  "GET /outsource/settings/fields": OutsourceFieldSettingsResponse
+  "POST /outsource/settings/fields": OutsourceFieldSettingsResponse
+  "PUT /outsource/settings/fields/order": OutsourceFieldSettingsResponse
+  "PUT /outsource/settings/fields/{id}": OutsourceFieldSettingsResponse
+  "PUT /outsource/settings/fields/{id}/status": OutsourceFieldSettingsResponse
   "PUT /outsource/settings/sync-schedule": OutsourceSyncStatusResponse
   "PUT /outsource/settings/sync-time": OutsourceSyncStatusResponse
   "GET /outsource/settings/types": Array<OutsourceTypeResponse>

@@ -12,6 +12,7 @@ const SOURCE: Record<string, { label: string; color: string }> = {
   EDIT: { label: '编辑', color: 'arcoblue' },
   IPMS_SCHEDULED: { label: '定时同步', color: 'green' },
   IPMS_MANUAL: { label: '手动同步', color: 'cyan' },
+  VENDOR: { label: '厂商填写', color: 'orange' },
 }
 
 function useChanges(itemId: number | null) {
@@ -36,7 +37,7 @@ function useChanges(itemId: number | null) {
   return { changes, error, retry: () => setAttempt((value) => value + 1) }
 }
 
-/** Every recorded change of one item: IPMS syncs and purchasing edits, newest first. */
+/** Every recorded change of one item: IPMS syncs, staff edits and what the vendor filled in, newest first. */
 export function ItemHistoryDrawer({ item, onClose }: { item: { id: number; workOrderNo: string } | null; onClose: () => void }) {
   const { changes, error, retry } = useChanges(item?.id ?? null)
   const columns: TableColumnProps<Change>[] = [
@@ -48,7 +49,11 @@ export function ItemHistoryDrawer({ item, onClose }: { item: { id: number; workO
       title: '来源', width: 120,
       render: (_, change) => <Tag color={SOURCE[change.source]?.color}>{SOURCE[change.source]?.label ?? change.source}</Tag>,
     },
-    { title: '操作人', dataIndex: 'actorName', width: 120, ellipsis: true, render: (value: string | null) => value ?? '—' },
+    {
+      title: '操作人', width: 120, ellipsis: true,
+      // A vendor change is signed with the person's name (the shared vendor login is not a person).
+      render: (_, change) => change.source === 'VENDOR' ? `厂商签名：${change.signerName ?? '—'}` : change.actorName ?? '—',
+    },
   ]
   return <Drawer width={820} title={item ? `工令 ${item.workOrderNo} · 变更履历` : '变更履历'} visible={item !== null}
     footer={null} onCancel={onClose} unmountOnExit>

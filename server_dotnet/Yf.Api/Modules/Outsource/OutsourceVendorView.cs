@@ -1,5 +1,7 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Oem.Common;
 
 namespace Yf.Api.Modules.Outsource;
@@ -15,15 +17,12 @@ public sealed record OutsourceVendorPageResponse(
 
 /// <summary>
 /// The outsourcing list in the ODM/OEMA vendor portal (外协清单契约 → 厂商查看): an ODM/OEMA account reads, never writes, the
-/// current records whose vendor is its own company, with the columns of the vendor Excel attachment. Internal staff use
-/// the outsourcing module itself. Fields vendors fill in will be added here once they are specified.
+/// current records whose vendor is its own company, with the columns the field settings show to vendors (the same as the
+/// vendor Excel attachment). Internal staff use the outsourcing module itself. Vendors filling columns in is reserved.
 /// </summary>
 public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> dbFactory)
 {
     internal const string SerialKey = "serialNo";
-
-    public static OutsourceVendorColumn[] Columns { get; } =
-        [new(SerialKey, "序号"), .. OutsourceWorkbook.Fields.Select(field => new OutsourceVendorColumn(field.Key, field.Header))];
 
     public async Task<OutsourceVendorPageResponse> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
     {
@@ -49,14 +48,18 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         }
         var total = (ulong)await items.LongCountAsync(ct);
         var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
-        var list = rows.Select(item =>
-        {
-            var response = reference.Json(item);
-            var values = new Dictionary<string, string?>(StringComparer.Ordinal)
-                { [SerialKey] = item.SerialNo.ToString(System.Globalization.CultureInfo.InvariantCulture) };
-            foreach (var field in OutsourceWorkbook.Fields) values[field.Key] = field.Value(response);
-            return new OutsourceVendorRow(item.Id, item.Status, item.ClosedAt is not null, values);
-        }).ToArray();
-        return new(Columns, list, total, page, size);
+        await reference.LoadValuesAsync(db, rows.Select(x => x.Id).ToArray(), ct);
+        OutsourceVendorColumn[] columns =
+            [new(SerialKey, "序号"), .. reference.Layout.VendorColumns.Select(column => new OutsourceVendorColumn(column.Key, column.Label))];
+        return new(columns, rows.Select(item => Row(reference, item)).ToArray(), total, page, size);
+    }
+
+    private static OutsourceVendorRow Row(OutsourceReference reference, OutsourceItem item)
+    {
+        var response = reference.Json(item);
+        var values = new Dictionary<string, string?>(StringComparer.Ordinal)
+            { [SerialKey] = item.SerialNo.ToString(CultureInfo.InvariantCulture) };
+        foreach (var column in reference.Layout.VendorColumns) values[column.Key] = column.Value(response);
+        return new(item.Id, item.Status, item.ClosedAt is not null, values);
     }
 }

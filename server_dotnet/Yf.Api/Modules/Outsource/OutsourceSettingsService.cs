@@ -15,6 +15,8 @@ internal static class OutsourcePermissions
     internal const string Import = "outsource:import";
     internal const string Manage = "outsource:manage";
     internal const string Settings = "outsource:settings";
+    /// <summary>The field settings page: which columns exist, who fills each in and what vendors see.</summary>
+    internal const string FieldSettings = "outsource:field_settings";
 }
 
 /// <summary>

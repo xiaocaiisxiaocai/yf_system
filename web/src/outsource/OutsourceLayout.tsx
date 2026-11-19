@@ -5,7 +5,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import AccountMenu from '../components/AccountMenu'
 import Shell, { type MenuEntry } from '../layouts/SectionShell'
-import { OUTSOURCE_PERMISSIONS, outsourceHome } from './outsourceNavigation'
+import { OUTSOURCE_PERMISSIONS, canOpenOutsourceSettings, outsourceHome } from './outsourceNavigation'
 
 export function OutsourceLanding() {
   const permissions = useAuth((state) => state.permissions)
@@ -22,7 +22,7 @@ export default function OutsourceLayout() {
     { path: '/outsource/items', label: '外协清单', icon: <IconList />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view) },
     { path: '/outsource/mails', label: '发送记录', icon: <IconEmail />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.view) },
     { path: '/outsource/ipms-data', label: 'IPMS 资料', icon: <IconStorage />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.settings), admin: true },
-    { path: '/outsource/settings', label: '设定', icon: <IconSettings />, visible: permissions.includes(OUTSOURCE_PERMISSIONS.settings), admin: true },
+    { path: '/outsource/settings', label: '设定', icon: <IconSettings />, visible: canOpenOutsourceSettings(permissions), admin: true },
   ]
   if (!menu.some((item) => item.visible)) {
     return <Result status="403" title="没有外协清单权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
