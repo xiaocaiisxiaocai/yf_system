@@ -1,9 +1,11 @@
 name: verify
 
 on:
-  push:
-    branches: [main]
+  # main only changes through pull requests that must be up to date and green (branch protection),
+  # so a push run on main would only repeat what the pull request already verified. Run it by hand
+  # from the Actions page when needed.
   pull_request:
+  workflow_dispatch:
 
 # A newer push to the same branch makes the previous run obsolete; cancel it instead of paying for both.
 concurrency:
