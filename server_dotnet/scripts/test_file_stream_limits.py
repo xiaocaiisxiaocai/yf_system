@@ -126,15 +126,24 @@ def _exercise_path(base, path, headers, total_size, check, label, other=None):
         _close_all(held)
 
     _wait_for_short_range(base, path, headers, total_size)
-    with ThreadPoolExecutor(max_workers=_PER_USER_LIMIT) as pool:
-        completed = list(pool.map(
-            lambda _: _read(base, path, {**headers, "Range": _SHORT_RANGE}),
-            range(_PER_USER_LIMIT),
-        ))
+    # The server notices the aborted streams above a moment later, so a full concurrent batch may still meet a
+    # transient 429 while their slots are being released; retry the batch until it fits, as _wait_for_short_range does.
+    deadline = time.monotonic() + 10.0
+    while True:
+        with ThreadPoolExecutor(max_workers=_PER_USER_LIMIT) as pool:
+            completed = list(pool.map(
+                lambda _: _read(base, path, {**headers, "Range": _SHORT_RANGE}),
+                range(_PER_USER_LIMIT),
+            ))
+        if any(status == 429 for status, _, _ in completed) and time.monotonic() < deadline:
+            time.sleep(0.2)
+            continue
+        break
     if not all(status == 206 and payload == _EXPECTED_SHORT
                and response_headers.get("Content-Range") == f"bytes 0-7/{total_size}"
                for status, payload, response_headers in completed):
-        raise AssertionError(f"{label}: completed Range responses differ")
+        statuses = sorted(status for status, _, _ in completed)
+        raise AssertionError(f"{label}: completed Range responses differ (statuses {statuses})")
     _expect_short_range(base, path, headers, total_size)
     check(f"{label} preserves legal Range and releases completed responses", True)
 
