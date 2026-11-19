@@ -17,6 +17,7 @@ public static class OutsourceModule
         .AddSingleton<IHostedService>(provider => provider.GetRequiredService<MesMirrorSyncService>())
         .AddSingleton<OutsourceSettingsService>()
         .AddSingleton<OutsourceVendorViewService>()
+        .AddSingleton<OutsourceFieldService>()
         .AddSingleton<OutsourceItemService>()
         .AddSingleton<OutsourceIpmsSyncService>()
         .AddSingleton<IHostedService>(provider => provider.GetRequiredService<OutsourceIpmsSyncService>())
@@ -62,6 +63,20 @@ public static class OutsourceModule
             s.SetDefaultCcAsync(AccessService.GetCurrent(c), r, ct));
         settings.MapGet("/cc-user-options", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.CcUserOptionsAsync(AccessService.GetCurrent(c), c.Request.Query["keyword"], ct));
+
+        settings.MapGet("/fields", (HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
+            s.SettingsAsync(AccessService.GetCurrent(c), ct));
+        settings.MapPost("/fields", (OutsourceFieldCreate r, HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
+            s.CreateAsync(AccessService.GetCurrent(c), r, ct));
+        settings.MapPut("/fields/order", (OutsourceFieldOrderRequest r, HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
+            s.SetOrderAsync(AccessService.GetCurrent(c), r, ct));
+        settings.MapPut("/fields/{id:long}", (ulong id, OutsourceFieldUpdate r, HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
+            s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
+        settings.MapPut("/fields/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
+            s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
+        // The list's columns for the current account (anyone who may view the list).
+        endpoints.MapGet("/api/v1/outsource/fields", (HttpContext c, OutsourceFieldService s, CancellationToken ct) =>
+            s.LayoutAsync(AccessService.GetCurrent(c), ct));
 
         var items = endpoints.MapGroup("/api/v1/outsource/items");
         items.MapGet("", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>

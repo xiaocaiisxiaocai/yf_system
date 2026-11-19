@@ -37,7 +37,14 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         string Key, string Kind, ulong VendorId, string VendorName, Address[] To, Address[] DefaultCc,
         OutsourceItemResponse[] Items, Dictionary<ulong, IReadOnlySet<string>> Changed);
 
-    private sealed record Plan(Draft[] Drafts, string Fingerprint, OutsourceItemResponse[] Items);
+    private sealed record Plan(Draft[] Drafts, string Fingerprint, OutsourceItemResponse[] Items, OutsourceFieldLayout Layout)
+    {
+        /// <summary>The vendor columns: the attachment and the "as last sent" snapshot.</summary>
+        public OutsourceWorkbook.Field[] VendorFields { get; } = Layout.WorkbookFields(vendor: true);
+
+        /// <summary>The body table's columns, limited to what vendors see.</summary>
+        public OutsourceWorkbook.Field[] BodyFields(string kind) => Layout.MailBodyFields(OutsourceMailContent.BodyKeys(kind));
+    }
 
     // ---- preview and send ----
 
@@ -55,7 +62,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
             draft.To.Select(Json).ToArray(), draft.DefaultCc.Select(Json).ToArray(),
             draft.Items.Select(x => x.Id).ToArray(), draft.Items.Select(x => x.WorkOrderNo).ToArray(),
             draft.Items.Select(x => x.Customer ?? "").Distinct(StringComparer.Ordinal).Count(),
-            OutsourceMailContent.Html(draft.Kind, draft.VendorName, draft.Items, draft.Changed))).ToArray());
+            OutsourceMailContent.Html(draft.Kind, draft.VendorName, draft.Items, draft.Changed, plan.BodyFields(draft.Kind)))).ToArray());
     }
 
     public async Task<OutsourceMailSendResponse> SendAsync(CurrentUser actor, OutsourceMailSendRequest request, CancellationToken ct)
@@ -104,10 +111,10 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
             {
                 BatchKey = requestKey, Kind = draft.Kind, VendorId = draft.VendorId, CreatedBy = actor.Id,
                 Subject = OutsourceMailContent.Subject(draft.Kind, draft.VendorName, day, draft.Items.Length),
-                BodyHtml = OutsourceMailContent.Html(draft.Kind, draft.VendorName, draft.Items, draft.Changed),
-                BodyText = OutsourceMailContent.Text(draft.Kind, draft.VendorName, draft.Items),
+                BodyHtml = OutsourceMailContent.Html(draft.Kind, draft.VendorName, draft.Items, draft.Changed, plan.BodyFields(draft.Kind)),
+                BodyText = OutsourceMailContent.Text(draft.Kind, draft.VendorName, draft.Items, plan.BodyFields(draft.Kind)),
                 AttachmentName = notice ? OutsourceMailContent.AttachmentName(draft.VendorName, day) : null,
-                Attachment = notice ? OutsourceWorkbook.Build(draft.Items, draft.Changed, forVendor: true) : null,
+                Attachment = notice ? OutsourceWorkbook.Build(draft.Items, draft.Changed, plan.VendorFields, forVendor: true) : null,
                 Status = OutsourceMailStatuses.Queued, NextAttemptAt = now,
             };
             context.OutsourceMails.Add(mail);
@@ -124,7 +131,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         // Everything mailed as a notice is now "sent" to its current vendor, with what it showed.
         foreach (var item in plan.Drafts.Where(x => x.Kind == OutsourceMailKinds.Notice).SelectMany(x => x.Items))
         {
-            var snapshot = JsonSerializer.Serialize(OutsourceWorkbook.Snapshot(item), SnapshotJson);
+            var snapshot = JsonSerializer.Serialize(OutsourceWorkbook.Snapshot(item, plan.VendorFields), SnapshotJson);
             await context.OutsourceItems.Where(x => x.Id == item.Id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.SendStatus, OutsourceSendStatuses.Sent)
                 .SetProperty(x => x.NotifiedVendorId, item.VendorId)
@@ -149,7 +156,9 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         if (rows.Count != ids.Length) throw ApiException.NotFound("外协记录不存在或已被删除");
         var reference = await OutsourceReference.LoadAsync(context, ct);
         var items = rows.OrderBy(x => x.Id).ToArray();
+        await reference.LoadValuesAsync(context, items.Select(x => x.Id).ToArray(), ct);
         var responses = items.ToDictionary(x => x.Id, reference.Json);
+        var vendorFields = reference.Layout.WorkbookFields(vendor: true);
         // Vendors and contacts are the ODM/OEMA directory; a contact without an address is not a recipient.
         var vendors = await context.OemCompanies.AsNoTracking().ToDictionaryAsync(x => x.Id, ct);
         var contacts = (await context.OemCompanyContacts.AsNoTracking()
@@ -188,7 +197,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         {
             var groupItems = group.Select(x => responses[x.Id]).ToArray();
             var changed = group.ToDictionary(x => x.Id, x => x.NotifiedVendorId == x.VendorId && x.LastSentSnapshot is { } json
-                ? OutsourceWorkbook.Changed(responses[x.Id], JsonSerializer.Deserialize<Dictionary<string, string?>>(json, SnapshotJson))
+                ? OutsourceWorkbook.Changed(responses[x.Id], JsonSerializer.Deserialize<Dictionary<string, string?>>(json, SnapshotJson), vendorFields)
                 : (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal));
             drafts.Add(new($"{OutsourceMailKinds.Notice}:{group.Key}", OutsourceMailKinds.Notice, group.Key, vendors[group.Key].Name,
                 To(group.Key), defaultCc, groupItems, changed));
@@ -208,9 +217,9 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
                 .AppendJoin(',', draft.Items.Select(x => $"{x.Id}:{x.UpdatedAt.Ticks}")).Append('\n');
         }
         // Reference data shown in the mail (type labels) also feeds the fingerprint through the rendered values.
-        foreach (var item in responses.Values) fingerprint.AppendJoin('\u001f', OutsourceWorkbook.Snapshot(item).Values).Append('\n');
+        foreach (var item in responses.Values) fingerprint.AppendJoin('\u001f', OutsourceWorkbook.Snapshot(item, vendorFields).Values).Append('\n');
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(fingerprint.ToString()))).ToLowerInvariant();
-        return new(drafts.ToArray(), hash, responses.Values.ToArray());
+        return new(drafts.ToArray(), hash, responses.Values.ToArray(), reference.Layout);
     }
 
     private static async Task<Dictionary<string, Address[]>> ResolveExtraCcAsync(

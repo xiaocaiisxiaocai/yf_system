@@ -44,10 +44,26 @@ const syncStatus = {
   lastProcessed: 2, lastChanged: 0, lastClosed: 0, lastMissing: 0,
 }
 
+const FIELD_ORDER: [string, string, string, boolean][] = [
+  ['outsourceDate', '外发日期', 'PROCESS', true], ['status', '状态', 'PROCESS', true], ['workOrderNo', '工令', 'FIXED', false],
+  ['customer', '客户', 'IPMS', false], ['machineModel', '机型', 'IPMS', false], ['type', '外发类型', 'PROCESS', true],
+  ['vendor', '外发厂商', 'PROCESS', true], ['mechanicalSection', '机构课别', 'IPMS', false], ['mechanicalOwner', '机构执行人', 'IPMS', false],
+  ['electricalOwner', '电控执行人', 'IPMS', false], ['workOrderIssuedOn', '工令下发', 'IPMS', false], ['bomOn', 'BOM时间', 'MANUAL', true],
+  ['drawingReleasedOn', '发图', 'MANUAL', true], ['originalDueDate', '原始交期', 'IPMS', false], ['latestDueDate', '最新交期', 'PROCESS', true],
+  ['quantity', '数量', 'IPMS', false], ['remark', '备注', 'MANUAL', true],
+]
+/** The default columns (外协清单契约 → 栏位设定): today's built-in columns, each one an editor may fill in marked canEdit. */
+const fieldLayout = {
+  fields: FIELD_ORDER.map(([key, label, category, canEdit]) => ({
+    key, label, dataType: 'TEXT', options: [], category, pinned: ['outsourceDate', 'status', 'workOrderNo'].includes(key),
+    vendorVisible: true, vendorEditable: false, canEdit,
+  })),
+}
+
 function mockApi() {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
     data: url === '/outsource/items' ? { list: items, total: 2, page: 1, pageSize: 20 }
-        : url === '/outsource/sync-status' ? syncStatus
+        : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus
           : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
   } as never))
 }
@@ -70,6 +86,7 @@ describe('外协清单页面', () => {
   it('有查看权限时首页进入清单，只有设定权限时进入设定', () => {
     expect(outsourceHome(['outsource:view', 'outsource:settings'])).toBe('/outsource/items')
     expect(outsourceHome(['outsource:settings'])).toBe('/outsource/settings')
+    expect(outsourceHome(['outsource:field_settings'])).toBe('/outsource/settings')
     expect(outsourceHome(['outsource:import'])).toBeNull()
   })
 
@@ -141,7 +158,7 @@ describe('外协清单页面', () => {
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items'
         ? { list: [{ ...items[0], typeId: null, typeLabel: 'XYZ', typeCode: 'XYZ', matchState: 'UNKNOWN_TYPE' }], total: 1, page: 1, pageSize: 20 }
-          : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: items[0] } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -191,7 +208,7 @@ describe('外协清单页面', () => {
 
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [{ ...items[1], closed: true }], total: 1, page: 1, pageSize: 20 }
-          : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     put.mockClear()
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -251,7 +268,7 @@ describe('外协清单页面', () => {
     setSession(['outsource:view', 'outsource:manage'])
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [items[0], { ...items[1], closed: true }], total: 2, page: 1, pageSize: 20 }
-          : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items } } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -276,6 +293,41 @@ describe('外协清单页面', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/batch', {
       items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }],
       vendorId: undefined, typeId: 5, status: undefined, bomOn: undefined, drawingReleasedOn: undefined, remark: undefined,
+    }))
+  })
+
+  it('列与可编辑的栏位来自栏位设定：自定义栏位显示与编辑，不可填写的栏位不出现在编辑框里', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:view', 'outsource:manage'])
+    const robotV = { key: 'hasRobotV', label: '是否有RobotV', dataType: 'BOOLEAN', options: [], category: 'CUSTOM', pinned: false,
+      vendorVisible: false, vendorEditable: false, canEdit: true }
+    const layout = {
+      fields: [...fieldLayout.fields.slice(0, 5), robotV, ...fieldLayout.fields.slice(5)]
+        .map((field) => field.key === 'remark' ? { ...field, canEdit: false } : field),
+    }
+    const list = [{ ...items[0], remark: '内部备注', customValues: { hasRobotV: 'true' } }, items[1]]
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/items' ? { list, total: 2, page: 1, pageSize: 20 }
+        : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
+          : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+    } as never))
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: items[0] } as never)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    expect(await screen.findByRole('columnheader', { name: /是否有RobotV/ })).toBeInTheDocument()
+    const row = screen.getByText('21089901').closest('tr')!
+    expect(within(row).getByText('是')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '编辑工令 21089901' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByRole('textbox', { name: '备注' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('combobox', { name: '是否有RobotV' }))
+    fireEvent.click(await screen.findByRole('option', { name: '否' }))
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    // 备注 is sent back unchanged; the custom value goes in `values`.
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
+      vendorId: 1, typeId: 5, status: 'PAUSED', bomOn: '', drawingReleasedOn: '', remark: '内部备注',
+      values: { hasRobotV: 'false' }, expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
   })
 })

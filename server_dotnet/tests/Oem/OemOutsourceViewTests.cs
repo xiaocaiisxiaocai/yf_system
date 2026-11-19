@@ -28,7 +28,11 @@ public sealed class OemOutsourceViewTests
                 """, new { a = companyA, b = companyB });
         }
 
-        // Only the vendor's own open records, by serial number, with the vendor attachment's columns.
+        // 是否有RobotV is internal by default; 备注 is hidden on the field settings page here.
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE outsource_fields SET vendor_visible=0 WHERE field_key='remark'");
+
+        // Only the vendor's own open records, by serial number, with the columns shown to vendors.
         var page = await vendor.GetAsync("/api/v1/oem/outsource-items", ct).Ok();
         Assert.Equal(2UL, page["total"]!.GetValue<ulong>());
         var list = page["list"]!.AsArray();
@@ -39,7 +43,8 @@ public sealed class OemOutsourceViewTests
         var columns = page["columns"]!.AsArray().Select(x => x!["key"]!.GetValue<string>()).ToArray();
         Assert.Equal("serialNo", columns[0]);
         Assert.DoesNotContain("sendStatus", columns);
-        Assert.DoesNotContain(columns, key => key is "importedBy" or "modifiedBy");
+        Assert.DoesNotContain(columns, key => key is "importedBy" or "modifiedBy" or "hasRobotV" or "remark");
+        Assert.Null(a2["values"]!["remark"]);
 
         // Keyword (work order, customer full or short name, model) and completed records on request.
         Assert.Equal(["A2"], (await vendor.GetAsync("/api/v1/oem/outsource-items?keyword=超穎", ct).Ok())["list"]!.AsArray()

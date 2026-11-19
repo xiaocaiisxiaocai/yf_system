@@ -21,6 +21,9 @@ internal static class OutsourceMailContent
     private const string Header = Cell + "background:#f2f3f5;font-weight:600;";
     private static readonly string[] WithdrawKeys = ["workOrderNo", "customer", "machineModel", "type", "quantity"];
 
+    /// <summary>The body table's column keys for a notice or a withdrawal (the caller drops what vendors may not see).</summary>
+    internal static IReadOnlyList<string> BodyKeys(string kind) => kind == OutsourceMailKinds.Withdraw ? WithdrawKeys : OutsourceWorkbook.MailBodyKeys;
+
     internal static string Subject(string kind, string vendorName, DateOnly businessDay, int count) =>
         kind == OutsourceMailKinds.Withdraw
             ? $"【外发撤回】{vendorName} {businessDay:yyyy-MM-dd}（共 {count} 笔）"
@@ -33,11 +36,9 @@ internal static class OutsourceMailContent
     }
 
     internal static string Html(string kind, string vendorName, IReadOnlyList<OutsourceItemResponse> items,
-        IReadOnlyDictionary<ulong, IReadOnlySet<string>> changed)
+        IReadOnlyDictionary<ulong, IReadOnlySet<string>> changed, IReadOnlyList<OutsourceWorkbook.Field> fields)
     {
         var withdraw = kind == OutsourceMailKinds.Withdraw;
-        var keys = withdraw ? WithdrawKeys : OutsourceWorkbook.MailBodyKeys;
-        var fields = keys.Select(key => OutsourceWorkbook.Fields.Single(field => field.Key == key)).ToArray();
         var anyChanged = !withdraw && items.Any(item => changed.GetValueOrDefault(item.Id)?.Count > 0);
         var html = new StringBuilder();
         html.Append("<div style=\"font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;color:#1d2129;\">");
@@ -72,11 +73,9 @@ internal static class OutsourceMailContent
         return html.ToString();
     }
 
-    internal static string Text(string kind, string vendorName, IReadOnlyList<OutsourceItemResponse> items)
+    internal static string Text(string kind, string vendorName, IReadOnlyList<OutsourceItemResponse> items, IReadOnlyList<OutsourceWorkbook.Field> fields)
     {
         var withdraw = kind == OutsourceMailKinds.Withdraw;
-        var keys = withdraw ? WithdrawKeys : OutsourceWorkbook.MailBodyKeys;
-        var fields = keys.Select(key => OutsourceWorkbook.Fields.Single(field => field.Key == key)).ToArray();
         var text = new StringBuilder();
         text.Append(vendorName).AppendLine(" 您好：");
         text.AppendLine(withdraw

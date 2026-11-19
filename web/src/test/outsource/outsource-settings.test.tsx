@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -198,5 +198,45 @@ describe('外协清单入口与设定', () => {
     await user.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/settings/customers', { fullName: '深圳市泰雪科技有限公司', shortName: '泰雪' }))
     expect(await screen.findByText(/缺少简称 0/)).toBeInTheDocument()
+  })
+
+  it('只有栏位设定权限时只显示栏位设定：厂商可见可切换，固定显示的栏位不能关闭，内部填写可指定角色', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource', 'outsource:field_settings'])
+    const field = (id: number, key: string, label: string, extra: Record<string, unknown> = {}) => ({
+      id, key, builtIn: true, label, dataType: 'TEXT', options: [], category: 'MANUAL', sortNo: id * 10, status: 'ACTIVE', pinned: false,
+      vendorVisible: true, vendorVisibleLocked: false, vendorEditable: false, vendorEditableAllowed: true, editorScope: 'ALL',
+      editorScopeAllowed: true, editorRoleIds: [], inUse: false, updatedAt: '2026-11-19T00:00:00.000Z', ...extra,
+    })
+    const settings = {
+      fields: [
+        field(3, 'workOrderNo', '工令', { category: 'FIXED', pinned: true, vendorVisibleLocked: true, editorScope: 'NONE', editorScopeAllowed: false }),
+        field(6, 'hasRobotV', '是否有RobotV', { builtIn: false, dataType: 'BOOLEAN', category: 'CUSTOM', vendorVisible: false }),
+        field(18, 'remark', '备注'),
+      ],
+      roles: [{ id: 71, name: '采购' }, { id: 72, name: '机构' }],
+    }
+    const get = vi.spyOn(http, 'get').mockResolvedValue({ data: settings } as never)
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: settings } as never)
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+
+    expect(await screen.findByRole('tab', { name: '栏位设定' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '外发类型' })).not.toBeInTheDocument()
+    expect(get).not.toHaveBeenCalledWith('/outsource/settings/types')
+    expect(await screen.findByRole('switch', { name: '工令 厂商可见' })).toBeDisabled()
+
+    await user.click(screen.getByRole('switch', { name: '是否有RobotV 厂商可见' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/6', { vendorVisible: true }))
+
+    const remark = screen.getByText('备注').closest('tr')!
+    await user.click(within(remark).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('radio', { name: '指定角色' }))
+    await user.click(within(dialog).getByRole('combobox', { name: /可填写的角色/ }))
+    // In multiple mode role=option is a wrapper; the inner option element takes the click.
+    const option = (await screen.findAllByRole('option', { name: '机构' })).at(-1)!
+    fireEvent.click(option.querySelector('.arco-select-option') ?? option)
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/18', { editorScope: 'ROLES', editorRoleIds: [72] }))
   })
 })

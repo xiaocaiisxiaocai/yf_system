@@ -139,6 +139,7 @@ public sealed class OutsourceIpmsSyncService(
         string? error = null;
         try
         {
+            var vendorKeys = (await OutsourceFieldLayout.LoadAsync(context, ct)).VendorKeys;
             ulong afterId = 0;
             while (true)
             {
@@ -157,7 +158,7 @@ public sealed class OutsourceIpmsSyncService(
                     processed++;
                     if (!byNo.TryGetValue(item.WorkOrderNo, out var order)) { missing++; continue; }
                     var result = await ApplyAsync(context, item, order, now,
-                        trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, ct);
+                        trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, vendorKeys, ct);
                     if (result.Changed) changed++;
                     if (result.Closed) closed++;
                 }
@@ -195,7 +196,7 @@ public sealed class OutsourceIpmsSyncService(
     private sealed record ItemResult(bool Changed, bool Closed);
 
     private static async Task<ItemResult> ApplyAsync(YfDbContext context, OutsourceItem item, IpmsWorkOrder order, DateTime now,
-        string source, ulong? actorId, CancellationToken ct)
+        string source, ulong? actorId, IReadOnlySet<string> vendorKeys, CancellationToken ct)
     {
         var next = new OutsourceItem();
         OutsourceItemService.ApplyIpms(next, order, now);
@@ -220,8 +221,9 @@ public sealed class OutsourceIpmsSyncService(
         int updated;
         if (changed)
         {
-            // A sent item with new IPMS data waits for purchasing to notify the vendor; nothing is mailed here.
-            var sendStatus = item.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : item.SendStatus;
+            // A sent item with new IPMS data the vendor sees waits for purchasing to notify the vendor; nothing is mailed here.
+            var noticeNeeded = changes.Any(x => vendorKeys.Contains(x.Field));
+            var sendStatus = noticeNeeded && item.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : item.SendStatus;
             updated = await row.ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.Customer, next.Customer).SetProperty(x => x.MachineModel, next.MachineModel)
                 .SetProperty(x => x.MechanicalSection, next.MechanicalSection).SetProperty(x => x.MechanicalOwner, next.MechanicalOwner)

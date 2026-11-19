@@ -24,6 +24,7 @@ type Item = ApiResponses['GET /outsource/items']['list'][number]
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
+type FieldColumn = ApiResponses['GET /outsource/fields']['fields'][number]
 type ImportRow = { rowNumber: number; outsourceDate: string; workOrderNo: string; vendorName: string; typeName: string }
 
 const STATUS_OPTIONS = [
@@ -50,12 +51,10 @@ const MATCH_PROBLEM: Record<string, string> = {
   UNKNOWN_TYPE: '外发类型不在字典中，不能发送',
   VENDOR_MISMATCH: '外发类型与厂商不符，不能发送',
 }
-/** Column title → the key the server uses for that column in `changedFields`. */
-const CHANGE_KEYS: Record<string, string> = {
-  外发日期: 'outsourceDate', 工令: 'workOrderNo', 客户: 'customer', 机型: 'machineModel', 机构课别: 'mechanicalSection',
-  机构执行人: 'mechanicalOwner', 电控执行人: 'electricalOwner', 工令下发: 'workOrderIssuedOn', BOM时间: 'bomOn', 发图: 'drawingReleasedOn',
-  外发类型: 'type', 原始交期: 'originalDueDate', 最新交期: 'latestDueDate', 数量: 'quantity', 外发厂商: 'vendor', 备注: 'remark', 状态: 'status',
-}
+/** A custom field's cell text: yes/no fields are stored as true/false. */
+const customText = (field: Pick<FieldColumn, 'dataType'>, value?: string | null) =>
+  field.dataType === 'BOOLEAN' ? (value === 'true' ? '是' : value === 'false' ? '否' : '') : (value ?? '')
+const BOOLEAN_OPTIONS = [{ label: '是', value: 'true' }, { label: '否', value: 'false' }]
 
 const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
 
@@ -87,6 +86,7 @@ export default function OutsourceListPage() {
   const [total, setTotal] = useState(0)
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [types, setTypes] = useState<OutsourceType[]>([])
+  const [layout, setLayout] = useState<FieldColumn[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [selected, setSelected] = useState<number[]>([])
@@ -112,11 +112,12 @@ export default function OutsourceListPage() {
   }), [filters])
 
   const loadReference = useCallback(async () => {
-    const [vendorResponse, typeResponse] = await Promise.all([
+    const [vendorResponse, typeResponse, fieldResponse] = await Promise.all([
       http.get<ApiResponses['GET /outsource/settings/vendors']>('/outsource/settings/vendors'),
       http.get<ApiResponses['GET /outsource/settings/types']>('/outsource/settings/types'),
+      http.get<ApiResponses['GET /outsource/fields']>('/outsource/fields'),
     ])
-    setVendors(vendorResponse.data); setTypes(typeResponse.data)
+    setVendors(vendorResponse.data); setTypes(typeResponse.data); setLayout(fieldResponse.data.fields)
   }, [])
 
   const load = useCallback(async () => {
@@ -217,6 +218,7 @@ export default function OutsourceListPage() {
       setSelected([]); await load()
     } catch { /* 统一请求层提示 */ }
   }
+  const editable = useMemo(() => layout.filter((field) => field.canEdit), [layout])
   const closedSelected = selectedItems.filter((item) => item.closed).length
   const sentSelected = selectedItems.filter((item) => item.sendStatus !== 'UNSENT').length
 
@@ -252,37 +254,53 @@ export default function OutsourceListPage() {
   }
 
   const date = (value?: string | null) => value ?? ''
-  const rawColumns: TableColumnProps<Item>[] = [
-    { title: '序号', dataIndex: 'serialNo', width: 70, fixed: 'left', align: 'center' },
-    { title: '外发日期', dataIndex: 'outsourceDate', width: 110, fixed: 'left' },
-    {
-      title: '状态', width: 80, align: 'center', fixed: 'left',
-      render: (_, item) => <Tag color={STATUS_TAG[item.status]?.color}>{STATUS_TAG[item.status]?.label ?? item.status}</Tag>,
-    },
-    { title: '工令', dataIndex: 'workOrderNo', width: 110, fixed: 'left' },
-    {
-      title: '客户', dataIndex: 'customer', width: 150, ellipsis: true,
+  // Built-in columns by key; their titles, order and presence come from the field settings (外协清单契约 → 栏位设定).
+  const builtIn: Record<string, Partial<TableColumnProps<Item>>> = {
+    outsourceDate: { dataIndex: 'outsourceDate', width: 110 },
+    status: { width: 80, align: 'center', render: (_, item) => <Tag color={STATUS_TAG[item.status]?.color}>{STATUS_TAG[item.status]?.label ?? item.status}</Tag> },
+    workOrderNo: { dataIndex: 'workOrderNo', width: 110 },
+    customer: {
+      dataIndex: 'customer', width: 150, ellipsis: true,
       render: (_, item) => item.customerFullName && item.customerFullName !== item.customer
         ? <Tooltip content={item.customerFullName}><span>{item.customer}</span></Tooltip> : item.customer,
     },
-    { title: '机型', dataIndex: 'machineModel', width: 120, ellipsis: true },
-    {
-      title: '外发类型', width: 200, render: (_, item) => <Space size={4}>
+    machineModel: { dataIndex: 'machineModel', width: 120, ellipsis: true },
+    type: {
+      width: 200, render: (_, item) => <Space size={4}>
         <span>{item.typeLabel ?? item.typeCode ?? ''}</span>
         {MATCH_PROBLEM[item.matchState] && <Tooltip content={MATCH_PROBLEM[item.matchState]}><Tag size="small" color="orangered">不符</Tag></Tooltip>}
       </Space>,
     },
-    { title: '外发厂商', dataIndex: 'vendorName', width: 110, ellipsis: true },
-    { title: '机构课别', dataIndex: 'mechanicalSection', width: 110, ellipsis: true },
-    { title: '机构执行人', dataIndex: 'mechanicalOwner', width: 100, ellipsis: true },
-    { title: '电控执行人', dataIndex: 'electricalOwner', width: 100, ellipsis: true },
-    { title: '工令下发', width: 110, render: (_, item) => date(item.workOrderIssuedOn) },
-    { title: 'BOM时间', width: 110, render: (_, item) => date(item.bomOn) },
-    { title: '发图', width: 110, render: (_, item) => date(item.drawingReleasedOn) },
-    { title: '原始交期', width: 110, render: (_, item) => date(item.originalDueDate) },
-    { title: '最新交期', width: 110, render: (_, item) => <LatestDueCell item={item} /> },
-    { title: '数量', dataIndex: 'quantity', width: 70, align: 'center' },
-    { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true },
+    vendor: { dataIndex: 'vendorName', width: 110, ellipsis: true },
+    mechanicalSection: { dataIndex: 'mechanicalSection', width: 110, ellipsis: true },
+    mechanicalOwner: { dataIndex: 'mechanicalOwner', width: 100, ellipsis: true },
+    electricalOwner: { dataIndex: 'electricalOwner', width: 100, ellipsis: true },
+    workOrderIssuedOn: { width: 110, render: (_, item) => date(item.workOrderIssuedOn) },
+    bomOn: { width: 110, render: (_, item) => date(item.bomOn) },
+    drawingReleasedOn: { width: 110, render: (_, item) => date(item.drawingReleasedOn) },
+    originalDueDate: { width: 110, render: (_, item) => date(item.originalDueDate) },
+    latestDueDate: { width: 110, render: (_, item) => <LatestDueCell item={item} /> },
+    quantity: { dataIndex: 'quantity', width: 70, align: 'center' },
+    remark: { dataIndex: 'remark', width: 180, ellipsis: true },
+  }
+  const fieldColumns: TableColumnProps<Item>[] = layout.map((field) => {
+    const base: Partial<TableColumnProps<Item>> = builtIn[field.key]
+      ?? { width: field.dataType === 'TEXT' ? 160 : 110, ellipsis: true, render: (_, item) => customText(field, item.customValues?.[field.key]) }
+    const column: TableColumnProps<Item> = { ...base, key: field.key, title: field.label, fixed: field.pinned ? 'left' : undefined }
+    // A cell that differs from what was last mailed to the vendor is yellow, as in the mail and its Excel attachment.
+    // Arco takes a cell's class from what its render function returns (`props`), not from `onCell`.
+    return {
+      ...column,
+      render: (value: unknown, item: Item, index: number) => {
+        const content = base.render ? base.render(value, item, index) : (value ?? '')
+        return item.changedFields?.includes(field.key) ? { children: content, props: { className: 'outsource-cell-changed' } } : content
+      },
+    }
+  })
+  const columns: TableColumnProps<Item>[] = [
+    { title: '序号', dataIndex: 'serialNo', width: 70, fixed: 'left', align: 'center' },
+    ...fieldColumns.filter((column) => column.fixed),
+    ...fieldColumns.filter((column) => !column.fixed),
     {
       title: '发送状态', width: 120, align: 'center',
       render: (_, item) => <Space size={4}>
@@ -300,26 +318,13 @@ export default function OutsourceListPage() {
         <Tooltip content="变更履历">
           <Button type="text" size="mini" icon={<IconHistory />} aria-label={`工令 ${item.workOrderNo} 变更履历`} onClick={() => setHistory(item)} />
         </Tooltip>
-        {canManage && <Tooltip content={item.closed ? '已完成记录不可编辑' : '编辑'}>
-          <Button type="text" size="mini" disabled={item.closed} icon={<IconEdit />}
+        {canManage && <Tooltip content={item.closed ? '已完成记录不可编辑' : editable.length === 0 ? '没有可由你填写的栏位' : '编辑'}>
+          <Button type="text" size="mini" disabled={item.closed || editable.length === 0} icon={<IconEdit />}
             aria-label={`编辑工令 ${item.workOrderNo}`} onClick={() => setEditing(item)} />
         </Tooltip>}
       </Space>,
     },
   ]
-  // A cell that differs from what was last mailed to the vendor is yellow, as in the mail and its Excel attachment.
-  // Arco takes a cell's class from what its render function returns (`props`), not from `onCell`.
-  const columns = rawColumns.map((column) => {
-    const key = typeof column.title === 'string' ? CHANGE_KEYS[column.title] : undefined
-    if (!key) return column
-    return {
-      ...column,
-      render: (value: unknown, item: Item, index: number) => {
-        const content = column.render ? column.render(value, item, index) : (value ?? '')
-        return item.changedFields?.includes(key) ? { children: content, props: { className: 'outsource-cell-changed' } } : content
-      },
-    }
-  })
 
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外协清单</h1>
@@ -346,7 +351,7 @@ export default function OutsourceListPage() {
         {canManage && closedSelected > 0 && <Button onClick={() => void setCompletion(false)}>重新开启 ({closedSelected})</Button>}
         {canManage && openSelected.length > 0 && <>
           <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(openSelected)}>发送邮件 ({openSelected.length})</Button>
-          <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({openSelected.length})</Button>
+          {editable.length > 0 && <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({openSelected.length})</Button>}
           <Popconfirm title={`将所选 ${openSelected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
             <Button icon={<IconCheckCircle />}>标记完成</Button>
           </Popconfirm>
@@ -380,9 +385,9 @@ export default function OutsourceListPage() {
           current: page, pageSize, total, onChange: (next, size) => { setPage(next); setPageSize(size) },
         }} />}
     <ItemHistoryDrawer item={history} onClose={() => setHistory(null)} />
-    <EditDialog item={editing} vendors={vendors} types={types} onClose={() => setEditing(null)}
+    <EditDialog item={editing} vendors={vendors} types={types} fields={editable} onClose={() => setEditing(null)}
       onSaved={async () => { const ids = editing ? [editing.id] : []; setEditing(null); await load(); offerMail(ids) }} />
-    <BatchDialog visible={batchOpen} items={openSelectedItems} vendors={vendors} types={types} onClose={() => setBatchOpen(false)}
+    <BatchDialog visible={batchOpen} items={openSelectedItems} vendors={vendors} types={types} fields={editable} onClose={() => setBatchOpen(false)}
       onSaved={async () => { const ids = openSelectedItems.map((item) => item.id); setBatchOpen(false); await load(); offerMail(ids) }} />
     <SendMailDialog itemIds={mailing} onClose={() => setMailing(null)}
       onSent={() => { setMailing(null); setSelected([]); void load() }} />
@@ -405,15 +410,38 @@ function vendorOptions(vendors: Vendor[], types: OutsourceType[], item: Item, ty
 const typeOptions = (types: OutsourceType[]) => types.filter((type) => type.status === 'ACTIVE')
   .map((type) => ({ label: `${type.code}【${type.name}】`, value: type.id }))
 
-function EditDialog({ item, vendors, types, onClose, onSaved }: {
-  item: Item | null; vendors: Vendor[]; types: OutsourceType[]; onClose: () => void; onSaved: () => Promise<void>
+/** The input of a custom field, by its type; `undefined` means empty. */
+function CustomInput({ field, value, onChange, placeholder }: {
+  field: FieldColumn; value?: string; onChange?: (value: string | undefined) => void; placeholder?: string
+}) {
+  const label = field.label
+  if (field.dataType === 'BOOLEAN') return <Select aria-label={label} allowClear placeholder={placeholder} value={value} onChange={onChange} options={BOOLEAN_OPTIONS} />
+  if (field.dataType === 'SELECT') return <Select aria-label={label} allowClear placeholder={placeholder} value={value} onChange={onChange}
+    options={field.options.map((option) => ({ label: option, value: option }))} />
+  if (field.dataType === 'DATE') return <DatePicker aria-label={label} style={{ width: '100%' }} placeholder={placeholder} value={value}
+    onChange={(next) => onChange?.(next || undefined)} />
+  return <Input aria-label={label} placeholder={placeholder} value={value} maxLength={field.dataType === 'NUMBER' ? 32 : 500}
+    onChange={(next) => onChange?.(next || undefined)} />
+}
+
+const isCustom = (field: FieldColumn) => field.category === 'CUSTOM'
+
+function EditDialog({ item, vendors, types, fields, onClose, onSaved }: {
+  item: Item | null; vendors: Vendor[]; types: OutsourceType[]; fields: FieldColumn[]; onClose: () => void; onSaved: () => Promise<void>
 }) {
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const selectedTypeId = Form.useWatch('typeId', form) as number | undefined
+  // Only the columns this account may fill in are offered; the others are sent back unchanged.
+  const can = (key: string) => fields.some((field) => field.key === key)
+  const custom = useMemo(() => fields.filter(isCustom), [fields])
   useEffect(() => {
-    if (item) form.setFieldsValue({ vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '', bomOn: item.bomOn ?? undefined, drawingReleasedOn: item.drawingReleasedOn ?? undefined })
-  }, [item, form])
+    if (item) form.setFieldsValue({
+      vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '', bomOn: item.bomOn ?? undefined,
+      drawingReleasedOn: item.drawingReleasedOn ?? undefined,
+      ...Object.fromEntries(custom.map((field) => [`custom.${field.key}`, item.customValues?.[field.key] ?? undefined])),
+    })
+  }, [item, form, custom])
   const save = async () => {
     if (!item || saving) return
     const values = await form.validate().catch(() => null)
@@ -421,8 +449,14 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /outsource/items/{id}']>(`/outsource/items/${item.id}`, {
-        vendorId: values.vendorId, typeId: values.typeId, status: values.status, bomOn: values.bomOn || '', drawingReleasedOn: values.drawingReleasedOn || '',
-        remark: values.remark?.trim() ?? '', expectedUpdatedAt: item.updatedAt,
+        vendorId: can('vendor') ? values.vendorId : item.vendorId,
+        typeId: can('type') ? values.typeId : undefined,
+        status: can('status') ? values.status : item.status,
+        bomOn: can('bomOn') ? values.bomOn || '' : undefined,
+        drawingReleasedOn: can('drawingReleasedOn') ? values.drawingReleasedOn || '' : undefined,
+        remark: can('remark') ? values.remark?.trim() ?? '' : item.remark ?? '',
+        values: custom.length > 0 ? Object.fromEntries(custom.map((field) => [field.key, values.custom?.[field.key] ?? ''])) : undefined,
+        expectedUpdatedAt: item.updatedAt,
       })
       Message.success('外协记录已保存'); await onSaved()
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
@@ -430,7 +464,7 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
   return <Modal className="form-dialog" title={item ? `编辑工令 ${item.workOrderNo}` : '编辑'} visible={item !== null} onOk={() => void save()}
     onCancel={() => { if (!saving) onClose() }} confirmLoading={saving} closable={!saving} maskClosable={!saving} okText="保存" cancelText="取消" unmountOnExit>
     <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
-      <Form.Item field="typeId" label="外发类型" rules={[{ required: true, message: '请选择外发类型' }]}
+      {can('type') && <Form.Item field="typeId" label="外发类型" rules={[{ required: true, message: '请选择外发类型' }]}
         extra={item && item.typeId == null ? '当前外发类型不在字典中，请重新选择' : undefined}>
         <Select aria-label="外发类型" options={typeOptions(types)}
           onChange={(value: number) => {
@@ -438,23 +472,27 @@ function EditDialog({ item, vendors, types, onClose, onSaved }: {
             const vendorId = form.getFieldValue('vendorId') as number | undefined
             if (vendorId !== undefined && !(item && value === item.typeId) && !allowed.includes(vendorId)) form.setFieldValue('vendorId', undefined)
           }} />
-      </Form.Item>
-      <Form.Item field="vendorId" label="外发厂商" rules={[{ required: true, message: '请选择外发厂商' }]}>
-        <Select aria-label="外发厂商" disabled={!item || selectedTypeId === undefined} options={item ? vendorOptions(vendors, types, item, selectedTypeId) : []} />
-      </Form.Item>
-      <Form.Item field="bomOn" label="BOM时间"><DatePicker style={{ width: '100%' }} /></Form.Item>
-      <Form.Item field="drawingReleasedOn" label="发图"><DatePicker style={{ width: '100%' }} /></Form.Item>
-      <Form.Item field="status" label="状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>
-      <Form.Item field="remark" label="备注" rules={[{ maxLength: 500, message: '备注最多 500 个字符' }]}>
+      </Form.Item>}
+      {can('vendor') && <Form.Item field="vendorId" label="外发厂商" rules={[{ required: true, message: '请选择外发厂商' }]}>
+        <Select aria-label="外发厂商" disabled={!item || (can('type') && selectedTypeId === undefined)}
+          options={item ? vendorOptions(vendors, types, item, can('type') ? selectedTypeId : item.typeId ?? undefined) : []} />
+      </Form.Item>}
+      {can('bomOn') && <Form.Item field="bomOn" label="BOM时间"><DatePicker style={{ width: '100%' }} /></Form.Item>}
+      {can('drawingReleasedOn') && <Form.Item field="drawingReleasedOn" label="发图"><DatePicker style={{ width: '100%' }} /></Form.Item>}
+      {can('status') && <Form.Item field="status" label="状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>}
+      {can('remark') && <Form.Item field="remark" label="备注" rules={[{ maxLength: 500, message: '备注最多 500 个字符' }]}>
         <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} />
-      </Form.Item>
+      </Form.Item>}
+      {custom.map((field) => <Form.Item key={field.key} field={`custom.${field.key}`} label={field.label}>
+        <CustomInput field={field} />
+      </Form.Item>)}
       <EnterSubmit />
     </Form>
   </Modal>
 }
 
-function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
-  visible: boolean; items: Item[]; vendors: Vendor[]; types: OutsourceType[]; onClose: () => void; onSaved: () => Promise<void>
+function BatchDialog({ visible, items, vendors, types, fields, onClose, onSaved }: {
+  visible: boolean; items: Item[]; vendors: Vendor[]; types: OutsourceType[]; fields: FieldColumn[]; onClose: () => void; onSaved: () => Promise<void>
 }) {
   const [vendorId, setVendorId] = useState<number>()
   const [typeId, setTypeId] = useState<number>()
@@ -463,9 +501,13 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
   const [drawingReleasedOn, setDrawingReleasedOn] = useState<string>()
   const [changeRemark, setChangeRemark] = useState(false)
   const [remark, setRemark] = useState('')
+  const [customValues, setCustomValues] = useState<Record<string, string | undefined>>({})
   const [saving, setSaving] = useState(false)
-  const reset = () => { setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setBomOn(undefined); setDrawingReleasedOn(undefined); setChangeRemark(false); setRemark('') }
-  const nothing = vendorId === undefined && typeId === undefined && !status && !bomOn && !drawingReleasedOn && !changeRemark
+  const can = (key: string) => fields.some((field) => field.key === key)
+  const custom = fields.filter(isCustom)
+  const reset = () => { setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setBomOn(undefined); setDrawingReleasedOn(undefined); setChangeRemark(false); setRemark(''); setCustomValues({}) }
+  const changedCustom = Object.entries(customValues).filter(([, value]) => value !== undefined)
+  const nothing = vendorId === undefined && typeId === undefined && !status && !bomOn && !drawingReleasedOn && !changeRemark && changedCustom.length === 0
   const save = async () => {
     if (saving || nothing) return
     setSaving(true)
@@ -473,6 +515,7 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
       await http.put<ApiResponses['PUT /outsource/items/batch']>('/outsource/items/batch', {
         items: items.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt })),
         vendorId, typeId, status, bomOn, drawingReleasedOn, remark: changeRemark ? remark.trim() : undefined,
+        values: changedCustom.length > 0 ? Object.fromEntries(changedCustom) : undefined,
       })
       Message.success(`已修改 ${items.length} 条记录`); reset(); await onSaved()
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
@@ -481,7 +524,7 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
     okButtonProps={{ disabled: nothing }} onCancel={() => { if (!saving) { reset(); onClose() } }} confirmLoading={saving}
     okText="保存" cancelText="取消">
     <Form layout="vertical" disabled={saving}>
-      <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId}
+      {can('type') && <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId}
         onChange={(value: number | undefined) => {
           setTypeId(value)
           if (value !== undefined && vendorId !== undefined) {
@@ -489,16 +532,20 @@ function BatchDialog({ visible, items, vendors, types, onClose, onSaved }: {
             if (!allowed.includes(vendorId)) setVendorId(undefined)
           }
         }}
-        options={typeOptions(types)} /></Form.Item>
-      <Form.Item label="外发厂商"><Select aria-label="外发厂商" allowClear placeholder="不修改" value={vendorId} onChange={setVendorId}
+        options={typeOptions(types)} /></Form.Item>}
+      {can('vendor') && <Form.Item label="外发厂商"><Select aria-label="外发厂商" allowClear placeholder="不修改" value={vendorId} onChange={setVendorId}
         options={vendors.filter((vendor) => vendor.status === 'ACTIVE' && (typeId === undefined || (types.find((type) => type.id === typeId)?.vendorIds ?? []).includes(vendor.id)))
-          .map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>
-      <Form.Item label="BOM时间"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={bomOn} onChange={(value) => setBomOn(value || undefined)} /></Form.Item>
-      <Form.Item label="发图"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={drawingReleasedOn} onChange={(value) => setDrawingReleasedOn(value || undefined)} /></Form.Item>
-      <Form.Item label="状态"><Select allowClear placeholder="不修改" value={status} onChange={setStatus} options={STATUS_OPTIONS} /></Form.Item>
-      <Form.Item label={<Checkbox checked={changeRemark} onChange={setChangeRemark}>修改备注</Checkbox>}>
+          .map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>}
+      {can('bomOn') && <Form.Item label="BOM时间"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={bomOn} onChange={(value) => setBomOn(value || undefined)} /></Form.Item>}
+      {can('drawingReleasedOn') && <Form.Item label="发图"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={drawingReleasedOn} onChange={(value) => setDrawingReleasedOn(value || undefined)} /></Form.Item>}
+      {can('status') && <Form.Item label="状态"><Select allowClear placeholder="不修改" value={status} onChange={setStatus} options={STATUS_OPTIONS} /></Form.Item>}
+      {can('remark') && <Form.Item label={<Checkbox checked={changeRemark} onChange={setChangeRemark}>修改备注</Checkbox>}>
         <Input.TextArea aria-label="备注" disabled={!changeRemark} value={remark} onChange={setRemark} maxLength={500} autoSize={{ minRows: 2, maxRows: 4 }} />
-      </Form.Item>
+      </Form.Item>}
+      {custom.map((field) => <Form.Item key={field.key} label={field.label}>
+        <CustomInput field={field} placeholder="不修改" value={customValues[field.key]}
+          onChange={(value) => setCustomValues((current) => ({ ...current, [field.key]: value }))} />
+      </Form.Item>)}
     </Form>
   </Modal>
 }

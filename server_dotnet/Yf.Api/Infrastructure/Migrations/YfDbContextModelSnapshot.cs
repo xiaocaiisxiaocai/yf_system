@@ -989,6 +989,127 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceField", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<bool>("BuiltIn")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("built_in");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<string>("DataType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("data_type");
+
+                    b.Property<string>("EditorScope")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ALL")
+                        .HasColumnName("editor_scope");
+
+                    b.Property<string>("FieldKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("field_key");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("label");
+
+                    b.Property<string>("Options")
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)")
+                        .HasColumnName("options");
+
+                    b.Property<int>("SortNo")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_no");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
+
+                    b.Property<ulong?>("UpdatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("updated_by");
+
+                    b.Property<bool>("VendorEditable")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("vendor_editable");
+
+                    b.Property<bool>("VendorVisible")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("vendor_visible");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FieldKey")
+                        .IsUnique()
+                        .HasDatabaseName("uk_outsource_fields_key");
+
+                    b.ToTable("outsource_fields", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceFieldEditorRole", b =>
+                {
+                    b.Property<ulong>("FieldId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("field_id");
+
+                    b.Property<ulong>("RoleId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("role_id");
+
+                    b.HasKey("FieldId", "RoleId");
+
+                    b.HasIndex("RoleId")
+                        .HasDatabaseName("idx_outsource_field_editor_roles_role");
+
+                    b.ToTable("outsource_field_editor_roles", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItem", b =>
                 {
                     b.Property<ulong>("Id")
@@ -1127,6 +1248,19 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("vendor_id");
 
+                    b.Property<DateTime?>("VendorSeenAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("vendor_seen_at");
+
+                    b.Property<DateTime?>("VendorUpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("vendor_updated_at");
+
+                    b.Property<string>("VendorUpdatedSigner")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("vendor_updated_signer");
+
                     b.Property<DateOnly?>("WorkOrderIssuedOn")
                         .HasColumnType("date")
                         .HasColumnName("work_order_issued_on");
@@ -1167,6 +1301,10 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
 
+                    b.Property<ulong?>("ActorOemAccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("actor_oem_account_id");
+
                     b.Property<ulong?>("ActorUserId")
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("actor_user_id");
@@ -1197,6 +1335,11 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(500)")
                         .HasColumnName("old_value");
 
+                    b.Property<string>("SignerName")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("signer_name");
+
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -1209,6 +1352,32 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_outsource_item_changes_item");
 
                     b.ToTable("outsource_item_changes", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItemValue", b =>
+                {
+                    b.Property<ulong>("ItemId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("item_id");
+
+                    b.Property<ulong>("FieldId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("field_id");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("varchar(500)")
+                        .HasColumnName("value");
+
+                    b.HasKey("ItemId", "FieldId");
+
+                    b.HasIndex("FieldId")
+                        .HasDatabaseName("idx_outsource_item_values_field");
+
+                    b.ToTable("outsource_item_values", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
@@ -4808,6 +4977,23 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasConstraintName("fk_outsource_default_cc_user");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceFieldEditorRole", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceField", null)
+                        .WithMany()
+                        .HasForeignKey("FieldId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_field_editor_roles_field");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Role", null)
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_field_editor_roles_role");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItem", b =>
                 {
                     b.HasOne("Yf.Api.Modules.Oem.Data.OemCompany", null)
@@ -4826,6 +5012,23 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_outsource_item_changes_item");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceItemValue", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceField", null)
+                        .WithMany()
+                        .HasForeignKey("FieldId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_item_values_field");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceItem", null)
+                        .WithMany()
+                        .HasForeignKey("ItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_item_values_item");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceMail", b =>

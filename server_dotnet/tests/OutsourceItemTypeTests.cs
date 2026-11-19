@@ -188,7 +188,8 @@ public sealed class OutsourceItemTypeTests
             new(null, item.VendorId, null, "手填备注", item.Status, edited.UpdatedAt, null, "11/20", null), ct))).Status);
         item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List) with { ChangedFields = null };
 
-        var snapshot = OutsourceWorkbook.Snapshot(item);
+        // By default vendors see every built-in column (是否有RobotV is internal), so that is what the mail recorded.
+        var snapshot = OutsourceWorkbook.Snapshot(item, OutsourceBuiltInFields.All.Select(x => new OutsourceWorkbook.Field(x.Key, x.Key, x.Width, x.Value)).ToArray());
         snapshot["quantity"] = "99";
         snapshot["remark"] = "旧备注";
         var json = System.Text.Json.JsonSerializer.Serialize(snapshot, new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
