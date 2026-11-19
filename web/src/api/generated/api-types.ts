@@ -1144,12 +1144,6 @@ export interface OutsourceFieldColumnResponse {
   canEdit: boolean
 }
 
-export interface OutsourceFieldCreate {
-  label?: string | null
-  dataType?: string | null
-  options?: Array<string> | null
-}
-
 export interface OutsourceFieldLayoutResponse {
   fields: Array<OutsourceFieldColumnResponse>
 }
@@ -2343,7 +2337,6 @@ export interface ApiResponses {
   "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
   "GET /outsource/settings/fields": OutsourceFieldSettingsResponse
-  "POST /outsource/settings/fields": OutsourceFieldSettingsResponse
   "PUT /outsource/settings/fields/order": OutsourceFieldSettingsResponse
   "PUT /outsource/settings/fields/{id}": OutsourceFieldSettingsResponse
   "PUT /outsource/settings/fields/{id}/status": OutsourceFieldSettingsResponse

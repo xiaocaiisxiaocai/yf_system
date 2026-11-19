@@ -179,7 +179,6 @@
   "POST /api/v1/outsource/mails/{}/retry",
   "POST /api/v1/outsource/settings/customers",
   "POST /api/v1/outsource/settings/customers/sync",
-  "POST /api/v1/outsource/settings/fields",
   "POST /api/v1/outsource/settings/types",
   "POST /api/v1/project-dictionaries",
   "POST /api/v1/projects",

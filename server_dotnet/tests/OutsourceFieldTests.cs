@@ -32,17 +32,17 @@ public sealed class OutsourceFieldTests
     {
         var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync(name, ct);
         await database.InitializeBusinessFixtureAsync(ct);
-        // 生管 imports; 采购 and 机构 both edit the list; only 采购 maintains the settings; only the system administrator the fields.
+        // 生管, 采购 and 机构 manage the list; only 采购 maintains the settings (fields included); 发信 only mails vendors.
         await database.ExecuteAsync("""
             INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
               (70,'生管',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (71,'采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (72,'机构',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (73,'发信',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:import');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage','outsource:settings');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 73,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:send');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:manage');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:manage','outsource:settings');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code IN ('outsource','outsource:manage');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 73,id FROM permissions WHERE code IN ('outsource','outsource:send');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9741,'of_planner','unused','生管甲','planner@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9742,'of_buyer','unused','采购乙','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
@@ -76,6 +76,9 @@ public sealed class OutsourceFieldTests
 
     private static async Task<int> StatusOfAsync(Func<Task> action) => (await Assert.ThrowsAsync<ApiException>(action)).Status;
 
+    /// <summary>Holds only outsource:send: no column of the list is theirs unless they are named on it.</summary>
+    private static readonly CurrentUser Sender = new(9744, "of_sender", "INTERNAL", null);
+
     [Fact(Timeout = 180_000)]
     public async Task TheMigrationKeepsTodaysColumnsAndAddsAnInternalRobotVColumn()
     {
@@ -99,9 +102,11 @@ public sealed class OutsourceFieldTests
         var layout = await f.Fields.LayoutAsync(f.Buyer, ct);
         Assert.Equal(["outsourceDate", "status", "hasRobotV", "type", "vendor", "bomOn", "drawingReleasedOn", "latestDueDate", "remark"],
             layout.Fields.Where(x => x.CanEdit).Select(x => x.Key));
-        Assert.Empty((await f.Fields.LayoutAsync(f.Planner, ct)).Fields.Where(x => x.CanEdit));
-        // Field settings are their own permission.
-        Assert.Equal(403, await StatusOfAsync(() => f.Fields.SettingsAsync(f.Buyer, ct)));
+        // Seeing the list needs no permission; filling a column in does (ALL = outsource:manage).
+        Assert.Empty((await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit));
+        // Field settings come with the settings permission.
+        Assert.NotEmpty((await f.Fields.SettingsAsync(f.Buyer, ct)).Fields);
+        Assert.Equal(403, await StatusOfAsync(() => f.Fields.SettingsAsync(f.Mechanic, ct)));
     }
 
     [Fact(Timeout = 180_000)]
@@ -112,13 +117,15 @@ public sealed class OutsourceFieldTests
         await using var _ = f.Database;
         var fields = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.ToDictionary(x => x.Key);
 
-        var created = await f.Fields.CreateAsync(f.Admin, new("交付方式", "SELECT", ["自取", "送货"]), ct);
-        var delivery = created.Fields.Single(x => x.Label == "交付方式");
+        // Columns are not added on the settings page (2026-11-19); a release adds them, as this one stands in for.
+        await f.Database.ExecuteAsync("""
+            INSERT INTO outsource_fields(field_key,built_in,label,data_type,options,sort_no,status,editor_scope,vendor_visible,vendor_editable)
+            VALUES('cdelivery',0,'交付方式','SELECT','["自取","送货"]',9999,'ACTIVE','ALL',0,0)
+            """, ct);
+        var delivery = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.Single(x => x.Label == "交付方式");
         Assert.Equal((false, false, "ALL", "CUSTOM"), (delivery.VendorVisible, delivery.VendorEditable, delivery.EditorScope, delivery.Category));
-        Assert.Equal(delivery.Key, created.Fields[^1].Key);
-        Assert.Equal(409, await StatusOfAsync(() => f.Fields.CreateAsync(f.Admin, new("交付方式", "TEXT", null), ct)));
-        Assert.Equal(400, await StatusOfAsync(() => f.Fields.CreateAsync(f.Admin, new("选项", "SELECT", []), ct)));
-        Assert.Equal(400, await StatusOfAsync(() => f.Fields.CreateAsync(f.Admin, new("文字", "TEXT", ["a"]), ct)));
+        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, delivery.Id, new(null, "SELECT", [], null, null, null, null), ct)));
+        Assert.Equal(409, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, delivery.Id, new("备注", null, null, null, null, null, null), ct)));
 
         // Built-in labels and types are fixed; 工令 and 状态 always show; IPMS columns are never filled in by hand.
         Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["remark"].Id, new("说明", null, null, null, null, null, null), ct)));
@@ -189,11 +196,12 @@ public sealed class OutsourceFieldTests
         Assert.Equal(400, await StatusOfAsync(() => f.Items.BatchUpdateAsync(f.Admin,
             new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, Values: new() { ["customer"] = "x" }), ct)));
 
-        // 发图 only by named people: 机构丙. Only accounts that can edit the list may be named.
+        // 发图 only by named people: 机构丙. Any active internal account may be named, with or without a permission.
         var settings = await f.Fields.SettingsAsync(f.Admin, ct);
-        Assert.Equal([9740UL, 9742UL, 9743UL], settings.Users!.Select(x => x.Id).Order());
+        Assert.Contains(9741UL, settings.Users!.Select(x => x.Id));
+        Assert.Contains(Sender.Id, settings.Users!.Select(x => x.Id));
         Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
-            new(null, null, null, null, null, "USERS", null, [9741]), ct)));
+            new(null, null, null, null, null, "USERS", null, [987654]), ct)));
         Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
             new(null, null, null, null, null, "USERS", null, []), ct)));
         var named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
@@ -208,6 +216,17 @@ public sealed class OutsourceFieldTests
         saved = (await f.Items.BatchUpdateAsync(f.Mechanic,
             new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, DrawingReleasedOn: "2026-12-01"), ct)).Items.Single();
         Assert.Equal(new DateOnly(2026, 12, 1), saved.DrawingReleasedOn);
+        // Being named is enough: 发信丁 holds no edit permission, fills in 发图, and still cannot do anything else.
+        named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+            new(null, null, null, null, null, "USERS", null, [Sender.Id]), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
+        Assert.Equal(["drawingReleasedOn"], (await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit).Select(x => x.Key));
+        saved = await f.Items.UpdateAsync(Sender, item.Id, new(null, item.VendorId, null, saved.Remark, saved.Status, saved.UpdatedAt,
+            DrawingReleasedOn: "2026-12-02"), ct);
+        Assert.Equal(new DateOnly(2026, 12, 2), saved.DrawingReleasedOn);
+        Assert.Equal(403, await StatusOfAsync(() => f.Items.UpdateAsync(Sender, item.Id,
+            new(null, item.VendorId, null, "发信的备注", saved.Status, saved.UpdatedAt), ct)));
+        Assert.Equal(403, await StatusOfAsync(() => f.Items.SetCompletionAsync(Sender, new([new(item.Id, saved.UpdatedAt)], true), ct)));
+        Assert.Equal(403, await StatusOfAsync(() => f.Items.BatchDeleteAsync(Sender, new([new(item.Id, saved.UpdatedAt)]), ct)));
         // Back to everyone: the named people are dropped.
         named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
             new(null, null, null, null, null, "ALL", null, null), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");

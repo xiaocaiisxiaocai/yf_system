@@ -107,7 +107,7 @@ public sealed class OutsourceField
     public string Status { get; set; } = null!;
     /// <summary>
     /// Who fills it in internally: ALL (everyone with outsource:manage), ROLES (<see cref="OutsourceFieldEditorRole"/>),
-    /// USERS (<see cref="OutsourceFieldEditorUser"/>), NONE.
+    /// USERS (<see cref="OutsourceFieldEditorUser"/>), NONE. ROLES and USERS need no outsourcing permission.
     /// </summary>
     public string EditorScope { get; set; } = null!;
     public bool VendorVisible { get; set; }

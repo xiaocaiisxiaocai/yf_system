@@ -84,7 +84,6 @@ const today = () => {
 /** The outsourcing list (外协清单契约 → 页面). */
 export default function OutsourceListPage() {
   const permissions = useAuth((state) => state.permissions)
-  const canImport = permissions.includes(OUTSOURCE_PERMISSIONS.import)
   const canManage = permissions.includes(OUTSOURCE_PERMISSIONS.manage)
   const canSend = permissions.includes(OUTSOURCE_PERMISSIONS.send)
   const [searchParams, setSearchParams] = useSearchParams()
@@ -346,13 +345,14 @@ export default function OutsourceListPage() {
     { title: '修改人', dataIndex: 'modifiedBy', width: 100, ellipsis: true },
     { title: '修改时间', width: 130, render: (_, item) => item.modifiedAt ? fmtTime(item.modifiedAt).slice(0, 16) : '' },
     {
-      title: '操作', width: canManage ? 80 : 56, align: 'center', fixed: 'right',
+      title: '操作', width: editable.length > 0 ? 80 : 56, align: 'center', fixed: 'right',
       render: (_, item) => <Space size={0}>
         <Tooltip content="变更履历">
           <Button type="text" size="mini" icon={<IconHistory />} aria-label={`工令 ${item.workOrderNo} 变更履历`} onClick={() => setHistory(item)} />
         </Tooltip>
-        {canManage && <Tooltip content={item.closed ? '已完成记录不可编辑' : editable.length === 0 ? '没有可由你填写的栏位' : '编辑'}>
-          <Button type="text" size="mini" disabled={item.closed || editable.length === 0} icon={<IconEdit />}
+        {/* Who fills which column in is set per column (栏位设定); no column of yours, no edit action. */}
+        {editable.length > 0 && <Tooltip content={item.closed ? '已完成记录不可编辑' : '编辑'}>
+          <Button type="text" size="mini" disabled={item.closed} icon={<IconEdit />}
             aria-label={`编辑工令 ${item.workOrderNo}`} onClick={() => setEditing(item)} />
         </Tooltip>}
       </Space>,
@@ -388,12 +388,12 @@ export default function OutsourceListPage() {
           title={`将所选 ${skipTargets.length} 条标记为无需通知？不会发送邮件；之后仍可随时发送。`} onOk={skipNotice}>
           <Button>无需通知 ({skipTargets.length})</Button>
         </Popconfirm>}
-        {canManage && openSelected.length > 0 && <>
-          {editable.length > 0 && <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({openSelected.length})</Button>}
-          <Popconfirm title={`将所选 ${openSelected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
-            <Button icon={<IconCheckCircle />}>标记完成</Button>
-          </Popconfirm>
-        </>}
+        {editable.length > 0 && openSelected.length > 0
+          && <Button icon={<IconEdit />} onClick={() => setBatchOpen(true)}>批量修改 ({openSelected.length})</Button>}
+        {canManage && openSelected.length > 0 && <Popconfirm
+          title={`将所选 ${openSelected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
+          <Button icon={<IconCheckCircle />}>标记完成</Button>
+        </Popconfirm>}
         {canManage && selected.length > 0 && (
           <Popconfirm title={[
             sentSelected > 0 ? `所选含 ${sentSelected} 条已发送给厂商的记录，删除后不会通知厂商` : '',
@@ -407,14 +407,14 @@ export default function OutsourceListPage() {
         {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running || (selected.length > 0 && openSelected.length === 0)}
           onClick={() => void syncNow()}>{openSelected.length > 0 ? `同步所选 (${openSelected.length})` : '立即同步'}</Button>}
         <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
-        {canImport && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>汇入</Button>}
+        {canManage && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>汇入</Button>}
       </Space>
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
       : <ResizableTable<Item> tableId="outsource-items" className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
         rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : 'outsource-row--normal',
           item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
-        rowSelection={canManage || canSend ? {
+        rowSelection={canManage || canSend || editable.length > 0 ? {
           type: 'checkbox', selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]),
         } : undefined}
         noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}

@@ -301,15 +301,6 @@ public sealed class OutsourceIpmsSyncService(
 
     private static DateTime? Utc(DateTime? value) => value is { } v ? DateTime.SpecifyKind(v, DateTimeKind.Utc) : null;
 
-    private static async Task AuthorizeAnyAsync(YfDbContext context, CurrentUser actor, CancellationToken ct)
-    {
-        AccessService.RequireInternal(actor);
-        await context.Database.OpenConnectionAsync(ct);
-        var connection = context.Database.Connection();
-        actor = await AccessService.ReadActorAsync(connection, null, actor, ct);
-        AccessService.RequireInternal(actor);
-        var codes = await AccessService.PermissionCodesAsync(connection, null, actor.Id, ct);
-        if (!codes.Any(code => code is OutsourcePermissions.View or OutsourcePermissions.Settings or OutsourcePermissions.Manage or OutsourcePermissions.Send))
-            throw ApiException.Forbidden();
-    }
+    private static Task AuthorizeAnyAsync(YfDbContext context, CurrentUser actor, CancellationToken ct) =>
+        OutsourceItemService.AuthorizeReadAsync(context, actor, null, ct);
 }

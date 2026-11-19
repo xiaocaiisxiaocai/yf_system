@@ -1,6 +1,6 @@
 import { OEM_UI_ENABLED } from '../features'
 import { oemHome } from '../oem/oemNavigation'
-import { outsourceHome } from '../outsource/outsourceNavigation'
+import { OUTSOURCE_HOME } from '../outsource/outsourceNavigation'
 
 interface NavigationGrants {
   menus: readonly string[]
@@ -50,6 +50,7 @@ export function businessHomes(grants: NavigationGrants) {
   return {
     collaboration: collaborationPages(grants)[0]?.path ?? null,
     oem: OEM_UI_ENABLED && internal ? oemHome(grants.permissions) : null,
-    outsource: internal ? outsourceHome(grants.permissions) : null,
+    // Every internal account sees the outsourcing list (外协清单契约 → 权限).
+    outsource: internal ? OUTSOURCE_HOME : null,
   }
 }

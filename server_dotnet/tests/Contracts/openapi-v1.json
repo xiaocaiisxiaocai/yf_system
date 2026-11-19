@@ -8748,43 +8748,6 @@
             }
           }
         }
-      },
-      "post": {
-        "tags": [
-          "Yf.Api.Tests"
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OutsourceFieldCreate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OutsourceFieldSettingsResponse"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorResponse"
-                }
-              }
-            }
-          }
-        }
       }
     },
     "/api/v1/outsource/settings/fields/order": {
@@ -14550,32 +14513,6 @@
           },
           "canEdit": {
             "type": "boolean"
-          }
-        },
-        "additionalProperties": false
-      },
-      "OutsourceFieldCreate": {
-        "required": [
-          "dataType",
-          "label",
-          "options"
-        ],
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string",
-            "nullable": true
-          },
-          "dataType": {
-            "type": "string",
-            "nullable": true
-          },
-          "options": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "nullable": true
           }
         },
         "additionalProperties": false

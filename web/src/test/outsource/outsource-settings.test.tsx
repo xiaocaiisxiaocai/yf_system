@@ -47,9 +47,9 @@ describe('外协清单入口与设定', () => {
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
   })
 
-  it('有设定权限的内部员工可从业务切换栏进入外协清单', async () => {
+  it('每个内部员工都可从业务切换栏进入外协清单，不需要权限', async () => {
     const user = userEvent.setup()
-    setInternalSession(['outsource:settings'])
+    setInternalSession([])
     render(
       <MemoryRouter initialEntries={['/']}>
         <Routes><Route path="*" element={<><AppRail active="collaboration" /><CurrentLocation /></>} /></Routes>
@@ -57,11 +57,12 @@ describe('外协清单入口与设定', () => {
     )
     expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '外协清单' }))
-    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/settings')
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/items')
   })
 
-  it('没有外协权限时不显示入口', () => {
-    setInternalSession(['dashboard'])
+  it('厂商账号没有外协清单入口', () => {
+    setInternalSession(['outsource:settings'])
+    useAuth.setState({ user: { ...useAuth.getState().user!, userType: 'SUPPLIER', supplierId: 3 } })
     render(<MemoryRouter><AppRail active="collaboration" /></MemoryRouter>)
     expect(screen.queryByRole('button', { name: '外协清单' })).not.toBeInTheDocument()
   })
@@ -200,9 +201,9 @@ describe('外协清单入口与设定', () => {
     expect(await screen.findByText(/缺少简称 0/)).toBeInTheDocument()
   })
 
-  it('只有栏位设定权限时只显示栏位设定：厂商可见可切换，固定显示的栏位不能关闭，内部填写可指定角色', async () => {
+  it('栏位设定：不能新增栏位，厂商可见可切换，固定显示的栏位不能关闭，内部填写可指定角色', async () => {
     const user = userEvent.setup()
-    setInternalSession(['outsource', 'outsource:field_settings'])
+    setInternalSession(['outsource', 'outsource:settings'])
     const field = (id: number, key: string, label: string, extra: Record<string, unknown> = {}) => ({
       id, key, builtIn: true, label, dataType: 'TEXT', options: [], category: 'MANUAL', sortNo: id * 10, status: 'ACTIVE', pinned: false,
       vendorVisible: true, vendorVisibleLocked: false, vendorEditable: false, vendorEditableAllowed: true, editorScope: 'ALL',
@@ -216,14 +217,15 @@ describe('外协清单入口与设定', () => {
       ],
       roles: [{ id: 71, name: '采购' }, { id: 72, name: '机构' }],
     }
-    const get = vi.spyOn(http, 'get').mockResolvedValue({ data: settings } as never)
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/settings/fields' ? settings : [],
+    } as never))
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: settings } as never)
     render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
 
-    expect(await screen.findByRole('tab', { name: '栏位设定' })).toBeInTheDocument()
-    expect(screen.queryByRole('tab', { name: '外发类型' })).not.toBeInTheDocument()
-    expect(get).not.toHaveBeenCalledWith('/outsource/settings/types')
+    await user.click(await screen.findByRole('tab', { name: '栏位设定' }))
     expect(await screen.findByRole('switch', { name: '工令 厂商可见' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /新增栏位/ })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('switch', { name: '是否有RobotV 厂商可见' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/6', { vendorVisible: true }))
@@ -242,7 +244,7 @@ describe('外协清单入口与设定', () => {
 
   it('有发送权限时，业务切换栏的外协清单显示待发送数量，点击直接进入待发送筛选', async () => {
     const user = userEvent.setup()
-    setInternalSession(['dashboard', 'project:list', 'outsource', 'outsource:view', 'outsource:send'])
+    setInternalSession(['dashboard', 'project:list', 'outsource', 'outsource:send'])
     useAuth.setState({ menus: ['dashboard'] })
     const get = vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/send-queue' ? { count: 3 } : [],
