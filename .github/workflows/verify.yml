@@ -14,9 +14,18 @@ permissions:
   contents: read
 
 jobs:
-  non-browser-gates:
+  # The non-browser gates of verify-all.ps1 run as parallel jobs: the .NET tests in four shards
+  # (tests/test-shards.json; regenerate it with scripts/test-shards.py plan when the shards drift
+  # apart), the HTTP contract suite, and the web/script checks. `non-browser-gates` is the single
+  # required status check that collects them.
+  dotnet-tests:
+    name: dotnet-tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     services:
       mysql:
         image: mysql:8.4
@@ -40,19 +49,55 @@ jobs:
           global-json-file: server_dotnet/global.json
           cache: true
           cache-dependency-path: server_dotnet/**/packages.lock.json
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
+          python-version: "3.11"
+      - name: Run .NET test shard
+        shell: pwsh
+        run: ./server_dotnet/scripts/verify-all.ps1 -Part dotnet -TestShard ${{ matrix.shard }}/4
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-dotnet-${{ matrix.shard }}
+          path: .artifacts/tests/verify-all/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  http-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      YF_TEST_DATABASE_URL: mysql://root:root@127.0.0.1:3306/ignored
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: server_dotnet/global.json
+          cache: true
+          cache-dependency-path: server_dotnet/**/packages.lock.json
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
       - name: Install HTTP test dependency
         run: python -m pip install pymysql==1.1.2
-      - name: Run full non-browser verification
+      - name: Run HTTP contract suite
         shell: pwsh
-        run: ./server_dotnet/scripts/verify-all.ps1
+        run: ./server_dotnet/scripts/verify-all.ps1 -Part http
       - name: Scan .NET dependencies
         # `dotnet list package --vulnerable` exits 0 even when it reports vulnerabilities,
         # so fail explicitly on its report marker (and on any command failure).
@@ -69,6 +114,39 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: verify-http
+          path: .artifacts/tests/verify-all/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_NOLOGO: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: server_dotnet/global.json
+          cache: true
+          cache-dependency-path: server_dotnet/**/packages.lock.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.11"
+      - name: Run web and script checks
+        shell: pwsh
+        run: ./server_dotnet/scripts/verify-all.ps1 -Part web
       - name: Audit web and build dependencies
         working-directory: web
         # Allowlisted advisories live in scripts/audit-allowlist.json with a reason and a review date;
@@ -78,10 +156,29 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: verify-all-report
+          name: verify-web
           path: .artifacts/tests/verify-all/
           retention-days: 14
           if-no-files-found: ignore
+
+  non-browser-gates:
+    # The required status check: green only when every part above succeeded. A failed, skipped or
+    # cancelled part fails it, so the gate can never pass by default.
+    needs: [dotnet-tests, http-contract, web]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every part to succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        shell: python
+        run: |
+          import json, os, sys
+          needs = json.loads(os.environ["RESULTS"])
+          for name, item in needs.items():
+              print(name + ": " + item["result"])
+          sys.exit(0 if len(needs) == 3 and all(item["result"] == "success" for item in needs.values()) else 1)
 
   deploy-security:
     # Deployment/maintenance scripts target IIS on Windows PowerShell 5.1 (ACLs, Protect-YfDirectory),
