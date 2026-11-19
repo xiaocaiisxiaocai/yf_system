@@ -298,6 +298,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (departmentChanged) await EnsureNoActiveProjectResponsibilityWithSectionAsync(context, id, ct);
         if (roleChanged && !await RoleHasPermissionAsync(context, roleId, "project:list", ct))
             await EnsureNoActiveProjectResponsibilityAsync(context, id, ct);
+        var leaderBaseline = departmentChanged ? await DepartmentService.LeaderViolationsAsync(context, ct) : null;
         context.Attach(user);
         if (request.RealName is not null) user.RealName = request.RealName.Trim();
         if (request.Email is not null) user.Email = request.Email.Trim();
@@ -305,7 +306,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await context.SaveChangesAsync(ct);
         if (request.Scopes is { Count: > 0 })
             await ApplyUserScopeAssignmentAsync(context, actor, user, id, request.Scopes, ct);
-        if (departmentChanged) await DepartmentService.EnsureLeaderRulesAsync(context, ct);
+        if (departmentChanged) await DepartmentService.EnsureLeaderRulesAsync(context, leaderBaseline!, ct);
         if (roleChanged)
         {
             await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);

@@ -185,6 +185,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         {
             resultId = id.Value;
             var target = existing!;
+            var leaderBaseline = parentChanged ? await LeaderViolationsAsync(context, ct) : null;
             // Re-attach for update: `existing` was loaded no-tracking above (FindAsync).
             context.Attach(target);
             target.Name = name;
@@ -196,7 +197,7 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
             {
                 await RecomputeAsync(context, resultId, kind, ct);
                 await EnsureProjectOwnerSectionsRemainActiveAsync(context, protectedProjectIds, ct);
-                await EnsureLeaderRulesAsync(context, ct);
+                await EnsureLeaderRulesAsync(context, leaderBaseline!, ct);
             }
         }
         var row = await FindAsync(context, resultId, ct) ?? throw ApiException.NotFound();
@@ -295,13 +296,29 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
     /// Organisation leader invariants (2026-11-05): one person leads at most one organisation, and a leader belongs
     /// to the organisation they lead or one of its descendants. Called after a write inside the management-locked
     /// transaction, so it sees the pending state and a violation rolls the write back.
+    /// Only violations this write introduces are refused: <paramref name="before"/> holds the ones that already existed
+    /// (<see cref="LeaderViolationsAsync"/> taken before the write), so old inconsistent data never blocks an unrelated
+    /// save that names somebody else; it is cleaned up on the organisation page.
     /// </summary>
-    internal static async Task EnsureLeaderRulesAsync(YfDbContext context, CancellationToken ct)
+    internal static async Task EnsureLeaderRulesAsync(YfDbContext context, IReadOnlySet<string> before, CancellationToken ct)
     {
+        var introduced = (await LeaderViolationListAsync(context, ct)).FirstOrDefault(x => !before.Contains(x.Key));
+        if (introduced is not null) throw ApiException.BadRequest(introduced.Message);
+    }
+
+    /// <summary>The leader-rule violations present right now, as stable keys; take it before a write.</summary>
+    internal static async Task<IReadOnlySet<string>> LeaderViolationsAsync(YfDbContext context, CancellationToken ct) =>
+        (await LeaderViolationListAsync(context, ct)).Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+
+    private sealed record LeaderViolation(string Key, string Message);
+
+    private static async Task<List<LeaderViolation>> LeaderViolationListAsync(YfDbContext context, CancellationToken ct)
+    {
+        var violations = new List<LeaderViolation>();
         var departments = await context.Departments.AsNoTracking()
             .Select(d => new { d.Id, d.Name, d.ParentId, d.LeaderAccountId }).ToArrayAsync(ct);
         var led = departments.Where(d => d.LeaderAccountId.HasValue).ToArray();
-        if (led.Length == 0) return;
+        if (led.Length == 0) return violations;
         var leaderIds = led.Select(d => d.LeaderAccountId!.Value).Distinct().ToArray();
         var leaders = await context.Users.AsNoTracking().Where(user => Enumerable.Contains(leaderIds, user.Id))
             .Select(user => new { user.Id, user.RealName, user.DepartmentId }).ToDictionaryAsync(user => user.Id, ct);
@@ -309,14 +326,17 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         foreach (var group in led.GroupBy(d => d.LeaderAccountId!.Value).Where(group => group.Count() > 1))
         {
             var name = leaders.TryGetValue(group.Key, out var person) ? person.RealName : group.Key.ToString();
-            throw ApiException.BadRequest($"{name}同时是「{string.Join("」「", group.Select(d => d.Name))}」的主管，一人只能担任一个组织的主管");
+            violations.Add(new($"many:{group.Key}:{string.Join(',', group.Select(d => d.Id).Order())}",
+                $"{name}同时是「{string.Join("」「", group.Select(d => d.Name))}」的主管，一人只能担任一个组织的主管"));
         }
         foreach (var department in led)
         {
             if (!leaders.TryGetValue(department.LeaderAccountId!.Value, out var leader)) continue;
             if (!IsWithin(parents, leader.DepartmentId, department.Id))
-                throw ApiException.BadRequest($"{leader.RealName}不属于「{department.Name}」或其下级组织，不能担任该组织主管；请先更换该组织主管");
+                violations.Add(new($"outside:{department.Id}:{leader.Id}:{leader.DepartmentId}",
+                    $"{leader.RealName}不属于「{department.Name}」或其下级组织，不能担任该组织主管；请先更换该组织主管"));
         }
+        return violations;
     }
 
     internal static bool IsWithin(IReadOnlyDictionary<ulong, ulong?> parents, ulong? memberDepartmentId, ulong ancestorId)
