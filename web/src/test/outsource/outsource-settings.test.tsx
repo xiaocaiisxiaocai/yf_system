@@ -135,6 +135,35 @@ describe('外协清单入口与设定', () => {
     await user.click(toggle)
     expect(put).toHaveBeenCalledWith('/outsource/settings/sync-schedule', { enabled: false })
     await waitFor(() => expect(toggle).not.toBeChecked())
+    // Without outsource:manage there is no manual sync here (the server would refuse it).
+    expect(screen.queryByRole('button', { name: /立即同步/ })).not.toBeInTheDocument()
+  })
+
+  it('有管理权限时，更新外协清单可以立即同步全部未完成项目', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings', 'outsource:manage'])
+    const syncStatus = {
+      syncTime: '03:30', scheduleEnabled: true, ipmsConfigured: true, running: false, lastStartedAt: null, lastFinishedAt: null,
+      lastSuccessAt: null, lastError: null, lastTrigger: null, lastProcessed: 0, lastChanged: 0, lastClosed: 0, lastMissing: 0,
+    }
+    const mirrorStatus = {
+      phase: 'IDLE', runMode: null, page: null, pageSize: 100, fetched: 0, pages: 0, total: null, pendingReason: null, startedAt: null,
+      lastFinishedAt: null, lastSuccessAt: null, lastError: null, lastTrigger: null, lastCount: 0, mirrorCount: 0, preview: [],
+    }
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/sync-status') ? syncStatus : url.endsWith('/mes-mirror/status') ? mirrorStatus
+        : url.endsWith('/mes-mirror/settings') ? { baseUrl: '', configBaseUrl: null, saved: false, account: '', passwordSet: false, accountConfigured: false, syncTime: '03:00', scheduleEnabled: false }
+          : url.endsWith('/vendors') ? vendors : [],
+    } as never))
+    const post = vi.spyOn(http, 'post').mockResolvedValue({
+      data: { ...syncStatus, lastTrigger: 'MANUAL', lastFinishedAt: '2026-11-19T12:00:00Z', lastSuccessAt: '2026-11-19T12:00:00Z', lastProcessed: 12, lastChanged: 3 },
+    } as never)
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+
+    await user.click(await screen.findByRole('tab', { name: 'IPMS 同步' }))
+    await user.click(await screen.findByRole('button', { name: /立即同步/ }))
+    expect(post).toHaveBeenCalledWith('/outsource/items/sync', { itemIds: null })
+    expect(await screen.findByText(/处理 12，变更 3/)).toBeInTheDocument()
   })
 
 

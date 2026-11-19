@@ -3,8 +3,10 @@ import {
   Button, Card, Checkbox, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Tabs, Tag, TimePicker,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconPlus } from '@arco-design/web-react/icon'
+import { IconPlus, IconSync } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { useAuth } from '../../store/auth'
+import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
 import EnterSubmit from '../../components/EnterSubmit'
@@ -252,6 +254,9 @@ function SyncTab() {
   const [time, setTime] = useState<string>()
   const [error, setError] = useState(false)
   const { saving, run } = useSaving()
+  // Manual sync of the open items is the list page's "立即同步" and needs the same permission.
+  const canSync = useAuth((state) => state.permissions.includes(OUTSOURCE_PERMISSIONS.manage))
+  const { saving: syncing, run: runSync } = useSaving()
 
   const load = useCallback(async () => {
     setError(false)
@@ -277,6 +282,12 @@ function SyncTab() {
     setStatus(response.data); setTime(response.data.syncTime); Message.success('同步时间已保存')
   })
 
+  const syncNow = () => runSync(async () => {
+    const response = await http.post<ApiResponses['POST /outsource/items/sync']>('/outsource/items/sync', { itemIds: null })
+    setStatus(response.data)
+    Message.success(`已同步 ${response.data.lastProcessed} 条，${response.data.lastChanged} 条有变更`)
+  })
+
   if (error) return <LoadError message="同步状态加载失败" onRetry={load} />
   if (!status) return null
   const trigger = status.lastTrigger === 'SCHEDULED' ? '定时' : status.lastTrigger === 'MANUAL' ? '手动' : '—'
@@ -291,6 +302,8 @@ function SyncTab() {
       <span>定时同步</span>
       <Switch aria-label="定时同步" checkedText="开启" uncheckedText="停止" checked={status.scheduleEnabled} disabled={saving}
         onChange={(value) => void setSchedule(value)} />
+      {canSync && <Button icon={<IconSync />} loading={syncing || status.running}
+        onClick={() => void syncNow()}>立即同步</Button>}
     </Space>
     <Descriptions column={1} border className="outsource-sync-descriptions" data={[
       { label: '最近成功', value: syncTime(status.lastSuccessAt) },

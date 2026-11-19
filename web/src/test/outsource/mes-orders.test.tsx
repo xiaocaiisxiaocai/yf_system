@@ -4,8 +4,45 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import http from '../../api/client'
 import MesOrdersPage from '../../outsource/pages/MesOrdersPage'
 
+const mirrorIdle = {
+  phase: 'IDLE', runMode: null, page: null, pageSize: 100, fetched: 0, pages: 0, total: null, pendingReason: null, startedAt: null,
+  lastFinishedAt: null, lastSuccessAt: null, lastError: null, lastTrigger: 'SCHEDULED', lastCount: 1794, mirrorCount: 1794, preview: [],
+}
+const mirrorRunning = { ...mirrorIdle, phase: 'RUNNING', runMode: 'ALL', fetched: 200, pages: 2, total: 1794, lastTrigger: 'MANUAL' }
+
 describe('IPMS 资料', () => {
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
+
+  it('同步按钮发起全部抓取，进行中显示进度，完成后重新加载列表', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let mirror: unknown = mirrorIdle
+    vi.spyOn(http, 'get').mockImplementation(() => Promise.resolve({ data: mirror } as never))
+    const post = vi.spyOn(http, 'post').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/run') ? mirrorRunning : { list: [], total: 0, page: 1, pageSize: 20 },
+    } as never))
+    render(<MemoryRouter><MesOrdersPage /></MemoryRouter>)
+    await waitFor(() => expect(screen.getByRole('button', { name: /^同步$/ })).toBeEnabled())
+
+    fireEvent.click(screen.getByRole('button', { name: /^同步$/ }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/mes-mirror/run', { mode: 'ALL' }))
+    expect(await screen.findByRole('button', { name: /同步中 200 \/ 1794/ })).toBeInTheDocument()
+
+    const queries = () => post.mock.calls.filter(([url]) => url === '/outsource/mes-mirror/orders/query').length
+    const before = queries()
+    mirror = { ...mirrorIdle, lastTrigger: 'MANUAL', mirrorCount: 1800 }
+    await vi.advanceTimersByTimeAsync(3000)
+    await waitFor(() => expect(queries()).toBe(before + 1))
+    expect(screen.getByRole('button', { name: /^同步$/ })).toBeEnabled()
+  })
+
+  it('定时抓取进行中打开页面时显示进度，不能再发起同步', async () => {
+    vi.spyOn(http, 'get').mockResolvedValue({ data: { ...mirrorRunning, lastTrigger: 'SCHEDULED' } } as never)
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { list: [], total: 0, page: 1, pageSize: 20 } } as never)
+    render(<MemoryRouter><MesOrdersPage /></MemoryRouter>)
+    const button = await screen.findByRole('button', { name: /同步中 200 \/ 1794/ })
+    fireEvent.click(button)
+    expect(post).not.toHaveBeenCalledWith('/outsource/mes-mirror/run', expect.anything())
+  })
 
   it('分页与筛选放在请求体里发送，筛选条件再多也不会让地址过长，且顶部显示已启用筛选并可一键清空', async () => {
     const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { list: [], total: 0, page: 1, pageSize: 20 } } as never)
