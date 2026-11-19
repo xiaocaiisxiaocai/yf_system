@@ -102,6 +102,7 @@
   "GET /api/v1/project-copy-jobs",
   "GET /api/v1/project-copy-jobs/{}",
   "GET /api/v1/project-dictionaries",
+  "GET /api/v1/project-filter-options",
   "GET /api/v1/project-owner-options",
   "GET /api/v1/projects",
   "GET /api/v1/projects/{}",

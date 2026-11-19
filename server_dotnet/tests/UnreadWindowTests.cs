@@ -45,7 +45,7 @@ public sealed class UnreadWindowTests
 
         Assert.Equal(1UL, await MessageService.UnreadCountAsync(conn, null, 1, 1, ct));
         var projects = new ProjectService(new AuditService([]), new AppOptions());
-        Assert.Equal(1UL, Assert.Single((await projects.ListAsync(conn, admin, 1, 20, null, null, null, null, false, false, ct)).List).UnreadMessages);
+        Assert.Equal(1UL, Assert.Single((await projects.ListAsync(conn, admin, 1, 20, null, null, null, null, false, false, null, null, ct)).List).UnreadMessages);
         Assert.Equal(1UL, (await projects.DetailAsync(conn, admin, 1, ct)).UnreadMessages);
 
         var collaboration = new CollaborationService();

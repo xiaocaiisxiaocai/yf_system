@@ -36,6 +36,8 @@ internal sealed partial class ProjectService(
         string? materialState,
         bool overdue,
         bool mine,
+        ulong? responsibleUserId,
+        ulong? sectionId,
         CancellationToken ct)
     {
         var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
@@ -64,6 +66,10 @@ internal sealed partial class ProjectService(
         }
         if (status is not null) query = query.Where(project => project.Status == status);
         if (supplierId is not null) query = query.Where(project => project.SupplierId == supplierId.Value);
+        // Both narrow the caller's visible projects only, so neither can reveal a project outside its data range.
+        if (responsibleUserId is not null)
+            query = query.Where(project => project.ResponsibleUserId == responsibleUserId.Value);
+        if (sectionId is not null) query = query.Where(project => project.SectionId == sectionId.Value);
         if (materialState is not null)
         {
             var matching = ProjectQueries.InProgressMaterial(db).Where(row => row.State == materialState)
@@ -410,6 +416,33 @@ internal sealed partial class ProjectService(
             .ToListAsync(ct);
         await tx.CommitAsync(ct);
         return rows;
+    }
+
+    /// <summary>
+    /// The responsible users and sections that occur among the projects the caller can see, for the list's filters.
+    /// Derived from the visible projects so the options never name anyone outside the caller's data range.
+    /// </summary>
+    internal async Task<ProjectFilterOptionsResponse> FilterOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)
+    {
+        await using var tx = await AppDb.BeginTransactionAsync(conn, ct);
+        var current = await AccessService.ReadActorAsync(conn, tx, actor, ct);
+        AccessService.RequireInternal(current);
+        await using var db = EfDb.Use(conn, tx);
+        var visible = await ProjectAccessService.VisibleQueryAsync(db, current, ct);
+        var ownerIds = visible.Where(project => project.ResponsibleUserId != null)
+            .Select(project => project.ResponsibleUserId!.Value).Distinct();
+        var sectionIds = visible.Where(project => project.SectionId != null)
+            .Select(project => project.SectionId!.Value).Distinct();
+        var owners = await db.Users.Where(user => ownerIds.Contains(user.Id))
+            .OrderBy(user => user.RealName).ThenBy(user => user.Id)
+            .Select(user => new ProjectFilterUserOption(user.Id, user.EmployeeNo, user.RealName))
+            .ToListAsync(ct);
+        var sections = await db.Departments.Where(department => sectionIds.Contains(department.Id))
+            .OrderBy(department => department.Name).ThenBy(department => department.Id)
+            .Select(department => new ProjectFilterSectionOption(department.Id, department.Name))
+            .ToListAsync(ct);
+        await tx.CommitAsync(ct);
+        return new ProjectFilterOptionsResponse(owners, sections);
     }
 
     internal async Task<List<ProjectOwnerOption>> ProjectOwnerOptionsAsync(MySqlConnection conn, CurrentUser actor, CancellationToken ct)

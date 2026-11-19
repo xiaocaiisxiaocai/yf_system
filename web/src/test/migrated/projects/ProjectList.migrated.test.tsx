@@ -88,6 +88,7 @@ async function enterCreatedOption(id: string, value: string) {
 function successfulGet(url: string, config?: GetConfig) {
   if (url === '/projects') return Promise.resolve({ data: page() })
   if (url === '/supplier-options') return Promise.resolve({ data: suppliers })
+  if (url === '/project-filter-options') return Promise.resolve({ data: { responsibleUsers: [], sections: [] } })
   if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
   if (url === '/supplier-contacts') return Promise.resolve({ data: contactsBySupplier[config?.params?.supplierId ?? 0] ?? [] })
   if (url === '/robot-parts') {
@@ -234,6 +235,7 @@ describe('ProjectList migrated behavior', () => {
       if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
       if (url === '/robot-parts') return Promise.reject(new Error('catalog temporarily unavailable'))
       if (url === '/supplier-contacts') return Promise.resolve({ data: contactsBySupplier[8] })
+      if (url === '/project-filter-options') return Promise.resolve({ data: { responsibleUsers: [], sections: [] } })
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -423,6 +425,7 @@ describe('ProjectList migrated behavior', () => {
       }
       if (url === '/project-dictionaries') return Promise.resolve({ data: dictionaryOptions(config) })
       if (url === '/robot-parts') return Promise.resolve({ data: [] })
+      if (url === '/project-filter-options') return Promise.resolve({ data: { responsibleUsers: [], sections: [] } })
       throw new Error(`unexpected GET ${url}`)
     })
     const user = userEvent.setup()
@@ -548,5 +551,35 @@ describe('ProjectList migrated behavior', () => {
     await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
       params: { page: 1, pageSize: 10, keyword: undefined, status: undefined, supplierId: undefined },
     })))
+  })
+  it('按负责人和课别筛选看得到的项目，只看本人时不显示这两个筛选', async () => {
+    mocks.get.mockImplementation((url: string, config?: GetConfig) => url === '/project-filter-options'
+      ? Promise.resolve({ data: {
+        responsibleUsers: [{ id: 51, employeeNo: 'eng-a', realName: '工程师甲' }, { id: 52, employeeNo: 'eng-b', realName: '工程师乙' }],
+        sections: [{ id: 61, name: '仿真一课' }, { id: 62, name: '仿真二课' }],
+      } })
+      : successfulGet(url, config))
+    render(<MemoryRouter initialEntries={['/projects?section=61']}><ProjectList /><LocationProbe /></MemoryRouter>)
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
+      params: expect.objectContaining({ sectionId: 61, responsibleUserId: undefined }),
+    })))
+    const owner = await screen.findByText('负责人', { selector: '.arco-select-view-value' })
+    fireEvent.click(owner)
+    fireEvent.click((await screen.findAllByRole('option', { name: '工程师乙（eng-b）' })).at(-1)!)
+    await waitFor(() => expect(locationProbe.search).toContain('owner=52'))
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
+      params: expect.objectContaining({ sectionId: 61, responsibleUserId: 52 }),
+    })))
+  })
+
+  it('选项不足两项时不显示负责人和课别筛选', async () => {
+    mocks.get.mockImplementation((url: string, config?: GetConfig) => url === '/project-filter-options'
+      ? Promise.resolve({ data: { responsibleUsers: [{ id: 1, employeeNo: 'admin1', realName: '管理员' }], sections: [{ id: 61, name: '仿真一课' }] } })
+      : successfulGet(url, config))
+    renderList()
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/project-filter-options', expect.anything()))
+    await screen.findByPlaceholderText('项目名称 / 工令号 / 机型 / 料号')
+    expect(screen.queryByText('负责人', { selector: '.arco-select-view-value' })).toBeNull()
+    expect(screen.queryByText('课别', { selector: '.arco-select-view-value' })).toBeNull()
   })
 })

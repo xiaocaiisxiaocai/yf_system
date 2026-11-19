@@ -156,6 +156,13 @@ public sealed record SupplierOption(ulong Id, string Name);
 
 public sealed record ProjectOwnerOption(ulong Id, string EmployeeNo, string RealName, ulong? SectionId, string? SectionName);
 
+public sealed record ProjectFilterUserOption(ulong Id, string EmployeeNo, string RealName);
+
+public sealed record ProjectFilterSectionOption(ulong Id, string Name);
+
+public sealed record ProjectFilterOptionsResponse(
+    IReadOnlyList<ProjectFilterUserOption> ResponsibleUsers, IReadOnlyList<ProjectFilterSectionOption> Sections);
+
 public sealed record ProjectCopyRecord(
     ulong CopyId, ulong SourceProjectId, ulong TargetProjectId, int FileCount, ulong TotalBytes, DateTime CreatedAt);
 

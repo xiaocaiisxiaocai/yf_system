@@ -1585,6 +1585,22 @@ export interface ProjectDictionaryUpsertRequest {
   enabled: boolean
 }
 
+export interface ProjectFilterOptionsResponse {
+  responsibleUsers: Array<ProjectFilterUserOption>
+  sections: Array<ProjectFilterSectionOption>
+}
+
+export interface ProjectFilterSectionOption {
+  id: number
+  name: string
+}
+
+export interface ProjectFilterUserOption {
+  id: number
+  employeeNo: string
+  realName: string
+}
+
 export interface ProjectMaterialReviewRequest {
   expectedSupplierFileId?: number | null
   reason?: string | null
@@ -2251,6 +2267,7 @@ export interface ApiResponses {
   "POST /project-dictionaries": ProjectDictionaryResponse
   "DELETE /project-dictionaries/{id}": EmptyResponse
   "PUT /project-dictionaries/{id}": ProjectDictionaryResponse
+  "GET /project-filter-options": ProjectFilterOptionsResponse
   "GET /project-owner-options": Array<ProjectOwnerOption>
   "GET /projects": PageResponseOfProjectResponse
   "POST /projects": ProjectResponse

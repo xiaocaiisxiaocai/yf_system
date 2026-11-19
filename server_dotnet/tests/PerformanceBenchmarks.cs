@@ -39,7 +39,7 @@ public sealed class PerformanceBenchmarks
             ("dashboard summary", conn => dashboard.SummaryAsync(conn, admin, ct)),
             ("dashboard unread messages", conn => dashboard.MessagesAsync(conn, admin, 1, 10, true, ct)),
             ("dashboard messages", conn => dashboard.MessagesAsync(conn, admin, 1, 10, false, ct)),
-            ("project list", conn => projects.ListAsync(conn, admin, 1, 20, null, null, null, null, false, false, ct)),
+            ("project list", conn => projects.ListAsync(conn, admin, 1, 20, null, null, null, null, false, false, null, null, ct)),
             ("notifications (all)", conn => collaboration.NotificationsAsync(conn, admin, 1, 20, false, ct)),
             ("notifications (unread)", conn => collaboration.NotificationsAsync(conn, admin, 1, 20, true, ct)),
         };

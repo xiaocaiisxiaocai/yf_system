@@ -150,7 +150,7 @@ public sealed class ProjectNotificationTests
 
         async Task<int> Total(string? materialState, bool overdue)
         {
-            var page = await projects.ListAsync(conn, actor, 1, 20, null, null, null, materialState, overdue, false, ct);
+            var page = await projects.ListAsync(conn, actor, 1, 20, null, null, null, materialState, overdue, false, null, null, ct);
             return (int)page.Total;
         }
 
