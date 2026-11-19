@@ -18,12 +18,17 @@ public sealed class MesMirrorManualTests
         public MesConnection? Tested { get; private set; }
         public string? TestedUrl => Tested?.BaseUrl;
         public int TestCalls { get; private set; }
+        /// <summary>When set, a test stays logged in until it is completed.</summary>
+        public TaskCompletionSource? TestGate { get; set; }
+        public TaskCompletionSource TestEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<MesTestResult> TestAsync(MesConnection connection, CancellationToken ct)
+        public async Task<MesTestResult> TestAsync(MesConnection connection, CancellationToken ct)
         {
             Tested = connection;
             TestCalls++;
-            return Task.FromResult(new MesTestResult(true, "连接成功，MES 共 5 笔", 5, 12));
+            TestEntered.TrySetResult();
+            if (TestGate is { } gate) await gate.Task.WaitAsync(ct);
+            return new MesTestResult(true, "连接成功，MES 共 5 笔", 5, 12);
         }
 
         public Task<MesCustomerPage> FetchCustomersPageAsync(int page, int pageSize, CancellationToken ct) =>
@@ -301,6 +306,63 @@ public sealed class MesMirrorManualTests
         Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => f.Service.StartAsync(f.Admin, new("PAGE", 1, 2), ct))).Status);
         Assert.Null(await f.Service.RunAsync("SCHEDULED", new DateOnly(2026, 11, 14), ct));
         await f.Service.ConfirmAsync(f.Admin, new(false), ct);
+    }
+
+    /// <summary>
+    /// Regression: the daily fetch (also its catch-up right after the schedule is switched on) held the lease while the status
+    /// said IDLE, so the page offered a manual fetch that was refused with "已有抓取任务进行中或等待确认".
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AScheduledRunShowsAsRunningAndNamesItselfWhenAManualFetchIsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_manual_daily_busy", 4, ct);
+        await using var _ = f.Database;
+        f.Source.HangOnPage = 2;
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var daily = f.Service.RunAsync("SCHEDULED", new DateOnly(2026, 11, 19), stop.Token);
+
+        var running = await WaitAsync(f, s => s.Phase == "RUNNING" && s.Pages == 1, ct);
+        Assert.Equal(("ALL", "SCHEDULED", 2, 4), (running.RunMode, running.LastTrigger, running.Fetched, running.Total));
+        var refused = await Assert.ThrowsAsync<ApiException>(() => f.Service.StartAsync(f.Admin, new("ALL", null, 2), ct));
+        Assert.Equal((409, "定时抓取进行中，请等它完成"), (refused.Status, refused.Message));
+        await f.Service.StopAsync(f.Admin, ct); // the page offers no stop for it; a stray call leaves it running
+        Assert.Equal("RUNNING", (await f.Service.StatusAsync(f.Admin, ct)).Phase);
+
+        await stop.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => daily);
+        Assert.Equal("IDLE", (await f.Service.StatusAsync(f.Admin, ct)).Phase);
+        await f.Service.StartAsync(f.Admin, new("PAGE", 1, 2), ct);
+        await WaitAsync(f, s => s.Phase == "AWAITING_CONFIRM", ct);
+        await f.Service.ConfirmAsync(f.Admin, new(false), ct);
+    }
+
+    /// <summary>
+    /// Regression: the test only checked the lease when it began, so the daily fetch could start (and log in) while a slow test
+    /// was still logged in, and the fetch clicked right after the test was refused.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AConnectionTestKeepsTheDailyFetchWaitingUntilItEnds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("mes_manual_test_lease", 4, ct);
+        await using var _ = f.Database;
+        await f.Database.ExecuteAsync("INSERT INTO mes_mirror_state(id,last_trigger,last_count) VALUES(1,'MANUAL',4) ON DUPLICATE KEY UPDATE last_trigger='MANUAL', last_count=4", ct);
+        f.Source.TestGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        var test = f.Service.TestAsync(f.Admin, new(null, null, null), ct);
+        await f.Source.TestEntered.Task.WaitAsync(ct);
+
+        var day = new DateOnly(2026, 11, 19);
+        Assert.Null(await f.Service.RunAsync("SCHEDULED", day, ct)); // not started, and the day is not marked as done
+        var refused = await Assert.ThrowsAsync<ApiException>(() => f.Service.StartAsync(f.Admin, new("ALL", null, 2), ct));
+        Assert.Equal((409, "正在测试连接，请等测试完成"), (refused.Status, refused.Message));
+        var during = await f.Service.StatusAsync(f.Admin, ct);
+        Assert.Equal(("IDLE", "MANUAL"), (during.Phase, during.LastTrigger)); // a test is not a run
+
+        f.Source.TestGate.SetResult();
+        Assert.True((await test).Ok);
+        var outcome = await f.Service.RunAsync("SCHEDULED", day, ct);
+        Assert.Equal((4, (string?)null), (outcome!.Fetched, outcome.Error));
     }
 
     [Fact(Timeout = 180_000)]

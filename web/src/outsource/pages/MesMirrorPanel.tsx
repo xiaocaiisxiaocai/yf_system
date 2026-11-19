@@ -84,8 +84,14 @@ export default function MesMirrorPanel() {
   }
 
   const start = (body: { mode: 'ALL' } | { mode: 'PAGE'; page: number }) => run(async () => {
-    const response = await http.post<ApiResponses['POST /outsource/mes-mirror/run']>('/outsource/mes-mirror/run', { ...body, pageSize })
-    setStatus(response.data)
+    try {
+      const response = await http.post<ApiResponses['POST /outsource/mes-mirror/run']>('/outsource/mes-mirror/run', { ...body, pageSize })
+      setStatus(response.data)
+    } catch (failure) {
+      // A refusal usually means another fetch (the daily one) is under way: show it instead of the stale idle state.
+      void refresh().catch(() => undefined)
+      throw failure
+    }
   })
   const stop = () => run(async () => {
     const response = await http.post<ApiResponses['POST /outsource/mes-mirror/stop']>('/outsource/mes-mirror/stop')
@@ -124,6 +130,8 @@ export default function MesMirrorPanel() {
   const dirty = address.trim() !== settings.baseUrl || account.trim() !== settings.account || password !== '' || fetchTime !== settings.syncTime
   const pending = phase === 'AWAITING_CONFIRM'
   const pendingText = status.pendingReason === 'PAGE_FETCHED' ? `第 ${status.page} 页` : '已停止'
+  // The daily fetch cannot be stopped from here; while it runs lastTrigger names it.
+  const scheduledRun = busy && status.lastTrigger === 'SCHEDULED'
 
   return <section className="outsource-sync-section">
     <div className="outsource-sync-section__head">
@@ -164,9 +172,9 @@ export default function MesMirrorPanel() {
         error={!validPage(page)} onChange={(value) => setPage(value as number | undefined)} />
       <Button disabled={!canStart || !validSize(pageSize) || !validPage(page)}
         onClick={() => void start({ mode: 'PAGE', page: page as number })}>抓取指定页</Button>
-      {busy && <Button status="danger" disabled={phase === 'STOPPING' || working} onClick={() => void stop()}>停止</Button>}
+      {busy && !scheduledRun && <Button status="danger" disabled={phase === 'STOPPING' || working} onClick={() => void stop()}>停止</Button>}
     </Space>
-    {busy && <div role="status">已抓取 {status.fetched} / {status.total ?? '—'} 笔，第 {status.pages} 页{phase === 'STOPPING' ? '，正在停止' : ''}</div>}
+    {busy && <div role="status">{scheduledRun ? '定时抓取中，' : ''}已抓取 {status.fetched} / {status.total ?? '—'} 笔，第 {status.pages} 页{phase === 'STOPPING' ? '，正在停止' : ''}</div>}
     <Descriptions column={1} border className="outsource-sync-descriptions" data={[
       { label: '资料笔数', value: String(status.mirrorCount) },
       { label: '最近成功', value: fmtTime(status.lastSuccessAt) },
