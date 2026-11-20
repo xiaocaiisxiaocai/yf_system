@@ -144,8 +144,10 @@ public sealed class OemTransferProgression(OemApprovalEngine engine, OemAuditWri
                     .SetProperty(file => file.UpdatedAt, uow.Now)
                     .SetProperty(file => file.ConcurrencyVersion, file => file.ConcurrencyVersion + 1), ct);
         await uow.Db.SaveChangesAsync(ct);
+        var companyName = await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Id == transfer.OemCompanyId)
+            .Select(company => company.Name).SingleOrDefaultAsync(ct);
         await audit.WriteAsync(uow, actor, "OEM_TRANSFER_RELEASE", "oem_transfer", transfer.Id,
-            new { targetName = transfer.Title, transfer.ExpiresAt, retentionMode = snapshot.Mode }, ct);
+            new { targetName = transfer.Title, transfer.ExpiresAt, retentionMode = snapshot.Mode, companyName }, ct);
         uow.Raise(new TransferReleasedEvent(transfer.Id));
     }
 

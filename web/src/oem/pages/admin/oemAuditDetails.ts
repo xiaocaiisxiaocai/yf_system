@@ -103,6 +103,10 @@ function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+function nameList(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').join('、') : ''
+}
+
 function hasValue(value: unknown) {
   return value != null && value !== ''
 }
@@ -185,10 +189,12 @@ export function oemDetailSummary(row: AuditLogRow): string {
     case 'OEM_TRANSFER_CREATE':
       return directionLabel(detail.direction) ?? '-'
     case 'OEM_TRANSFER_SEND':
-      return join(hasValue(detail.files) && `${formatAuditValue(detail.files)} 个文件`, approvalLabel(detail.approval),
+      return join(text(detail.companyName) && `厂商 ${text(detail.companyName)}`,
+        nameList(detail.recipientNames) && `${detail.direction === 'OEM_TO_INTERNAL' ? '通知' : '联络人'} ${nameList(detail.recipientNames)}`,
+        hasValue(detail.files) && `${formatAuditValue(detail.files)} 个文件`, approvalLabel(detail.approval),
         label(RETENTION_LABELS, detail.retentionMode)) || '-'
     case 'OEM_TRANSFER_RELEASE':
-      return join(text(detail.expiresAt) ? `有效期至 ${fmtTime(String(detail.expiresAt))}` : '长期有效', label(RETENTION_LABELS, detail.retentionMode))
+      return join(text(detail.companyName) && `厂商 ${text(detail.companyName)}`, text(detail.expiresAt) ? `有效期至 ${fmtTime(String(detail.expiresAt))}` : '长期有效', label(RETENTION_LABELS, detail.retentionMode))
     case 'OEM_FILE_UPLOAD':
       return join(hasValue(detail.sizeBytes) && formatByteSize(detail.sizeBytes),
         hasValue(detail.durationMs) && `耗时 ${formatDuration(detail.durationMs)}`,

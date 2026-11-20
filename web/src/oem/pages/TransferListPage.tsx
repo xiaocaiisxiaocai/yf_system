@@ -289,7 +289,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
             </Space>
           )} />
         )}
-        {realm === 'oem' && choices.length > 0 && (
+        {realm === 'oem' && recipientChoices.isSuccess && (
           <Form.Item field="recipientUserIds" label="通知公司人员"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请选择要通知的公司人员' }]}>
             <RecipientChoiceSelect choices={choices} disabled={busy} />
@@ -301,7 +301,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
           </Form.Item>
         )}
         {realm === 'oem' && recipientChoices.isSuccess && choices.length === 0 && (
-          <Alert type="info" style={{ marginBottom: 12 }} content="没有可通知的公司人员，发送后不会邮件提醒。" />
+          <Alert type="warning" style={{ marginBottom: 12 }} content="没有可通知的公司人员，暂时无法发送，请联系公司管理员。" />
         )}
         {realm === 'oem' && recipientChoices.isError && (
           <Alert type="error" style={{ marginBottom: 12 }} content="可通知人员加载失败"
@@ -540,7 +540,8 @@ export default function TransferListPage() {
     },
     {
       key: 'counterpart', title: realm === 'internal' ? '往来厂商' : '往来',
-      render: (_: unknown, row: TransferSummary) => <Counterpart direction={row.direction} companyName={row.companyName} realm={realm} />,
+      render: (_: unknown, row: TransferSummary) => <Counterpart direction={row.direction} companyName={row.companyName} recipientNames={row.recipientNames}
+        senderName={row.sender.realm === 'internal' ? row.sender.realName : undefined} realm={realm} />,
     },
     // A vendor-sent transfer shows the contact who signed it, with the shared login in brackets (as in Robot).
     {

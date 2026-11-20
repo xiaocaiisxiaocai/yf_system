@@ -25,7 +25,7 @@ function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycl
       companyId: 9,
       companyName: '甲厂',
       title: '图纸.zip',
-      sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' }, signerName: null,
+      sender: { realm: 'internal', id: 7, employeeNo: 'A0007', realName: '发送人' }, signerName: null, recipientNames: [],
       lifecycleStatus,
       approvalStatus: lifecycleStatus === 'DRAFT' ? null : 'PENDING',
       approvalBlockedReason: null,
@@ -260,6 +260,7 @@ describe('ODM/OEMA 一键发送文件', () => {
       createTransfer: vi.fn().mockResolvedValue(inboundDraft),
       transfer,
       send,
+      transferRecipientChoices: vi.fn().mockResolvedValue([{ userId: 51, realName: '王五' }]),
     } as Partial<OemApi>)
     renderList(api, 'oem')
 
@@ -267,6 +268,8 @@ describe('ODM/OEMA 一键发送文件', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).queryByText('目标 ODM/OEMA 厂商')).not.toBeInTheDocument()
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
+    await user.click(within(dialog).getByRole('combobox'))
+    fireEvent.click((await screen.findAllByText('王五')).at(-1)!)
     await user.type(within(dialog).getByLabelText('签名'), '张三')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
 
@@ -302,19 +305,19 @@ describe('ODM/OEMA 一键发送文件', () => {
     await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, [51], '张三'))
   })
 
-  it('没有可通知的公司人员时厂商仍可发送，并提示不会邮件提醒', async () => {
+  it('没有可通知的公司人员时厂商无法发送，并提示联系管理员', async () => {
     const user = userEvent.setup()
     const api = createApi()
     renderList(api, 'oem')
 
     await user.click(await screen.findByRole('button', { name: '发送文件' }))
     const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByText('没有可通知的公司人员，发送后不会邮件提醒。')).toBeInTheDocument()
-    expect(within(dialog).queryByText('通知公司人员')).not.toBeInTheDocument()
+    expect(await within(dialog).findByText('没有可通知的公司人员，暂时无法发送，请联系公司管理员。')).toBeInTheDocument()
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
     await user.type(within(dialog).getByLabelText('签名'), '李四')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
-    await waitFor(() => expect(api.send).toHaveBeenCalledWith(41, 4, [], '李四'))
+    expect(await within(dialog).findByText('请选择要通知的公司人员')).toBeInTheDocument()
+    expect(api.createTransfer).not.toHaveBeenCalled()
   })
 
   it('创建结果未知时阻止盲目重试，并提示回列表确认', async () => {
@@ -429,13 +432,18 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(screen.getByPlaceholderText('搜索文件或厂商')).toBeInTheDocument()
   })
 
-  it('厂商门户看到的往来对象是 SAA', async () => {
-    const outgoing = { ...detail(43, 'RELEASED').summary, id: 43, direction: 'OEM_TO_INTERNAL' as const, title: '厂商回传.zip' }
+  it('厂商门户的往来对象显示具体人名，没有姓名时才回退为 SAA', async () => {
+    const base = { ...detail(43, 'RELEASED').summary, direction: 'OEM_TO_INTERNAL' as const }
+    const named = { ...base, id: 43, title: '厂商回传.zip', recipientNames: ['张三', '李四'] }
+    const unnamed = { ...base, id: 44, title: '无人名.zip', recipientNames: [] }
+    const received = { ...detail(45, 'RELEASED').summary, id: 45, direction: 'INTERNAL_TO_OEM' as const, title: '公司发来.zip' }
     renderList(createApi({
-      listTransfers: vi.fn().mockResolvedValue({ list: [outgoing], total: 1, page: 1, pageSize: 20 }),
+      listTransfers: vi.fn().mockResolvedValue({ list: [named, unnamed, received], total: 3, page: 1, pageSize: 20 }),
     } as Partial<OemApi>), 'oem')
     const row = (await screen.findByRole('link', { name: '厂商回传.zip' })).closest('tr')!
-    expect(within(row).getByTitle('发给 SAA')).toBeInTheDocument()
+    expect(within(row).getByTitle('发给 张三、李四')).toBeInTheDocument()
+    expect(within(screen.getByRole('link', { name: '无人名.zip' }).closest('tr')!).getByTitle('发给 SAA')).toBeInTheDocument()
+    expect(within(screen.getByRole('link', { name: '公司发来.zip' }).closest('tr')!).getByTitle('来自 发送人')).toBeInTheDocument()
     expect(within(row).queryByText('公司')).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: '往来厂商' })).not.toBeInTheDocument()
   })

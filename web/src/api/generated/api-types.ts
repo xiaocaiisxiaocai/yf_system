@@ -1001,6 +1001,7 @@ export interface OemTransferSummaryResponse {
   title: string
   sender: OemPersonRefResponse
   signerName: string | null
+  recipientNames: Array<string>
   lifecycleStatus: string
   approvalStatus: string | null
   approvalBlockedReason: string | null

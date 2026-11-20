@@ -311,8 +311,8 @@ export default function TransferDetailPage() {
   const send = async () => {
     if (sendLocked.current || uploader.current?.isBusy()) return
     const choosing = realm === 'oem' && summary.direction === 'OEM_TO_INTERNAL'
-    if (choosing && (recipientChoices.data?.length ?? 0) > 0 && notifyUserIds.length === 0) {
-      Message.warning('请选择要通知的公司人员')
+    if (choosing && notifyUserIds.length === 0) {
+      Message.warning((recipientChoices.data?.length ?? 0) > 0 ? '请选择要通知的公司人员' : '没有可通知的公司人员，请联系公司管理员')
       return
     }
     if (choosing && !signerName.trim()) {
@@ -409,12 +409,13 @@ export default function TransferDetailPage() {
     <div className="oem-transfer-detail">
       <Card
         title={<Space><Button type="text" icon={<IconLeft />} onClick={() => navigate(`${base}/transfers`)} />{summary.title}
-          <Counterpart direction={summary.direction} companyName={summary.companyName} realm={realm} />
+          <Counterpart direction={summary.direction} companyName={summary.companyName} recipientNames={summary.recipientNames}
+            senderName={summary.sender.realm === 'internal' ? summary.sender.realName : undefined} realm={realm} />
           <LifecycleTag value={summary.lifecycleStatus} />
           {summary.direction === 'INTERNAL_TO_OEM' && realm === 'internal' && <ApprovalTag value={summary.approvalStatus} />}</Space>}
         extra={
           <Space>
-            {caps.canSend && realm === 'oem' && (recipientChoices.data?.length ?? 0) > 0 && (
+            {caps.canSend && realm === 'oem' && recipientChoices.isSuccess && (recipientChoices.data?.length ?? 0) > 0 && (
               <RecipientChoiceSelect choices={recipientChoices.data ?? []} value={notifyUserIds} onChange={setNotifyUserIds}
                 disabled={sending} style={{ width: 260 }} />
             )}
@@ -457,6 +458,7 @@ export default function TransferDetailPage() {
               value: summary.signerName ? `${summary.signerName}（${summary.sender.realName}）`
                 : summary.sender.employeeNo ? `${summary.sender.realName}（${summary.sender.employeeNo}）` : summary.sender.realName,
             },
+            ...(summary.direction === 'OEM_TO_INTERNAL' ? [{ label: '接收人', value: summary.recipientNames.length ? summary.recipientNames.join('、') : '-' }] : []),
             { label: '提交时间', value: summary.sentAt ? fmtTime(summary.sentAt) : '-' },
             { label: '发送时间', value: summary.releasedAt ? fmtTime(summary.releasedAt) : '-' },
             { label: '最晚保留至', value: detail.expiresAt ? fmtTime(detail.expiresAt) : '-' },

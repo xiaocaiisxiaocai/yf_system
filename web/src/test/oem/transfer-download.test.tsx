@@ -16,7 +16,7 @@ function detail(): TransferDetail {
       companyId: 9,
       companyName: '甲厂',
       title: '可下载的传递单',
-      sender: { realm: 'oem', id: 3, employeeNo: 'V0003', realName: '厂商' }, signerName: null,
+      sender: { realm: 'oem', id: 3, employeeNo: 'V0003', realName: '厂商' }, signerName: null, recipientNames: [],
       lifecycleStatus: 'RELEASED',
       approvalStatus: 'NOT_REQUIRED',
       approvalBlockedReason: null,
