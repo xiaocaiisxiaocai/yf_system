@@ -14,6 +14,7 @@ import LoadError from '../../components/LoadError'
 import MesMirrorPanel from './MesMirrorPanel'
 import OutsourceCustomersTab from './OutsourceCustomersTab'
 import OutsourceFieldsTab from './OutsourceFieldsTab'
+import OutsourceVendorEmailsTab from './OutsourceVendorEmailsTab'
 import './OutsourceSettingsPage.css'
 import ResizableTable from '../../components/ResizableTable'
 import StatusTag from '../../components/StatusTag'
@@ -22,7 +23,7 @@ type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type CcUser = ApiResponses['GET /outsource/settings/default-cc'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
-type TabKey = 'types' | 'customers' | 'cc' | 'sync' | 'fields'
+type TabKey = 'types' | 'customers' | 'cc' | 'emails' | 'sync' | 'fields'
 
 const ACTIVE = 'ACTIVE'
 const DISABLED = 'DISABLED'
@@ -75,6 +76,7 @@ export default function OutsourceSettingsPage() {
       <Tabs.TabPane key="types" title="外发类型" />
       <Tabs.TabPane key="customers" title="客户简称" />
       <Tabs.TabPane key="cc" title="默认抄送" />
+      <Tabs.TabPane key="emails" title="外协邮箱" />
       <Tabs.TabPane key="sync" title="IPMS 同步" />
       <Tabs.TabPane key="fields" title="栏位设定" />
     </Tabs>
@@ -83,6 +85,7 @@ export default function OutsourceSettingsPage() {
       : tab === 'types' ? <TypesTab types={types} vendors={vendors} loading={loading} reload={load} />
           : tab === 'customers' ? <OutsourceCustomersTab />
           : tab === 'cc' ? <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />
+          : tab === 'emails' ? <OutsourceVendorEmailsTab vendors={vendors} />
             : <SyncTab />}
   </Card>
 }

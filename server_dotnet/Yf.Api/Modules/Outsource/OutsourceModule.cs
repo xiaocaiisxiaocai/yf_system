@@ -19,6 +19,7 @@ public static class OutsourceModule
         .AddSingleton<OutsourceVendorViewService>()
         .AddSingleton<OutsourceFieldService>()
         .AddSingleton<OutsourceItemService>()
+        .AddSingleton<OutsourceVendorEmailService>()
         .AddSingleton<OutsourceDateImportService>()
         .AddSingleton<OutsourceIpmsSyncService>()
         .AddSingleton<IHostedService>(provider => provider.GetRequiredService<OutsourceIpmsSyncService>())
@@ -34,6 +35,17 @@ public static class OutsourceModule
         settings.MapGet("/vendors", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.VendorsAsync(AccessService.GetCurrent(c), ct));
 
+        // Each vendor's outsourcing mail addresses (外协清单契约 → 外协邮箱); vendors are the ODM/OEMA companies.
+        settings.MapGet("/vendor-emails", (HttpContext c, OutsourceVendorEmailService s, CancellationToken ct) =>
+            s.ListAsync(AccessService.GetCurrent(c), ct));
+        settings.MapPost("/vendor-emails", (OutsourceVendorEmailCreate r, HttpContext c, OutsourceVendorEmailService s, CancellationToken ct) =>
+            s.CreateAsync(AccessService.GetCurrent(c), r, ct));
+        settings.MapPost("/vendor-emails/import", (OutsourceVendorEmailImportRequest r, HttpContext c, OutsourceVendorEmailService s, CancellationToken ct) =>
+            s.ImportAsync(AccessService.GetCurrent(c), r, ct)).Produces<AdminImportResponse>();
+        settings.MapPut("/vendor-emails/{id:long}", (ulong id, OutsourceVendorEmailUpdate r, HttpContext c, OutsourceVendorEmailService s, CancellationToken ct) =>
+            s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
+        settings.MapDelete("/vendor-emails/{id:long}", (ulong id, HttpContext c, OutsourceVendorEmailService s, CancellationToken ct) =>
+            s.DeleteAsync(AccessService.GetCurrent(c), id, ct));
         settings.MapGet("/customers", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.CustomerAliasesAsync(AccessService.GetCurrent(c), ct));
         settings.MapGet("/customers/missing", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>

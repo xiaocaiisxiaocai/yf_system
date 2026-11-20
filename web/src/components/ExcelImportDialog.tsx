@@ -144,7 +144,7 @@ export default function ExcelImportDialog<T>({
   }
 
   const confirm = async () => {
-    if (!prepared || prepared.payload.length === 0 || saving || parsing) return
+    if (!prepared || prepared.payload.length === 0 || counts.ready === 0 || saving || parsing) return
     setSaving(true)
     let finished = false
     try {
@@ -178,7 +178,7 @@ export default function ExcelImportDialog<T>({
       confirmLoading={saving}
       okText="确认导入"
       cancelText="关闭"
-      okButtonProps={{ disabled: !prepared || prepared.payload.length === 0 || saving || parsing }}
+      okButtonProps={{ disabled: !prepared || prepared.payload.length === 0 || counts.ready === 0 || saving || parsing }}
       closable={!saving && !parsing}
       maskClosable={!saving && !parsing}
       escToExit={!saving && !parsing}

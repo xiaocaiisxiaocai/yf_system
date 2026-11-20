@@ -254,8 +254,9 @@
   "PUT /api/v1/projects/{}/status",
   "PUT /api/v1/robot-parts/{}",
   "PUT /api/v1/uploads/{}/chunks/{}",
-  "GET /api/v1/oem/companies/{}/outsource-emails",
-  "POST /api/v1/oem/companies/{}/outsource-emails",
-  "PUT /api/v1/oem/outsource-emails/{}",
-  "DELETE /api/v1/oem/outsource-emails/{}"
+  "GET /api/v1/outsource/settings/vendor-emails",
+  "POST /api/v1/outsource/settings/vendor-emails",
+  "POST /api/v1/outsource/settings/vendor-emails/import",
+  "PUT /api/v1/outsource/settings/vendor-emails/{}",
+  "DELETE /api/v1/outsource/settings/vendor-emails/{}"
 ]
