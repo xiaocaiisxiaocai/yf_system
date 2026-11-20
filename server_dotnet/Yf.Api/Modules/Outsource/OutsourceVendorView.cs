@@ -27,9 +27,39 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
     public async Task<OutsourceVendorPageResponse> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
     {
         var (page, size, offset) = QueryValues.Page(request);
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        var (db, reference, items) = await FilteredAsync(uow, actor, request, ct);
+        var total = (ulong)await items.LongCountAsync(ct);
+        var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
+        await reference.LoadValuesAsync(db, rows.Select(x => x.Id).ToArray(), ct);
+        OutsourceVendorColumn[] columns =
+            [new(SerialKey, "序号"), .. reference.Layout.VendorColumns.Select(column => new OutsourceVendorColumn(column.Key, column.Label))];
+        return new(columns, rows.Select(item => Row(reference, item)).ToArray(), total, page, size);
+    }
+
+    /// <summary>
+    /// The records the list shows with the same keyword and completed filter, all pages, as the vendor Excel attachment
+    /// (vendor columns, rows coloured by status, no yellow change marks).
+    /// </summary>
+    public async Task<OutsourceExport> ExportAsync(OemActor actor, HttpRequest request, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        var (db, reference, items) = await FilteredAsync(uow, actor, request, ct);
+        if (await items.CountAsync(ct) > OutsourceItemService.MaximumExportRows)
+            throw ApiException.BadRequest($"一次最多导出 {OutsourceItemService.MaximumExportRows} 条，请缩小筛选范围");
+        var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).ToArrayAsync(ct);
+        await reference.LoadValuesAsync(db, rows.Select(x => x.Id).ToArray(), ct);
+        var content = OutsourceWorkbook.Build(rows.Select(reference.Json).ToArray(), null,
+            reference.Layout.WorkbookFields(vendor: true), forVendor: true);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
+        return new(content, $"外协清单_{today}.xlsx");
+    }
+
+    private static async Task<(YfDbContext Db, OutsourceReference Reference, IQueryable<OutsourceItem> Items)> FilteredAsync(
+        OemUnitOfWork uow, OemActor actor, HttpRequest request, CancellationToken ct)
+    {
         var keyword = request.Query["keyword"].ToString().Trim();
         var includeClosed = string.Equals(request.Query["includeClosed"], "true", StringComparison.OrdinalIgnoreCase);
-        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         // Rechecks the account, its company and its session; only vendor accounts have a list here.
         if (await OemAuthorizer.RecheckAsync(uow, actor, ct) is not OemAccountActor account)
             throw ApiException.Forbidden("外协清单请在外协模块中查看");
@@ -46,12 +76,7 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
                 || byShortName.Contains(x.Customer!)
                 || EF.Functions.Like(x.MachineModel!, pattern, QueryValues.LikeEscape));
         }
-        var total = (ulong)await items.LongCountAsync(ct);
-        var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
-        await reference.LoadValuesAsync(db, rows.Select(x => x.Id).ToArray(), ct);
-        OutsourceVendorColumn[] columns =
-            [new(SerialKey, "序号"), .. reference.Layout.VendorColumns.Select(column => new OutsourceVendorColumn(column.Key, column.Label))];
-        return new(columns, rows.Select(item => Row(reference, item)).ToArray(), total, page, size);
+        return (db, reference, items);
     }
 
     private static OutsourceVendorRow Row(OutsourceReference reference, OutsourceItem item)

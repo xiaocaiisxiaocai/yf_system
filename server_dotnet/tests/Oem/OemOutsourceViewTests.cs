@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using Dapper;
 
@@ -56,8 +57,28 @@ public sealed class OemOutsourceViewTests
             .Select(x => x!["values"]!["workOrderNo"]!.GetValue<string>()));
         await admin.GetAsync("/api/v1/oem/outsource-items", ct).Status(HttpStatusCode.Forbidden);
 
+        // Export: the same filter over all pages, vendor columns only, as the vendor attachment.
+        using var export = await vendor.Http.GetAsync("/api/v1/oem/outsource-items/export?keyword=ST", ct);
+        export.EnsureSuccessStatusCode();
+        Assert.Equal("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.Content.Headers.ContentType?.MediaType);
+        using (var zip = new ZipArchive(new MemoryStream(await export.Content.ReadAsByteArrayAsync(ct))))
+        {
+            using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+            var sheet = await reader.ReadToEndAsync(ct);
+            Assert.Contains(Cell("A1"), sheet, StringComparison.Ordinal);
+            Assert.Contains(Cell("A2"), sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain(Cell("A3"), sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain(Cell("B1"), sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain("内部也可见的备注", sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain("发送状态", sheet, StringComparison.Ordinal);
+            Assert.Contains(Cell("超穎"), sheet, StringComparison.Ordinal);
+        }
+        await admin.GetAsync("/api/v1/oem/outsource-items/export", ct).Status(HttpStatusCode.Forbidden);
+
         // A disabled vendor loses access at once.
         await admin.PutAsync($"/api/v1/oem/companies/{companyA}/status", new { status = "DISABLED" }, ct).Ok();
         await vendor.GetAsync("/api/v1/oem/outsource-items", ct).Status(HttpStatusCode.Unauthorized);
     }
+
+    private static string Cell(string text) => $"<t xml:space=\"preserve\">{text}</t>";
 }

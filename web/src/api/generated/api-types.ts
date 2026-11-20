@@ -2283,6 +2283,7 @@ export interface ApiResponses {
   "GET /oem/notify-policies": Array<OemSettingResponse>
   "PUT /oem/notify-policies": Array<OemSettingResponse>
   "GET /oem/outsource-items": OutsourceVendorPageResponse
+  "GET /oem/outsource-items/export": Blob
   "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>
   "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
   "POST /oem/retention-templates": OemRetentionTemplateResponse
