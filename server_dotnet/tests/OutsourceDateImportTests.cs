@@ -94,6 +94,8 @@ public sealed class OutsourceDateImportTests
         Assert.Null(list["W3"].BomOn);
         // Vendors see 发图 by default, so the mailed record now waits for a notice; the unsent one stays unsent.
         Assert.Equal(("PENDING_NOTICE", "UNSENT"), (list["W2"].SendStatus, list["W1"].SendStatus));
+        // Before the first mail the imported cells are marked like any manual edit.
+        Assert.Equal(["bomOn", "drawingReleasedOn"], list["W1"].ChangedFields!.Order());
         Assert.Equal("设计乙", list["W1"].ModifiedBy);
         var history = await items.ChangesAsync(buyer, list["W2"].Id, ct);
         var change = Assert.Single(history);

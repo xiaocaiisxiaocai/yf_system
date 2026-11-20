@@ -835,7 +835,8 @@ internal sealed class OutsourceReference
         var unsent = items.Where(x => x.NotifiedVendorId != x.VendorId || x.LastSentSnapshot is null).Select(x => x.Id).ToArray();
         if (unsent.Length == 0) return responses;
         var edits = await context.OutsourceItemChanges.AsNoTracking()
-            .Where(x => unsent.Contains(x.ItemId) && x.Source == OutsourceHistory.Edit)
+            // Changes made by hand mark the cell: list edits and the BOM时间/发图 import (not IPMS syncs).
+            .Where(x => unsent.Contains(x.ItemId) && (x.Source == OutsourceHistory.Edit || x.Source == OutsourceHistory.DateImport))
             .Select(x => new { x.Id, x.ItemId, x.Field, x.NewValue }).ToArrayAsync(ct);
         // A sender's "no notice needed" is a new baseline: only edits made after it are marked.
         var skipped = edits.Where(x => x.Field == "sendStatus" && x.NewValue == OutsourceItemService.SkipNoticeLabel)
