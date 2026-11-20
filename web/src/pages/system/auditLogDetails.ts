@@ -458,7 +458,8 @@ export function detailNotes(row: AuditLogRow): DetailNote[] {
   if (detail.passwordChanged === true) notes.push({ label: '邮箱凭据', value: '已更新（不记录密码或授权码）', tone: 'normal' })
   const reasonCode = cleanText(detail.reason)
   // 会话撤销原因是服务端的内部代码，显示为中文说明。
-  const reason = reasonCode && SESSION_REVOKE_REASONS[reasonCode]
+  // Own keys only: a code such as "constructor" must not resolve to an inherited Object.prototype function.
+  const reason = reasonCode && Object.hasOwn(SESSION_REVOKE_REASONS, reasonCode)
     ? SESSION_REVOKE_REASONS[reasonCode](detail)
     : mailReasonText(reasonCode)
   if (reason) {
