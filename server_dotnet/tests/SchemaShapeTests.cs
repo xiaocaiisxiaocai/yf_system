@@ -80,6 +80,7 @@ public sealed class SchemaShapeTests
         "20261119030550_SplitOutsourceSendPermission",
         "20261119060000_SimplifyOutsourcePermissions",
         "20261120064823_AddOutsourceDateImportPermission",
+        "20261120065922_StopInternalRobotVEditing",
     ];
 
     [Fact]

@@ -92,7 +92,8 @@ public sealed class OutsourceFieldTests
                 "originalDueDate", "latestDueDate", "quantity", "remark"],
             settings.Fields.Select(x => x.Key));
         var robotV = settings.Fields.Single(x => x.Key == "hasRobotV");
-        Assert.Equal(("是否有RobotV", "BOOLEAN", false, false, "ALL"), (robotV.Label, robotV.DataType, robotV.VendorVisible, robotV.VendorEditable, robotV.EditorScope));
+        // 是否有RobotV is not filled in on the list (StopInternalRobotVEditing), by administrators neither.
+        Assert.Equal(("是否有RobotV", "BOOLEAN", false, false, "NONE"), (robotV.Label, robotV.DataType, robotV.VendorVisible, robotV.VendorEditable, robotV.EditorScope));
         // Vendors keep seeing every built-in column; the IPMS columns are never filled in by hand.
         Assert.All(settings.Fields.Where(x => x.BuiltIn), x => Assert.True(x.VendorVisible));
         Assert.Equal("NONE", settings.Fields.Single(x => x.Key == "customer").EditorScope);
@@ -103,8 +104,9 @@ public sealed class OutsourceFieldTests
         // Everyone who could edit before still can (editor scope ALL), so the layout offers the same columns.
         var layout = await f.Fields.LayoutAsync(f.Buyer, ct);
         // BOM时间 and 发图 are only imported (outsource:date_import), never filled in on the list.
-        Assert.Equal(["outsourceDate", "status", "hasRobotV", "type", "vendor", "latestDueDate", "remark"],
+        Assert.Equal(["outsourceDate", "status", "type", "vendor", "latestDueDate", "remark"],
             layout.Fields.Where(x => x.CanEdit).Select(x => x.Key));
+        Assert.DoesNotContain((await f.Fields.LayoutAsync(f.Admin, ct)).Fields.Where(x => x.CanEdit), x => x.Key == "hasRobotV");
         // Seeing the list needs no permission; filling a column in does (ALL = outsource:manage).
         Assert.Empty((await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit));
         // Field settings come with the settings permission.
@@ -188,9 +190,12 @@ public sealed class OutsourceFieldTests
         Assert.Equal(403, await StatusOfAsync(() => f.Items.BatchUpdateAsync(f.Buyer,
             new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, Values: new() { ["hasRobotV"] = "true" }), ct)));
 
-        // 机构 fills in 备注; the administrator fills in anything open to staff.
+        // 机构 fills in 备注. 内部不填写 binds the administrator too; any other setting lets them fill the column in.
         saved = await f.Items.UpdateAsync(f.Mechanic, item.Id, new(null, item.VendorId, null, "机构的备注", saved.Status, saved.UpdatedAt), ct);
         Assert.Equal("机构的备注", saved.Remark);
+        Assert.Equal(403, await StatusOfAsync(() => f.Items.BatchUpdateAsync(f.Admin,
+            new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, Values: new() { ["hasRobotV"] = "是" }), ct)));
+        await f.Fields.UpdateAsync(f.Admin, fields["hasRobotV"].Id, new(null, null, null, null, null, "ROLES", [72]), ct);
         saved = (await f.Items.BatchUpdateAsync(f.Admin,
             new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, Values: new() { ["hasRobotV"] = "是" }), ct)).Items.Single();
         Assert.Equal("true", saved.CustomValues!["hasRobotV"]);
@@ -253,12 +258,13 @@ public sealed class OutsourceFieldTests
         await f.Database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT', notified_vendor_id=vendor_id", ct);
         item = (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single();
 
-        // 是否有RobotV is internal by default: filling it in keeps the item sent.
+        // 是否有RobotV is internal by default: filling it in (once opened to staff again) keeps the item sent.
+        var fields = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.ToDictionary(x => x.Key);
+        await f.Fields.UpdateAsync(f.Admin, fields["hasRobotV"].Id, new(null, null, null, null, null, "ALL", null), ct);
         item = await f.Items.UpdateAsync(f.Buyer, item.Id, new(null, item.VendorId, null, null, item.Status, item.UpdatedAt,
             Values: new() { ["hasRobotV"] = "true" }), ct);
         Assert.Equal("SENT", item.SendStatus);
 
-        var fields = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.ToDictionary(x => x.Key);
         await f.Fields.UpdateAsync(f.Admin, fields["hasRobotV"].Id, new(null, null, null, true, null, null, null), ct);
         await f.Fields.UpdateAsync(f.Admin, fields["remark"].Id, new(null, null, null, false, null, null, null), ct);
         item = await f.Items.UpdateAsync(f.Buyer, item.Id, new(null, item.VendorId, null, "只给内部看", item.Status, item.UpdatedAt), ct);

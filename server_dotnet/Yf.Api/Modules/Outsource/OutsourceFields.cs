@@ -27,6 +27,7 @@ internal static class OutsourceEditorScopes
     internal const string Roles = "ROLES";
     /// <summary>Only the field's editor accounts (and system administrators); no permission needed.</summary>
     internal const string Users = "USERS";
+    /// <summary>Nobody inside the company, system administrators included.</summary>
     internal const string None = "NONE";
     internal static bool IsValid(string? value) => value is All or Roles or Users or None;
 }
@@ -184,6 +185,8 @@ internal sealed class OutsourceFieldLayout
     public static bool CanEdit(Column column, OutsourceEditor editor)
     {
         if (!column.Active || !OutsourceFieldCategories.InternalEditable(column.Category)) return false;
+        // 内部不填写 holds for system administrators too (2026-11-20); every other setting lets them fill the column in.
+        if (column.EditorScope == OutsourceEditorScopes.None) return false;
         if (editor.IsSystemAdmin) return true;
         return column.EditorScope switch
         {
