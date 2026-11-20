@@ -34,11 +34,14 @@ internal static class WindowsFinalPath
         return final.StartsWith(@"\\?\", StringComparison.Ordinal) ? final[4..] : final;
     }
 
+    // kernel32 is resolved from System32 only, never from the application or current directory.
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFileW(
         string fileName, uint desiredAccess, uint shareMode, IntPtr securityAttributes,
         uint creationDisposition, uint flagsAndAttributes, IntPtr templateFile);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint GetFinalPathNameByHandleW(SafeFileHandle file, [Out] char[] buffer, uint bufferLength, uint flags);
 }

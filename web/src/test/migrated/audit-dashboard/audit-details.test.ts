@@ -168,6 +168,14 @@ describe('审计详情生产契约', () => {
     expect(detailNotes(mail).map((item) => item.label)).toEqual(['失败原因', '重试次数'])
   })
 
+  it('a reason code that names an inherited object property is shown as text, not called as a function', () => {
+    for (const code of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      const row: AuditLogRow = { ...baseRow, action: 'LOGIN', targetType: 'user', detail: { reason: code } }
+      expect(() => detailNotes(row)).not.toThrow()
+      expect(JSON.stringify(detailNotes(row))).not.toContain('[object')
+    }
+  })
+
   it('category selection filters actions and clears an incompatible action', () => {
     const orgActions = actionOptionsForCategory('ORG')
     expect(orgActions.some(([code]) => code === 'ROLE_ASSIGN_PERMS')).toBe(true)

@@ -13,14 +13,6 @@
 - 根因：两个并发启动争同一个 `GET_LOCK`，后到者等锁 60 秒，但 MySqlConnector 默认命令超时 30 秒；云端整套迁移耗时远超 30 秒（模板库首次迁移约 2 分 13 秒），先到者没跑完就被打断。是环境耗时差异，不是业务缺陷。
 - 规避：云端验证时把这两个用例视为已知环境失败，其余结果有效；要让它们在云端通过，需在用例里把命令超时调到大于迁移耗时，或把测试放到服务器本机跑。在 `server_dotnet/` 目录执行 `dotnet test`，否则 `global.json` 不生效，会换成 .NET 10 SDK 并报 VSTest 不再支持。
 
-## picomatch 的 ReDoS 目前没有修复版本（2026-11-18）
-
-- 现象：`npm audit --include=dev` 在 `web/` 报 6 个 high（`vite`、`vitest`、`@vitejs/plugin-react`、`tinyglobby`、`fdir` 都指向 `picomatch`）。
-- 根因：GHSA-fc5q-39xc-vjpf 的影响范围是 `<=4.0.7`，而 `4.0.7` 就是 npm 上的最新版，上游尚未发布修复；`npm audit` 给出的"修复"是降级到 vite 6 / vitest 3，不可取。
-- 影响面：只在构建与测试期（glob 匹配），运行时的 `dist` 不含这些包；CI 的审计步骤会因它失败，但和业务代码无关。
-- 规避：等上游发版后升级；在那之前由 `web/scripts/audit-deps.mjs` 只放行 `web/scripts/audit-allowlist.json` 里列出的 advisory（当前仅此一条，带理由与复查日期），CI 用 `npm run audit:deps`。新出现的漏洞仍会让 CI 失败；`npm run audit:deps:strict` 忽略白名单，用来确认门禁本身没有失效。不要执行 `npm audit fix --force`（会降级 vite/vitest）。
-- NuGet 侧同时扫描（`dotnet list package --vulnerable --include-transitive`，`Yf.Api` 与测试项目）为 0 个易受攻击的包。
-
 ## 授权保存必须一次请求、一个事务（2026-11-18）
 
 - 现象：角色抽屉与用户编辑框各自把"数据范围"和"权限/资料"拆成两次 PUT；第二步被拒绝时第一步已落库，出现"只生效一半"，旧页面还可能把别人刚撤销的授权写回去。
