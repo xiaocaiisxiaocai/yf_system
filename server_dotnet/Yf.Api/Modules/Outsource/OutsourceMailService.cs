@@ -179,7 +179,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
             .GroupBy(x => x.NotifiedVendorId!.Value).OrderBy(g => g.Key).ToArray();
         foreach (var vendorId in notices.Select(g => g.Key).Concat(withdrawals.Select(g => g.Key)).Distinct())
         {
-            if (!contacts[vendorId].Any()) problems.Add($"厂商「{vendors[vendorId].Name}」没有外协邮箱，请在 ODM/OEMA 厂商的联络人「外协清单」中维护");
+            if (!contacts[vendorId].Any()) problems.Add($"厂商「{vendors[vendorId].Name}」没有外协邮箱，请在外协清单「设定 → 外协邮箱」中维护");
         }
         if (problems.Count > 0) throw ApiException.BadRequest(string.Join("；", problems.Take(10)) + (problems.Count > 10 ? $"……共 {problems.Count} 项" : ""));
 

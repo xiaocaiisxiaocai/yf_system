@@ -34,7 +34,6 @@ public static class OemModule
 
         // Directory slice: vendors and vendor accounts.
         services.AddSingleton<OemDirectoryService>();
-        services.AddSingleton<OemOutsourceEmailService>();
 
         // Policy slice: retention templates and the oem.* parameter pages.
         services.AddSingleton<OemRetentionTemplateService>();

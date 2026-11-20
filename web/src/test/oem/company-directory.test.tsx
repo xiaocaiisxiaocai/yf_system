@@ -196,28 +196,6 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     expect(screen.getByRole('menuitem', { name: '导出联络人' })).toBeVisible()
   })
 
-  it('外协邮箱有自己的导入导出入口，导出只有厂商名称和邮箱两列，不含联络人', async () => {
-    vi.mocked(downloadExcelWorkbook).mockClear()
-    const user = userEvent.setup()
-    renderDirectory(baseApi({
-      outsourceEmails: vi.fn().mockResolvedValue([{ id: 1, companyId: 7, email: 'os@example.invalid', createdAt: '2026-11-20T00:00:00Z', updatedAt: '2026-11-20T00:00:00Z' }]),
-      contacts: vi.fn().mockResolvedValue([{ id: 2, companyId: 7, name: '联络人甲', email: 'contact@example.invalid', sortNo: 0, status: 'ACTIVE', createdAt: '', updatedAt: '' }]),
-    }), ['oem:company_manage'])
-
-    await user.click(await screen.findByRole('button', { name: '导入' }))
-    expect(await screen.findByRole('menuitem', { name: '导入外协邮箱' })).toBeVisible()
-    await user.click(screen.getByRole('button', { name: '导出' }))
-    const exportEmails = await screen.findByRole('menuitem', { name: '导出外协邮箱' })
-    await waitFor(() => expect(getComputedStyle(exportEmails.closest('.arco-dropdown') ?? exportEmails).pointerEvents).not.toBe('none'))
-    await user.click(exportEmails)
-    await waitFor(() => expect(downloadExcelWorkbook).toHaveBeenCalledTimes(1))
-
-    const [fileName, sheets] = vi.mocked(downloadExcelWorkbook).mock.calls[0]
-    expect(fileName).toBe('ODM-OEMA外协邮箱.xlsx')
-    expect(sheets[0].headers).toEqual(['厂商名称', '邮箱'])
-    expect(sheets[0].rows).toEqual([['精工制造有限公司', 'os@example.invalid']])
-  })
-
   it('ODM/OEMA账号导出不包含姓名、邮箱或任何密码列', async () => {
     vi.mocked(downloadExcelWorkbook).mockClear()
     const user = userEvent.setup()

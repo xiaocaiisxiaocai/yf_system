@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tabs, Tag, Tooltip, Typography,
+  Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -9,7 +9,6 @@ import { fmtTime } from '../../../api/types'
 import { oemRequestError } from '../../api/requestError'
 import type { Company, CompanyContact, InternalRecipient, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
-import type { OemApi } from '../../api/OemApi'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../../components/ExcelImportDialog'
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../../utils/excelWorkbook'
 
@@ -72,23 +71,6 @@ const OEM_CONTACT_WORKBOOK: ExcelWorkbookSheet[] = [
     ['只新增联络人；同一厂商有多位联络人时重复填写厂商名称。邮箱用于厂商邮件通知。'],
   ] },
 ]
-
-const OEM_OUTSOURCE_EMAIL_IMPORT_HEADERS = ['厂商名称', '邮箱'] as const
-const OEM_OUTSOURCE_EMAIL_WORKBOOK: ExcelWorkbookSheet[] = [
-  { name: '数据', headers: [...OEM_OUTSOURCE_EMAIL_IMPORT_HEADERS], rows: [] },
-  { name: '说明', headers: ['说明'], rows: [
-    ['一行一个邮箱；同一厂商有多个邮箱时，重复填写厂商名称。'],
-    ['厂商必须已存在，名称须与系统中的厂商名称一致。'],
-    ['这里的邮箱只用于外协清单邮件，与 ODM/OEMA 联络人分开；只新增，已有的邮箱会跳过。'],
-  ] },
-]
-
-interface OemOutsourceEmailImportPayload {
-  rowNumber: number
-  companyId: number
-  companyName: string
-  email: string
-}
 
 interface OemContactImportPayload {
   rowNumber: number
@@ -229,23 +211,9 @@ interface ContactsDrawerProps {
   onChanged: () => void
 }
 
-/** The contact drawer: ODM/OEMA contacts and, apart from them, the outsourcing-list mail addresses (外协邮箱). */
 function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
-  const can = useCan()
-  return (
-    <Drawer width="min(920px, 100vw)" title={`联络人 · ${company?.name ?? ''}`} visible={!!company}
-      onCancel={onClose} footer={null} unmountOnExit>
-      {!can.manageCompanies ? <span>当前账号没有 ODM/OEMA 厂商管理权限。</span>
-        : <Tabs defaultActiveTab="oem" lazyload>
-          <Tabs.TabPane key="oem" title="ODM/OEMA"><OemContactsPanel company={company} onChanged={onChanged} /></Tabs.TabPane>
-          <Tabs.TabPane key="outsource" title="外协清单"><OutsourceEmailsPanel company={company} /></Tabs.TabPane>
-        </Tabs>}
-    </Drawer>
-  )
-}
-
-function OemContactsPanel({ company, onChanged }: { company: Company | null; onChanged: () => void }) {
   const { api } = useOem()
+  const can = useCan()
   const [rows, setRows] = useState<CompanyContact[]>([])
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -294,7 +262,9 @@ function OemContactsPanel({ company, onChanged }: { company: Company | null; onC
   }
 
   return (
-      <>
+    <Drawer width="min(920px, 100vw)" title={`联络人 · ${company?.name ?? ''}`} visible={!!company}
+      onCancel={onClose} footer={null} unmountOnExit>
+      {!can.manageCompanies ? <span>当前账号没有 ODM/OEMA 厂商管理权限。</span> : <>
         {failed && <Alert type="error" style={{ marginBottom: 12 }} content="联络人列表加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
         {!loading && !failed && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
           <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有联络人均已停用，传递单发布后将不会收到邮件通知。" />
@@ -324,81 +294,9 @@ function OemContactsPanel({ company, onChanged }: { company: Company | null; onC
             <Form.Item field="sortNo" label="排序"><InputNumber min={0} max={9999} precision={0} placeholder="0" /></Form.Item>
           </Form>
         </Modal>
-      </>
+      </>}
+    </Drawer>
   )
-}
-
-type OutsourceEmail = Awaited<ReturnType<OemApi['outsourceEmails']>>[number]
-
-/** Addresses that receive this vendor's outsourcing-list mail; only an e-mail address each. */
-function OutsourceEmailsPanel({ company }: { company: Company | null }) {
-  const { api } = useOem()
-  const [rows, setRows] = useState<OutsourceEmail[]>([])
-  const [loading, setLoading] = useState(false)
-  const [failed, setFailed] = useState(false)
-  const [editing, setEditing] = useState<OutsourceEmail | 'new' | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [form] = Form.useForm()
-  const requestId = useRef(0)
-
-  const load = useCallback(async () => {
-    const current = ++requestId.current
-    if (!company) { setRows([]); setFailed(false); setLoading(false); return }
-    setLoading(true)
-    try {
-      const result = await api.outsourceEmails(company.id)
-      if (requestId.current === current) { setRows(result); setFailed(false) }
-    } catch {
-      if (requestId.current === current) setFailed(true)
-    } finally {
-      if (requestId.current === current) setLoading(false)
-    }
-  }, [api, company])
-  useLoadEffect(load)
-
-  const save = async () => {
-    if (!company || !editing || saving) return
-    const values = await form.validate().catch(() => null)
-    if (!values) return
-    setSaving(true)
-    try {
-      const email = String(values.email).trim()
-      if (editing === 'new') await api.createOutsourceEmail(company.id, email)
-      else await api.updateOutsourceEmail(editing.id, email)
-      Message.success(editing === 'new' ? '外协邮箱已添加' : '外协邮箱已更新')
-      setEditing(null); form.resetFields(); await load()
-    } catch {
-      // The request layer displays errors; keep the dialog open for correction.
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return <>
-    {failed && <Alert type="error" style={{ marginBottom: 12 }} content="外协邮箱加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
-    {!loading && !failed && rows.length === 0 && <Alert type="warning" style={{ marginBottom: 12 }} content="没有外协邮箱时，不能给该厂商发送外协清单邮件。" />}
-    <div className="drawer-toolbar responsive-toolbar">
-      <Typography.Text type="secondary">共 {rows.length} 个邮箱</Typography.Text>
-      <Button type="primary" size="small" icon={<IconPlus />} disabled={company?.status !== 'ACTIVE'}
-        onClick={() => { form.resetFields(); setEditing('new') }}>新增邮箱</Button>
-    </div>
-    <ResizableTable tableId="oem-company-outsource-emails" rowKey="id" size="small" loading={loading} data={rows} pagination={false} scroll={{ x: 480 }} columns={[
-      { title: '邮箱', dataIndex: 'email', width: 320 },
-      { title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: OutsourceEmail) => <Space size={4}>
-        <Button size="mini" type="text" onClick={() => { form.setFieldsValue({ email: row.email }); setEditing(row) }}>编辑</Button>
-        <Popconfirm title="确认删除该外协邮箱？" onOk={async () => { await api.deleteOutsourceEmail(row.id); await load() }}>
-          <Button size="mini" type="text" status="danger">删除</Button>
-        </Popconfirm>
-      </Space> },
-    ]} />
-    <Modal className="form-dialog" title={editing === 'new' ? '新增外协邮箱' : '编辑外协邮箱'} visible={editing !== null} confirmLoading={saving}
-      onCancel={() => { if (!saving) setEditing(null) }} onOk={() => void save()} unmountOnExit>
-      <Form form={form} layout="vertical" onSubmit={() => void save()}>
-        <Form.Item field="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}><Input autoFocus /></Form.Item>
-        <EnterSubmit />
-      </Form>
-    </Modal>
-  </>
 }
 
 function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerProps) {
@@ -648,8 +546,6 @@ export default function CompaniesPage() {
   const [contactImportOpen, setContactImportOpen] = useState(false)
   const [accountExporting, setAccountExporting] = useState(false)
   const [contactExporting, setContactExporting] = useState(false)
-  const [outsourceEmailImportOpen, setOutsourceEmailImportOpen] = useState(false)
-  const [outsourceEmailExporting, setOutsourceEmailExporting] = useState(false)
   const [actionError, setActionError] = useState('')
   const [listLoading, setListLoading] = useState(false)
   const [listError, setListError] = useState('')
@@ -802,76 +698,6 @@ export default function CompaniesPage() {
       return { rowNumber: row.rowNumber, key, detail, status: 'READY' }
     })
     return { payload, preview }
-  }
-
-  const prepareOutsourceEmailImport = async (sourceRows: ExcelImportRow[]): Promise<PreparedImport<OemOutsourceEmailImportPayload>> => {
-    const companies = await fetchAllCompanies()
-    const companiesByName = new Map(companies.map(company => [company.name.trim().toLowerCase(), company]))
-    const existing = new Set<string>()
-    for (const company of companies) {
-      for (const item of await api.outsourceEmails(company.id)) existing.add(`${company.id}:${item.email.trim().toLowerCase()}`)
-    }
-    const counts = new Map<string, number>()
-    for (const row of sourceRows) {
-      const company = companiesByName.get((row.values['厂商名称']?.trim() ?? '').toLowerCase())
-      const email = row.values['邮箱']?.trim().toLowerCase() ?? ''
-      if (company && email) counts.set(`${company.id}:${email}`, (counts.get(`${company.id}:${email}`) ?? 0) + 1)
-    }
-    const payload: OemOutsourceEmailImportPayload[] = []
-    const preview: ImportPreviewRow[] = sourceRows.map(row => {
-      const companyName = row.values['厂商名称']?.trim() ?? ''
-      const company = companiesByName.get(companyName.toLowerCase())
-      const email = row.values['邮箱']?.trim() ?? ''
-      const key = email || `第 ${row.rowNumber} 行`
-      const detail = companyName
-      if (!company) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: 'ODM/OEMA 厂商不存在，请先建立厂商资料' }
-      if (company.status !== 'ACTIVE') return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '厂商已停用，不能新增外协邮箱' }
-      if (!email) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '请输入邮箱' }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { rowNumber: row.rowNumber, key, detail, status: 'INVALID', message: '邮箱格式不正确' }
-      const emailKey = `${company.id}:${email.toLowerCase()}`
-      if ((counts.get(emailKey) ?? 0) > 1) return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '文件内该厂商的外协邮箱重复，本重复组未导入' }
-      if (existing.has(emailKey)) return { rowNumber: row.rowNumber, key, detail, status: 'SKIPPED', message: '该厂商已有这个外协邮箱，未覆盖现有资料' }
-      payload.push({ rowNumber: row.rowNumber, companyId: company.id, companyName, email })
-      return { rowNumber: row.rowNumber, key, detail, status: 'READY' }
-    })
-    return { payload, preview }
-  }
-
-  const importOutsourceEmails = async (rows: OemOutsourceEmailImportPayload[]): Promise<ImportBatchOutcome> => {
-    const grouped = new Map<number, OemOutsourceEmailImportPayload[]>()
-    rows.forEach(row => grouped.set(row.companyId, [...(grouped.get(row.companyId) ?? []), row]))
-    const outcomes: ImportBatchOutcome[] = []
-    for (const [companyId, group] of grouped) {
-      const result = await api.importOutsourceEmails(companyId, group.map(({ companyId: _companyId, ...row }) => row))
-      outcomes.push(result as ImportBatchOutcome)
-    }
-    return {
-      created: outcomes.reduce((sum, result) => sum + result.created, 0),
-      skipped: outcomes.reduce((sum, result) => sum + result.skipped, 0),
-      failed: outcomes.reduce((sum, result) => sum + result.failed, 0),
-      rows: outcomes.flatMap(result => result.rows),
-    }
-  }
-
-  const exportAllOutsourceEmails = async () => {
-    setOutsourceEmailExporting(true)
-    try {
-      const all = await fetchAllCompanies(keyword, status)
-      const data: string[][] = []
-      for (const company of all) {
-        const emails = await api.outsourceEmails(company.id)
-        data.push(...emails.map(item => [company.name, item.email]))
-      }
-      await downloadExcelWorkbook('ODM-OEMA外协邮箱.xlsx', [
-        { name: '数据', headers: [...OEM_OUTSOURCE_EMAIL_IMPORT_HEADERS], rows: data },
-        ...OEM_OUTSOURCE_EMAIL_WORKBOOK.slice(1),
-      ])
-      Message.success(`已导出 ${data.length} 个外协邮箱`)
-    } catch (error) {
-      Message.error(oemRequestError(error, '外协邮箱导出失败'))
-    } finally {
-      setOutsourceEmailExporting(false)
-    }
   }
 
   const importContacts = async (rows: OemContactImportPayload[]): Promise<ImportBatchOutcome> => {
@@ -1128,13 +954,11 @@ export default function CompaniesPage() {
             can.manageCompanies && { key: 'companies', label: '导入厂商', onClick: () => setImportOpen(true) },
             can.manageAccounts && { key: 'accounts', label: '导入账号', onClick: () => setAccountImportOpen(true) },
             can.manageCompanies && { key: 'contacts', label: '导入联络人', onClick: () => setContactImportOpen(true) },
-            can.manageCompanies && { key: 'outsource-emails', label: '导入外协邮箱', onClick: () => setOutsourceEmailImportOpen(true) },
           ]} />
           <ToolbarMenuButton label="导出" items={[
             (can.manageCompanies || can.manageAccounts) && { key: 'companies', label: '导出厂商', loading: exporting, onClick: () => void exportCompanies() },
             can.manageAccounts && { key: 'accounts', label: '导出账号', loading: accountExporting, onClick: () => void exportAllAccounts() },
             can.manageCompanies && { key: 'contacts', label: '导出联络人', loading: contactExporting, onClick: () => void exportAllContacts() },
-            can.manageCompanies && { key: 'outsource-emails', label: '导出外协邮箱', loading: outsourceEmailExporting, onClick: () => void exportAllOutsourceEmails() },
           ]} />
           {can.manageCompanies && <Button onClick={() => setRecipientsOpen(true)}>可通知人员</Button>}
           {can.manageCompanies && (
@@ -1182,19 +1006,6 @@ export default function CompaniesPage() {
         commit={importAccounts}
         onImported={() => void load().catch(() => undefined)}
         onClose={() => setAccountImportOpen(false)}
-      />
-      <ExcelImportDialog<OemOutsourceEmailImportPayload>
-        visible={outsourceEmailImportOpen}
-        title="导入外协邮箱"
-        templateName="ODM-OEMA外协邮箱导入模板.xlsx"
-        requiredHeaders={OEM_OUTSOURCE_EMAIL_IMPORT_HEADERS}
-        templateSheets={OEM_OUTSOURCE_EMAIL_WORKBOOK}
-        keyTitle="邮箱"
-        maxRows={50}
-        prepare={prepareOutsourceEmailImport}
-        commit={importOutsourceEmails}
-        onImported={() => void load().catch(() => undefined)}
-        onClose={() => setOutsourceEmailImportOpen(false)}
       />
       <ExcelImportDialog<OemContactImportPayload>
         visible={contactImportOpen}

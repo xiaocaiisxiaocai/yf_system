@@ -804,28 +804,6 @@ export interface OemOptionResponse {
   name: string
 }
 
-export interface OemOutsourceEmailImportRequest {
-  rows: Array<OemOutsourceEmailImportRow>
-}
-
-export interface OemOutsourceEmailImportRow {
-  rowNumber: number
-  companyName: string
-  email: string
-}
-
-export interface OemOutsourceEmailResponse {
-  id: number
-  companyId: number
-  email: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface OemOutsourceEmailUpsert {
-  email?: string | null
-}
-
 export interface OemPageResponseOfOemAuditLogResponse {
   list: Array<OemAuditLogResponse>
   total: number
@@ -1476,6 +1454,33 @@ export interface OutsourceTypeVendorsRequest {
 export interface OutsourceVendorColumn {
   key: string
   title: string
+}
+
+export interface OutsourceVendorEmailCreate {
+  vendorId?: number | null
+  email?: string | null
+}
+
+export interface OutsourceVendorEmailImportRequest {
+  rows?: Array<OutsourceVendorEmailImportRow> | null
+}
+
+export interface OutsourceVendorEmailImportRow {
+  rowNumber: number
+  vendorName?: string | null
+  email?: string | null
+}
+
+export interface OutsourceVendorEmailResponse {
+  id: number
+  vendorId: number
+  vendorName: string
+  email: string
+  updatedAt: string
+}
+
+export interface OutsourceVendorEmailUpdate {
+  email?: string | null
 }
 
 export interface OutsourceVendorPageResponse {
@@ -2303,9 +2308,6 @@ export interface ApiResponses {
   "GET /oem/companies/{id}/contacts": Array<OemCompanyContactResponse>
   "POST /oem/companies/{id}/contacts": OemCompanyContactResponse
   "POST /oem/companies/{id}/contacts/import": OemImportResponse
-  "GET /oem/companies/{id}/outsource-emails": Array<OemOutsourceEmailResponse>
-  "POST /oem/companies/{id}/outsource-emails": OemOutsourceEmailResponse
-  "POST /oem/companies/{id}/outsource-emails/import": OemImportResponse
   "PUT /oem/companies/{id}/status": OemCompanyResponse
   "PUT /oem/company-contacts/{id}": OemCompanyContactResponse
   "PUT /oem/company-contacts/{id}/status": OemCompanyContactResponse
@@ -2332,8 +2334,6 @@ export interface ApiResponses {
   "GET /oem/internal-user-options": Array<OemInternalUserOptionResponse>
   "GET /oem/notify-policies": Array<OemSettingResponse>
   "PUT /oem/notify-policies": Array<OemSettingResponse>
-  "DELETE /oem/outsource-emails/{id}": EmptyResponse
-  "PUT /oem/outsource-emails/{id}": OemOutsourceEmailResponse
   "GET /oem/outsource-items": OutsourceVendorPageResponse
   "GET /oem/outsource-items/export": Blob
   "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>
@@ -2403,6 +2403,11 @@ export interface ApiResponses {
   "PUT /outsource/settings/types/{id}": OutsourceTypeResponse
   "PUT /outsource/settings/types/{id}/status": OutsourceTypeResponse
   "PUT /outsource/settings/types/{id}/vendors": OutsourceTypeResponse
+  "GET /outsource/settings/vendor-emails": Array<OutsourceVendorEmailResponse>
+  "POST /outsource/settings/vendor-emails": OutsourceVendorEmailResponse
+  "POST /outsource/settings/vendor-emails/import": AdminImportResponse
+  "DELETE /outsource/settings/vendor-emails/{id}": EmptyResponse
+  "PUT /outsource/settings/vendor-emails/{id}": OutsourceVendorEmailResponse
   "GET /outsource/settings/vendors": Array<OutsourceVendorResponse>
   "GET /outsource/sync-status": OutsourceSyncStatusResponse
   "GET /permissions": Array<PermissionResponse>
