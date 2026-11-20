@@ -29,6 +29,14 @@ internal static class OutsourceTestVendors
         await AddContactAsync(context, vendorId, name, email, status, sortNo, ct);
     }
 
+    /// <summary>An address on the vendor's outsourcing mail list (外协邮箱), apart from its ODM/OEMA contacts.</summary>
+    public static async Task AddOutsourceEmailAsync(IDbContextFactory<YfDbContext> factory, ulong vendorId, string email, CancellationToken ct)
+    {
+        await using var context = await factory.CreateDbContextAsync(ct);
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO outsource_vendor_emails(vendor_id,email,created_at,updated_at) VALUES({vendorId},{email},UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))", ct);
+    }
+
     private static Task<int> AddContactAsync(YfDbContext context, ulong vendorId, string name, string? email, string status, int sortNo,
         CancellationToken ct) =>
         context.Database.ExecuteSqlInterpolatedAsync(

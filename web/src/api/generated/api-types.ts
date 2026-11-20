@@ -804,6 +804,18 @@ export interface OemOptionResponse {
   name: string
 }
 
+export interface OemOutsourceEmailResponse {
+  id: number
+  companyId: number
+  email: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OemOutsourceEmailUpsert {
+  email?: string | null
+}
+
 export interface OemPageResponseOfOemAuditLogResponse {
   list: Array<OemAuditLogResponse>
   total: number
@@ -2281,6 +2293,8 @@ export interface ApiResponses {
   "GET /oem/companies/{id}/contacts": Array<OemCompanyContactResponse>
   "POST /oem/companies/{id}/contacts": OemCompanyContactResponse
   "POST /oem/companies/{id}/contacts/import": OemImportResponse
+  "GET /oem/companies/{id}/outsource-emails": Array<OemOutsourceEmailResponse>
+  "POST /oem/companies/{id}/outsource-emails": OemOutsourceEmailResponse
   "PUT /oem/companies/{id}/status": OemCompanyResponse
   "PUT /oem/company-contacts/{id}": OemCompanyContactResponse
   "PUT /oem/company-contacts/{id}/status": OemCompanyContactResponse
@@ -2307,6 +2321,8 @@ export interface ApiResponses {
   "GET /oem/internal-user-options": Array<OemInternalUserOptionResponse>
   "GET /oem/notify-policies": Array<OemSettingResponse>
   "PUT /oem/notify-policies": Array<OemSettingResponse>
+  "DELETE /oem/outsource-emails/{id}": EmptyResponse
+  "PUT /oem/outsource-emails/{id}": OemOutsourceEmailResponse
   "GET /oem/outsource-items": OutsourceVendorPageResponse
   "GET /oem/outsource-items/export": Blob
   "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>

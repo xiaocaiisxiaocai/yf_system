@@ -18,7 +18,7 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261120065922_StopInternalRobotVEditing";
+    private const string Latest = "20261120071443_AddOutsourceVendorEmails";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -109,6 +109,7 @@ public sealed class MigrationRoundTripTests
         // + SimplifyOutsourcePermissions (Down does not bring back outsource:view/import/field_settings or the old names).
         // + AddOutsourceDateImportPermission (Down keeps outsource:date_import and its administrator grant).
         // + StopInternalRobotVEditing (Down leaves 是否有RobotV at 内部不填写).
+        // + AddOutsourceVendorEmails (Down drops outsource_vendor_emails).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -126,6 +127,7 @@ public sealed class MigrationRoundTripTests
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|overdue_notified_for|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|material_file_floor|", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|oem_company_contacts", StringComparison.Ordinal));
+        Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|outsource_vendor_emails", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|project_robot_owners", StringComparison.Ordinal));
         Assert.DoesNotContain(rolledBack, line => line.StartsWith("column|projects|completed_at|", StringComparison.Ordinal));
         Assert.DoesNotContain(latestSchema, line => line.StartsWith("table|project_group", StringComparison.Ordinal));

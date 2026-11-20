@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
+  Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tabs, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -9,6 +9,7 @@ import { fmtTime } from '../../../api/types'
 import { oemRequestError } from '../../api/requestError'
 import type { Company, CompanyContact, InternalRecipient, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
+import type { OemApi } from '../../api/OemApi'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../../components/ExcelImportDialog'
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../../utils/excelWorkbook'
 
@@ -211,9 +212,23 @@ interface ContactsDrawerProps {
   onChanged: () => void
 }
 
+/** The contact drawer: ODM/OEMA contacts and, apart from them, the outsourcing-list mail addresses (外协邮箱). */
 function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
-  const { api } = useOem()
   const can = useCan()
+  return (
+    <Drawer width="min(920px, 100vw)" title={`联络人 · ${company?.name ?? ''}`} visible={!!company}
+      onCancel={onClose} footer={null} unmountOnExit>
+      {!can.manageCompanies ? <span>当前账号没有 ODM/OEMA 厂商管理权限。</span>
+        : <Tabs defaultActiveTab="oem" lazyload>
+          <Tabs.TabPane key="oem" title="ODM/OEMA"><OemContactsPanel company={company} onChanged={onChanged} /></Tabs.TabPane>
+          <Tabs.TabPane key="outsource" title="外协清单"><OutsourceEmailsPanel company={company} /></Tabs.TabPane>
+        </Tabs>}
+    </Drawer>
+  )
+}
+
+function OemContactsPanel({ company, onChanged }: { company: Company | null; onChanged: () => void }) {
+  const { api } = useOem()
   const [rows, setRows] = useState<CompanyContact[]>([])
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState(false)
@@ -262,9 +277,7 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
   }
 
   return (
-    <Drawer width="min(920px, 100vw)" title={`联络人 · ${company?.name ?? ''}`} visible={!!company}
-      onCancel={onClose} footer={null} unmountOnExit>
-      {!can.manageCompanies ? <span>当前账号没有 ODM/OEMA 厂商管理权限。</span> : <>
+      <>
         {failed && <Alert type="error" style={{ marginBottom: 12 }} content="联络人列表加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
         {!loading && !failed && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
           <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有联络人均已停用，传递单发布后将不会收到邮件通知。" />
@@ -294,9 +307,81 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
             <Form.Item field="sortNo" label="排序"><InputNumber min={0} max={9999} precision={0} placeholder="0" /></Form.Item>
           </Form>
         </Modal>
-      </>}
-    </Drawer>
+      </>
   )
+}
+
+type OutsourceEmail = Awaited<ReturnType<OemApi['outsourceEmails']>>[number]
+
+/** Addresses that receive this vendor's outsourcing-list mail; only an e-mail address each. */
+function OutsourceEmailsPanel({ company }: { company: Company | null }) {
+  const { api } = useOem()
+  const [rows, setRows] = useState<OutsourceEmail[]>([])
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [editing, setEditing] = useState<OutsourceEmail | 'new' | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [form] = Form.useForm()
+  const requestId = useRef(0)
+
+  const load = useCallback(async () => {
+    const current = ++requestId.current
+    if (!company) { setRows([]); setFailed(false); setLoading(false); return }
+    setLoading(true)
+    try {
+      const result = await api.outsourceEmails(company.id)
+      if (requestId.current === current) { setRows(result); setFailed(false) }
+    } catch {
+      if (requestId.current === current) setFailed(true)
+    } finally {
+      if (requestId.current === current) setLoading(false)
+    }
+  }, [api, company])
+  useLoadEffect(load)
+
+  const save = async () => {
+    if (!company || !editing || saving) return
+    const values = await form.validate().catch(() => null)
+    if (!values) return
+    setSaving(true)
+    try {
+      const email = String(values.email).trim()
+      if (editing === 'new') await api.createOutsourceEmail(company.id, email)
+      else await api.updateOutsourceEmail(editing.id, email)
+      Message.success(editing === 'new' ? '外协邮箱已添加' : '外协邮箱已更新')
+      setEditing(null); form.resetFields(); await load()
+    } catch {
+      // The request layer displays errors; keep the dialog open for correction.
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <>
+    {failed && <Alert type="error" style={{ marginBottom: 12 }} content="外协邮箱加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
+    {!loading && !failed && rows.length === 0 && <Alert type="warning" style={{ marginBottom: 12 }} content="没有外协邮箱时，不能给该厂商发送外协清单邮件。" />}
+    <div className="drawer-toolbar responsive-toolbar">
+      <Typography.Text type="secondary">共 {rows.length} 个邮箱</Typography.Text>
+      <Button type="primary" size="small" icon={<IconPlus />} disabled={company?.status !== 'ACTIVE'}
+        onClick={() => { form.resetFields(); setEditing('new') }}>新增邮箱</Button>
+    </div>
+    <ResizableTable tableId="oem-company-outsource-emails" rowKey="id" size="small" loading={loading} data={rows} pagination={false} scroll={{ x: 480 }} columns={[
+      { title: '邮箱', dataIndex: 'email', width: 320 },
+      { title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: OutsourceEmail) => <Space size={4}>
+        <Button size="mini" type="text" onClick={() => { form.setFieldsValue({ email: row.email }); setEditing(row) }}>编辑</Button>
+        <Popconfirm title="确认删除该外协邮箱？" onOk={async () => { await api.deleteOutsourceEmail(row.id); await load() }}>
+          <Button size="mini" type="text" status="danger">删除</Button>
+        </Popconfirm>
+      </Space> },
+    ]} />
+    <Modal className="form-dialog" title={editing === 'new' ? '新增外协邮箱' : '编辑外协邮箱'} visible={editing !== null} confirmLoading={saving}
+      onCancel={() => { if (!saving) setEditing(null) }} onOk={() => void save()} unmountOnExit>
+      <Form form={form} layout="vertical" onSubmit={() => void save()}>
+        <Form.Item field="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}><Input autoFocus /></Form.Item>
+        <EnterSubmit />
+      </Form>
+    </Modal>
+  </>
 }
 
 function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerProps) {

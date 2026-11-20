@@ -74,13 +74,11 @@ public sealed class OutsourceMailTests
 
         var dingya = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         var duopu = await OutsourceTestVendors.CreateAsync(factory, "多普", ct);
-        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "d1", "d1@vendor.invalid", ct, sortNo: 1);
-        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "窗口", "d2@vendor.invalid", ct, sortNo: 2);
-        await OutsourceTestVendors.AddContactAsync(factory, duopu.Id, "p1", "p1@vendor.invalid", ct, sortNo: 1);
-        // ODM/OEMA contacts without an address, disabled ones and repeated addresses are not recipients.
-        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "无邮箱", null, ct, sortNo: 3);
-        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "停用", "off@vendor.invalid", ct, status: "DISABLED", sortNo: 4);
-        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "同邮箱", "D1@vendor.invalid", ct, sortNo: 5);
+        // Outsourcing mail goes to each vendor's 外协邮箱, never to its ODM/OEMA contacts.
+        await OutsourceTestVendors.AddOutsourceEmailAsync(factory, dingya.Id, "d1@vendor.invalid", ct);
+        await OutsourceTestVendors.AddOutsourceEmailAsync(factory, dingya.Id, "d2@vendor.invalid", ct);
+        await OutsourceTestVendors.AddOutsourceEmailAsync(factory, duopu.Id, "p1@vendor.invalid", ct);
+        await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "ODM窗口", "odm@vendor.invalid", ct, sortNo: 1);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id, duopu.Id]), ct);
         await settings.SetDefaultCcAsync(buyer, new([9913]), ct);
