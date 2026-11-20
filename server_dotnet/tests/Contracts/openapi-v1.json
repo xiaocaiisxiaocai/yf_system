@@ -13893,6 +13893,7 @@
           "purgeDueAt",
           "purgePendingCount",
           "purgedCount",
+          "recipientNames",
           "releasedAt",
           "sender",
           "sentAt",
@@ -13928,6 +13929,12 @@
           "signerName": {
             "type": "string",
             "nullable": true
+          },
+          "recipientNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "lifecycleStatus": {
             "type": "string"

@@ -95,7 +95,7 @@ describe('ODM/OEMA 文件校验界面', () => {
         companyId: 9,
         companyName: '测试代工厂',
         title: '待处理图纸',
-        sender: { realm: 'oem', id: 31, employeeNo: 'OEM31', realName: '厂商用户' }, signerName: null,
+        sender: { realm: 'oem', id: 31, employeeNo: 'OEM31', realName: '厂商用户' }, signerName: null, recipientNames: [],
         lifecycleStatus: 'DRAFT',
         approvalStatus: null,
         approvalBlockedReason: null,

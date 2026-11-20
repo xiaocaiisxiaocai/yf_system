@@ -350,6 +350,13 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var files = await db.OemTransferFiles.AsNoTracking()
             .Where(file => Enumerable.Contains(ids, file.TransferId) && (file.PurgeReason == null || file.PurgeReason != PurgeReasons.FileRemoved))
             .Select(file => new { file.TransferId, file.SizeBytes, file.Ext, file.ScanStatus, file.PayloadStatus, file.PurgeDueAt }).ToArrayAsync(ct);
+        // Who the vendor chose to notify (inbound only). Names only: a vendor account must never learn employee numbers.
+        var recipientNames = (await db.OemTransferInternalRecipients.AsNoTracking()
+                .Where(item => Enumerable.Contains(ids, item.TransferId))
+                .Join(db.Users, item => item.UserId, user => user.Id, (item, user) => new { item.TransferId, user.RealName, user.Id })
+                .ToArrayAsync(ct))
+            .GroupBy(item => item.TransferId)
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<string>)group.OrderBy(item => item.Id).Select(item => item.RealName).ToArray());
         var instances = await db.OemFlowInstances.AsNoTracking().Where(instance => Enumerable.Contains(ids, instance.TransferId))
             .ToDictionaryAsync(instance => instance.TransferId, instance => new { instance.Status, instance.BlockedReason }, ct);
         // Content access per row, evaluated in batch with the same rule as CapabilitiesAsync.
@@ -416,7 +423,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     : new OemPersonRefResponse("unknown", 0UL, "", "");
             result[transfer.Id] = new OemTransferSummaryResponse(
                 transfer.Id, transfer.Direction, transfer.OemCompanyId, companies.GetValueOrDefault(transfer.OemCompanyId),
-                transfer.Title, sender, transfer.SignerName, transfer.LifecycleStatus, approvalStatus,
+                transfer.Title, sender, transfer.SignerName, recipientNames.GetValueOrDefault(transfer.Id) ?? [],
+                transfer.LifecycleStatus, approvalStatus,
                 ApprovalBlockedReason: !forVendor && instance?.Status == FlowInstanceStatuses.ApprovalBlocked ? instance.BlockedReason : null,
                 ValidationSummary: ValidationSummary(own.Select(file => file.ScanStatus).ToArray()),
                 FileCount: own.Length,

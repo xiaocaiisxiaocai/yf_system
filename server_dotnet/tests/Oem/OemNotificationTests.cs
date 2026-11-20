@@ -215,6 +215,19 @@ public sealed class OemNotificationTests
             new { version = Version(draft) + 1, recipientUserIds = new[] { noMail }, signerName = world.Vendor.Signer }, ct).Ok();
         await host.RunOemJobsAsync(ct);
 
+        // Both sides can see who it was addressed to (names only), and the audit trail records vendor and people.
+        var vendorRow = (await world.Vendor.GetAsync("/api/v1/oem/transfers", ct).Ok())["list"]!.AsArray().Single(item => item!.Id() == id)!;
+        var named = vendorRow["recipientNames"]!.AsArray().Select(item => item!.GetValue<string>()).ToArray();
+        Assert.Single(named);
+        Assert.False(string.IsNullOrWhiteSpace(named[0]));
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            var detail = await conn.ExecuteScalarAsync<string>("SELECT detail FROM audit_logs WHERE action='OEM_TRANSFER_SEND' AND target_id=@id",
+                new { id = id.ToString(System.Globalization.CultureInfo.InvariantCulture) });
+            Assert.Contains("companyName", detail);
+            Assert.Contains(named[0], detail);
+        }
+
         // They receive (see and open) the transfer, but no release mail is queued for anyone.
         var client = await host.LoginInternalAsync("zp_nomail", "NoMail#2026xx", ct);
         var visible = (await client.GetAsync("/api/v1/oem/transfers", ct).Ok())["list"]!.AsArray().Select(item => item!.Id()).ToArray();
@@ -322,18 +335,14 @@ public sealed class OemNotificationTests
         await world.Admin.PutAsync($"{url}/{receiver}", new { removed = false }, ct).Ok();
         Assert.True(await AllowedAsync());
 
-        // With everyone removed the vendor may send without choosing; nobody is mailed and the skip is audited.
+        // With everyone removed there is nobody to address, so the vendor cannot send (a recipient is always required).
         foreach (var userId in Listed(await world.Admin.GetAsync(url, ct).Ok(), false))
             await world.Admin.PutAsync($"{url}/{userId}", new { removed = true }, ct).Ok();
         Assert.Empty(await ChoicesAsync());
         var (third, thirdVersion) = await DraftAsync("无人可通知");
-        await world.Vendor.PostAsync($"/api/v1/oem/transfers/{third}/send", new { version = thirdVersion, signerName = world.Vendor.Signer }, ct).Ok();
-        await host.RunOemJobsAsync(ct);
-        Assert.Empty(await ReleasedMailsAsync(third));
-        await using (var conn = await host.OpenAsync(ct))
-            Assert.Equal(1, await conn.ExecuteScalarAsync<int>(
-                "SELECT COUNT(*) FROM audit_logs WHERE action='OEM_EMAIL_SKIPPED_NO_INTERNAL_RECIPIENT' AND target_id=@Id",
-                new { Id = third.ToString(System.Globalization.CultureInfo.InvariantCulture) }));
+        var refused = await world.Vendor.PostAsync($"/api/v1/oem/transfers/{third}/send",
+            new { version = thirdVersion, recipientUserIds = Array.Empty<ulong>(), signerName = world.Vendor.Signer }, ct).Status(HttpStatusCode.BadRequest);
+        Assert.Contains("没有可通知的公司人员", refused.Body);
 
         // Newly created staff with view + download join every list automatically.
         var newcomer = await host.CreateInternalUserAsync("zp_newcomer", "Newcomer#2026x", ["oem:transfer_view", "oem:file_download"], world.Org.Section, ct);

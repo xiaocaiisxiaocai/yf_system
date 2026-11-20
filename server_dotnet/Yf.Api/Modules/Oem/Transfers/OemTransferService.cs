@@ -196,7 +196,13 @@ public sealed class OemTransferService(
         transfer.ReceiptGraceMinutes = retention.ReceiptGraceMinutes;
         transfer.ManifestSha256 = Manifest(files);
         if (transfer.Title == DraftTitlePlaceholder) transfer.Title = GeneratedTitle(files);
-        var notified = await ChooseInboundRecipientsAsync(uow, current, transfer, recipientUserIds, ct);
+        var notifiedNames = await ChooseInboundRecipientsAsync(uow, current, transfer, recipientUserIds, ct);
+        // Outbound: the vendor contacts that will be mailed on release (same list the release mail uses).
+        var recipientNames = transfer.Direction == TransferDirections.OemToInternal
+            ? notifiedNames
+            : (await OemRecipients.VendorContactsAsync(uow.Db, transfer.OemCompanyId, ct)).Select(contact => contact.Name).ToArray();
+        var companyName = await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Id == transfer.OemCompanyId)
+            .Select(company => company.Name).SingleOrDefaultAsync(ct);
         await SignAsync(current, transfer, signerName);
         OemTransferProgression.Touch(uow, transfer);
         await uow.Db.SaveChangesAsync(ct);
@@ -205,7 +211,10 @@ public sealed class OemTransferService(
         {
             targetName = transfer.Title, files = files.Length, manifest = transfer.ManifestSha256, retentionMode = retention.Mode,
             approval = plan is null ? "NOT_REQUIRED" : plan.Plan.RequiresNoApproval ? "SKIPPED" : "REQUIRED",
-            notifyRecipients = notified,
+            direction = transfer.Direction,
+            companyName,
+            notifyRecipients = notifiedNames.Length,
+            recipientNames,
             signerName = transfer.SignerName,
             skippedNodes = plan?.Plan.Nodes.Where(node => node.Skipped).Select(node => new { node.Name, node.SkipReason }),
         }, ct);
@@ -218,25 +227,27 @@ public sealed class OemTransferService(
     /// A vendor sending files chooses whom to notify from its notification list: at least one when anyone on the list can receive,
     /// and only people on that list. Stored before release so the release mail goes to exactly these people.
     /// </summary>
-    private static async Task<int> ChooseInboundRecipientsAsync(
+    private static async Task<string[]> ChooseInboundRecipientsAsync(
         OemUnitOfWork uow, OemActor current, OemTransfer transfer, IReadOnlyCollection<ulong>? recipientUserIds, CancellationToken ct)
     {
         var chosen = (recipientUserIds ?? []).Distinct().ToArray();
         if (current is not OemAccountActor || transfer.Direction != TransferDirections.OemToInternal)
         {
             if (chosen.Length > 0) throw ApiException.BadRequest("公司发出的传递单不需要选择通知人员");
-            return 0;
+            return [];
         }
-        var candidates = (await OemRecipients.InboundRecipientsAsync(uow.Db, ct))
-            .Select(candidate => candidate.Id).ToHashSet();
-        if (candidates.Count > 0 && chosen.Length == 0) throw ApiException.BadRequest("请选择要通知的公司人员");
+        var candidateList = await OemRecipients.InboundRecipientsAsync(uow.Db, ct);
+        var candidates = candidateList.Select(candidate => candidate.Id).ToHashSet();
+        // Always required: a vendor transfer must name who it is addressed to, so with nobody on the list it cannot be sent.
+        if (chosen.Length == 0)
+            throw ApiException.BadRequest(candidates.Count > 0 ? "请选择要通知的公司人员" : "没有可通知的公司人员，请联系公司管理员");
         if (chosen.Any(userId => !candidates.Contains(userId))) throw ApiException.BadRequest("所选通知人员已不可选，请刷新后重新选择");
         await uow.Db.OemTransferInternalRecipients.Where(item => item.TransferId == transfer.Id).ExecuteDeleteAsync(ct);
         uow.Db.OemTransferInternalRecipients.AddRange(chosen.Select(userId => new OemTransferInternalRecipient
         {
             TransferId = transfer.Id, UserId = userId,
         }));
-        return chosen.Length;
+        return candidateList.Where(candidate => chosen.Contains(candidate.Id)).Select(candidate => candidate.Name).ToArray();
     }
 
     /// <summary>
