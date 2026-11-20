@@ -169,6 +169,8 @@ export class OemApi {
   contacts = (companyId: number) => this.get<'GET /oem/companies/{id}/contacts', CompanyContact[]>(`/oem/companies/${companyId}/contacts`)
   importContacts = (companyId: number, rows: Api.OemCompanyContactImportRow[]) =>
     this.post<'POST /oem/companies/{id}/contacts/import', Api.OemImportResponse>(`/oem/companies/${companyId}/contacts/import`, { rows })
+  importOutsourceEmails = (companyId: number, rows: Api.OemOutsourceEmailImportRow[]) =>
+    this.post<'POST /oem/companies/{id}/outsource-emails/import', Api.OemImportResponse>(`/oem/companies/${companyId}/outsource-emails/import`, { rows })
   /** The one notification list (the same for every vendor): everyone with view + download by default, removed ones marked. */
   allInternalRecipients = () =>
     this.get<'GET /oem/internal-recipients', InternalRecipient[]>('/oem/internal-recipients')

@@ -804,6 +804,16 @@ export interface OemOptionResponse {
   name: string
 }
 
+export interface OemOutsourceEmailImportRequest {
+  rows: Array<OemOutsourceEmailImportRow>
+}
+
+export interface OemOutsourceEmailImportRow {
+  rowNumber: number
+  companyName: string
+  email: string
+}
+
 export interface OemOutsourceEmailResponse {
   id: number
   companyId: number
@@ -2295,6 +2305,7 @@ export interface ApiResponses {
   "POST /oem/companies/{id}/contacts/import": OemImportResponse
   "GET /oem/companies/{id}/outsource-emails": Array<OemOutsourceEmailResponse>
   "POST /oem/companies/{id}/outsource-emails": OemOutsourceEmailResponse
+  "POST /oem/companies/{id}/outsource-emails/import": OemImportResponse
   "PUT /oem/companies/{id}/status": OemCompanyResponse
   "PUT /oem/company-contacts/{id}": OemCompanyContactResponse
   "PUT /oem/company-contacts/{id}/status": OemCompanyContactResponse

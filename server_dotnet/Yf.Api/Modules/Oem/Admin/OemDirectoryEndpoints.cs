@@ -47,6 +47,8 @@ internal static class OemDirectoryEndpoints
             s.ListAsync(OemActorAccessor.Get(c), id, ct)).Produces<OemOutsourceEmailResponse[]>();
         oem.MapPost("/companies/{id:long}/outsource-emails", (ulong id, OemOutsourceEmailUpsert r, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>
             s.CreateAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemOutsourceEmailResponse>();
+        oem.MapPost("/companies/{id:long}/outsource-emails/import", (ulong id, OemOutsourceEmailImportRequest r, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>
+            s.ImportAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemImportResponse>();
         oem.MapPut("/outsource-emails/{id:long}", (ulong id, OemOutsourceEmailUpsert r, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>
             s.UpdateAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemOutsourceEmailResponse>();
         oem.MapDelete("/outsource-emails/{id:long}", async (ulong id, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>

@@ -36,6 +36,24 @@ public sealed class OemOutsourceEmailTests
         await admin.DeleteAsync($"/api/v1/oem/outsource-emails/{id}", ct).Ok();
         Assert.Equal(["second@example.invalid"], (await admin.GetAsync(url, ct).Ok()).AsArray().Select(x => x!["email"]!.GetValue<string>()));
 
+        // Create-only Excel import for the company: new addresses are added, repeats and existing ones are skipped.
+        var imported = await admin.PostAsync($"{url}/import", new
+        {
+            rows = new[]
+            {
+                new { rowNumber = 2, companyName = "外协邮箱厂", email = "import-a@example.invalid" },
+                new { rowNumber = 3, companyName = "外协邮箱厂", email = "SECOND@example.invalid" },
+                new { rowNumber = 4, companyName = "外协邮箱厂", email = "import-b@example.invalid" },
+                new { rowNumber = 5, companyName = "外协邮箱厂", email = "import-b@example.invalid" },
+                new { rowNumber = 6, companyName = "别家厂商", email = "other@example.invalid" },
+                new { rowNumber = 7, companyName = "外协邮箱厂", email = "bad-address" },
+            }
+        }, ct).Ok();
+        Assert.Equal((1, 3, 2), (imported["created"]!.GetValue<int>(), imported["skipped"]!.GetValue<int>(), imported["failed"]!.GetValue<int>()));
+        Assert.Equal(["second@example.invalid", "import-a@example.invalid"],
+            (await admin.GetAsync(url, ct).Ok()).AsArray().Select(x => x!["email"]!.GetValue<string>()));
+        await admin.PostAsync($"{url}/import", new { rows = Array.Empty<object>() }, ct).Status(HttpStatusCode.BadRequest);
+
         // Like the contacts, the addresses need oem:company_manage; vendor accounts never reach them.
         await host.CreateInternalUserAsync("os_mail_viewer", "Viewer#2026", ["oem", "oem:directory_view"], null, ct);
         var viewer = await host.LoginInternalAsync("os_mail_viewer", "Viewer#2026", ct);

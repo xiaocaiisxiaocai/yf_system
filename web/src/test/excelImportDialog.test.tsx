@@ -55,6 +55,32 @@ describe('ExcelImportDialog', () => {
     await waitFor(() => expect(screen.getByRole('dialog', { hidden: true })).not.toBeVisible())
   })
 
+  it('keeps 确认导入 disabled when no row is ready to import', async () => {
+    const user = userEvent.setup()
+    const commit = vi.fn(async () => importResult)
+    const buffer = await createExcelWorkbook([{ name: '数据', headers: ['账号', '初始密码'], rows: [['U001', 'Temporary#2026']] }])
+    render(
+      <ExcelImportDialog<Row>
+        visible
+        title="账号导入"
+        templateName="账号模板.xlsx"
+        requiredHeaders={['账号', '初始密码']}
+        maxRows={10}
+        prepare={(rows: ExcelImportRow[]) => ({
+          payload: rows.map(row => ({ rowNumber: row.rowNumber, employeeNo: row.values['账号'], initialPassword: row.values['初始密码'] })),
+          preview: rows.map(row => ({ rowNumber: row.rowNumber, key: row.values['账号'], detail: '', status: 'SKIPPED' as const, message: '已存在' })),
+        })}
+        commit={commit}
+        onClose={() => undefined}
+      />,
+    )
+    await user.upload(screen.getByLabelText('选择 Excel 文件') as HTMLInputElement,
+      new File([buffer], 'accounts.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    expect(await screen.findByText('跳过 1')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '确认导入' })).toBeDisabled()
+    expect(commit).not.toHaveBeenCalled()
+  })
+
   it('does not commit when the preview is cancelled', async () => {
     const user = userEvent.setup()
     const commit = vi.fn(async () => importResult)

@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
@@ -9,6 +10,10 @@ using Yf.Api.Modules.Oem.Identity;
 namespace Yf.Api.Modules.Oem.Admin;
 
 public sealed record OemOutsourceEmailUpsert(string? Email);
+
+public sealed record OemOutsourceEmailImportRow(int RowNumber, [property: JsonRequired] string CompanyName, [property: JsonRequired] string Email);
+
+public sealed record OemOutsourceEmailImportRequest([property: JsonRequired] OemOutsourceEmailImportRow[] Rows);
 
 public sealed record OemOutsourceEmailResponse(ulong Id, ulong CompanyId, string Email, DateTime CreatedAt, DateTime UpdatedAt);
 
@@ -52,6 +57,72 @@ public sealed class OemOutsourceEmailService(IDbContextFactory<YfDbContext> dbFa
             new { companyId, companyName = company.Name, row.Email }, ct);
         await uow.CommitAsync(ct);
         return Json(row);
+    }
+
+    /// <summary>
+    /// Create-only import for one company: a repeated address in the file or one the company already has is skipped,
+    /// never overwritten. Every row goes through <see cref="CreateAsync"/>, so the same checks and audit apply.
+    /// </summary>
+    public async Task<OemImportResponse> ImportAsync(OemActor actor, ulong companyId, OemOutsourceEmailImportRequest request, CancellationToken ct)
+    {
+        if (request.Rows is null || request.Rows.Length is < 1 or > MaximumPerCompany || request.Rows.Any(row => row is null))
+            throw ApiException.BadRequest($"导入行数需为 1–{MaximumPerCompany} 行");
+
+        string companyName;
+        HashSet<string> existing;
+        await using (var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct))
+        {
+            await OemAuthorizer.RequireInternalAsync(uow, actor, OemPermissions.CompanyManage, ct);
+            companyName = await uow.Db.OemCompanies.AsNoTracking().Where(company => company.Id == companyId)
+                .Select(company => company.Name).SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+            existing = (await uow.Db.OutsourceVendorEmails.AsNoTracking().Where(x => x.VendorId == companyId)
+                .Select(x => x.Email).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var repeated = request.Rows.Select((row, index) => (email: row.Email?.Trim() ?? "", index))
+            .Where(item => item.email.Length > 0).GroupBy(item => item.email, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1).SelectMany(group => group.Select(item => item.index)).ToHashSet();
+        var results = new List<OemImportRowResult>(request.Rows.Length);
+        for (var index = 0; index < request.Rows.Length; index++)
+        {
+            var row = request.Rows[index];
+            var rowNumber = row.RowNumber >= 2 && row.RowNumber <= MaximumPerCompany + 1 ? row.RowNumber : index + 2;
+            var email = row.Email?.Trim() ?? "";
+            if (!string.Equals(row.CompanyName?.Trim(), companyName, StringComparison.OrdinalIgnoreCase))
+            {
+                results.Add(new(rowNumber, email, "FAILED", "厂商名称与导入对象不匹配"));
+                continue;
+            }
+            if (repeated.Contains(index))
+            {
+                results.Add(new(rowNumber, email, "SKIPPED", "文件内外协邮箱重复，本重复组未导入"));
+                continue;
+            }
+            if (existing.Contains(email))
+            {
+                results.Add(new(rowNumber, email, "SKIPPED", "该厂商已有这个外协邮箱，未覆盖现有资料"));
+                continue;
+            }
+            try
+            {
+                await CreateAsync(actor, companyId, new OemOutsourceEmailUpsert(email), ct);
+                existing.Add(email);
+                results.Add(new(rowNumber, email, "CREATED", null));
+            }
+            catch (ApiException error) when (error.Status is 400 or 409)
+            {
+                results.Add(new(rowNumber, email, error.Status == 409 ? "SKIPPED" : "FAILED", error.Message));
+            }
+            catch (ApiException error) when (error.Status == 403)
+            {
+                results.Add(new(rowNumber, email, "FAILED", "权限已变化，批次已停止"));
+                for (var rest = index + 1; rest < request.Rows.Length; rest++)
+                    results.Add(new(request.Rows[rest].RowNumber >= 2 ? request.Rows[rest].RowNumber : rest + 2, request.Rows[rest].Email ?? "", "FAILED", "未执行"));
+                break;
+            }
+        }
+        return new(results.Count(row => row.Status == "CREATED"), results.Count(row => row.Status == "SKIPPED"),
+            results.Count(row => row.Status == "FAILED"), results);
     }
 
     public async Task<OemOutsourceEmailResponse> UpdateAsync(OemActor actor, ulong id, OemOutsourceEmailUpsert request, CancellationToken ct)
