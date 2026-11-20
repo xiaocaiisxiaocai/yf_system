@@ -9118,6 +9118,84 @@
         }
       }
     },
+    "/api/v1/outsource/items/date-import/preview": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceDateImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceDateImportPreviewResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/date-import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceDateImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminImportResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/items/{id}": {
       "put": {
         "tags": [
@@ -14236,8 +14314,6 @@
       },
       "OutsourceBatchUpdate": {
         "required": [
-          "bomOn",
-          "drawingReleasedOn",
           "items",
           "latestDueDate",
           "outsourceDate",
@@ -14279,14 +14355,6 @@
             "nullable": true
           },
           "latestDueDate": {
-            "type": "string",
-            "nullable": true
-          },
-          "bomOn": {
-            "type": "string",
-            "nullable": true
-          },
-          "drawingReleasedOn": {
             "type": "string",
             "nullable": true
           },
@@ -14448,6 +14516,130 @@
             "items": {
               "$ref": "#/components/schemas/OutsourceCustomerAliasResponse"
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDateImportPreviewResponse": {
+        "required": [
+          "invalid",
+          "ready",
+          "rows",
+          "skipped"
+        ],
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "invalid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceDateImportPreviewRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDateImportPreviewRow": {
+        "required": [
+          "bomOn",
+          "bomOnBefore",
+          "drawingReleasedOn",
+          "drawingReleasedOnBefore",
+          "message",
+          "rowNumber",
+          "status",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workOrderNo": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "bomOnBefore": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "bomOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "drawingReleasedOnBefore": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          },
+          "drawingReleasedOn": {
+            "type": "string",
+            "format": "date",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDateImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceDateImportRow"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDateImportRow": {
+        "required": [
+          "bomOn",
+          "drawingReleasedOn",
+          "rowNumber",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workOrderNo": {
+            "type": "string",
+            "nullable": true
+          },
+          "bomOn": {
+            "type": "string",
+            "nullable": true
+          },
+          "drawingReleasedOn": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -15191,8 +15383,6 @@
       },
       "OutsourceItemUpdate": {
         "required": [
-          "bomOn",
-          "drawingReleasedOn",
           "expectedUpdatedAt",
           "latestDueDate",
           "outsourceDate",
@@ -15232,14 +15422,6 @@
             "nullable": true
           },
           "latestDueDate": {
-            "type": "string",
-            "nullable": true
-          },
-          "bomOn": {
-            "type": "string",
-            "nullable": true
-          },
-          "drawingReleasedOn": {
             "type": "string",
             "nullable": true
           },

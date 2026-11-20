@@ -32,8 +32,8 @@ internal static class OutsourceEditorScopes
 }
 
 /// <summary>
-/// What kind of column a field is, which fixes what the settings page may change: IPMS and fixed columns are never
-/// filled in by hand, process columns drive routing and row colours so only internal staff fill them in, and manual
+/// What kind of column a field is, which fixes what the settings page may change: IPMS, fixed and imported columns are
+/// never filled in on the list, process columns drive routing and row colours so only internal staff fill them in, and manual
 /// and custom columns may also be opened to the vendor.
 /// </summary>
 internal static class OutsourceFieldCategories
@@ -42,6 +42,8 @@ internal static class OutsourceFieldCategories
     internal const string Ipms = "IPMS";
     internal const string Process = "PROCESS";
     internal const string Manual = "MANUAL";
+    /// <summary>Only written by its own Excel import (BOM时间, 发图), never edited on the list.</summary>
+    internal const string Imported = "IMPORTED";
     internal const string Custom = "CUSTOM";
     internal static bool InternalEditable(string category) => category is Process or Manual or Custom;
     internal static bool VendorEditable(string category) => category is Manual or Custom;
@@ -69,8 +71,8 @@ internal static class OutsourceBuiltInFields
         new("mechanicalOwner", OutsourceFieldCategories.Ipms, 12, x => x.MechanicalOwner),
         new("electricalOwner", OutsourceFieldCategories.Ipms, 12, x => x.ElectricalOwner),
         new("workOrderIssuedOn", OutsourceFieldCategories.Ipms, 12, x => Date(x.WorkOrderIssuedOn)),
-        new("bomOn", OutsourceFieldCategories.Manual, 12, x => Date(x.BomOn)),
-        new("drawingReleasedOn", OutsourceFieldCategories.Manual, 12, x => Date(x.DrawingReleasedOn)),
+        new("bomOn", OutsourceFieldCategories.Imported, 12, x => Date(x.BomOn)),
+        new("drawingReleasedOn", OutsourceFieldCategories.Imported, 12, x => Date(x.DrawingReleasedOn)),
         new("originalDueDate", OutsourceFieldCategories.Ipms, 12, x => Date(x.OriginalDueDate)),
         new("latestDueDate", OutsourceFieldCategories.Process, 12, x => Date(x.LatestDueDate)),
         new("quantity", OutsourceFieldCategories.Ipms, 8, x => x.Quantity?.ToString(CultureInfo.InvariantCulture)),

@@ -61,16 +61,15 @@ public sealed record OutsourceItemResponse(
 // CustomValues: the stored value of every active custom field by key (BOOLEAN as "true"/"false", null when empty).
 
 /// <summary><paramref name="TypeId"/> is optional: null keeps the current type (a record whose type was disabled can still be edited).
-/// <paramref name="BomOn"/> and <paramref name="DrawingReleasedOn"/> (filled in by hand): null keeps, an empty text clears.
 /// <paramref name="Values"/>: custom field values by key; an absent key keeps, an empty text clears.</summary>
 public sealed record OutsourceItemUpdate(string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, DateTime? ExpectedUpdatedAt, string? LatestDueDate = null,
-    string? BomOn = null, string? DrawingReleasedOn = null, Dictionary<string, string?>? Values = null);
+    Dictionary<string, string?>? Values = null);
 
 public sealed record OutsourceItemVersion(ulong Id, DateTime ExpectedUpdatedAt);
 
 /// <summary>Batch edit: only the fields that are present change; an empty remark clears it.</summary>
 public sealed record OutsourceBatchUpdate(OutsourceItemVersion[]? Items, string? OutsourceDate, ulong? VendorId, ulong? TypeId, string? Remark, string? Status, string? LatestDueDate = null,
-    string? BomOn = null, string? DrawingReleasedOn = null, Dictionary<string, string?>? Values = null);
+    Dictionary<string, string?>? Values = null);
 
 public sealed record OutsourceBatchDelete(OutsourceItemVersion[]? Items);
 

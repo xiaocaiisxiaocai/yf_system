@@ -172,7 +172,7 @@ public sealed class OutsourceItemChange
     public string Field { get; set; } = null!;
     public string? OldValue { get; set; }
     public string? NewValue { get; set; }
-    /// <summary>EDIT, IPMS_SCHEDULED or IPMS_MANUAL.</summary>
+    /// <summary>EDIT, IPMS_SCHEDULED, IPMS_MANUAL, VENDOR or DATE_IMPORT.</summary>
     public string Source { get; set; } = null!;
     public ulong? ActorUserId { get; set; }
     /// <summary>Reserved for a change the vendor makes in the portal (<c>VENDOR</c>): the account and the name it signed with.</summary>

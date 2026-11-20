@@ -28,6 +28,7 @@ type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
 type FieldColumn = ApiResponses['GET /outsource/fields']['fields'][number]
 type ImportRow = { rowNumber: number; outsourceDate: string; workOrderNo: string; vendorName: string; typeName: string }
+type DateImportRow = { rowNumber: number; workOrderNo: string; bomOn: string; drawingReleasedOn: string }
 
 const STATUS_OPTIONS = [
   { label: '正常', value: 'NORMAL' },
@@ -63,6 +64,7 @@ const customText = (field: Pick<FieldColumn, 'dataType'>, value?: string | null)
 const BOOLEAN_OPTIONS = [{ label: '是', value: 'true' }, { label: '否', value: 'false' }]
 
 const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
+const DATE_IMPORT_HEADERS = ['工令', 'BOM时间', '发图'] as const
 
 interface Filters {
   keyword: string
@@ -86,6 +88,7 @@ export default function OutsourceListPage() {
   const permissions = useAuth((state) => state.permissions)
   const canManage = permissions.includes(OUTSOURCE_PERMISSIONS.manage)
   const canSend = permissions.includes(OUTSOURCE_PERMISSIONS.send)
+  const canDateImport = permissions.includes(OUTSOURCE_PERMISSIONS.dateImport)
   const [searchParams, setSearchParams] = useSearchParams()
   const [filters, setFilters] = useState<Filters>(() => ({ keyword: '', includeClosed: false, sendQueue: searchParams.get('sendQueue') === '1' }))
   const refreshQueue = useSendQueue((state) => state.refresh)
@@ -105,6 +108,7 @@ export default function OutsourceListPage() {
   const [mailing, setMailing] = useState<number[] | null>(null)
   const [batchOpen, setBatchOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
+  const [dateImportOpen, setDateImportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
@@ -285,6 +289,39 @@ export default function OutsourceListPage() {
     return { ...data, rows: data.rows.map((row) => ({ ...row, status: row.status as ImportRowOutcome['status'] })) }
   }
 
+  const prepareDateImport = async (rows: ExcelImportRow[]) => {
+    const payload: DateImportRow[] = rows.map((row) => ({
+      rowNumber: row.rowNumber,
+      workOrderNo: row.values['工令'],
+      bomOn: normalizeImportDate(row.values['BOM时间']),
+      drawingReleasedOn: normalizeImportDate(row.values['发图']),
+    }))
+    try {
+      const response = await http.post<ApiResponses['POST /outsource/items/date-import/preview']>('/outsource/items/date-import/preview', { rows: payload })
+      const byRow = new Map(response.data.rows.map((row) => [row.rowNumber, row]))
+      const change = (label: string, before?: string | null, after?: string | null) =>
+        before === after ? '' : `${label} ${before ?? '空'} → ${after ?? '空'}`
+      const preview: ImportPreviewRow[] = payload.map((row) => {
+        const result = byRow.get(row.rowNumber)
+        return {
+          rowNumber: row.rowNumber,
+          key: row.workOrderNo,
+          detail: result ? [change('BOM时间', result.bomOnBefore, result.bomOn), change('发图', result.drawingReleasedOnBefore, result.drawingReleasedOn)]
+            .filter(Boolean).join(' · ') : '',
+          status: (result?.status ?? 'INVALID') as ImportPreviewRow['status'],
+          message: result?.message ?? undefined,
+        }
+      })
+      return { payload, preview }
+    } catch (error) {
+      throw new Error(requestErrorMessage(error, '预览失败，请稍后重试'))
+    }
+  }
+  const commitDateImport = async (rows: DateImportRow[]): Promise<ImportBatchOutcome> => {
+    const { data } = await http.post<ApiResponses['POST /outsource/items/date-import']>('/outsource/items/date-import', { rows })
+    return { ...data, rows: data.rows.map((row) => ({ ...row, status: row.status as ImportRowOutcome['status'] })) }
+  }
+
   const date = (value?: string | null) => value ?? ''
   // Built-in columns by key; their titles, order and presence come from the field settings (外协清单契约 → 栏位设定).
   const builtIn: Record<string, Partial<TableColumnProps<Item>>> = {
@@ -407,6 +444,7 @@ export default function OutsourceListPage() {
         {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running || (selected.length > 0 && openSelected.length === 0)}
           onClick={() => void syncNow()}>{openSelected.length > 0 ? `同步所选 (${openSelected.length})` : '立即同步'}</Button>}
         <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
+        {canDateImport && <Button icon={<IconUpload />} onClick={() => setDateImportOpen(true)}>导入BOM/发图</Button>}
         {canManage && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>汇入</Button>}
       </Space>
     </div>
@@ -434,6 +472,11 @@ export default function OutsourceListPage() {
       notice={<>填写外发日期、工令、外发类型和外发厂商，序号自动编，其余字段由 IPMS 带出。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}
       prepare={prepareImport} commit={commitImport}
       onImported={() => { void load() }} onClose={() => setImportOpen(false)} />
+    <ExcelImportDialog<DateImportRow> visible={dateImportOpen} title="导入BOM时间与发图" templateName="BOM时间与发图导入模板.xlsx"
+      requiredHeaders={DATE_IMPORT_HEADERS} maxRows={500} keyTitle="工令"
+      notice={<>按工令更新外协清单中的 BOM时间 和发图，空白单元格保留原值。清单中没有的工令和已完成的记录会跳过。最多 500 行。</>}
+      prepare={prepareDateImport} commit={commitDateImport}
+      onImported={() => { void load() }} onClose={() => setDateImportOpen(false)} />
   </Card>
 }
 
@@ -475,8 +518,7 @@ function EditDialog({ item, vendors, types, fields, onClose, onSaved }: {
   const custom = useMemo(() => fields.filter(isCustom), [fields])
   useEffect(() => {
     if (item) form.setFieldsValue({
-      vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '', bomOn: item.bomOn ?? undefined,
-      drawingReleasedOn: item.drawingReleasedOn ?? undefined,
+      vendorId: item.vendorId, typeId: item.typeId ?? undefined, status: item.status, remark: item.remark ?? '',
       ...Object.fromEntries(custom.map((field) => [`custom.${field.key}`, item.customValues?.[field.key] ?? undefined])),
     })
   }, [item, form, custom])
@@ -490,8 +532,6 @@ function EditDialog({ item, vendors, types, fields, onClose, onSaved }: {
         vendorId: can('vendor') ? values.vendorId : item.vendorId,
         typeId: can('type') ? values.typeId : undefined,
         status: can('status') ? values.status : item.status,
-        bomOn: can('bomOn') ? values.bomOn || '' : undefined,
-        drawingReleasedOn: can('drawingReleasedOn') ? values.drawingReleasedOn || '' : undefined,
         remark: can('remark') ? values.remark?.trim() ?? '' : item.remark ?? '',
         values: custom.length > 0 ? Object.fromEntries(custom.map((field) => [field.key, values.custom?.[field.key] ?? ''])) : undefined,
         expectedUpdatedAt: item.updatedAt,
@@ -515,8 +555,6 @@ function EditDialog({ item, vendors, types, fields, onClose, onSaved }: {
         <Select aria-label="外发厂商" disabled={!item || (can('type') && selectedTypeId === undefined)}
           options={item ? vendorOptions(vendors, types, item, can('type') ? selectedTypeId : item.typeId ?? undefined) : []} />
       </Form.Item>}
-      {can('bomOn') && <Form.Item field="bomOn" label="BOM时间"><DatePicker style={{ width: '100%' }} /></Form.Item>}
-      {can('drawingReleasedOn') && <Form.Item field="drawingReleasedOn" label="发图"><DatePicker style={{ width: '100%' }} /></Form.Item>}
       {can('status') && <Form.Item field="status" label="状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>}
       {can('remark') && <Form.Item field="remark" label="备注" rules={[{ maxLength: 500, message: '备注最多 500 个字符' }]}>
         <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} maxLength={500} />
@@ -535,24 +573,22 @@ function BatchDialog({ visible, items, vendors, types, fields, onClose, onSaved 
   const [vendorId, setVendorId] = useState<number>()
   const [typeId, setTypeId] = useState<number>()
   const [status, setStatus] = useState<string>()
-  const [bomOn, setBomOn] = useState<string>()
-  const [drawingReleasedOn, setDrawingReleasedOn] = useState<string>()
   const [changeRemark, setChangeRemark] = useState(false)
   const [remark, setRemark] = useState('')
   const [customValues, setCustomValues] = useState<Record<string, string | undefined>>({})
   const [saving, setSaving] = useState(false)
   const can = (key: string) => fields.some((field) => field.key === key)
   const custom = fields.filter(isCustom)
-  const reset = () => { setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setBomOn(undefined); setDrawingReleasedOn(undefined); setChangeRemark(false); setRemark(''); setCustomValues({}) }
+  const reset = () => { setVendorId(undefined); setTypeId(undefined); setStatus(undefined); setChangeRemark(false); setRemark(''); setCustomValues({}) }
   const changedCustom = Object.entries(customValues).filter(([, value]) => value !== undefined)
-  const nothing = vendorId === undefined && typeId === undefined && !status && !bomOn && !drawingReleasedOn && !changeRemark && changedCustom.length === 0
+  const nothing = vendorId === undefined && typeId === undefined && !status && !changeRemark && changedCustom.length === 0
   const save = async () => {
     if (saving || nothing) return
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /outsource/items/batch']>('/outsource/items/batch', {
         items: items.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt })),
-        vendorId, typeId, status, bomOn, drawingReleasedOn, remark: changeRemark ? remark.trim() : undefined,
+        vendorId, typeId, status, remark: changeRemark ? remark.trim() : undefined,
         values: changedCustom.length > 0 ? Object.fromEntries(changedCustom) : undefined,
       })
       Message.success(`已修改 ${items.length} 条记录`); reset(); await onSaved()
@@ -574,8 +610,6 @@ function BatchDialog({ visible, items, vendors, types, fields, onClose, onSaved 
       {can('vendor') && <Form.Item label="外发厂商"><Select aria-label="外发厂商" allowClear placeholder="不修改" value={vendorId} onChange={setVendorId}
         options={vendors.filter((vendor) => vendor.status === 'ACTIVE' && (typeId === undefined || (types.find((type) => type.id === typeId)?.vendorIds ?? []).includes(vendor.id)))
           .map((vendor) => ({ label: vendor.name, value: vendor.id }))} /></Form.Item>}
-      {can('bomOn') && <Form.Item label="BOM时间"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={bomOn} onChange={(value) => setBomOn(value || undefined)} /></Form.Item>}
-      {can('drawingReleasedOn') && <Form.Item label="发图"><DatePicker style={{ width: '100%' }} placeholder="不修改" value={drawingReleasedOn} onChange={(value) => setDrawingReleasedOn(value || undefined)} /></Form.Item>}
       {can('status') && <Form.Item label="状态"><Select allowClear placeholder="不修改" value={status} onChange={setStatus} options={STATUS_OPTIONS} /></Form.Item>}
       {can('remark') && <Form.Item label={<Checkbox checked={changeRemark} onChange={setChangeRemark}>修改备注</Checkbox>}>
         <Input.TextArea aria-label="备注" disabled={!changeRemark} value={remark} onChange={setRemark} maxLength={500} autoSize={{ minRows: 2, maxRows: 4 }} />

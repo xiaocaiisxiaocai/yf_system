@@ -96,11 +96,14 @@ public sealed class OutsourceFieldTests
         // Vendors keep seeing every built-in column; the IPMS columns are never filled in by hand.
         Assert.All(settings.Fields.Where(x => x.BuiltIn), x => Assert.True(x.VendorVisible));
         Assert.Equal("NONE", settings.Fields.Single(x => x.Key == "customer").EditorScope);
+        Assert.All(settings.Fields.Where(x => x.Key is "bomOn" or "drawingReleasedOn"),
+            x => Assert.Equal(("IMPORTED", "NONE", false), (x.Category, x.EditorScope, x.EditorScopeAllowed)));
         Assert.Contains(settings.Roles, x => x.Name == "采购");
 
         // Everyone who could edit before still can (editor scope ALL), so the layout offers the same columns.
         var layout = await f.Fields.LayoutAsync(f.Buyer, ct);
-        Assert.Equal(["outsourceDate", "status", "hasRobotV", "type", "vendor", "bomOn", "drawingReleasedOn", "latestDueDate", "remark"],
+        // BOM时间 and 发图 are only imported (outsource:date_import), never filled in on the list.
+        Assert.Equal(["outsourceDate", "status", "hasRobotV", "type", "vendor", "latestDueDate", "remark"],
             layout.Fields.Where(x => x.CanEdit).Select(x => x.Key));
         // Seeing the list needs no permission; filling a column in does (ALL = outsource:manage).
         Assert.Empty((await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit));
@@ -196,40 +199,40 @@ public sealed class OutsourceFieldTests
         Assert.Equal(400, await StatusOfAsync(() => f.Items.BatchUpdateAsync(f.Admin,
             new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, Values: new() { ["customer"] = "x" }), ct)));
 
-        // 发图 only by named people: 机构丙. Any active internal account may be named, with or without a permission.
+        // 最新交期 only by named people: 机构丙. Any active internal account may be named, with or without a permission.
         var settings = await f.Fields.SettingsAsync(f.Admin, ct);
         Assert.Contains(9741UL, settings.Users!.Select(x => x.Id));
         Assert.Contains(Sender.Id, settings.Users!.Select(x => x.Id));
-        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["latestDueDate"].Id,
             new(null, null, null, null, null, "USERS", null, [987654]), ct)));
-        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
+        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, fields["latestDueDate"].Id,
             new(null, null, null, null, null, "USERS", null, []), ct)));
-        var named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
-            new(null, null, null, null, null, "USERS", null, [9743, 9742]), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
+        var named = (await f.Fields.UpdateAsync(f.Admin, fields["latestDueDate"].Id,
+            new(null, null, null, null, null, "USERS", null, [9743, 9742]), ct)).Fields.Single(x => x.Key == "latestDueDate");
         Assert.Equal("USERS", named.EditorScope);
         Assert.Equal([9742UL, 9743UL], named.EditorUserIds!);
-        named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
-            new(null, null, null, null, null, "USERS", null, [9743]), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
+        named = (await f.Fields.UpdateAsync(f.Admin, fields["latestDueDate"].Id,
+            new(null, null, null, null, null, "USERS", null, [9743]), ct)).Fields.Single(x => x.Key == "latestDueDate");
         Assert.Equal([9743UL], named.EditorUserIds!);
         Assert.Equal(403, await StatusOfAsync(() => f.Items.BatchUpdateAsync(f.Buyer,
-            new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, DrawingReleasedOn: "2026-12-01"), ct)));
+            new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, LatestDueDate: "2026-12-01"), ct)));
         saved = (await f.Items.BatchUpdateAsync(f.Mechanic,
-            new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, DrawingReleasedOn: "2026-12-01"), ct)).Items.Single();
-        Assert.Equal(new DateOnly(2026, 12, 1), saved.DrawingReleasedOn);
-        // Being named is enough: 发信丁 holds no edit permission, fills in 发图, and still cannot do anything else.
-        named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
-            new(null, null, null, null, null, "USERS", null, [Sender.Id]), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
-        Assert.Equal(["drawingReleasedOn"], (await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit).Select(x => x.Key));
+            new([new(item.Id, saved.UpdatedAt)], null, null, null, null, null, LatestDueDate: "2026-12-01"), ct)).Items.Single();
+        Assert.Equal(new DateOnly(2026, 12, 1), saved.LatestDueDate);
+        // Being named is enough: 发信丁 holds no edit permission, fills in 最新交期, and still cannot do anything else.
+        named = (await f.Fields.UpdateAsync(f.Admin, fields["latestDueDate"].Id,
+            new(null, null, null, null, null, "USERS", null, [Sender.Id]), ct)).Fields.Single(x => x.Key == "latestDueDate");
+        Assert.Equal(["latestDueDate"], (await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit).Select(x => x.Key));
         saved = await f.Items.UpdateAsync(Sender, item.Id, new(null, item.VendorId, null, saved.Remark, saved.Status, saved.UpdatedAt,
-            DrawingReleasedOn: "2026-12-02"), ct);
-        Assert.Equal(new DateOnly(2026, 12, 2), saved.DrawingReleasedOn);
+            LatestDueDate: "2026-12-02"), ct);
+        Assert.Equal(new DateOnly(2026, 12, 2), saved.LatestDueDate);
         Assert.Equal(403, await StatusOfAsync(() => f.Items.UpdateAsync(Sender, item.Id,
             new(null, item.VendorId, null, "发信的备注", saved.Status, saved.UpdatedAt), ct)));
         Assert.Equal(403, await StatusOfAsync(() => f.Items.SetCompletionAsync(Sender, new([new(item.Id, saved.UpdatedAt)], true), ct)));
         Assert.Equal(403, await StatusOfAsync(() => f.Items.BatchDeleteAsync(Sender, new([new(item.Id, saved.UpdatedAt)]), ct)));
         // Back to everyone: the named people are dropped.
-        named = (await f.Fields.UpdateAsync(f.Admin, fields["drawingReleasedOn"].Id,
-            new(null, null, null, null, null, "ALL", null, null), ct)).Fields.Single(x => x.Key == "drawingReleasedOn");
+        named = (await f.Fields.UpdateAsync(f.Admin, fields["latestDueDate"].Id,
+            new(null, null, null, null, null, "ALL", null, null), ct)).Fields.Single(x => x.Key == "latestDueDate");
         Assert.Empty(named.EditorUserIds!);
 
         var history = await f.Items.ChangesAsync(f.Buyer, item.Id, ct);

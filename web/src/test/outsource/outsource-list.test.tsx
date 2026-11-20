@@ -47,8 +47,8 @@ const FIELD_ORDER: [string, string, string, boolean][] = [
   ['outsourceDate', '外发日期', 'PROCESS', true], ['status', '状态', 'PROCESS', true], ['workOrderNo', '工令', 'FIXED', false],
   ['customer', '客户', 'IPMS', false], ['machineModel', '机型', 'IPMS', false], ['type', '外发类型', 'PROCESS', true],
   ['vendor', '外发厂商', 'PROCESS', true], ['mechanicalSection', '机构课别', 'IPMS', false], ['mechanicalOwner', '机构执行人', 'IPMS', false],
-  ['electricalOwner', '电控执行人', 'IPMS', false], ['workOrderIssuedOn', '工令下发', 'IPMS', false], ['bomOn', 'BOM时间', 'MANUAL', true],
-  ['drawingReleasedOn', '发图', 'MANUAL', true], ['originalDueDate', '原始交期', 'IPMS', false], ['latestDueDate', '最新交期', 'PROCESS', true],
+  ['electricalOwner', '电控执行人', 'IPMS', false], ['workOrderIssuedOn', '工令下发', 'IPMS', false], ['bomOn', 'BOM时间', 'IMPORTED', false],
+  ['drawingReleasedOn', '发图', 'IMPORTED', false], ['originalDueDate', '原始交期', 'IPMS', false], ['latestDueDate', '最新交期', 'PROCESS', true],
   ['quantity', '数量', 'IPMS', false], ['remark', '备注', 'MANUAL', true],
 ]
 /** The default columns (外协清单契约 → 栏位设定): today's built-in columns, each one an editor may fill in marked canEdit. */
@@ -132,7 +132,7 @@ describe('外协清单页面', () => {
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
-      vendorId: 1, typeId: 5, status: 'PAUSED', bomOn: '', drawingReleasedOn: '', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
+      vendorId: 1, typeId: 5, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
   })
 
@@ -157,7 +157,7 @@ describe('外协清单页面', () => {
     fireEvent.click(await screen.findByRole('option', { name: '元控' }))
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
-      vendorId: 2, typeId: 6, status: 'PAUSED', bomOn: '', drawingReleasedOn: '', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
+      vendorId: 2, typeId: 6, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
   })
 
@@ -195,7 +195,7 @@ describe('外协清单页面', () => {
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/batch', {
       items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }],
-      vendorId: undefined, typeId: 5, status: undefined, bomOn: undefined, drawingReleasedOn: undefined, remark: undefined,
+      vendorId: undefined, typeId: 5, status: undefined, remark: undefined,
     }))
   })
 
@@ -301,7 +301,7 @@ describe('外协清单页面', () => {
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/batch', {
       items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }],
-      vendorId: undefined, typeId: 5, status: undefined, bomOn: undefined, drawingReleasedOn: undefined, remark: undefined,
+      vendorId: undefined, typeId: 5, status: undefined, remark: undefined,
     }))
   })
 
@@ -335,7 +335,7 @@ describe('外协清单页面', () => {
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     // 备注 is sent back unchanged; the custom value goes in `values`.
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
-      vendorId: 1, typeId: 5, status: 'PAUSED', bomOn: '', drawingReleasedOn: '', remark: '内部备注',
+      vendorId: 1, typeId: 5, status: 'PAUSED', remark: '内部备注',
       values: { hasRobotV: 'false' }, expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
   })

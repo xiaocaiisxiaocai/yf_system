@@ -1079,8 +1079,6 @@ export interface OutsourceBatchUpdate {
   remark?: string | null
   status?: string | null
   latestDueDate?: string | null
-  bomOn?: string | null
-  drawingReleasedOn?: string | null
   values?: Record<string, string | null> | null
 }
 
@@ -1121,6 +1119,35 @@ export interface OutsourceCustomerSyncResponse {
   updated: number
   keptManual: number
   aliases: Array<OutsourceCustomerAliasResponse>
+}
+
+export interface OutsourceDateImportPreviewResponse {
+  ready: number
+  skipped: number
+  invalid: number
+  rows: Array<OutsourceDateImportPreviewRow>
+}
+
+export interface OutsourceDateImportPreviewRow {
+  rowNumber: number
+  workOrderNo: string
+  status: string
+  message: string | null
+  bomOnBefore: string | null
+  bomOn: string | null
+  drawingReleasedOnBefore: string | null
+  drawingReleasedOn: string | null
+}
+
+export interface OutsourceDateImportRequest {
+  rows?: Array<OutsourceDateImportRow> | null
+}
+
+export interface OutsourceDateImportRow {
+  rowNumber: number
+  workOrderNo?: string | null
+  bomOn?: string | null
+  drawingReleasedOn?: string | null
 }
 
 export interface OutsourceDefaultCcRequest {
@@ -1294,8 +1321,6 @@ export interface OutsourceItemUpdate {
   status?: string | null
   expectedUpdatedAt?: string | null
   latestDueDate?: string | null
-  bomOn?: string | null
-  drawingReleasedOn?: string | null
   values?: Record<string, string | null> | null
 }
 
@@ -2307,6 +2332,8 @@ export interface ApiResponses {
   "PUT /outsource/items/batch": OutsourceBatchResponse
   "POST /outsource/items/batch-delete": EmptyResponse
   "PUT /outsource/items/completion": OutsourceBatchResponse
+  "POST /outsource/items/date-import": AdminImportResponse
+  "POST /outsource/items/date-import/preview": OutsourceDateImportPreviewResponse
   "GET /outsource/items/export": Blob
   "POST /outsource/items/import": AdminImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse

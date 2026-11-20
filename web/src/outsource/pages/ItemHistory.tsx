@@ -13,6 +13,7 @@ const SOURCE: Record<string, { label: string; color: string }> = {
   IPMS_SCHEDULED: { label: '定时同步', color: 'green' },
   IPMS_MANUAL: { label: '手动同步', color: 'cyan' },
   VENDOR: { label: '厂商填写', color: 'orange' },
+  DATE_IMPORT: { label: '导入', color: 'purple' },
 }
 
 function useChanges(itemId: number | null) {
