@@ -804,6 +804,18 @@ export interface OemOptionResponse {
   name: string
 }
 
+export interface OemOutsourceEmailResponse {
+  id: number
+  companyId: number
+  email: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OemOutsourceEmailUpsert {
+  email?: string | null
+}
+
 export interface OemPageResponseOfOemAuditLogResponse {
   list: Array<OemAuditLogResponse>
   total: number
@@ -1079,8 +1091,6 @@ export interface OutsourceBatchUpdate {
   remark?: string | null
   status?: string | null
   latestDueDate?: string | null
-  bomOn?: string | null
-  drawingReleasedOn?: string | null
   values?: Record<string, string | null> | null
 }
 
@@ -1121,6 +1131,35 @@ export interface OutsourceCustomerSyncResponse {
   updated: number
   keptManual: number
   aliases: Array<OutsourceCustomerAliasResponse>
+}
+
+export interface OutsourceDateImportPreviewResponse {
+  ready: number
+  skipped: number
+  invalid: number
+  rows: Array<OutsourceDateImportPreviewRow>
+}
+
+export interface OutsourceDateImportPreviewRow {
+  rowNumber: number
+  workOrderNo: string
+  status: string
+  message: string | null
+  bomOnBefore: string | null
+  bomOn: string | null
+  drawingReleasedOnBefore: string | null
+  drawingReleasedOn: string | null
+}
+
+export interface OutsourceDateImportRequest {
+  rows?: Array<OutsourceDateImportRow> | null
+}
+
+export interface OutsourceDateImportRow {
+  rowNumber: number
+  workOrderNo?: string | null
+  bomOn?: string | null
+  drawingReleasedOn?: string | null
 }
 
 export interface OutsourceDefaultCcRequest {
@@ -1294,8 +1333,6 @@ export interface OutsourceItemUpdate {
   status?: string | null
   expectedUpdatedAt?: string | null
   latestDueDate?: string | null
-  bomOn?: string | null
-  drawingReleasedOn?: string | null
   values?: Record<string, string | null> | null
 }
 
@@ -2256,6 +2293,8 @@ export interface ApiResponses {
   "GET /oem/companies/{id}/contacts": Array<OemCompanyContactResponse>
   "POST /oem/companies/{id}/contacts": OemCompanyContactResponse
   "POST /oem/companies/{id}/contacts/import": OemImportResponse
+  "GET /oem/companies/{id}/outsource-emails": Array<OemOutsourceEmailResponse>
+  "POST /oem/companies/{id}/outsource-emails": OemOutsourceEmailResponse
   "PUT /oem/companies/{id}/status": OemCompanyResponse
   "PUT /oem/company-contacts/{id}": OemCompanyContactResponse
   "PUT /oem/company-contacts/{id}/status": OemCompanyContactResponse
@@ -2282,7 +2321,10 @@ export interface ApiResponses {
   "GET /oem/internal-user-options": Array<OemInternalUserOptionResponse>
   "GET /oem/notify-policies": Array<OemSettingResponse>
   "PUT /oem/notify-policies": Array<OemSettingResponse>
+  "DELETE /oem/outsource-emails/{id}": EmptyResponse
+  "PUT /oem/outsource-emails/{id}": OemOutsourceEmailResponse
   "GET /oem/outsource-items": OutsourceVendorPageResponse
+  "GET /oem/outsource-items/export": Blob
   "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>
   "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
   "POST /oem/retention-templates": OemRetentionTemplateResponse
@@ -2306,6 +2348,8 @@ export interface ApiResponses {
   "PUT /outsource/items/batch": OutsourceBatchResponse
   "POST /outsource/items/batch-delete": EmptyResponse
   "PUT /outsource/items/completion": OutsourceBatchResponse
+  "POST /outsource/items/date-import": AdminImportResponse
+  "POST /outsource/items/date-import/preview": OutsourceDateImportPreviewResponse
   "GET /outsource/items/export": Blob
   "POST /outsource/items/import": AdminImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse

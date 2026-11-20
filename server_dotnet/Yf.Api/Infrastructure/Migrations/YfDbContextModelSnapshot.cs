@@ -1774,6 +1774,48 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceVendorEmail", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(254)
+                        .HasColumnType("varchar(254)")
+                        .HasColumnName("email");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at");
+
+                    b.Property<ulong>("VendorId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("vendor_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("VendorId", "Email")
+                        .IsUnique()
+                        .HasDatabaseName("uk_outsource_vendor_emails_vendor_email");
+
+                    b.ToTable("outsource_vendor_emails", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.Permission", b =>
                 {
                     b.Property<ulong>("Id")
@@ -5120,6 +5162,16 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_outsource_type_vendors_vendor");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceVendorEmail", b =>
+                {
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemCompany", null)
+                        .WithMany()
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_outsource_vendor_emails_vendor");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.Project", b =>

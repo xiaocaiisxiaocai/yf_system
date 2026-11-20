@@ -82,6 +82,7 @@ internal static class BootstrapSeedCatalog
         (229, "oem:directory_view", "查看 ODM/OEMA 厂商与账号", "ACTION", 200, 76),
         (230, "dict:delete", "删除数据字典项", "ACTION", 48, 77),
         (232, "outsource:send", "发送外协清单邮件", "ACTION", 217, 79),
+        (233, "outsource:date_import", "导入BOM时间与发图", "ACTION", 217, 80),
     ];
 
     private static readonly (string Key, string Value, string Description)[] Configs =

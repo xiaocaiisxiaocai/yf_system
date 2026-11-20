@@ -9,6 +9,8 @@ export const OUTSOURCE_PERMISSIONS = {
   send: 'outsource:send',
   /** The settings page (field settings included) and the IPMS data page. */
   settings: 'outsource:settings',
+  /** Imports BOM时间 and 发图 from Excel; the list never edits these two columns. */
+  dateImport: 'outsource:date_import',
 } as const
 
 /** The outsourcing section's first page; every internal account may open it. */

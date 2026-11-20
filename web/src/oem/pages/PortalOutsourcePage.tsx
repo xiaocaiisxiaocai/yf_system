@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Card, Checkbox, Empty, Input } from '@arco-design/web-react'
+import { Button, Card, Checkbox, Empty, Input } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconSearch } from '@arco-design/web-react/icon'
+import { IconDownload, IconSearch } from '@arco-design/web-react/icon'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
 import ResizableTable from '../../components/ResizableTable'
 import { TABLE_PAGINATION } from '../../components/tablePagination'
+import { saveBlob } from '../../utils/saveBlob'
 import { useOem } from '../OemContext'
 import '../../outsource/pages/OutsourceListPage.css'
 
@@ -34,6 +35,7 @@ export default function PortalOutsourcePage() {
   const [includeClosed, setIncludeClosed] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const sequence = useRef(0)
 
   const load = useCallback(async () => {
@@ -55,6 +57,19 @@ export default function PortalOutsourcePage() {
     return () => { active = false; sequence.current += 1 }
   }, [load])
 
+  const exportItems = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }).replaceAll('-', '')
+      saveBlob(await api.outsourceExport({ keyword: applied, includeClosed }), `外协清单_${day}.xlsx`)
+    } catch {
+      // 统一请求层提示
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const columns = useMemo<TableColumnProps<Row>[]>(() => (data?.columns ?? []).map((column, index) => ({
     title: column.title, key: column.key, width: WIDTHS[column.key] ?? 110, ellipsis: true,
     fixed: index < 4 ? 'left' as const : undefined,
@@ -69,6 +84,7 @@ export default function PortalOutsourcePage() {
         onChange={(value) => { setKeyword(value); if (!value) { setPage(1); setApplied('') } }}
         onPressEnter={() => { setPage(1); setApplied(keyword.trim()) }} />
       <Checkbox checked={includeClosed} onChange={(value) => { setPage(1); setIncludeClosed(value) }}>显示已完成</Checkbox>
+      <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={load} />
       : <ResizableTable<Row> tableId="oem-portal-outsource" className="page-table outsource-table" rowKey="id" loading={loading}

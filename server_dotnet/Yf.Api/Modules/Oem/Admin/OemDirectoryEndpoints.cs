@@ -42,6 +42,18 @@ internal static class OemDirectoryEndpoints
             s.CreateCompanyContactAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemCompanyContactResponse>();
         oem.MapPost("/companies/{id:long}/contacts/import", (ulong id, OemCompanyContactImportRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.ImportCompanyContactsAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemImportResponse>();
+        // Outsourcing-list mail addresses, kept apart from the contacts (外协清单契约 → 外协邮箱).
+        oem.MapGet("/companies/{id:long}/outsource-emails", (ulong id, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>
+            s.ListAsync(OemActorAccessor.Get(c), id, ct)).Produces<OemOutsourceEmailResponse[]>();
+        oem.MapPost("/companies/{id:long}/outsource-emails", (ulong id, OemOutsourceEmailUpsert r, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>
+            s.CreateAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemOutsourceEmailResponse>();
+        oem.MapPut("/outsource-emails/{id:long}", (ulong id, OemOutsourceEmailUpsert r, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>
+            s.UpdateAsync(OemActorAccessor.Get(c), id, r, ct)).Produces<OemOutsourceEmailResponse>();
+        oem.MapDelete("/outsource-emails/{id:long}", async (ulong id, HttpContext c, OemOutsourceEmailService s, CancellationToken ct) =>
+        {
+            await s.DeleteAsync(OemActorAccessor.Get(c), id, ct);
+            return EmptyResponse.Instance;
+        }).Produces<EmptyResponse>();
         oem.MapGet("/internal-recipients", (HttpContext c, OemDirectoryService s, CancellationToken ct) =>
             s.ListAllInternalRecipientsAsync(OemActorAccessor.Get(c), ct)).Produces<IReadOnlyList<OemInternalRecipientResponse>>();
         oem.MapPost("/internal-recipients/restore", (OemRecipientRestoreRequest r, HttpContext c, OemDirectoryService s, CancellationToken ct) =>

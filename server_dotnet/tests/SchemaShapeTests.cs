@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
@@ -79,6 +79,9 @@ public sealed class SchemaShapeTests
         "20261119030241_AddOutsourceFieldEditorUsers",
         "20261119030550_SplitOutsourceSendPermission",
         "20261119060000_SimplifyOutsourcePermissions",
+        "20261120064823_AddOutsourceDateImportPermission",
+        "20261120065922_StopInternalRobotVEditing",
+        "20261120071443_AddOutsourceVendorEmails",
     ];
 
     [Fact]
@@ -351,8 +354,8 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(61, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(61, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(62, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(62, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='project:view_all'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code IN ('project:submit','project:confirm','project:withdraw')"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));

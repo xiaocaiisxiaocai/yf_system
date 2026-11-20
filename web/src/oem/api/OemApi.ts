@@ -78,6 +78,11 @@ export class OemApi {
   outsourceItems = (query: { page: number; pageSize: number; keyword?: string; includeClosed?: boolean }) =>
     this.get<'GET /oem/outsource-items', ApiResponses['GET /oem/outsource-items']>('/oem/outsource-items',
       { ...query, keyword: query.keyword || undefined, includeClosed: query.includeClosed ? 'true' : undefined })
+  outsourceExport = async (query: { keyword?: string; includeClosed?: boolean }) =>
+    (await this.http.get<ApiResponses['GET /oem/outsource-items/export']>('/oem/outsource-items/export', {
+      params: { keyword: query.keyword || undefined, includeClosed: query.includeClosed ? 'true' : undefined },
+      responseType: 'blob', timeout: 0,
+    })).data as Blob
 
   // Transfers
   listTransfers = (query: TransferQuery) =>
@@ -153,6 +158,14 @@ export class OemApi {
     this.post<'POST /oem/companies/{id}/accounts', VendorAccount>(`/oem/companies/${companyId}/accounts`, body)
   updateContact = (id: number, body: Api.OemCompanyContactUpsert) => this.put<'PUT /oem/company-contacts/{id}', CompanyContact>(`/oem/company-contacts/${id}`, body)
   setContactStatus = (id: number, status: 'ACTIVE' | 'DISABLED') => this.put<'PUT /oem/company-contacts/{id}/status', CompanyContact>(`/oem/company-contacts/${id}/status`, { status })
+  // Outsourcing-list mail addresses, kept apart from the contacts (外协邮箱)
+  outsourceEmails = (companyId: number) =>
+    this.get<'GET /oem/companies/{id}/outsource-emails', ApiResponses['GET /oem/companies/{id}/outsource-emails']>(`/oem/companies/${companyId}/outsource-emails`)
+  createOutsourceEmail = (companyId: number, email: string) =>
+    this.post<'POST /oem/companies/{id}/outsource-emails', ApiResponses['POST /oem/companies/{id}/outsource-emails']>(`/oem/companies/${companyId}/outsource-emails`, { email })
+  updateOutsourceEmail = (id: number, email: string) =>
+    this.put<'PUT /oem/outsource-emails/{id}', ApiResponses['PUT /oem/outsource-emails/{id}']>(`/oem/outsource-emails/${id}`, { email })
+  deleteOutsourceEmail = (id: number) => this.delete<'DELETE /oem/outsource-emails/{id}'>(`/oem/outsource-emails/${id}`)
   contacts = (companyId: number) => this.get<'GET /oem/companies/{id}/contacts', CompanyContact[]>(`/oem/companies/${companyId}/contacts`)
   importContacts = (companyId: number, rows: Api.OemCompanyContactImportRow[]) =>
     this.post<'POST /oem/companies/{id}/contacts/import', Api.OemImportResponse>(`/oem/companies/${companyId}/contacts/import`, { rows })

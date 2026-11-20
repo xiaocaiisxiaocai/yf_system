@@ -79,6 +79,7 @@
   "GET /api/v1/oem/notify-policies",
   "GET /api/v1/oem/retention-template-options",
   "GET /api/v1/oem/outsource-items",
+  "GET /api/v1/oem/outsource-items/export",
   "GET /api/v1/oem/retention-templates",
   "GET /api/v1/oem/transfer-recipient-choices",
   "GET /api/v1/oem/transfers",
@@ -173,6 +174,8 @@
   "POST /api/v1/outsource/items/batch-delete",
   "POST /api/v1/outsource/items/import",
   "POST /api/v1/outsource/items/import/preview",
+  "POST /api/v1/outsource/items/date-import/preview",
+  "POST /api/v1/outsource/items/date-import",
   "POST /api/v1/outsource/items/sync",
   "POST /api/v1/outsource/mails/preview",
   "POST /api/v1/outsource/mails/send",
@@ -250,5 +253,9 @@
   "PUT /api/v1/projects/{}/responsible",
   "PUT /api/v1/projects/{}/status",
   "PUT /api/v1/robot-parts/{}",
-  "PUT /api/v1/uploads/{}/chunks/{}"
+  "PUT /api/v1/uploads/{}/chunks/{}",
+  "GET /api/v1/oem/companies/{}/outsource-emails",
+  "POST /api/v1/oem/companies/{}/outsource-emails",
+  "PUT /api/v1/oem/outsource-emails/{}",
+  "DELETE /api/v1/oem/outsource-emails/{}"
 ]

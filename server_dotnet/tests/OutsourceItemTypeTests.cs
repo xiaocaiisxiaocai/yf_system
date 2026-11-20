@@ -176,16 +176,6 @@ public sealed class OutsourceItemTypeTests
         Assert.NotNull(edited.ModifiedAt);
         Assert.Equal(["remark"], Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List).ChangedFields!);
 
-        // BOM时间 and 发图 are filled in by hand (never from IPMS): a date sets them, an empty text clears, null keeps.
-        Assert.Null(edited.BomOn);
-        edited = await f.Items.UpdateAsync(f.Buyer, item.Id,
-            new(null, item.VendorId, null, "手填备注", item.Status, edited.UpdatedAt, null, "2026-11-20", "2026-11-25"), ct);
-        Assert.Equal((new DateOnly(2026, 11, 20), new DateOnly(2026, 11, 25)), (edited.BomOn, edited.DrawingReleasedOn));
-        Assert.Equal(["bomOn", "drawingReleasedOn", "remark"], edited.ChangedFields!.Order());
-        edited = (await f.Items.BatchUpdateAsync(f.Buyer, new([new(item.Id, edited.UpdatedAt)], null, null, null, null, null, null, "", null), ct)).Items.Single();
-        Assert.Equal((null, new DateOnly(2026, 11, 25)), (edited.BomOn, edited.DrawingReleasedOn));
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => f.Items.UpdateAsync(f.Buyer, item.Id,
-            new(null, item.VendorId, null, "手填备注", item.Status, edited.UpdatedAt, null, "11/20", null), ct))).Status);
         item = Assert.Single((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List) with { ChangedFields = null };
 
         // By default vendors see every built-in column (是否有RobotV is internal), so that is what the mail recorded.

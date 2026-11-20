@@ -159,11 +159,11 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         await reference.LoadValuesAsync(context, items.Select(x => x.Id).ToArray(), ct);
         var responses = items.ToDictionary(x => x.Id, reference.Json);
         var vendorFields = reference.Layout.WorkbookFields(vendor: true);
-        // Vendors and contacts are the ODM/OEMA directory; a contact without an address is not a recipient.
+        // Vendors are the ODM/OEMA directory; recipients are each vendor's own outsourcing addresses (外协邮箱),
+        // not its ODM/OEMA contacts.
         var vendors = await context.OemCompanies.AsNoTracking().ToDictionaryAsync(x => x.Id, ct);
-        var contacts = (await context.OemCompanyContacts.AsNoTracking()
-            .Where(x => x.Status == AccountStatuses.Active && x.Email != null && x.Email != "")
-            .OrderBy(x => x.SortNo).ThenBy(x => x.Id).ToArrayAsync(ct)).ToLookup(x => x.OemCompanyId);
+        var contacts = (await context.OutsourceVendorEmails.AsNoTracking()
+            .OrderBy(x => x.Id).ToArrayAsync(ct)).ToLookup(x => x.VendorId);
 
         var problems = new List<string>();
         foreach (var item in items)
@@ -179,7 +179,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
             .GroupBy(x => x.NotifiedVendorId!.Value).OrderBy(g => g.Key).ToArray();
         foreach (var vendorId in notices.Select(g => g.Key).Concat(withdrawals.Select(g => g.Key)).Distinct())
         {
-            if (!contacts[vendorId].Any()) problems.Add($"厂商「{vendors[vendorId].Name}」没有启用的联络邮箱");
+            if (!contacts[vendorId].Any()) problems.Add($"厂商「{vendors[vendorId].Name}」没有外协邮箱，请在 ODM/OEMA 厂商的联络人「外协清单」中维护");
         }
         if (problems.Count > 0) throw ApiException.BadRequest(string.Join("；", problems.Take(10)) + (problems.Count > 10 ? $"……共 {problems.Count} 项" : ""));
 
@@ -189,7 +189,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
                 .OrderBy(x => x.SortNo).ThenBy(x => x.user.Id)
                 .Select(x => new { x.user.Id, x.user.Email, x.user.RealName }).ToArrayAsync(ct))
             .Select(x => new Address(x.Email, x.RealName, x.Id)).ToArray();
-        Address[] To(ulong vendorId) => contacts[vendorId].Select(x => new Address(x.Email!.Trim(), x.Name, null))
+        Address[] To(ulong vendorId) => contacts[vendorId].Select(x => new Address(x.Email.Trim(), null, null))
             .DistinctBy(x => x.Email, StringComparer.OrdinalIgnoreCase).ToArray();
 
         var drafts = new List<Draft>();

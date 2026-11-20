@@ -24,6 +24,8 @@ internal static class OutsourcePermissions
     internal const string Send = "outsource:send";
     /// <summary>The settings pages, field settings included, and the IPMS data page.</summary>
     internal const string Settings = "outsource:settings";
+    /// <summary>Imports BOM时间 and 发图 from Excel; these two columns are never edited on the list.</summary>
+    internal const string DateImport = "outsource:date_import";
 }
 
 /// <summary>

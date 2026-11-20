@@ -4,8 +4,39 @@ using Yf.Api.Modules.Oem.Data;
 
 namespace Yf.Api.Infrastructure.Entities;
 
-// Outsourcing vendors and their contacts are the ODM/OEMA companies (oem_companies, oem_company_contacts):
-// every VendorId below is an oem_companies id (since 2026-11-17).
+// Outsourcing vendors are the ODM/OEMA companies (oem_companies): every VendorId below is an oem_companies id
+// (since 2026-11-17). Outsourcing mail goes to the vendor's own outsourcing addresses (outsource_vendor_emails,
+// since 2026-11-20), not to its ODM/OEMA contacts.
+
+/// <summary>An address that receives the outsourcing-list mail of one vendor; maintained in the ODM/OEMA directory.</summary>
+public sealed class OutsourceVendorEmail
+{
+    public ulong Id { get; set; }
+    public ulong VendorId { get; set; }
+    public string Email { get; set; } = null!;
+    public ulong? CreatedBy { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public sealed class OutsourceVendorEmailConfig : IEntityTypeConfiguration<OutsourceVendorEmail>
+{
+    public void Configure(EntityTypeBuilder<OutsourceVendorEmail> b)
+    {
+        b.ToTable("outsource_vendor_emails");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => x.Id);
+        b.Property(x => x.VendorId).HasColumnName("vendor_id");
+        b.Property(x => x.Email).HasColumnName("email").HasMaxLength(254).IsRequired();
+        b.Property(x => x.CreatedBy).HasColumnName("created_by");
+        b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)");
+        b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)");
+        b.HasIndex(x => new { x.VendorId, x.Email }).IsUnique().HasDatabaseName("uk_outsource_vendor_emails_vendor_email");
+        // Deleting a vendor (only possible while outsourcing never used it) drops its addresses.
+        b.HasOne<OemCompany>().WithMany().HasForeignKey(x => x.VendorId)
+            .HasConstraintName("fk_outsource_vendor_emails_vendor").OnDelete(DeleteBehavior.Cascade);
+    }
+}
 
 /// <summary>Outsourcing type dictionary; <see cref="Code"/> is what IPMS reports.</summary>
 public sealed class OutsourceType
@@ -172,7 +203,7 @@ public sealed class OutsourceItemChange
     public string Field { get; set; } = null!;
     public string? OldValue { get; set; }
     public string? NewValue { get; set; }
-    /// <summary>EDIT, IPMS_SCHEDULED or IPMS_MANUAL.</summary>
+    /// <summary>EDIT, IPMS_SCHEDULED, IPMS_MANUAL, VENDOR or DATE_IMPORT.</summary>
     public string Source { get; set; } = null!;
     public ulong? ActorUserId { get; set; }
     /// <summary>Reserved for a change the vendor makes in the portal (<c>VENDOR</c>): the account and the name it signed with.</summary>
