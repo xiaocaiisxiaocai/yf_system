@@ -278,7 +278,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var reference = await OutsourceReference.LoadAsync(context, ct);
         var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
         var total = (ulong)await filtered.LongCountAsync(ct);
-        var rows = await filtered.OrderByDescending(x => x.OutsourceDate).ThenByDescending(x => x.Id)
+        var rows = await ListOrder(context, filtered)
             .Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size).ToArrayAsync(ct);
         return new(await reference.JsonMarkedAsync(context, rows, ct), total, page, size);
     }
@@ -291,7 +291,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
         if (await filtered.CountAsync(ct) > MaximumExportRows)
             throw ApiException.BadRequest($"一次最多导出 {MaximumExportRows} 条，请缩小筛选范围");
-        var rows = await filtered.OrderByDescending(x => x.OutsourceDate).ThenByDescending(x => x.Id).ToArrayAsync(ct);
+        var rows = await ListOrder(context, filtered).ToArrayAsync(ct);
         // Cells that differ from the last mail are yellow, as in the list and the vendor attachment.
         var responses = await reference.JsonMarkedAsync(context, rows, ct);
         var changed = responses.Where(x => x.ChangedFields is { Length: > 0 })
@@ -301,6 +301,11 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         return new(content, $"外协清单{vendorPart}_{today}.xlsx");
     }
+
+    /// <summary>List and export order (外协清单契约 → 清单排序): vendor name, then newest outsourcing date, then work order.</summary>
+    private static IOrderedQueryable<OutsourceItem> ListOrder(YfDbContext context, IQueryable<OutsourceItem> items) =>
+        items.OrderBy(x => context.OemCompanies.Where(c => c.Id == x.VendorId).Select(c => c.Name).FirstOrDefault())
+            .ThenBy(x => x.VendorId).ThenByDescending(x => x.OutsourceDate).ThenBy(x => x.WorkOrderNo).ThenBy(x => x.Id);
 
     private static IQueryable<OutsourceItem> Filter(IQueryable<OutsourceItem> items, OutsourceItemQuery query, OutsourceReference reference)
     {
