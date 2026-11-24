@@ -202,6 +202,38 @@ public sealed class OutsourceItemTests
         Assert.Equal(4, actions.Count(x => x == "OUTSOURCE_ITEM_UPDATE"));
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task ListSortsByVendorThenNewestDateThenWorkOrder()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_order", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await database.ExecuteAsync("""
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9721,'oo_viewer','unused','查看甲','oo@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            """, ct);
+        var viewer = new CurrentUser(9721, "oo_viewer", "INTERNAL", null);
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var service = new OutsourceItemService(factory, new AuditService([]), new StubIpms());
+        var beta = await OutsourceTestVendors.CreateAsync(factory, "Beta", ct);
+        var alpha = await OutsourceTestVendors.CreateAsync(factory, "Alpha", ct);
+        await using (var context = factory.CreateDbContext())
+        {
+            uint serial = 0;
+            void Add(string no, ulong vendorId, int day) => context.OutsourceItems.Add(new()
+            {
+                WorkOrderNo = no, SerialNo = ++serial, OutsourceDate = new DateOnly(2026, 11, day), VendorId = vendorId,
+                Status = "NORMAL", SendStatus = "UNSENT", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            Add("B200", beta.Id, 20); Add("A300", alpha.Id, 10); Add("A102", alpha.Id, 12); Add("A101", alpha.Id, 12); Add("B100", beta.Id, 21);
+            await context.SaveChangesAsync(ct);
+        }
+
+        var list = await service.ListAsync(viewer, Query(), 1, 20, 0, ct);
+        Assert.Equal(["A101", "A102", "A300", "B100", "B200"], list.List.Select(x => x.WorkOrderNo));
+        Assert.Equal(["A300", "B100"], (await service.ListAsync(viewer, Query(), 2, 2, 2, ct)).List.Select(x => x.WorkOrderNo));
+    }
+
     private static OutsourceItemQuery Query(ulong? vendorId = null, ulong? typeId = null, string? keyword = null, bool includeClosed = false) =>
         new(vendorId, typeId, null, null, null, null, keyword, includeClosed);
 }
