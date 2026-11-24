@@ -16,6 +16,7 @@ type DuplicateRow = Preview['duplicates'][number]['rows'][number] & { workOrder:
 type InvalidRow = Preview['invalid'][number]
 type ImportFile = Awaited<ReturnType<typeof readMesExcelImport>>
 
+const MAX_REQUEST_BYTES = 60 * 1024 * 1024
 const EMPTY_PREVIEW: Preview = { added: 0, unchanged: 0, invalid: [], existing: [], duplicates: [] }
 const SUMMARY_FIELDS = [
   { key: 'customerName', title: '客户名称', width: 160 },
@@ -94,6 +95,11 @@ function MesExcelImportDialog({ onClose, onImported }: { onClose: () => void; on
         return
       }
       const request: MesImportRequest = { rows: file.rows }
+      // The server accepts at most 64 MiB per import request; leave room for the confirmation's selections.
+      if (new TextEncoder().encode(JSON.stringify(request)).length > MAX_REQUEST_BYTES) {
+        setPreviewError('数据量过大，请把 Excel 拆成几个文件分别导入')
+        return
+      }
       const previewConfig: QuietRequestConfig = { ...config, quietClientError: true, quietNetworkError: true }
       const preview = file.rows.length
         ? (await http.post<Preview>('/outsource/mes-mirror/import/preview', request, previewConfig)).data

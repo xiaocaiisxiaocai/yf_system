@@ -39,7 +39,7 @@ public sealed class MesMirrorImportTests
         request.Method = method;
         request.Path = path;
         Assert.Equal(allowed, OutsourceModule.IsMesImport(request));
-        Assert.Equal(16L * 1024 * 1024, OutsourceModule.MesImportRequestLimitBytes);
+        Assert.Equal(64L * 1024 * 1024, OutsourceModule.MesImportRequestLimitBytes);
     }
 
     [Fact(Timeout = 180_000)]

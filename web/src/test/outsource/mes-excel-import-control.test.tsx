@@ -90,6 +90,16 @@ describe('IPMS Excel 导入控件', () => {
     expect(post).not.toHaveBeenCalled()
   })
 
+  it('请求超过上限时在对话框内提示拆分文件，不请求预览', async () => {
+    const big = 'x'.repeat(1000)
+    const rows = Array.from({ length: 64_000 }, (_, index) => ({ rowNumber: index + 2, workOrder: `W${index}`, values: { remark: big } }))
+    readExcel.mockResolvedValueOnce({ rows, invalid: [], unknownHeaders: [], exampleSkipped: false })
+    const dialog = openDialog()
+    selectFile(dialog, 'huge.xlsx')
+    expect(await dialog.findByText('数据量过大，请把 Excel 拆成几个文件分别导入')).toBeVisible()
+    expect(post).not.toHaveBeenCalled()
+  })
+
   it('requires one row per duplicate and updates the visible counts and conflicts', async () => {
     const dialog = openDialog()
     selectFile(dialog)

@@ -138,6 +138,15 @@ describe('IPMS Excel 导入解析', () => {
     ])
   })
 
+  it('数字工单号保留补零格式显示的文字，常规格式的大整数不变成科学计数法', async () => {
+    const sheet = XLSX.utils.aoa_to_sheet([['工单号', '机型'], [123, 'M-1'], [21074672, 'M-2'], [123456789012, 'M-3']])
+    sheet.A2.z = '00000'
+    const result = await readMesExcelImport(fileOf(sheet))
+    expect(result.rows.map((row) => [row.workOrder, row.values.workOrder])).toEqual([
+      ['00123', '00123'], ['21074672', '21074672'], ['123456789012', '123456789012'],
+    ])
+  })
+
   it('缺少工单号栏时使用指定错误文案', async () => {
     await expect(readMesExcelImport(fileOf(XLSX.utils.aoa_to_sheet([['机型'], ['M-1']]))))
       .rejects.toThrow('找不到“工单号”栏')

@@ -182,13 +182,21 @@ export async function readMesExcelImport(file: File): Promise<MesExcelImportResu
     }
     return textOf(cell)
   }
+  // A numeric work-order cell keeps what Excel shows (e.g. 00123 from a zero-padded format); only General-formatted
+  // whole numbers fall back to the plain digits, so large numbers never come through as 2.11E+07.
+  const workOrderOf = (cell: CellObject | undefined): string | null => {
+    if (cell?.t !== 'n' || typeof cell.v !== 'number') return valueOf(cell)
+    const general = !cell.z || cell.z === 'General'
+    if (general && Number.isSafeInteger(cell.v)) return String(cell.v)
+    return cell.w?.trim() || textOf(cell)
+  }
 
   const rows: MesExcelImportResult['rows'] = []
   const invalid: MesExcelImportResult['invalid'] = []
   let examples = 0
   for (let row = headerEnd + 1; row <= end.r; row += 1) {
     const cells = data[row]
-    const workOrder = valueOf(cells?.[workOrderColumn])
+    const workOrder = workOrderOf(cells?.[workOrderColumn])
     if (!workOrder) continue
     if (workOrder === EXAMPLE_WORK_ORDER) {
       examples++
@@ -208,7 +216,7 @@ export async function readMesExcelImport(file: File): Promise<MesExcelImportResu
     }
     const values: MesExcelImportRow['values'] = {}
     for (const [column, prop] of mapped) {
-      const value = valueOf(cells?.[column])
+      const value = column === workOrderColumn ? workOrder : valueOf(cells?.[column])
       if (value !== null) values[prop] = codesByText.get(prop)?.get(value) ?? value
     }
     rows.push({ rowNumber, workOrder, values })

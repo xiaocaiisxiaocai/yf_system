@@ -180,7 +180,8 @@ public static class OutsourceModule
         return endpoints;
     }
 
-    internal const long MesImportRequestLimitBytes = 16L * 1024 * 1024;
+    // Same as the Kestrel/IIS request cap: ~5000 rows with every MES column filled can pass 16 MiB of JSON.
+    internal const long MesImportRequestLimitBytes = 64L * 1024 * 1024;
 
     internal static bool IsMesImport(HttpRequest request) =>
         HttpMethods.IsPost(request.Method) &&
