@@ -56,6 +56,10 @@ internal sealed record OutsourceBuiltInField(string Key, string Category, double
 
 internal static class OutsourceBuiltInFields
 {
+    internal const string ElectricalHandoffKey = "electricalHandoff";
+    internal const string ElectricalHandoffLabel = "是否转迅得电控";
+    internal static string YesNo(bool value) => value ? "是" : "否";
+
     private static string? Date(DateOnly? value) => value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     /// <summary>Every built-in business column (without the row number); labels and order live in <c>outsource_fields</c>.</summary>
@@ -63,6 +67,7 @@ internal static class OutsourceBuiltInFields
     [
         new("outsourceDate", OutsourceFieldCategories.Process, 12, x => Date(x.OutsourceDate), Pinned: true),
         new("status", OutsourceFieldCategories.Process, 8, x => OutsourceItemStatuses.Label(x.Status), Pinned: true, AlwaysVendorVisible: true),
+        new(ElectricalHandoffKey, OutsourceFieldCategories.Fixed, 18, x => YesNo(x.ElectricalHandoff), Pinned: true, AlwaysVendorVisible: true),
         new("workOrderNo", OutsourceFieldCategories.Fixed, 12, x => x.WorkOrderNo, Pinned: true, AlwaysVendorVisible: true),
         new("customer", OutsourceFieldCategories.Ipms, 18, x => x.Customer),
         new("machineModel", OutsourceFieldCategories.Ipms, 14, x => x.MachineModel),
@@ -125,8 +130,8 @@ internal static class OutsourceFieldValues
 
 /// <summary>
 /// The columns of the outsourcing list as configured on the field settings page, loaded once per request: their order,
-/// labels, who may fill each in, and which ones vendors see. The vendor columns drive the portal, the mail bodies,
-/// the attachment and the "as last sent" snapshot, so a column hidden from vendors never leaves the company.
+/// labels, who may fill each in, and which ones vendors see. The portal includes the handoff column, while
+/// the outsourcing notice and its sent snapshot use mail columns.
 /// </summary>
 internal sealed class OutsourceFieldLayout
 {
@@ -157,12 +162,14 @@ internal sealed class OutsourceFieldLayout
     public IReadOnlyList<Column> Columns { get; }
     /// <summary>The active columns vendors see, in list order.</summary>
     public IReadOnlyList<Column> VendorColumns { get; }
+    private IReadOnlyList<Column> MailColumns { get; }
 
     private OutsourceFieldLayout(IReadOnlyList<Column> everything)
     {
         Everything = everything;
         Columns = everything.Where(x => x.Active).ToArray();
         VendorColumns = Columns.Where(x => x.VendorVisible).ToArray();
+        MailColumns = VendorColumns.Where(x => x.Key != OutsourceBuiltInFields.ElectricalHandoffKey).ToArray();
         byKey = everything.ToDictionary(x => x.Key, StringComparer.Ordinal);
     }
 
@@ -170,13 +177,15 @@ internal sealed class OutsourceFieldLayout
 
     public string Label(string key) => Find(key)?.Label ?? OutsourceHistory.Label(key);
 
-    public IReadOnlySet<string> VendorKeys => VendorColumns.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
+    public IReadOnlySet<string> NoticeKeys => MailColumns.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
 
     public OutsourceWorkbook.Field[] WorkbookFields(bool vendor) => (vendor ? VendorColumns : Columns).Select(x => x.AsWorkbookField()).ToArray();
 
+    public OutsourceWorkbook.Field[] MailWorkbookFields() => MailColumns.Select(x => x.AsWorkbookField()).ToArray();
+
     /// <summary>The mail body's summary columns that vendors may see, in the body's own order.</summary>
     public OutsourceWorkbook.Field[] MailBodyFields(IEnumerable<string> keys) => keys
-        .Select(Find).OfType<Column>().Where(x => x.Active && x.VendorVisible).Select(x => x.AsWorkbookField()).ToArray();
+        .Select(Find).OfType<Column>().Where(MailColumns.Contains).Select(x => x.AsWorkbookField()).ToArray();
 
     /// <summary>
     /// Whether <paramref name="editor"/> may fill <paramref name="column"/> in. This is the only edit check: an ALL

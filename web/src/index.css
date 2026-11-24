@@ -785,6 +785,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .action-slots--oem-file > .action-slot { --action-slot-width: 56px; }
 /* 外协设定：第二个操作是四个字（联络邮箱、可用厂商）。 */
 .action-slots--outsource > .action-slot:nth-child(2) { --action-slot-width: 60px; }
+.action-slots--outsource-handoff > .action-slot { --action-slot-width: 76px; }
 /* 外协发送记录：详情 / 附件 / 重新发送 三个槽位各自宽度（"重新发送"是四个字）。 */
 .action-slots--outsource-mail > .action-slot:nth-child(1) { --action-slot-width: 40px; }
 .action-slots--outsource-mail > .action-slot:nth-child(2) { --action-slot-width: 44px; }

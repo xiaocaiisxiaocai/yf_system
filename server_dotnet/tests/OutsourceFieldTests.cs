@@ -87,7 +87,7 @@ public sealed class OutsourceFieldTests
         await using var _ = f.Database;
 
         var settings = await f.Fields.SettingsAsync(f.Admin, ct);
-        Assert.Equal(["outsourceDate", "status", "workOrderNo", "customer", "machineModel", "hasRobotV", "type", "vendor",
+        Assert.Equal(["outsourceDate", "status", "electricalHandoff", "workOrderNo", "customer", "machineModel", "hasRobotV", "type", "vendor",
                 "mechanicalSection", "mechanicalOwner", "electricalOwner", "workOrderIssuedOn", "bomOn", "drawingReleasedOn",
                 "originalDueDate", "latestDueDate", "quantity", "remark"],
             settings.Fields.Select(x => x.Key));
@@ -97,6 +97,9 @@ public sealed class OutsourceFieldTests
         // Vendors keep seeing every built-in column; the IPMS columns are never filled in by hand.
         Assert.All(settings.Fields.Where(x => x.BuiltIn), x => Assert.True(x.VendorVisible));
         Assert.Equal("NONE", settings.Fields.Single(x => x.Key == "customer").EditorScope);
+        var handoff = settings.Fields.Single(x => x.Key == "electricalHandoff");
+        Assert.Equal(("是否转迅得电控", "BOOLEAN", true, true, true, "NONE", false),
+            (handoff.Label, handoff.DataType, handoff.BuiltIn, handoff.VendorVisibleLocked, handoff.Pinned, handoff.EditorScope, handoff.EditorScopeAllowed));
         Assert.All(settings.Fields.Where(x => x.Key is "bomOn" or "drawingReleasedOn"),
             x => Assert.Equal(("IMPORTED", "NONE", false), (x.Category, x.EditorScope, x.EditorScopeAllowed)));
         Assert.Contains(settings.Roles, x => x.Name == "采购");
@@ -106,7 +109,8 @@ public sealed class OutsourceFieldTests
         // BOM时间 and 发图 are only imported (outsource:date_import), never filled in on the list.
         Assert.Equal(["outsourceDate", "status", "type", "vendor", "latestDueDate", "remark"],
             layout.Fields.Where(x => x.CanEdit).Select(x => x.Key));
-        Assert.DoesNotContain((await f.Fields.LayoutAsync(f.Admin, ct)).Fields.Where(x => x.CanEdit), x => x.Key == "hasRobotV");
+        Assert.DoesNotContain((await f.Fields.LayoutAsync(f.Admin, ct)).Fields.Where(x => x.CanEdit),
+            x => x.Key is "hasRobotV" or "electricalHandoff");
         // Seeing the list needs no permission; filling a column in does (ALL = outsource:manage).
         Assert.Empty((await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit));
         // Field settings come with the settings permission.
@@ -121,6 +125,11 @@ public sealed class OutsourceFieldTests
         var f = await CreateAsync("outsource_fields_rules", ct);
         await using var _ = f.Database;
         var fields = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.ToDictionary(x => x.Key);
+        var handoff = fields["electricalHandoff"];
+        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, handoff.Id,
+            new(null, null, null, false, null, null, null), ct)));
+        Assert.Equal(400, await StatusOfAsync(() => f.Fields.UpdateAsync(f.Admin, handoff.Id,
+            new(null, null, null, null, null, "ALL", null), ct)));
 
         // Columns are not added on the settings page (2026-11-19); a release adds them, as this one stands in for.
         await f.Database.ExecuteAsync("""
@@ -152,7 +161,7 @@ public sealed class OutsourceFieldTests
         // Pinned columns stay left; the rest follow the given order.
         var movable = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.Where(x => !x.Pinned).Select(x => x.Id).Reverse().ToArray();
         var ordered = await f.Fields.SetOrderAsync(f.Admin, new(movable), ct);
-        Assert.Equal(["outsourceDate", "status", "workOrderNo", hidden.Key], ordered.Fields.Take(4).Select(x => x.Key));
+        Assert.Equal(["outsourceDate", "status", "electricalHandoff", "workOrderNo", hidden.Key], ordered.Fields.Take(5).Select(x => x.Key));
         Assert.Equal(409, await StatusOfAsync(() => f.Fields.SetOrderAsync(f.Admin, new(movable[1..]), ct)));
 
         // A type with values can no longer change, and an option in use cannot be removed.

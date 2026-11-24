@@ -72,7 +72,7 @@ public sealed class MailKitOutsourceTransport : IOutsourceMailTransport
 
 /// <summary>
 /// Delivers queued outsourcing mails with the shared SMTP settings: one message per mail with every To and Cc together.
-/// Refused addresses are skipped (PARTIAL); a mail whose vendor addresses are all refused is FAILED. Connection-level
+/// Refused addresses are skipped (PARTIAL); a mail whose primary recipients are all refused is FAILED. Connection-level
 /// failures retry with growing delays (1, 2, 4 … 30 minutes) up to <see cref="MaximumAttempts"/>.
 /// </summary>
 public sealed class OutsourceMailWorker(
@@ -114,9 +114,12 @@ public sealed class OutsourceMailWorker(
             .Select(x => new { x.Id, x.Kind, x.VendorId }).ToArrayAsync(ct);
         foreach (var lost in stale)
         {
+            var message = OutsourceMailKinds.IsElectricalHandoff(lost.Kind)
+                ? "发送中断，不确定收件人是否已收到；请确认后再重新发送"
+                : "发送中断，不确定厂商是否已收到；请确认后再重新发送";
             var failed = await context.OutsourceMails.Where(x => x.Id == lost.Id && x.Status == OutsourceMailStatuses.Sending)
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, OutsourceMailStatuses.Failed)
-                    .SetProperty(x => x.LastError, "发送中断，不确定厂商是否已收到；请确认后再重新发送"), ct);
+                    .SetProperty(x => x.LastError, message), ct);
             if (failed > 0 && lost.Kind == OutsourceMailKinds.Notice) await ReopenItemsAsync(context, lost.Id, lost.VendorId, ct);
         }
         var due = await context.OutsourceMails.AsNoTracking()
@@ -156,12 +159,15 @@ public sealed class OutsourceMailWorker(
             var result = await transport.SendAsync(smtp, BuildMessage(smtp, mail, recipients), ct);
             rejected = result.Rejected;
             var rejectedSet = rejected.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var vendorAccepted = recipients.Any(x => x.Kind == "TO" && !rejectedSet.Contains(x.Email));
-            status = !vendorAccepted ? OutsourceMailStatuses.Failed
+            var primaryAccepted = recipients.Any(x => x.Kind == "TO" && !rejectedSet.Contains(x.Email));
+            status = !primaryAccepted ? OutsourceMailStatuses.Failed
                 : rejectedSet.Count > 0 ? OutsourceMailStatuses.Partial : OutsourceMailStatuses.Sent;
-            if (!vendorAccepted)
-                error = recipients.Any(x => x.Kind != "TO" && !rejectedSet.Contains(x.Email))
-                    ? "厂商收件地址全部被拒收（抄送人已收到此邮件，重新发送会再抄送一次）" : "厂商收件地址全部被拒收";
+            if (!primaryAccepted)
+            {
+                error = OutsourceMailKinds.IsElectricalHandoff(mail.Kind) ? "内部收件地址全部被拒收" : "厂商收件地址全部被拒收";
+                if (recipients.Any(x => x.Kind == "CC" && !rejectedSet.Contains(x.Email)))
+                    error += "（抄送人已收到此邮件，重新发送会再抄送一次）";
+            }
             else if (rejectedSet.Count > 0) error = "部分地址被拒收：" + string.Join("、", rejected);
         }
         catch (OutsourcePermanentMailException permanent)

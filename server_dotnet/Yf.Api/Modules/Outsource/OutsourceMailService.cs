@@ -39,8 +39,8 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
 
     private sealed record Plan(Draft[] Drafts, string Fingerprint, OutsourceItemResponse[] Items, OutsourceFieldLayout Layout)
     {
-        /// <summary>The vendor columns: the attachment and the "as last sent" snapshot.</summary>
-        public OutsourceWorkbook.Field[] VendorFields { get; } = Layout.WorkbookFields(vendor: true);
+        /// <summary>The fields included in the attachment and the "as last sent" snapshot.</summary>
+        public OutsourceWorkbook.Field[] VendorFields { get; } = Layout.MailWorkbookFields();
 
         /// <summary>The body table's columns, limited to what vendors see.</summary>
         public OutsourceWorkbook.Field[] BodyFields(string kind) => Layout.MailBodyFields(OutsourceMailContent.BodyKeys(kind));
@@ -151,6 +151,38 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         return new(await MailsAsync(context, context.OutsourceMails.Where(x => mailIds.Contains(x.Id)), ct));
     }
 
+    /// <summary>Freezes one vendor-triggered mail in the caller's handoff transaction.</summary>
+    internal static async Task<bool> QueueElectricalHandoffAsync(YfDbContext context, OutsourceItemResponse item,
+        ulong oemAccountId, string signer, DateTime occurredAt, CancellationToken ct)
+    {
+        var to = await ModuleRecipientsAsync(context, OutsourceDefaultCcModules.ElectricalHandoff, ct);
+        if (to.Length == 0) return false;
+
+        var vendorEmails = await context.OutsourceVendorEmails.AsNoTracking().Where(x => x.VendorId == item.VendorId)
+            .OrderBy(x => x.Id).Select(x => x.Email).ToArrayAsync(ct);
+        // This prefix is outside the format accepted for a purchasing confirmation requestKey.
+        var requestKey = $"electrical:{Guid.NewGuid():N}";
+        var content = OutsourceMailContent.ElectricalHandoff(item, signer, occurredAt);
+        context.OutsourceMailBatches.Add(new OutsourceMailBatch
+        {
+            RequestKey = requestKey, CreatedByOemAccountId = oemAccountId, CreatedAt = occurredAt,
+        });
+        var mail = new OutsourceMail
+        {
+            BatchKey = requestKey, VendorId = item.VendorId, CreatedByOemAccountId = oemAccountId, SignerName = signer,
+            Kind = item.ElectricalHandoff ? OutsourceMailKinds.ElectricalHandoff : OutsourceMailKinds.ElectricalHandoffWithdraw,
+            Subject = content.Subject, BodyHtml = content.Html, BodyText = content.Text, CreatedAt = occurredAt,
+            Status = OutsourceMailStatuses.Queued, NextAttemptAt = occurredAt,
+        };
+        context.OutsourceMails.Add(mail);
+        await context.SaveChangesAsync(ct);
+        context.OutsourceMailRecipients.AddRange(to.Select(x => Recipient(mail.Id, "TO", x, "MODULE"))
+            .Concat(vendorEmails.Select(email => Recipient(mail.Id, "CC", new Address(email.Trim(), null, null), "VENDOR"))));
+        context.OutsourceMailItems.Add(new OutsourceMailItem { MailId = mail.Id, ItemId = item.Id, WorkOrderNo = item.WorkOrderNo });
+        await context.SaveChangesAsync(ct);
+        return true;
+    }
+
     private async Task<Plan> PlanAsync(YfDbContext context, ulong[] ids, IReadOnlyCollection<OutsourceItem> rows, CancellationToken ct)
     {
         if (rows.Count != ids.Length) throw ApiException.NotFound("外协记录不存在或已被删除");
@@ -158,7 +190,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         var items = rows.OrderBy(x => x.Id).ToArray();
         await reference.LoadValuesAsync(context, items.Select(x => x.Id).ToArray(), ct);
         var responses = items.ToDictionary(x => x.Id, reference.Json);
-        var vendorFields = reference.Layout.WorkbookFields(vendor: true);
+        var vendorFields = reference.Layout.MailWorkbookFields();
         // Vendors are the ODM/OEMA directory; recipients are each vendor's own outsourcing addresses (外协邮箱),
         // not its ODM/OEMA contacts.
         var vendors = await context.OemCompanies.AsNoTracking().ToDictionaryAsync(x => x.Id, ct);
@@ -183,12 +215,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         }
         if (problems.Count > 0) throw ApiException.BadRequest(string.Join("；", problems.Take(10)) + (problems.Count > 10 ? $"……共 {problems.Count} 项" : ""));
 
-        var defaultCc = (await context.OutsourceDefaultCc.AsNoTracking()
-                .Join(context.Users, cc => cc.UserId, user => user.Id, (cc, user) => new { cc.SortNo, user })
-                .Where(x => x.user.Status == AccountStatuses.Active && x.user.UserType == UserTypes.Internal && x.user.Email != "")
-                .OrderBy(x => x.SortNo).ThenBy(x => x.user.Id)
-                .Select(x => new { x.user.Id, x.user.Email, x.user.RealName }).ToArrayAsync(ct))
-            .Select(x => new Address(x.Email, x.RealName, x.Id)).ToArray();
+        var defaultCc = await ModuleRecipientsAsync(context, OutsourceDefaultCcModules.Notice, ct);
         Address[] To(ulong vendorId) => contacts[vendorId].Select(x => new Address(x.Email.Trim(), null, null))
             .DistinctBy(x => x.Email, StringComparer.OrdinalIgnoreCase).ToArray();
 
@@ -307,7 +334,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         var mails = await query.AsNoTracking().Select(x => new
         {
             x.Id, x.BatchKey, x.Kind, x.VendorId, x.Subject, x.Status, x.AttachmentName, x.Attempts, x.LastError,
-            x.CreatedBy, x.CreatedAt, x.SentAt,
+            x.CreatedBy, x.SignerName, x.CreatedAt, x.SentAt,
         }).ToArrayAsync(ct);
         var ids = mails.Select(x => x.Id).ToArray();
         var recipients = (await context.OutsourceMailRecipients.AsNoTracking().Where(x => ids.Contains(x.MailId))
@@ -316,17 +343,32 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
             .OrderBy(x => x.ItemId).ToArrayAsync(ct)).ToLookup(x => x.MailId);
         var vendorIds = mails.Select(x => x.VendorId).Distinct().ToArray();
         var vendors = await context.OemCompanies.AsNoTracking().Where(x => vendorIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        var userIds = mails.Select(x => x.CreatedBy).Distinct().ToArray();
+        var userIds = mails.Where(x => x.CreatedBy.HasValue).Select(x => x.CreatedBy!.Value).Distinct().ToArray();
         var users = await context.Users.AsNoTracking().Where(x => userIds.Contains(x.Id)).ToDictionaryAsync(x => x.Id, x => x.RealName, ct);
         return mails.Select(x => new OutsourceMailResponse(
             x.Id, x.BatchKey, x.Kind, x.VendorId, vendors.GetValueOrDefault(x.VendorId) ?? "", x.Subject, x.Status,
             recipients[x.Id].Select(r => new OutsourceMailRecipientResponse(r.Kind, r.Email, r.Name, r.Source, r.Rejected)).ToArray(),
             items[x.Id].Select(i => i.WorkOrderNo).ToArray(), x.AttachmentName, x.Attempts, x.LastError,
-            users.GetValueOrDefault(x.CreatedBy), DateTime.SpecifyKind(x.CreatedAt, DateTimeKind.Utc),
+            x.SignerName is { } signer ? $"{vendors.GetValueOrDefault(x.VendorId)}（签名：{signer}）"
+                : x.CreatedBy is { } userId ? users.GetValueOrDefault(userId) : null,
+            DateTime.SpecifyKind(x.CreatedAt, DateTimeKind.Utc),
             x.SentAt is { } sent ? DateTime.SpecifyKind(sent, DateTimeKind.Utc) : null)).ToArray();
     }
 
     // ---- helpers ----
+
+    private static async Task<Address[]> ModuleRecipientsAsync(YfDbContext context, string module, CancellationToken ct)
+    {
+        var users = await (from cc in context.OutsourceDefaultCc.AsNoTracking()
+                           join membership in context.OutsourceDefaultCcModules on cc.UserId equals membership.UserId
+                           join user in context.Users on cc.UserId equals user.Id
+                           where membership.Module == module && user.Status == AccountStatuses.Active
+                               && user.UserType == UserTypes.Internal && user.Email != ""
+                           orderby cc.SortNo, user.Id
+                           select new { user.Id, user.Email, user.RealName }).ToArrayAsync(ct);
+        return users.Where(x => !string.IsNullOrWhiteSpace(x.Email))
+            .Select(x => new Address(x.Email.Trim(), x.RealName, x.Id)).ToArray();
+    }
 
     private static OutsourceMailRecipient Recipient(ulong mailId, string kind, Address address, string source) => new()
     {

@@ -57,13 +57,21 @@ public sealed class OutsourceSettingsTests
         Assert.Equal(["ODM-12345", "OEMA"], (await service.TypesAsync(buyer, ct)).Select(x => x.Code));
         await service.SetTypeStatusAsync(buyer, odm.Id, AccountStatuses.Disabled, ct);
 
-        // Default copy list: active internal accounts with an email address only.
+        // Default copy list: active internal accounts with email and at least one known module.
+        string[] notice = [OutsourceDefaultCcModules.Notice];
+        string[] handoff = [OutsourceDefaultCcModules.ElectricalHandoff];
         Assert.Equal("所选人员没有填写邮箱，无法接收抄送", (await Assert.ThrowsAsync<ApiException>(() =>
-            service.SetDefaultCcAsync(buyer, new([9614]), ct))).Message);
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.SetDefaultCcAsync(buyer, new([9615]), ct))).Status);
-        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.SetDefaultCcAsync(buyer, new([9616]), ct))).Status);
-        var cc = await service.SetDefaultCcAsync(buyer, new([9613, 9612]), ct);
+            service.SetDefaultCcAsync(buyer, new([new(9614, notice)]), ct))).Message);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.SetDefaultCcAsync(buyer, new([new(9615, notice)]), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.SetDefaultCcAsync(buyer, new([new(9616, notice)]), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.SetDefaultCcAsync(buyer, new([new(9613, [])]), ct))).Status);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.SetDefaultCcAsync(buyer, new([new(9613, ["UNKNOWN"])]), ct))).Status);
+        var cc = await service.SetDefaultCcAsync(buyer, new([new(9613, [.. notice, .. handoff]), new(9612, notice)]), ct);
         Assert.Equal([9613UL, 9612UL], cc.Select(x => x.UserId));
+        Assert.Equal(new[] { OutsourceDefaultCcModules.ElectricalHandoff, OutsourceDefaultCcModules.Notice }, cc[0].Modules.Order(StringComparer.Ordinal));
+        Assert.Equal(notice, cc[1].Modules);
+        Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.SetDefaultCcAsync(buyer, new([new(9613, handoff), new(9612, [])]), ct))).Status);
+        Assert.Equal([9613UL, 9612UL], (await service.DefaultCcAsync(buyer, ct)).Select(x => x.UserId));
         var options = await service.CcUserOptionsAsync(buyer, "主管", ct);
         Assert.Equal([9612UL], options.Select(x => x.UserId));
         // The picker lists every active internal account (no cap), including ones without email so they show as unselectable.
@@ -86,6 +94,7 @@ public sealed class OutsourceSettingsTests
         Assert.Equal([9612UL], (await service.DefaultCcAsync(buyer, ct)).Select(x => x.UserId));
 
         await using var connection = await database.Database.OpenAsync(ct);
+        Assert.Equal(0, await connection.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_default_cc_modules WHERE user_id=9613"));
         var actions = (await connection.QueryAsync<string>(
             "SELECT action FROM audit_logs WHERE action LIKE 'OUTSOURCE_%' ORDER BY id")).ToArray();
         Assert.Equal(

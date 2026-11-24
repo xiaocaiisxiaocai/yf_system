@@ -18,7 +18,8 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261124003700_CorrectOutsourceDueDatesFromCustomerDate";
+    private const string BeforeElectricalHandoff = "20261124003700_CorrectOutsourceDueDatesFromCustomerDate";
+    private const string Latest = "20261124010000_AddOutsourceElectricalHandoff";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -75,6 +76,28 @@ public sealed class MigrationRoundTripTests
         var latestCatalog = await CatalogCountsAsync(database, ct);
         Assert.Equal((6, 40, 5), latestCatalog);
 
+        await migrator.MigrateAsync(BeforeElectricalHandoff, ct);
+        var beforeElectricalHandoff = await SchemaAsync(database, ct);
+        Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("table|outsource_default_cc_modules|", StringComparison.Ordinal));
+        Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|outsource_items|electrical_handoff", StringComparison.Ordinal));
+        Assert.Contains(beforeElectricalHandoff, line => line.StartsWith("column|outsource_mails|kind|varchar(16)|", StringComparison.Ordinal));
+        Assert.Contains(beforeElectricalHandoff, line => line.StartsWith("column|outsource_mails|created_by|bigint(20) unsigned|NO|", StringComparison.Ordinal)
+            || line.StartsWith("column|outsource_mails|created_by|bigint unsigned|NO|", StringComparison.Ordinal));
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_fields WHERE field_key='electricalHandoff'"));
+            await conn.ExecuteAsync("INSERT INTO outsource_default_cc(user_id) SELECT id FROM users WHERE employee_no='admin'");
+        }
+        await migrator.MigrateAsync(cancellationToken: ct);
+        Assert.Equal(latestSchema, await SchemaAsync(database, ct));
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal("OUTSOURCE_NOTICE", await conn.QuerySingleAsync<string>("SELECT module FROM outsource_default_cc_modules"));
+            Assert.Equal(new[] { "status", "electricalHandoff", "workOrderNo" }, await conn.QueryAsync<string>(
+                "SELECT field_key FROM outsource_fields WHERE field_key IN ('status','electricalHandoff','workOrderNo') ORDER BY sort_no, id"));
+            await conn.ExecuteAsync("DELETE FROM outsource_default_cc");
+        }
+
         // AddProjectRobotOwnerName + SeedArmCatalogAndRobotTypes (Down keeps the catalog, Up skips existing rows) + AddProjectRobotType
         // + AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt + AddMessageClientId
         // + AddProjectMaterialReview (Down keeps its notification switch row) + AddSupplierContactsAndSignatures
@@ -111,6 +134,7 @@ public sealed class MigrationRoundTripTests
         // + StopInternalRobotVEditing (Down leaves 是否有RobotV at 内部不填写).
         // + AddOutsourceVendorEmails (Down drops outsource_vendor_emails).
         // + CorrectOutsourceDueDatesFromCustomerDate (data only; Down keeps the corrected due dates).
+        // + AddOutsourceElectricalHandoff (Down drops handoff fields and default CC module assignments).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);

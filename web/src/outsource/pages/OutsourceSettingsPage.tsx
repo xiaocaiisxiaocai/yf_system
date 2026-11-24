@@ -5,6 +5,7 @@ import {
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus, IconSync } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import type { OutsourceDefaultCcEntry, OutsourceDefaultCcRequest } from '../../api/generated/api-types'
 import { useAuth } from '../../store/auth'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { fmtTime, type ApiResponses } from '../../api/types'
@@ -22,11 +23,16 @@ import StatusTag from '../../components/StatusTag'
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type CcUser = ApiResponses['GET /outsource/settings/default-cc'][number]
+type CcUserOption = ApiResponses['GET /outsource/settings/cc-user-options'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
 type TabKey = 'types' | 'customers' | 'cc' | 'emails' | 'sync' | 'fields'
 
 const ACTIVE = 'ACTIVE'
 const DISABLED = 'DISABLED'
+const DEFAULT_CC_MODULES = [
+  { label: '外发邮件', value: 'OUTSOURCE_NOTICE' },
+  { label: '转迅得电控', value: 'ELECTRICAL_HANDOFF' },
+]
 const nextSortNo = (rows: { sortNo: number }[]) => Math.min(9999, Math.max(0, ...rows.map((row) => row.sortNo)) + 10)
 const typeLabel = (type: OutsourceType) => `${type.code}【${type.name}】`
 const lengthRule = (label: string, max: number, required = true) => ({
@@ -188,9 +194,11 @@ function TypesTab({ types, vendors, loading, reload }: {
 }
 
 function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolean; onChange: (rows: CcUser[]) => void }) {
-  const [options, setOptions] = useState<CcUser[]>([])
+  const [options, setOptions] = useState<CcUserOption[]>([])
   const [picked, setPicked] = useState<number>()
+  const [pickedModules, setPickedModules] = useState(['OUTSOURCE_NOTICE'])
   const { saving, run } = useSaving()
+  const busy = loading || saving
   const [optionsLoading, setOptionsLoading] = useState(false)
   const optionsLoaded = useRef(false)
 
@@ -204,26 +212,47 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
       setOptions(response.data)
     } catch { optionsLoaded.current = false /* 统一请求层提示 */ } finally { setOptionsLoading(false) }
   }
-  const replace = (userIds: number[], message: string) => run(async () => {
-    const response = await http.put<ApiResponses['PUT /outsource/settings/default-cc']>('/outsource/settings/default-cc', { userIds })
+  const entries = cc.map(({ userId, modules }): OutsourceDefaultCcEntry => ({ userId, modules }))
+  const replace = (next: OutsourceDefaultCcEntry[], message: string, onSaved?: () => void) => run(async () => {
+    const response = await http.put<ApiResponses['PUT /outsource/settings/default-cc']>('/outsource/settings/default-cc',
+      { entries: next } satisfies OutsourceDefaultCcRequest)
     onChange(response.data); Message.success(message)
+    onSaved?.()
   })
-  const add = async () => {
-    if (picked === undefined) return
-    await replace([...cc.map((row) => row.userId), picked], '已加入默认抄送')
-    setPicked(undefined)
+  const add = () => {
+    if (busy || picked === undefined || pickedModules.length === 0) return
+    void replace([...entries, { userId: picked, modules: pickedModules }], '已加入默认抄送', () => {
+      setPicked(undefined); setPickedModules(['OUTSOURCE_NOTICE'])
+    })
   }
 
-  const columns = [
+  const columns: TableColumnProps<CcUser>[] = [
     { title: '姓名', dataIndex: 'realName', width: 140, ellipsis: true },
     { title: '账号', dataIndex: 'employeeNo', width: 140, ellipsis: true },
     { title: '邮箱', dataIndex: 'email', width: 260, ellipsis: true },
+    {
+      title: '适用模块', width: 240,
+      render: (_, row) => <div role="group" aria-label={`${row.realName}的适用模块`}>
+        <Space>
+          {DEFAULT_CC_MODULES.map(({ label, value }) => {
+            const checked = row.modules.includes(value)
+            return <Checkbox key={value} checked={checked}
+              disabled={busy || (checked && row.modules.length === 1)}
+              onChange={(enabled) => {
+                const modules = enabled ? [...row.modules, value] : row.modules.filter((module) => module !== value)
+                if (modules.length === 0) return
+                void replace(entries.map((entry) => entry.userId === row.userId ? { ...entry, modules } : entry), '已保存适用模块')
+              }}>{label}</Checkbox>
+          })}
+        </Space>
+      </div>,
+    },
     { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, row: CcUser) => <StatusTag status={row.status} /> },
     {
       title: '操作', width: 100, align: 'center' as const, render: (_: unknown, row: CcUser) => actionSlots([
         <Popconfirm key="remove" title={`将“${row.realName}”移出默认抄送？`}
-          onOk={() => replace(cc.filter((item) => item.userId !== row.userId).map((item) => item.userId), '已移出默认抄送')}>
-          <Button type="text" size="mini" status="danger" disabled={saving}>移除</Button>
+          onOk={() => replace(entries.filter((item) => item.userId !== row.userId), '已移出默认抄送')}>
+          <Button type="text" size="mini" status="danger" disabled={busy}>移除</Button>
         </Popconfirm>,
       ], 'single'),
     },
@@ -233,7 +262,7 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
     <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">
       <Space wrap>
         <Select aria-label="选择抄送人员" placeholder="搜索姓名、账号或邮箱" showSearch allowClear style={{ width: 360 }}
-          loading={optionsLoading} value={picked} onChange={setPicked} onFocus={() => void loadOptions()}
+          loading={optionsLoading} disabled={busy} value={picked} onChange={setPicked} onFocus={() => void loadOptions()}
           filterOption={(input, option) => String((option as { props?: { children?: unknown } }).props?.children ?? '')
             .toLowerCase().includes(input.trim().toLowerCase())}
           options={options.filter((option) => !cc.some((row) => row.userId === option.userId))
@@ -241,12 +270,15 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
               label: `${option.realName} · ${option.employeeNo} · ${option.email || '未填写邮箱'}`,
               value: option.userId, disabled: !option.email,
             }))} />
-        <Button type="primary" icon={<IconPlus />} disabled={picked === undefined || saving} onClick={() => void add()}>加入</Button>
+        <div role="group" aria-label="新增人员的适用模块">
+          <Checkbox.Group options={DEFAULT_CC_MODULES} value={pickedModules} disabled={busy} onChange={setPickedModules} />
+        </div>
+        <Button type="primary" icon={<IconPlus />} disabled={busy || picked === undefined || pickedModules.length === 0} onClick={add}>加入</Button>
       </Space>
     </div>
     <ResizableTable<CcUser> tableId="outsource-default-cc" className="page-table" rowKey="userId" loading={loading} data={cc} pagination={false}
-      noDataElement={loading ? <span /> : <Empty description="暂无默认抄送人员" />} scroll={{ x: 730, y: 'var(--page-table-scroll-y)' }}
-      columns={columns as TableColumnProps<CcUser>[]} />
+      noDataElement={loading ? <span /> : <Empty description="暂无默认抄送人员" />} scroll={{ x: 970, y: 'var(--page-table-scroll-y)' }}
+      columns={columns} />
   </>
 }
 

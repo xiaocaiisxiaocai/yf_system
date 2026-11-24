@@ -57,12 +57,18 @@ public sealed class OutsourceTypeVendor
     public ulong VendorId { get; set; }
 }
 
-/// <summary>Internal accounts copied on every vendor mail; senders cannot remove them per mail.</summary>
+/// <summary>Internal recipients with standing assignments to outsourcing mail modules.</summary>
 public sealed class OutsourceDefaultCc
 {
     public ulong UserId { get; set; }
     public int SortNo { get; set; }
     public DateTime CreatedAt { get; set; }
+}
+
+public sealed class OutsourceDefaultCcModuleRow
+{
+    public ulong UserId { get; set; }
+    public string Module { get; set; } = null!;
 }
 
 /// <summary>
@@ -94,6 +100,9 @@ public sealed class OutsourceItem
     public string? Remark { get; set; }
     /// <summary>NORMAL / PAUSED / CANCELLED, set by purchasing.</summary>
     public string Status { get; set; } = null!;
+    public bool ElectricalHandoff { get; set; }
+    public DateTime? ElectricalHandoffAt { get; set; }
+    public string? ElectricalHandoffSigner { get; set; }
     /// <summary>UNSENT / SENT / PENDING_NOTICE.</summary>
     public string SendStatus { get; set; } = null!;
     /// <summary>Set when IPMS reports the work order finished; closed rows are hidden and no longer synchronized.</summary>
@@ -216,7 +225,8 @@ public sealed class OutsourceItemChange
 public sealed class OutsourceMailBatch
 {
     public string RequestKey { get; set; } = null!;
-    public ulong CreatedBy { get; set; }
+    public ulong? CreatedBy { get; set; }
+    public ulong? CreatedByOemAccountId { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -228,7 +238,6 @@ public sealed class OutsourceMail
 {
     public ulong Id { get; set; }
     public string BatchKey { get; set; } = null!;
-    /// <summary>NOTICE or WITHDRAW.</summary>
     public string Kind { get; set; } = null!;
     public ulong VendorId { get; set; }
     public string Subject { get; set; } = null!;
@@ -241,7 +250,9 @@ public sealed class OutsourceMail
     public int Attempts { get; set; }
     public DateTime? NextAttemptAt { get; set; }
     public string? LastError { get; set; }
-    public ulong CreatedBy { get; set; }
+    public ulong? CreatedBy { get; set; }
+    public ulong? CreatedByOemAccountId { get; set; }
+    public string? SignerName { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public DateTime? SentAt { get; set; }
@@ -347,6 +358,20 @@ public sealed class OutsourceDefaultCcConfig : IEntityTypeConfiguration<Outsourc
     }
 }
 
+public sealed class OutsourceDefaultCcModuleConfig : IEntityTypeConfiguration<OutsourceDefaultCcModuleRow>
+{
+    public void Configure(EntityTypeBuilder<OutsourceDefaultCcModuleRow> b)
+    {
+        b.ToTable("outsource_default_cc_modules");
+        b.UseCollation("utf8mb4_unicode_ci");
+        b.HasKey(x => new { x.UserId, x.Module });
+        b.Property(x => x.UserId).HasColumnName("user_id");
+        b.Property(x => x.Module).HasColumnName("module").HasMaxLength(32);
+        b.HasOne<OutsourceDefaultCc>().WithMany().HasForeignKey(x => x.UserId)
+            .HasConstraintName("fk_outsource_default_cc_modules_user").OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
 public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem>
 {
     public void Configure(EntityTypeBuilder<OutsourceItem> b)
@@ -372,6 +397,9 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.Property(x => x.LatestDueDate).HasColumnName("latest_due_date").HasColumnType("date");
         b.Property(x => x.Remark).HasColumnName("remark").HasMaxLength(500);
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue("NORMAL");
+        b.Property(x => x.ElectricalHandoff).HasColumnName("electrical_handoff").HasDefaultValue(false);
+        b.Property(x => x.ElectricalHandoffAt).HasColumnName("electrical_handoff_at").HasColumnType("datetime(3)");
+        b.Property(x => x.ElectricalHandoffSigner).HasColumnName("electrical_handoff_signer").HasMaxLength(32);
         b.Property(x => x.SendStatus).HasColumnName("send_status").HasMaxLength(16).IsRequired().HasDefaultValue("UNSENT");
         b.Property(x => x.ClosedAt).HasColumnName("closed_at").HasColumnType("datetime(3)");
         b.Property(x => x.IpmsSyncedAt).HasColumnName("ipms_synced_at").HasColumnType("datetime(3)");
@@ -451,6 +479,7 @@ public sealed class OutsourceMailBatchConfig : IEntityTypeConfiguration<Outsourc
         b.HasKey(x => x.RequestKey);
         b.Property(x => x.RequestKey).HasColumnName("request_key").HasMaxLength(64);
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
+        b.Property(x => x.CreatedByOemAccountId).HasColumnName("created_by_oem_account_id");
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
     }
 }
@@ -463,7 +492,7 @@ public sealed class OutsourceMailConfig : IEntityTypeConfiguration<OutsourceMail
         b.UseCollation("utf8mb4_unicode_ci");
         b.HasKey(x => x.Id);
         b.Property(x => x.BatchKey).HasColumnName("batch_key").HasMaxLength(64).IsRequired();
-        b.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(16).IsRequired();
+        b.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(32).IsRequired();
         b.Property(x => x.VendorId).HasColumnName("vendor_id");
         b.Property(x => x.Subject).HasColumnName("subject").HasMaxLength(255).IsRequired();
         b.Property(x => x.BodyHtml).HasColumnName("body_html").HasColumnType("mediumtext").IsRequired();
@@ -475,6 +504,8 @@ public sealed class OutsourceMailConfig : IEntityTypeConfiguration<OutsourceMail
         b.Property(x => x.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("datetime(3)");
         b.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(512);
         b.Property(x => x.CreatedBy).HasColumnName("created_by");
+        b.Property(x => x.CreatedByOemAccountId).HasColumnName("created_by_oem_account_id");
+        b.Property(x => x.SignerName).HasColumnName("signer_name").HasMaxLength(32);
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
         b.Property(x => x.SentAt).HasColumnName("sent_at").HasColumnType("datetime(3)");
