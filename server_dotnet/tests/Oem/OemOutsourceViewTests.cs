@@ -116,7 +116,8 @@ public sealed class OemOutsourceViewTests
             await conn.ExecuteAsync("""
                 UPDATE users SET status='DISABLED' WHERE id=@disabledUser;
                 UPDATE users SET email='' WHERE id=@blankEmailUser;
-                INSERT INTO outsource_vendor_emails(vendor_id,email) VALUES(@company,'outsourcing@vendor.invalid'),(@otherCompany,'other@vendor.invalid');
+                INSERT INTO outsource_vendor_emails(vendor_id,email,created_at,updated_at) VALUES
+                  (@company,'outsourcing@vendor.invalid',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),(@otherCompany,'other@vendor.invalid',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
                 INSERT INTO outsource_customer_aliases(full_name,short_name,manual,updated_at)
                   VALUES('客户电控全称','客户简称',1,UTC_TIMESTAMP(3));
                 INSERT INTO outsource_items(work_order_no,serial_no,outsource_date,vendor_id,customer,machine_model,type_code,status,
