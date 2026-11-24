@@ -248,6 +248,26 @@ public sealed class OemTransferOutsourceLinkTests
         Assert.Equal("WO-HIDDEN-OWN", Assert.Single(WorkOrderNumbers(rows)));
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task SendableItemsShowTheCustomerShortNameLikeTheWorkOrderList()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var item = await host.CreateOutsourceItemAsync(world.CompanyId, "WO-ALIAS", ct, customer: "某某科技股份有限公司");
+        await using (var connection = await host.OpenAsync(ct))
+        {
+            await connection.ExecuteAsync("UPDATE outsource_fields SET vendor_visible=1 WHERE field_key='customer'");
+            await connection.ExecuteAsync("INSERT INTO outsource_customer_aliases(full_name,short_name,manual,updated_at) VALUES('某某科技股份有限公司','某某',1,UTC_TIMESTAMP(3))");
+        }
+
+        foreach (var client in new[] { world.Vendor, world.Sender })
+        {
+            var row = Assert.Single((await client.GetAsync(SendableLookup("WO-ALIAS"), ct).Ok()).AsArray(), x => x!.Id() == item)!;
+            Assert.Equal("某某", row["customer"]!.GetValue<string>());
+        }
+    }
+
     private static string SendableLookup(string text) => $"{SendableItems}?workOrderNo={Uri.EscapeDataString(text)}";
 
     private static string[] WorkOrderNumbers(JsonArray rows) =>

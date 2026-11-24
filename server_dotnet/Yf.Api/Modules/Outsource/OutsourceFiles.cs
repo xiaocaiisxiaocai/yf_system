@@ -19,7 +19,8 @@ internal static class OutsourceFiles
         YfDbContext db, IReadOnlyCollection<ulong> itemIds, ulong? companyId, CancellationToken ct)
     {
         if (itemIds.Count == 0) return [];
-        return await Query(db, itemIds, companyId).GroupBy(x => x.Transfer.OutsourceItemId!.Value)
+        var now = await DbClock.UtcNowAsync(db, ct, 3);
+        return await Query(db, itemIds, companyId, now).GroupBy(x => x.Transfer.OutsourceItemId!.Value)
             .Select(g => new
             {
                 ItemId = g.Key,
@@ -29,16 +30,23 @@ internal static class OutsourceFiles
             .ToDictionaryAsync(x => x.ItemId, x => (x.FileCount, x.PurgedFileCount), ct);
     }
 
-    internal static Task<OutsourceItemFileResponse[]> ListAsync(
-        YfDbContext db, ulong itemId, ulong? companyId, CancellationToken ct) =>
-        (from row in Query(db, [itemId], companyId)
+    internal static async Task<OutsourceItemFileResponse[]> ListAsync(
+        YfDbContext db, ulong itemId, ulong? companyId, CancellationToken ct)
+    {
+        var now = await DbClock.UtcNowAsync(db, ct, 3);
+        return await (from row in Query(db, [itemId], companyId, now)
          join company in db.OemCompanies.AsNoTracking() on row.Transfer.OemCompanyId equals company.Id
          let sentAt = row.Transfer.SentAt ?? row.Transfer.ReleasedAt ?? row.Transfer.CreatedAt
          orderby sentAt descending, row.File.Id descending
          select new OutsourceItemFileResponse(row.File.Id, row.Transfer.Id, row.File.OriginalName, row.File.SizeBytes,
              row.Transfer.Direction, company.Name, DateTime.SpecifyKind(sentAt, DateTimeKind.Utc), row.State)).ToArrayAsync(ct);
+    }
 
-    private static IQueryable<ArchiveFile> Query(YfDbContext db, IReadOnlyCollection<ulong> itemIds, ulong? companyId)
+    /// <summary>
+    /// A file past its retention deadline can no longer be read (the delivery slice answers 410) even before the purge
+    /// worker has changed its status, so it counts as purged here too.
+    /// </summary>
+    private static IQueryable<ArchiveFile> Query(YfDbContext db, IReadOnlyCollection<ulong> itemIds, ulong? companyId, DateTime now)
     {
         var transfers = db.OemTransfers.AsNoTracking().Where(x => x.LifecycleStatus == TransferLifecycle.Released
             && x.OutsourceItemId.HasValue && itemIds.Contains(x.OutsourceItemId.Value));
@@ -53,6 +61,7 @@ internal static class OutsourceFiles
                    Transfer = transfer,
                    File = file,
                    State = file.PayloadStatus == PayloadStatuses.Purged || file.PayloadStatus == PayloadStatuses.PurgePending
+                       || (file.PurgeDueAt != null && file.PurgeDueAt <= now)
                        ? PayloadStatuses.Purged
                        : file.PayloadStatus == PayloadStatuses.Available && file.ScanStatus == ValidationStatuses.Valid
                            ? PayloadStatuses.Available : Processing,

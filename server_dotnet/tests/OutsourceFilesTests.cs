@@ -62,6 +62,24 @@ public sealed class OutsourceFilesTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task ExpiredFilesNotYetPurgedAreListedAsPurgedAndNotCounted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var (admin, company, item) = await CreateItemAsync(host, ct);
+        var transfer = await AddTransferAsync(host, company, item, ct);
+        await AddFileAsync(host, transfer, "live.pdf", PayloadStatuses.Available, ValidationStatuses.Valid, ct);
+        var expired = await AddFileAsync(host, transfer, "expired.pdf", PayloadStatuses.Available, ValidationStatuses.Valid, ct);
+        await using (var conn = await host.OpenAsync(ct))
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET purge_due_at=DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 HOUR) WHERE id=@expired", new { expired });
+
+        var row = await RowAsync(admin, item, ct);
+        Assert.Equal((1, 1), (row["fileCount"]!.GetValue<int>(), row["purgedFileCount"]!.GetValue<int>()));
+        var files = (await admin.GetAsync($"/api/v1/outsource/items/{item}/files", ct).Ok())["files"]!.AsArray();
+        Assert.Equal("PURGED", Assert.Single(files, file => file!["name"]!.GetValue<string>() == "expired.pdf")!["state"]!.GetValue<string>());
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task ProcessingFilesAreListedButNotCounted()
     {
         var ct = TestContext.Current.CancellationToken;

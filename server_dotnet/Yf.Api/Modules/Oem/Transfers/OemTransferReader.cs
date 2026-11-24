@@ -41,17 +41,25 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         {
             var layout = await OutsourceFieldLayout.LoadAsync(db, ct);
             var showCustomer = layout.Find("customer") is { Active: true, VendorVisible: true };
-            return await matches.Where(match => match.Company.Id == account.CompanyId).Take(20)
-                .Select(match => new OemSendableItemResponse(match.Item.Id, match.Item.WorkOrderNo,
-                    showCustomer ? match.Item.Customer : null, match.Company.Name, null))
+            var own = await matches.Where(match => match.Company.Id == account.CompanyId).Take(20)
+                .Select(match => new { match.Item.Id, match.Item.WorkOrderNo, match.Item.Customer, VendorName = match.Company.Name })
                 .ToArrayAsync(ct);
+            // The same short name the work-order list shows (客户简称), never the stored full name.
+            var shown = await OutsourceReference.LoadAsync(db, ct);
+            return own.Select(row => new OemSendableItemResponse(row.Id, row.WorkOrderNo,
+                showCustomer ? shown.CustomerShown(row.Customer) : null, row.VendorName, null)).ToArray();
         }
 
-        return await matches.Where(match => match.Company.Status == OemStatus.Active).Take(20)
-            .Select(match => new OemSendableItemResponse(match.Item.Id, match.Item.WorkOrderNo, match.Item.Customer,
-                match.Company.Name, db.OemAccounts.Any(recipient => recipient.OemCompanyId == match.Company.Id
-                    && recipient.Status == OemStatus.Active) ? null : OemRecipientPolicy.MissingAccountMessage))
-            .ToArrayAsync(ct);
+        var rows = await matches.Where(match => match.Company.Status == OemStatus.Active).Take(20)
+            .Select(match => new
+            {
+                match.Item.Id, match.Item.WorkOrderNo, match.Item.Customer, VendorName = match.Company.Name,
+                Reason = db.OemAccounts.Any(recipient => recipient.OemCompanyId == match.Company.Id
+                    && recipient.Status == OemStatus.Active) ? null : OemRecipientPolicy.MissingAccountMessage,
+            }).ToArrayAsync(ct);
+        var reference = await OutsourceReference.LoadAsync(db, ct);
+        return rows.Select(row => new OemSendableItemResponse(row.Id, row.WorkOrderNo,
+            reference.CustomerShown(row.Customer), row.VendorName, row.Reason)).ToArray();
     }
 
     public async Task<OemPageResponse<OemTransferSummaryResponse>> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
