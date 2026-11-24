@@ -87,6 +87,7 @@ public sealed class SchemaShapeTests
         "20261124032519_RenameOutsourceMechanicalSupervisor",
         "20261124055650_MarkLegacyOutsourceSupervisorBaseline",
         "20261124060404_RenameOutsourceSupervisorKey",
+        "20261124075430_RestoreOutsourceSectionLabel",
     ];
 
     [Fact]

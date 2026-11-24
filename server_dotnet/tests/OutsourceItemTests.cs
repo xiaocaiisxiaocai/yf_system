@@ -182,7 +182,7 @@ public sealed class OutsourceItemTests
             using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
             var sheet = await reader.ReadToEndAsync(ct);
             Assert.Contains("21089901", sheet, StringComparison.Ordinal);
-            Assert.Contains("上级主管", sheet, StringComparison.Ordinal);
+            Assert.Contains("机构课别", sheet, StringComparison.Ordinal);
             Assert.Contains("主管丙", sheet, StringComparison.Ordinal);
             Assert.DoesNotContain("历史机构测试课", sheet, StringComparison.Ordinal);
             Assert.Contains("超穎(泰國)", sheet, StringComparison.Ordinal);
