@@ -14,6 +14,7 @@ public static class DownloadPurposes
     public const string Download = "DOWNLOAD";
     public const string Preview = "PREVIEW";
     public const string Review = "REVIEW";
+    public const string Reference = "REFERENCE";
 }
 
 public static class DownloadSessionStatuses
@@ -33,7 +34,7 @@ public static class DownloadLeaseStatuses
 /// <summary>
 /// Preview, download and delivery receipts. Every request — including each Range
 /// request of a resumed download — re-validates the live account, login session,
-/// transfer visibility and file state. A download counts as received only when one
+/// transfer content access and file state. A download counts as received only when one
 /// logical session has delivered every byte; the first such recipient session sets the
 /// file's receipt time and (per the retention snapshot) its purge time. Active streams
 /// hold a lease that the purge worker honours for a bounded drain period.
@@ -70,7 +71,9 @@ public sealed class OemDeliveryService(
             path = await storage.ResolveExistingFileAsync(file.StoragePath, ct);
             await audit.WriteAsync(uow, current, "OEM_FILE_PREVIEW", "oem_file", fileId, new
             {
-                targetName = file.OriginalName, transferId = file.TransferId, purpose = capabilities.ContentAccess.ToString().ToUpperInvariant(),
+                targetName = file.OriginalName, transferId = file.TransferId,
+                purpose = capabilities.ContentAccess == ContentPurpose.Reference
+                    ? DownloadPurposes.Reference : capabilities.ContentAccess.ToString().ToUpperInvariant(),
             }, ct);
             await uow.CommitAsync(ct);
         }
@@ -99,7 +102,12 @@ public sealed class OemDeliveryService(
         {
             Id = Guid.NewGuid().ToString("D"), FileId = file.Id, FileStoredName = file.StoredName, FileSha256 = file.Sha256,
             ActorRealm = current.Realm, ActorId = current.Id, LoginSessionId = current.LoginSessionId,
-            Purpose = capabilities.ContentAccess == ContentPurpose.Review ? DownloadPurposes.Review : DownloadPurposes.Download,
+            Purpose = capabilities.ContentAccess switch
+            {
+                ContentPurpose.Reference => DownloadPurposes.Reference,
+                ContentPurpose.Review => DownloadPurposes.Review,
+                _ => DownloadPurposes.Download,
+            },
             RecipientSide = capabilities.IsRecipient, ExpectedSize = file.SizeBytes, Status = DownloadSessionStatuses.Started,
             AbsoluteDeadline = deadline, ConcurrencyVersion = 0, CreatedAt = uow.Now,
         };
@@ -420,15 +428,20 @@ public sealed class OemDeliveryService(
     {
         if ((await OemSettings.LoadAsync(uow.Db, ct)).ReconcileRequired)
             throw new ApiException(503, 50302, "系统正在进行存储核对，暂时不能读取文件");
-        var file = await uow.Db.OemTransferFiles.AsNoTracking().SingleOrDefaultAsync(item => item.Id == fileId, ct) ?? throw ApiException.NotFound();
+        var file = await uow.Db.OemTransferFiles.AsNoTracking().SingleOrDefaultAsync(item => item.Id == fileId, ct);
+        if (file is null) throw HiddenFile();
         var transfer = await uow.Db.OemTransfers.AsNoTracking().SingleAsync(item => item.Id == file.TransferId, ct);
         var capabilities = await OemTransferReader.CapabilitiesAsync(uow, actor, transfer, ct);
-        if (!capabilities.View || file.PurgeReason == PurgeReasons.FileRemoved) throw ApiException.NotFound();
+        if (!capabilities.View && !capabilities.CanReadContent) throw HiddenFile();
+        if (file.PurgeReason == PurgeReasons.FileRemoved) throw ApiException.NotFound();
         if (!capabilities.CanReadContent) throw ApiException.Forbidden("无权读取该文件内容");
         if (file.ScanStatus != ValidationStatuses.Valid || file.PayloadStatus != PayloadStatuses.Available)
             throw new ApiException(409, 40910, "文件尚未通过文件校验或已不可用");
         if (file.PurgeDueAt is DateTime due && due <= uow.Now) throw new ApiException(410, 41003, "文件已到期或不可用");
         return (file, transfer, capabilities);
+
+        // Keep an inaccessible file indistinguishable from a missing one within each realm.
+        ApiException HiddenFile() => actor.IsInternal ? ApiException.Forbidden("无权读取该文件内容") : ApiException.NotFound();
     }
 
     /// <summary>Rebuilds the caller behind a download grant from live data (account, vendor, login session).</summary>

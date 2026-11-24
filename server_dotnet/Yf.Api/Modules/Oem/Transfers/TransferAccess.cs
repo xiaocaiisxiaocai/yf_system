@@ -2,14 +2,15 @@ using Yf.Api.Modules.Oem.Common;
 
 namespace Yf.Api.Modules.Oem.Transfers;
 
-/// <summary>The facts about a transfer that visibility depends on.</summary>
+/// <summary>The facts about a transfer that visibility and content access depend on.</summary>
 public sealed record TransferFacts(
     string Direction,
     ulong CompanyId,
     string Lifecycle,
     ulong? InternalSenderUserId,
     ulong? OemSenderAccountId,
-    bool ApprovalBlocked = false);
+    bool ApprovalBlocked = false,
+    bool BoundToOutsourceItem = false);
 
 /// <summary>
 /// The facts about a caller: realm identity, internal permissions, and whether the
@@ -21,7 +22,7 @@ public sealed record TransferFacts(
 public sealed record ActorFacts(
     string Realm, ulong Id, ulong? CompanyId, bool CanView, bool CanDownload, bool CanCreate,
     bool HasActiveReviewTask, bool HasAnyTask, bool CanRecover = false, bool SeesAll = false, bool IsNotified = false,
-    bool InScope = false, bool CanUpdateDraft = false, bool CanDeleteDraft = false)
+    bool InScope = false, bool CanUpdateDraft = false, bool CanDeleteDraft = false, bool HasOutsourceFileAccess = false)
 {
     public static ActorFacts For(OemActor actor, IReadOnlySet<string> permissions, bool hasActiveReviewTask, bool hasAnyTask,
         bool seesAll = false, bool isNotified = false, bool inScope = false) => actor switch
@@ -33,14 +34,15 @@ public sealed record ActorFacts(
             permissions.Contains(OemPermissions.ApprovalRecover), seesAll, isNotified, inScope,
             // Draft writes are independent grants: update, delete (create holders keep it for retries) and send.
             permissions.Contains(OemPermissions.TransferUpdate),
-            permissions.Contains(OemPermissions.TransferDelete) || permissions.Contains(OemPermissions.TransferCreate)),
+            permissions.Contains(OemPermissions.TransferDelete) || permissions.Contains(OemPermissions.TransferCreate),
+            permissions.Contains(OemPermissions.OutsourceFileView)),
     };
 
     /// <summary>View permission over this transfer although it is not the actor's own: administrators and supervisors in scope.</summary>
     public bool ViewsAll => CanView && (SeesAll || InScope);
 }
 
-public enum ContentPurpose { None, Recipient, Sender, Review }
+public enum ContentPurpose { None, Recipient, Sender, Review, Reference }
 
 public sealed record TransferCapabilities(
     bool View, bool EditDraft, ContentPurpose ContentAccess, bool RecoveryOnly = false,
@@ -90,7 +92,10 @@ public static class TransferAccess
                 : isActualSender || actor.ViewsAll || actor.HasAnyTask || recoveryView;
         else
             view = isOem ? ownCompany : actor.CanView && (actor.SeesAll || actor.IsNotified || actor.InScope);
-        if (!view) return new(false, false, ContentPurpose.None);
+        var reference = actor.Realm == OemRealms.Internal && actor.HasOutsourceFileAccess
+            && transfer.BoundToOutsourceItem && transfer.Lifecycle == TransferLifecycle.Released
+            ? ContentPurpose.Reference : ContentPurpose.None;
+        if (!view) return new(false, false, reference);
         if (closedWithoutRelease) return new(true, false, ContentPurpose.None);
 
         ContentPurpose content;
@@ -115,6 +120,6 @@ public static class TransferAccess
                     : actor.CanView && actor.CanDownload ? ContentPurpose.Recipient : ContentPurpose.None;
         }
         var recoveryOnly = recoveryView && !isActualSender && !actor.ViewsAll && !actor.HasAnyTask;
-        return new(true, false, content, recoveryOnly);
+        return new(true, false, content == ContentPurpose.None ? reference : content, recoveryOnly);
     }
 }

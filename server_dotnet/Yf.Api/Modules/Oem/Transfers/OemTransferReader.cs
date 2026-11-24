@@ -332,7 +332,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var anyTask = canApprove && approverTaskStatuses.Any(status => status is FlowTaskStatuses.Pending or FlowTaskStatuses.Approved or FlowTaskStatuses.Rejected);
         var activeTask = canApprove && approverTaskStatuses.Contains(FlowTaskStatuses.Pending);
         var facts = new TransferFacts(transfer.Direction, transfer.OemCompanyId, transfer.LifecycleStatus,
-            transfer.InternalSenderUserId, transfer.OemSenderAccountId, approvalBlocked);
+            transfer.InternalSenderUserId, transfer.OemSenderAccountId, approvalBlocked,
+            BoundToOutsourceItem: transfer.OutsourceItemId is not null);
         return TransferAccess.Evaluate(facts, ActorFacts.For(actor, permissions, activeTask, anyTask, seesAll, notified, inScope));
     }
 
