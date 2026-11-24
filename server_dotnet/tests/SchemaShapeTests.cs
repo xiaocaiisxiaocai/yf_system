@@ -88,6 +88,7 @@ public sealed class SchemaShapeTests
         "20261124055650_MarkLegacyOutsourceSupervisorBaseline",
         "20261124060404_RenameOutsourceSupervisorKey",
         "20261124075430_RestoreOutsourceSectionLabel",
+        "20261124083731_AddOutsourceTransferLink",
     ];
 
     [Fact]
@@ -360,8 +361,14 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(62, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(62, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(63, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(63, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM permissions p JOIN permissions parent ON parent.id=p.parent_id
+                JOIN role_permissions rp ON rp.permission_id=p.id JOIN roles r ON r.id=rp.role_id
+                WHERE p.code='outsource:file_view' AND p.name='外协档案' AND p.type='ACTION' AND parent.code='outsource'
+                  AND r.is_built_in=1 AND r.name='系统管理员'
+                """));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='project:view_all'"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code IN ('project:submit','project:confirm','project:withdraw')"));
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions WHERE code='log:delete'"));

@@ -21,7 +21,8 @@ public sealed class MigrationRoundTripTests
     private const string BeforeElectricalHandoff = "20261124003700_CorrectOutsourceDueDatesFromCustomerDate";
     private const string BeforeMechanicalSupervisor = "20261124010000_AddOutsourceElectricalHandoff";
     private const string RenameSupervisor = "20261124032519_RenameOutsourceMechanicalSupervisor";
-    private const string Latest = "20261124075430_RestoreOutsourceSectionLabel";
+    private const string BeforeOutsourceTransferLink = "20261124075430_RestoreOutsourceSectionLabel";
+    private const string Latest = "20261124083731_AddOutsourceTransferLink";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -92,6 +93,68 @@ public sealed class MigrationRoundTripTests
         Assert.Equal((before.Id, "上级主管", 321, false, "DISABLED"), await ReadFieldAsync());
         await migrator.MigrateAsync(BeforeMechanicalSupervisor, ct);
         Assert.Equal(before, await ReadFieldAsync());
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AddOutsourceTransferLinkAddsColumnAndPermission()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_transfer_link", ct);
+        await database.InitializeWithMigrationsAsync(ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(BeforeOutsourceTransferLink, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
+              (2,'采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (3,'项目管理员',1,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT r.id,p.id FROM roles r CROSS JOIN permissions p
+            WHERE r.id IN (2,3) AND (p.code='outsource' OR p.code LIKE 'outsource:%');
+            INSERT INTO permissions(id,code,name,type,sort_no)
+            VALUES(234,'custom:permission','自定义权限','ACTION',1);
+            """, ct);
+        var beforeSchema = await SchemaAsync(database, ct);
+        var beforeData = await ReferenceDataAsync(database, ct);
+
+        await migrator.MigrateAsync(cancellationToken: ct);
+        await using (var connection = await database.Database.OpenAsync(ct))
+        {
+            var column = await connection.QuerySingleOrDefaultAsync<(string Type, string Nullable)>(new CommandDefinition("""
+                SELECT column_type, is_nullable FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND table_name='oem_transfers' AND column_name='outsource_item_id'
+                """, cancellationToken: ct));
+            Assert.NotNull(column.Type);
+            Assert.Matches(@"^bigint(?:\(20\))? unsigned$", column.Type);
+            Assert.Equal("YES", column.Nullable);
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+                SELECT COUNT(*) FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name='oem_transfers'
+                  AND column_name='outsource_item_id' AND seq_in_index=1
+                """, cancellationToken: ct)));
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>(new CommandDefinition("""
+                SELECT COUNT(*) FROM information_schema.key_column_usage k
+                JOIN information_schema.referential_constraints r
+                  ON r.constraint_schema=k.constraint_schema AND r.constraint_name=k.constraint_name AND r.table_name=k.table_name
+                WHERE k.table_schema=DATABASE() AND k.table_name='oem_transfers' AND k.column_name='outsource_item_id'
+                  AND k.referenced_table_schema=DATABASE() AND k.referenced_table_name='outsource_items'
+                  AND k.referenced_column_name='id' AND r.delete_rule='RESTRICT'
+                """, cancellationToken: ct)));
+            Assert.Equal(("外协档案", "ACTION", "outsource"),
+                await connection.QuerySingleAsync<(string, string, string)>(new CommandDefinition("""
+                    SELECT child.name, child.type, parent.code FROM permissions child
+                    JOIN permissions parent ON parent.id=child.parent_id WHERE child.code='outsource:file_view'
+                    """, cancellationToken: ct)));
+            Assert.Equal(("系统管理员", true),
+                Assert.Single(await connection.QueryAsync<(string, bool)>(new CommandDefinition("""
+                    SELECT r.name, r.is_built_in FROM roles r JOIN role_permissions rp ON rp.role_id=r.id
+                    JOIN permissions p ON p.id=rp.permission_id WHERE p.code='outsource:file_view'
+                    """, cancellationToken: ct))));
+        }
+
+        await migrator.MigrateAsync(BeforeOutsourceTransferLink, ct);
+        Assert.Equal(beforeSchema, await SchemaAsync(database, ct));
+        Assert.Equal(beforeData, await ReferenceDataAsync(database, ct));
     }
 
     [Fact(Timeout = 180_000)]
@@ -167,6 +230,7 @@ public sealed class MigrationRoundTripTests
         // + AddOutsourceVendorEmails (Down drops outsource_vendor_emails).
         // + CorrectOutsourceDueDatesFromCustomerDate (data only; Down keeps the corrected due dates).
         // + AddOutsourceElectricalHandoff (Down drops handoff fields and default CC module assignments).
+        // + AddOutsourceTransferLink (Down drops the link and the outsource:file_view permission and grant).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -212,7 +276,8 @@ public sealed class MigrationRoundTripTests
             Assert.Contains(latestSchema, line => line.StartsWith("table|" + table, StringComparison.Ordinal));
             Assert.DoesNotContain(rolledBack, line => line.StartsWith("table|" + table, StringComparison.Ordinal));
         }
-        Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
+        Assert.Equal(latestData.Where(line => !line.Contains("|outsource:file_view", StringComparison.Ordinal)),
+            await ReferenceDataAsync(database, ct));
         await migrator.MigrateAsync(cancellationToken: ct);
         Assert.Equal(latestSchema, await SchemaAsync(database, ct));
         Assert.Equal(latestData, await ReferenceDataAsync(database, ct));
@@ -355,8 +420,9 @@ public sealed class MigrationRoundTripTests
 
     private static readonly string[] PreOemCodes = ["dashboard", "org:dept", "org:user", "user:manage", "dept:manage"];
 
-    /// <summary>The outsourcing codes the built-in administrator holds after AddOutsourceDateImportPermission.</summary>
-    private static readonly string[] OutsourceCodes = ["outsource", "outsource:date_import", "outsource:manage", "outsource:send", "outsource:settings"];
+    /// <summary>The outsourcing codes the built-in administrator holds after an upgrade.</summary>
+    private static readonly string[] OutsourceCodes =
+        ["outsource", "outsource:date_import", "outsource:file_view", "outsource:manage", "outsource:send", "outsource:settings"];
 
     private static async Task<NotSupportedException> AssertRollbackRefusedAsync(
         SchemaShapeTests.SchemaDatabaseScope database,
