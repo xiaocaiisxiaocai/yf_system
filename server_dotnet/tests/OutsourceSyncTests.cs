@@ -211,6 +211,30 @@ public sealed class OutsourceSyncTests
         Assert.Equal((null, "SENT"), (after["NO-LEADER"].MechanicalSection, after["NO-LEADER"].SendStatus));
         var queue = (await items.ListAsync(buyer, Query(false) with { SendQueue = true }, 1, 20, 0, ct)).List;
         Assert.Equal(["CLEARED", "DIFFERENT"], queue.Select(item => item.WorkOrderNo).Order(StringComparer.Ordinal));
+
+        // The IPMS owner remains 机构丙 while the organisation replaces the leader of their unit.
+        await database.ExecuteAsync("""
+            UPDATE departments SET leader_account_id=9913 WHERE id=9001;
+            UPDATE outsource_fields SET vendor_visible=0 WHERE field_key='mechanicalSection';
+            """, ct);
+        await sync.SyncNowAsync(buyer, new(ids), ct);
+        var hidden = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.Single(item => item.WorkOrderNo == "SAME");
+        Assert.Equal(("机构丙", "机构甲", "SENT"), (hidden.MechanicalOwner, hidden.MechanicalSection, hidden.SendStatus));
+
+        await database.ExecuteAsync("UPDATE outsource_fields SET vendor_visible=1 WHERE field_key='mechanicalSection'", ct);
+        await sync.SyncNowAsync(buyer, new(ids), ct);
+        var visible = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.ToDictionary(item => item.WorkOrderNo);
+        Assert.Equal(("机构丙", "机构甲", "PENDING_NOTICE"),
+            (visible["SAME"].MechanicalOwner, visible["SAME"].MechanicalSection, visible["SAME"].SendStatus));
+        Assert.Equal((null, "SENT"), (visible["NO-LEADER"].MechanicalSection, visible["NO-LEADER"].SendStatus));
+
+        // A notice containing the new supervisor becomes the baseline for the next sync.
+        ulong[] same = [visible["SAME"].Id];
+        var resend = await mails.PreviewAsync(buyer, new(same), ct);
+        await mails.SendAsync(buyer, new(same, resend.Fingerprint, "supervisor-updated-notice", null), ct);
+        await sync.SyncNowAsync(buyer, new(ids), ct);
+        queue = (await items.ListAsync(buyer, Query(false) with { SendQueue = true }, 1, 20, 0, ct)).List;
+        Assert.Equal(["CLEARED", "DIFFERENT"], queue.Select(item => item.WorkOrderNo).Order(StringComparer.Ordinal));
     }
 
     [Fact(Timeout = 180_000)]

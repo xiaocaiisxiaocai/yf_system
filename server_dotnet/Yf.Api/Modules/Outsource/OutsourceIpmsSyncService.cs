@@ -194,29 +194,27 @@ public sealed class OutsourceIpmsSyncService(
         return new(processed, changed, closed, missing, error);
     }
 
-    // When the owner is hidden, a change to that owner may still affect the supervisor shown to the vendor.
+    // A vendor-visible supervisor can change when the directory changes, even if IPMS returns the same owner.
     private static async Task<HashSet<ulong>> SupervisorNoticesAsync(YfDbContext context, OutsourceItem[] batch,
         IReadOnlyDictionary<string, IpmsWorkOrder> orders, IReadOnlySet<string> vendorKeys, CancellationToken ct)
     {
         const string supervisorKey = "mechanicalSection";
-        if (!vendorKeys.Contains(supervisorKey) || vendorKeys.Contains("mechanicalOwner")) return [];
-        var changes = new List<(OutsourceItem Item, string? NextOwner)>();
+        if (!vendorKeys.Contains(supervisorKey)) return [];
+        var sentItems = new List<(OutsourceItem Item, string? NextOwner)>();
         foreach (var item in batch)
         {
             if (item.SendStatus != OutsourceSendStatuses.Sent || !orders.TryGetValue(item.WorkOrderNo, out var order)) continue;
-            var owner = OutsourceItemService.MechanicalOwnerOf(order);
-            if (owner != item.MechanicalOwner) changes.Add((item, owner));
+            sentItems.Add((item, OutsourceItemService.MechanicalOwnerOf(order)));
         }
-        var owners = changes.Select(x => x.Item.MechanicalOwner).Concat(changes.Select(x => x.NextOwner));
+        var owners = sentItems.Select(x => x.Item.MechanicalOwner).Concat(sentItems.Select(x => x.NextOwner));
         var supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, owners, ct);
         string? SupervisorOf(string? owner) => owner is null ? null : supervisors.GetValueOrDefault(owner);
 
         var notices = new HashSet<ulong>();
-        foreach (var (item, nextOwner) in changes)
+        foreach (var (item, nextOwner) in sentItems)
         {
             var snapshot = OutsourceChangeMarks.LastNoticeValues(item);
-            var before = snapshot is not null && snapshot.TryGetValue(supervisorKey, out var sent)
-                ? sent : SupervisorOf(item.MechanicalOwner);
+            var before = snapshot is null ? SupervisorOf(item.MechanicalOwner) : snapshot.GetValueOrDefault(supervisorKey);
             if (before != SupervisorOf(nextOwner)) notices.Add(item.Id);
         }
         return notices;
@@ -236,7 +234,7 @@ public sealed class OutsourceIpmsSyncService(
             new AuditChange("electricalOwner", "", item.ElectricalOwner, next.ElectricalOwner),
             new AuditChange("workOrderIssuedOn", "", item.WorkOrderIssuedOn, next.WorkOrderIssuedOn),
             new AuditChange("quantity", "", item.Quantity, next.Quantity));
-        var changed = changes.Length > 0;
+        var changed = supervisorNotice || changes.Length > 0;
         // IPMS supplies only the original due date, once; the latest due date is purchasing's, so a sync never moves it
         // (it is only filled in when it was empty).
         var originalDue = item.OriginalDueDate ?? order.DueDate;
@@ -268,7 +266,7 @@ public sealed class OutsourceIpmsSyncService(
                 .SetProperty(x => x.IpmsSyncedAt, now).SetProperty(x => x.OriginalDueDate, originalDue)
                 .SetProperty(x => x.LatestDueDate, latestDue).SetProperty(x => x.ClosedAt, closedAt).SetProperty(x => x.UpdatedAt, x => x.UpdatedAt), ct);
         }
-        if (updated > 0 && changed)
+        if (updated > 0 && changes.Length > 0)
         {
             OutsourceHistory.Add(context, item.Id, changes, source, actorId);
             await context.SaveChangesAsync(ct);
