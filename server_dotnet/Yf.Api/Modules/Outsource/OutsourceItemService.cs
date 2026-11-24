@@ -921,11 +921,18 @@ internal static class OutsourceWorkbook
     internal static Dictionary<string, string?> Snapshot(OutsourceItemResponse item, IReadOnlyList<Field> fields) =>
         fields.ToDictionary(field => field.Key, field => field.Value(item), StringComparer.Ordinal);
 
+    /// <summary>
+    /// Stored by migration in place of the 机构课别 name that snapshots held before the column became 上级主管: no real baseline,
+    /// so it never counts as a change and the next IPMS sync replaces it with the current supervisor.
+    /// </summary>
+    internal const string LegacyBaseline = "~legacy-section~";
+
     /// <summary>Keys whose value differs from the snapshot; empty when there is no snapshot.</summary>
     internal static IReadOnlySet<string> Changed(OutsourceItemResponse item, IReadOnlyDictionary<string, string?>? snapshot, IReadOnlyList<Field> fields)
     {
         if (snapshot is null) return new HashSet<string>(StringComparer.Ordinal);
-        return fields.Where(field => !snapshot.TryGetValue(field.Key, out var before) || before != field.Value(item))
+        return fields.Where(field => !snapshot.TryGetValue(field.Key, out var before)
+                || (before != field.Value(item) && before != LegacyBaseline))
             .Select(field => field.Key).ToHashSet(StringComparer.Ordinal);
     }
 
