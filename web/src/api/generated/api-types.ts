@@ -1371,6 +1371,22 @@ export interface OutsourceItemChangeResponse {
   signerName: string | null
 }
 
+export interface OutsourceItemFileResponse {
+  fileId: number
+  transferId: number
+  name: string
+  sizeBytes: number
+  direction: string
+  vendorName: string
+  sentAt: string
+  state: string
+}
+
+export interface OutsourceItemFilesResponse {
+  canOpen: boolean
+  files: Array<OutsourceItemFileResponse>
+}
+
 export interface OutsourceItemResponse {
   id: number
   serialNo: number
@@ -1409,6 +1425,8 @@ export interface OutsourceItemResponse {
   modifiedAt: string | null
   customerFullName: string | null
   customValues: Record<string, string | null> | null
+  fileCount: number
+  purgedFileCount: number
 }
 
 export interface OutsourceItemUpdate {
@@ -1601,6 +1619,8 @@ export interface OutsourceVendorRow {
   closed: boolean
   electricalHandoff: boolean
   values: Record<string, string | null>
+  fileCount: number
+  purgedFileCount: number
 }
 
 export interface PageResponseOfAuditLogResponse {
@@ -2437,6 +2457,7 @@ export interface ApiResponses {
   "GET /oem/outsource-items": OutsourceVendorPageResponse
   "GET /oem/outsource-items/export": Blob
   "POST /oem/outsource-items/{id}/electrical-handoff": OutsourceVendorRow
+  "GET /oem/outsource-items/{id}/files": OutsourceItemFilesResponse
   "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>
   "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
   "POST /oem/retention-templates": OemRetentionTemplateResponse
@@ -2470,6 +2491,7 @@ export interface ApiResponses {
   "POST /outsource/items/sync": OutsourceSyncStatusResponse
   "PUT /outsource/items/{id}": OutsourceItemResponse
   "GET /outsource/items/{id}/changes": Array<OutsourceItemChangeResponse>
+  "GET /outsource/items/{id}/files": OutsourceItemFilesResponse
   "GET /outsource/mails": PageResponseOfOutsourceMailResponse
   "POST /outsource/mails/preview": OutsourceMailPreviewResponse
   "POST /outsource/mails/send": OutsourceMailSendResponse

@@ -8180,6 +8180,46 @@
         }
       }
     },
+    "/api/v1/oem/outsource-items/{id}/files": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceItemFilesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/oem/outsource-items/{id}/electrical-handoff": {
       "post": {
         "tags": [
@@ -9706,6 +9746,46 @@
                   "items": {
                     "$ref": "#/components/schemas/OutsourceItemChangeResponse"
                   }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/items/{id}/files": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceItemFilesResponse"
                 }
               }
             }
@@ -15938,6 +16018,69 @@
         },
         "additionalProperties": false
       },
+      "OutsourceItemFileResponse": {
+        "required": [
+          "direction",
+          "fileId",
+          "name",
+          "sentAt",
+          "sizeBytes",
+          "state",
+          "transferId",
+          "vendorName"
+        ],
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "transferId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "vendorName": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceItemFilesResponse": {
+        "required": [
+          "canOpen",
+          "files"
+        ],
+        "type": "object",
+        "properties": {
+          "canOpen": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceItemFileResponse"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "OutsourceItemResponse": {
         "required": [
           "bomOn",
@@ -15951,6 +16094,7 @@
           "electricalHandoffAt",
           "electricalHandoffSigner",
           "electricalOwner",
+          "fileCount",
           "id",
           "importedAt",
           "importedBy",
@@ -15963,6 +16107,7 @@
           "modifiedBy",
           "originalDueDate",
           "outsourceDate",
+          "purgedFileCount",
           "quantity",
           "remark",
           "sendStatus",
@@ -16138,6 +16283,14 @@
               "nullable": true
             },
             "nullable": true
+          },
+          "fileCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "purgedFileCount": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false
@@ -16909,7 +17062,9 @@
         "required": [
           "closed",
           "electricalHandoff",
+          "fileCount",
           "id",
+          "purgedFileCount",
           "status",
           "values"
         ],
@@ -16934,6 +17089,14 @@
               "type": "string",
               "nullable": true
             }
+          },
+          "fileCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "purgedFileCount": {
+            "type": "integer",
+            "format": "int32"
           }
         },
         "additionalProperties": false

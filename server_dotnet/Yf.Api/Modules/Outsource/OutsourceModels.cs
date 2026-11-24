@@ -57,7 +57,8 @@ public sealed record OutsourceItemResponse(
     string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt,
     bool ElectricalHandoff, DateTime? ElectricalHandoffAt, string? ElectricalHandoffSigner,
     string[]? ChangedFields = null, string? ImportedBy = null, DateTime? ImportedAt = null, string? ModifiedBy = null, DateTime? ModifiedAt = null,
-    string? CustomerFullName = null, IReadOnlyDictionary<string, string?>? CustomValues = null);
+    string? CustomerFullName = null, IReadOnlyDictionary<string, string?>? CustomValues = null,
+    int FileCount = 0, int PurgedFileCount = 0);
 
 // Customer is the short name from the 客户简称 table when there is one; CustomerFullName is always IPMS's full name.
 // ImportedBy/At: who imported the row and when; ModifiedBy/At: who last edited it by hand (never IPMS syncs or sending).

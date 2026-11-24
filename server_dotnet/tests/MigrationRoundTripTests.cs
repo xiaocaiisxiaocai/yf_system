@@ -22,7 +22,8 @@ public sealed class MigrationRoundTripTests
     private const string BeforeMechanicalSupervisor = "20261124010000_AddOutsourceElectricalHandoff";
     private const string RenameSupervisor = "20261124032519_RenameOutsourceMechanicalSupervisor";
     private const string BeforeOutsourceTransferLink = "20261124075430_RestoreOutsourceSectionLabel";
-    private const string Latest = "20261124083731_AddOutsourceTransferLink";
+    private const string BeforeOutsourceFilesField = "20261124083731_AddOutsourceTransferLink";
+    private const string Latest = "20261124093646_AddOutsourceFilesField";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -117,7 +118,7 @@ public sealed class MigrationRoundTripTests
         var beforeSchema = await SchemaAsync(database, ct);
         var beforeData = await ReferenceDataAsync(database, ct);
 
-        await migrator.MigrateAsync(cancellationToken: ct);
+        await migrator.MigrateAsync(BeforeOutsourceFilesField, ct);
         await using (var connection = await database.Database.OpenAsync(ct))
         {
             var column = await connection.QuerySingleOrDefaultAsync<(string Type, string Nullable)>(new CommandDefinition("""
@@ -155,6 +156,41 @@ public sealed class MigrationRoundTripTests
         await migrator.MigrateAsync(BeforeOutsourceTransferLink, ct);
         Assert.Equal(beforeSchema, await SchemaAsync(database, ct));
         Assert.Equal(beforeData, await ReferenceDataAsync(database, ct));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AddOutsourceFilesFieldInsertsTheColumnAfterWorkOrder()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_files_field", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(BeforeOutsourceFilesField, ct);
+        // Exercise an upgraded database with a previously customised order, including a tie.
+        await database.ExecuteAsync("UPDATE outsource_fields SET sort_no=204 WHERE field_key IN ('workOrderNo','customer')", ct);
+
+        async Task<string[]> KeysAsync()
+        {
+            await using var conn = await database.Database.OpenAsync(ct);
+            return (await conn.QueryAsync<string>("SELECT field_key FROM outsource_fields ORDER BY sort_no,id")).ToArray();
+        }
+
+        var before = await KeysAsync();
+        await migrator.MigrateAsync(Latest, ct);
+        var after = await KeysAsync();
+        Assert.Equal(before.ToList().IndexOf("workOrderNo") + 1, Array.IndexOf(after, "files"));
+        Assert.Equal(before, after.Where(x => x != "files"));
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal((true, "档案", "TEXT", "ACTIVE", true, false, "NONE"),
+                await conn.QuerySingleAsync<(bool, string, string, string, bool, bool, string)>("""
+                    SELECT built_in,label,data_type,status,vendor_visible,vendor_editable,editor_scope
+                    FROM outsource_fields WHERE field_key='files'
+                    """));
+        }
+
+        await migrator.MigrateAsync(BeforeOutsourceFilesField, ct);
+        Assert.Equal(before, await KeysAsync());
     }
 
     [Fact(Timeout = 180_000)]
@@ -231,6 +267,7 @@ public sealed class MigrationRoundTripTests
         // + CorrectOutsourceDueDatesFromCustomerDate (data only; Down keeps the corrected due dates).
         // + AddOutsourceElectricalHandoff (Down drops handoff fields and default CC module assignments).
         // + AddOutsourceTransferLink (Down drops the link and the outsource:file_view permission and grant).
+        // + AddOutsourceFilesField (Down removes the files column from the field catalog).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);

@@ -87,7 +87,7 @@ public sealed class OutsourceFieldTests
         await using var _ = f.Database;
 
         var settings = await f.Fields.SettingsAsync(f.Admin, ct);
-        Assert.Equal(["outsourceDate", "status", "electricalHandoff", "workOrderNo", "customer", "machineModel", "hasRobotV", "type", "vendor",
+        Assert.Equal(["outsourceDate", "status", "electricalHandoff", "workOrderNo", "files", "customer", "machineModel", "hasRobotV", "type", "vendor",
                 "supervisor", "mechanicalOwner", "electricalOwner", "workOrderIssuedOn", "bomOn", "drawingReleasedOn",
                 "originalDueDate", "latestDueDate", "quantity", "remark"],
             settings.Fields.Select(x => x.Key));

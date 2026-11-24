@@ -89,6 +89,7 @@ public sealed class SchemaShapeTests
         "20261124060404_RenameOutsourceSupervisorKey",
         "20261124075430_RestoreOutsourceSectionLabel",
         "20261124083731_AddOutsourceTransferLink",
+        "20261124093646_AddOutsourceFilesField",
     ];
 
     [Fact]
