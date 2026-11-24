@@ -333,6 +333,12 @@ export default function OutsourceListPage() {
   const builtIn: Record<string, Partial<TableColumnProps<Item>>> = {
     outsourceDate: { dataIndex: 'outsourceDate', width: 110 },
     status: { width: 80, align: 'center', render: (_, item) => <Tag color={STATUS_TAG[item.status]?.color}>{STATUS_TAG[item.status]?.label ?? item.status}</Tag> },
+    electricalHandoff: {
+      width: 150, align: 'center',
+      render: (_, item) => item.electricalHandoff
+        ? <Tooltip content={`签名：${item.electricalHandoffSigner ?? '—'}　时间：${fmtTime(item.electricalHandoffAt)}`}><span tabIndex={0}>是</span></Tooltip>
+        : '否',
+    },
     workOrderNo: { dataIndex: 'workOrderNo', width: 110 },
     customer: {
       dataIndex: 'customer', width: 150, ellipsis: true,

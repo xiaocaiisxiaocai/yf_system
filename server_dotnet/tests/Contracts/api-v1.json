@@ -167,6 +167,7 @@
   "POST /api/v1/oem/files/{}/download-sessions",
   "POST /api/v1/oem/flow-templates",
   "POST /api/v1/oem/internal-recipients/restore",
+  "POST /api/v1/oem/outsource-items/{}/electrical-handoff",
   "POST /api/v1/oem/retention-templates",
   "POST /api/v1/oem/transfers",
   "POST /api/v1/oem/transfers/{}/cancel",

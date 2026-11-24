@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
@@ -6,21 +7,22 @@ using Yf.Api.Modules.Oem.Common;
 
 namespace Yf.Api.Modules.Outsource;
 
-/// <summary>One column of the vendor view, in the order of the vendor Excel attachment.</summary>
+/// <summary>One column of the vendor list and export.</summary>
 public sealed record OutsourceVendorColumn(string Key, string Title);
 
-/// <summary>One outsourcing record as its vendor sees it: the attachment's cells by column key, plus the status for row colour.</summary>
-public sealed record OutsourceVendorRow(ulong Id, string Status, bool Closed, IReadOnlyDictionary<string, string?> Values);
+/// <summary>One outsourcing record as its vendor sees it, with display values and the handoff state.</summary>
+public sealed record OutsourceVendorRow(ulong Id, string Status, bool Closed, bool ElectricalHandoff, IReadOnlyDictionary<string, string?> Values);
 
 public sealed record OutsourceVendorPageResponse(
     OutsourceVendorColumn[] Columns, IReadOnlyList<OutsourceVendorRow> List, ulong Total, ulong Page, uint PageSize);
 
+public sealed record OutsourceElectricalHandoffRequest(
+    [property: JsonRequired] bool Handoff, [property: JsonRequired] bool Expected, string? SignerName);
+
 /// <summary>
-/// The outsourcing list in the ODM/OEMA vendor portal (外协清单契约 → 厂商查看): an ODM/OEMA account reads, never writes, the
-/// current records whose vendor is its own company, with the columns the field settings show to vendors (the same as the
-/// vendor Excel attachment). Internal staff use the outsourcing module itself. Vendors filling columns in is reserved.
+/// The outsourcing list and electrical handoff action in the ODM/OEMA portal. Vendors access records assigned to their company.
 /// </summary>
-public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> dbFactory)
+public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> dbFactory, OemAuditWriter audit, OutsourceMailSignal mailSignal)
 {
     internal const string SerialKey = "serialNo";
 
@@ -34,11 +36,11 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         await reference.LoadValuesAsync(db, rows.Select(x => x.Id).ToArray(), ct);
         OutsourceVendorColumn[] columns =
             [new(SerialKey, "序号"), .. reference.Layout.VendorColumns.Select(column => new OutsourceVendorColumn(column.Key, column.Label))];
-        return new(columns, rows.Select(item => Row(reference, item)).ToArray(), total, page, size);
+        return new(columns, rows.Select(item => Row(reference.Layout, reference.Json(item))).ToArray(), total, page, size);
     }
 
     /// <summary>
-    /// The records the list shows with the same keyword and completed filter, all pages, as the vendor Excel attachment
+    /// The records the list shows with the same keyword and completed filter, all pages
     /// (vendor columns, rows coloured by status, no yellow change marks).
     /// </summary>
     public async Task<OutsourceExport> ExportAsync(OemActor actor, HttpRequest request, CancellationToken ct)
@@ -53,6 +55,48 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
             reference.Layout.WorkbookFields(vendor: true), forVendor: true);
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         return new(content, $"外协清单_{today}.xlsx");
+    }
+
+    public async Task<OutsourceVendorRow> SetElectricalHandoffAsync(
+        OemActor actor, ulong id, OutsourceElectricalHandoffRequest request, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
+        if (await OemAuthorizer.RecheckAsync(uow, actor, ct) is not OemAccountActor account)
+            throw ApiException.Forbidden("仅外发厂商可以操作");
+
+        var db = uow.Db;
+        var item = await db.OutsourceItems
+            .FromSqlInterpolated($"SELECT * FROM outsource_items WHERE id={id} AND vendor_id={account.CompanyId} FOR UPDATE")
+            .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound("外协记录不存在或已被删除");
+        if (item.ClosedAt is not null) throw ApiException.BadRequest("已完成的记录不能操作");
+        if (item.ElectricalHandoff != request.Expected)
+            throw ApiException.VersionConflict("数据已被他人修改，请刷新后重试");
+        if (request.Handoff == request.Expected) throw ApiException.BadRequest("请选择不同的转交状态");
+
+        var signer = request.SignerName?.Trim();
+        if (string.IsNullOrEmpty(signer)) throw ApiException.BadRequest("请填写签名（操作人姓名）");
+        if (signer.EnumerateRunes().Count() > 32) throw ApiException.BadRequest("签名不能超过 32 个字符");
+
+        var now = await uow.RefreshNowAsync(ct);
+        var change = new AuditChange(OutsourceBuiltInFields.ElectricalHandoffKey, OutsourceBuiltInFields.ElectricalHandoffLabel,
+            OutsourceBuiltInFields.YesNo(item.ElectricalHandoff), OutsourceBuiltInFields.YesNo(request.Handoff));
+        item.ElectricalHandoff = request.Handoff;
+        item.ElectricalHandoffAt = now;
+        item.ElectricalHandoffSigner = signer;
+        OutsourceHistory.Add(db, item.Id, [change], OutsourceHistory.Vendor, null, account.AccountId, signer);
+        await db.SaveChangesAsync(ct);
+
+        var reference = await OutsourceReference.LoadAsync(db, ct);
+        await reference.LoadValuesAsync(db, [id], ct);
+        var updated = reference.Json(item);
+        var response = Row(reference.Layout, updated);
+        var mailQueued = await OutsourceMailService.QueueElectricalHandoffAsync(db, updated, account.AccountId, signer, now, ct);
+        await audit.WriteAsync(uow, account,
+            request.Handoff ? "OUTSOURCE_ELECTRICAL_HANDOFF" : "OUTSOURCE_ELECTRICAL_HANDOFF_WITHDRAW",
+            "outsource_item", item.Id, new { targetName = item.WorkOrderNo, signerName = signer, mailQueued, changes = new[] { change } }, ct);
+        await uow.CommitAsync(ct);
+        if (mailQueued) mailSignal.Wake();
+        return response;
     }
 
     private static async Task<(YfDbContext Db, OutsourceReference Reference, IQueryable<OutsourceItem> Items)> FilteredAsync(
@@ -79,12 +123,11 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         return (db, reference, items);
     }
 
-    private static OutsourceVendorRow Row(OutsourceReference reference, OutsourceItem item)
+    private static OutsourceVendorRow Row(OutsourceFieldLayout layout, OutsourceItemResponse item)
     {
-        var response = reference.Json(item);
         var values = new Dictionary<string, string?>(StringComparer.Ordinal)
             { [SerialKey] = item.SerialNo.ToString(CultureInfo.InvariantCulture) };
-        foreach (var column in reference.Layout.VendorColumns) values[column.Key] = column.Value(response);
-        return new(item.Id, item.Status, item.ClosedAt is not null, values);
+        foreach (var column in layout.VendorColumns) values[column.Key] = column.Value(item);
+        return new(item.Id, item.Status, item.Closed, item.ElectricalHandoff, values);
     }
 }

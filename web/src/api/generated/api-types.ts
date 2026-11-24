@@ -1215,8 +1215,28 @@ export interface OutsourceDateImportRow {
   drawingReleasedOn?: string | null
 }
 
+export interface OutsourceDefaultCcEntry {
+  userId: number
+  modules?: Array<string> | null
+}
+
 export interface OutsourceDefaultCcRequest {
-  userIds?: Array<number> | null
+  entries?: Array<OutsourceDefaultCcEntry> | null
+}
+
+export interface OutsourceDefaultCcResponse {
+  userId: number
+  employeeNo: string
+  realName: string
+  email: string
+  status: string
+  modules: Array<string>
+}
+
+export interface OutsourceElectricalHandoffRequest {
+  handoff: boolean
+  expected: boolean
+  signerName?: string | null
 }
 
 export interface OutsourceExtraCc {
@@ -1369,6 +1389,9 @@ export interface OutsourceItemResponse {
   closed: boolean
   ipmsSyncedAt: string | null
   updatedAt: string
+  electricalHandoff: boolean
+  electricalHandoffAt: string | null
+  electricalHandoffSigner: string | null
   changedFields: Array<string> | null
   importedBy: string | null
   importedAt: string | null
@@ -1566,6 +1589,7 @@ export interface OutsourceVendorRow {
   id: number
   status: string
   closed: boolean
+  electricalHandoff: boolean
   values: Record<string, string | null>
 }
 
@@ -2401,6 +2425,7 @@ export interface ApiResponses {
   "PUT /oem/notify-policies": Array<OemSettingResponse>
   "GET /oem/outsource-items": OutsourceVendorPageResponse
   "GET /oem/outsource-items/export": Blob
+  "POST /oem/outsource-items/{id}/electrical-handoff": OutsourceVendorRow
   "GET /oem/retention-template-options": Array<OemRetentionTemplateResponse>
   "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
   "POST /oem/retention-templates": OemRetentionTemplateResponse
@@ -2457,8 +2482,8 @@ export interface ApiResponses {
   "POST /outsource/settings/customers/sync": OutsourceCustomerSyncResponse
   "DELETE /outsource/settings/customers/{id}": EmptyResponse
   "PUT /outsource/settings/customers/{id}": OutsourceCustomerAliasResponse
-  "GET /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
-  "PUT /outsource/settings/default-cc": Array<OutsourceCcUserResponse>
+  "GET /outsource/settings/default-cc": Array<OutsourceDefaultCcResponse>
+  "PUT /outsource/settings/default-cc": Array<OutsourceDefaultCcResponse>
   "GET /outsource/settings/fields": OutsourceFieldSettingsResponse
   "PUT /outsource/settings/fields/order": OutsourceFieldSettingsResponse
   "PUT /outsource/settings/fields/{id}": OutsourceFieldSettingsResponse

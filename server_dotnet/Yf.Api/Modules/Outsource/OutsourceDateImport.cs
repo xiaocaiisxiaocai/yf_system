@@ -61,7 +61,7 @@ public sealed class OutsourceDateImportService(IDbContextFactory<YfDbContext> db
         var ready = planned.Where(x => x.Status == "READY").ToArray();
         if (ready.Length > 0)
         {
-            var vendorKeys = (await OutsourceFieldLayout.LoadAsync(context, ct)).VendorKeys;
+            var vendorKeys = (await OutsourceFieldLayout.LoadAsync(context, ct)).NoticeKeys;
             var modifiedAt = await DbClock.UtcNowAsync(context, ct, 3);
             foreach (var row in ready)
             {
