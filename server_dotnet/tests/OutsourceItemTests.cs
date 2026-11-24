@@ -118,7 +118,7 @@ public sealed class OutsourceItemTests
             VALUES (8701,'机构测试课','SECTION',1,'ACTIVE',9713,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
             UPDATE users SET real_name='机构甲',department_id=8701 WHERE id=9711;
             UPDATE outsource_items SET mechanical_section='历史机构测试课';
-            UPDATE outsource_items SET mechanical_owner='未匹配人员' WHERE work_order_no='21089902';
+            UPDATE outsource_items SET mechanical_owner=NULL,electrical_owner='机构甲' WHERE work_order_no='21089902';
             """, ct);
         // List, filters and tab counts.
         var all = await service.ListAsync(viewer, Query(), 1, 20, 0, ct);

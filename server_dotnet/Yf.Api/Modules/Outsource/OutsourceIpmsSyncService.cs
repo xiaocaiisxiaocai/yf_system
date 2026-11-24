@@ -152,13 +152,14 @@ public sealed class OutsourceIpmsSyncService(
                 try { found = await ipms.LookupAsync(batch.Select(x => x.WorkOrderNo).ToArray(), ct); }
                 catch (IpmsUnavailableException unavailable) { error = unavailable.Message; break; }
                 var byNo = found.Values.ToDictionary(x => x.WorkOrderNo, StringComparer.OrdinalIgnoreCase);
+                var supervisorNotices = await SupervisorNoticesAsync(context, batch, byNo, vendorKeys, ct);
                 var now = await DbClock.UtcNowAsync(context, ct, 3);
                 foreach (var item in batch)
                 {
                     processed++;
                     if (!byNo.TryGetValue(item.WorkOrderNo, out var order)) { missing++; continue; }
                     var result = await ApplyAsync(context, item, order, now,
-                        trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, vendorKeys, ct);
+                        trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, vendorKeys, supervisorNotices.Contains(item.Id), ct);
                     if (result.Changed) changed++;
                     if (result.Closed) closed++;
                 }
@@ -193,10 +194,38 @@ public sealed class OutsourceIpmsSyncService(
         return new(processed, changed, closed, missing, error);
     }
 
+    // When the owner is hidden, a change to that owner may still affect the supervisor shown to the vendor.
+    private static async Task<HashSet<ulong>> SupervisorNoticesAsync(YfDbContext context, OutsourceItem[] batch,
+        IReadOnlyDictionary<string, IpmsWorkOrder> orders, IReadOnlySet<string> vendorKeys, CancellationToken ct)
+    {
+        const string supervisorKey = "mechanicalSection";
+        if (!vendorKeys.Contains(supervisorKey) || vendorKeys.Contains("mechanicalOwner")) return [];
+        var changes = new List<(OutsourceItem Item, string? NextOwner)>();
+        foreach (var item in batch)
+        {
+            if (item.SendStatus != OutsourceSendStatuses.Sent || !orders.TryGetValue(item.WorkOrderNo, out var order)) continue;
+            var owner = OutsourceItemService.MechanicalOwnerOf(order);
+            if (owner != item.MechanicalOwner) changes.Add((item, owner));
+        }
+        var owners = changes.Select(x => x.Item.MechanicalOwner).Concat(changes.Select(x => x.NextOwner));
+        var supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, owners, ct);
+        string? SupervisorOf(string? owner) => owner is null ? null : supervisors.GetValueOrDefault(owner);
+
+        var notices = new HashSet<ulong>();
+        foreach (var (item, nextOwner) in changes)
+        {
+            var snapshot = OutsourceChangeMarks.LastNoticeValues(item);
+            var before = snapshot is not null && snapshot.TryGetValue(supervisorKey, out var sent)
+                ? sent : SupervisorOf(item.MechanicalOwner);
+            if (before != SupervisorOf(nextOwner)) notices.Add(item.Id);
+        }
+        return notices;
+    }
+
     private sealed record ItemResult(bool Changed, bool Closed);
 
     private static async Task<ItemResult> ApplyAsync(YfDbContext context, OutsourceItem item, IpmsWorkOrder order, DateTime now,
-        string source, ulong? actorId, IReadOnlySet<string> vendorKeys, CancellationToken ct)
+        string source, ulong? actorId, IReadOnlySet<string> vendorKeys, bool supervisorNotice, CancellationToken ct)
     {
         var next = new OutsourceItem();
         OutsourceItemService.ApplyIpms(next, order, now);
@@ -221,7 +250,7 @@ public sealed class OutsourceIpmsSyncService(
         if (changed)
         {
             // A sent item with new IPMS data the vendor sees waits for purchasing to notify the vendor; nothing is mailed here.
-            var noticeNeeded = changes.Any(x => vendorKeys.Contains(x.Field));
+            var noticeNeeded = supervisorNotice || changes.Any(x => vendorKeys.Contains(x.Field));
             var sendStatus = noticeNeeded && item.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : item.SendStatus;
             updated = await row.ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.Customer, next.Customer).SetProperty(x => x.MachineModel, next.MachineModel)

@@ -243,12 +243,14 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     {
         item.Customer = Cut(order.Customer, 128);
         item.MachineModel = Cut(order.MachineModel, 128);
-        item.MechanicalOwner = Cut(order.MechanicalOwner, 64);
+        item.MechanicalOwner = MechanicalOwnerOf(order);
         item.ElectricalOwner = Cut(order.ElectricalOwner, 64);
         item.WorkOrderIssuedOn = order.WorkOrderIssuedOn;
         item.Quantity = order.Quantity;
         item.IpmsSyncedAt = syncedAt;
     }
+
+    internal static string? MechanicalOwnerOf(IpmsWorkOrder order) => Cut(order.MechanicalOwner, 64);
 
     private static string? Cut(string? value, int max)
     {
@@ -886,13 +888,16 @@ internal static class OutsourceChangeMarks
     /// </summary>
     internal static OutsourceItemResponse Marked(this OutsourceItemResponse response, OutsourceItem item, OutsourceFieldLayout layout)
     {
-        if (item.NotifiedVendorId != item.VendorId || item.LastSentSnapshot is not { } json) return response;
-        try
-        {
-            var snapshot = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string?>>(json);
-            return response with { ChangedFields = [.. OutsourceWorkbook.Changed(response, snapshot, layout.MailWorkbookFields())] };
-        }
-        catch (System.Text.Json.JsonException) { return response; }
+        var snapshot = LastNoticeValues(item);
+        return snapshot is null ? response
+            : response with { ChangedFields = [.. OutsourceWorkbook.Changed(response, snapshot, layout.MailWorkbookFields())] };
+    }
+
+    internal static Dictionary<string, string?>? LastNoticeValues(OutsourceItem item)
+    {
+        if (item.NotifiedVendorId != item.VendorId || item.LastSentSnapshot is not { } json) return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string?>>(json); }
+        catch (System.Text.Json.JsonException) { return null; }
     }
 }
 

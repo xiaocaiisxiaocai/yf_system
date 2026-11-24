@@ -154,6 +154,66 @@ public sealed class OutsourceSyncTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task HiddenMechanicalOwnerOnlyQueuesSentItemsWhoseVisibleSupervisorChanges()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("sync_supervisor", ct);
+        await database.InitializeAsync(ct);
+        await database.ExecuteAsync("""
+            UPDATE users SET must_change_password=0 WHERE employee_no='admin';
+            UPDATE outsource_fields SET vendor_visible=(field_key='mechanicalSection')
+              WHERE field_key IN ('mechanicalOwner','electricalOwner','mechanicalSection');
+            INSERT INTO departments(id,name,kind,sort_no,status,created_at,updated_at) VALUES
+              (9001,'机构一组','DIVISION',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9002,'机构二组','DIVISION',2,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9911,'sync_leader_a','unused','甲主管','a@example.invalid','INTERNAL',9001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9912,'sync_leader_b','unused','乙主管','b@example.invalid','INTERNAL',9002,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9913,'sync_owner_a','unused','机构甲','','INTERNAL',9001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9914,'sync_owner_b','unused','机构乙','','INTERNAL',9002,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9915,'sync_owner_c','unused','机构丙','','INTERNAL',9001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            UPDATE departments SET leader_account_id=9911 WHERE id=9001;
+            UPDATE departments SET leader_account_id=9912 WHERE id=9002;
+            """, ct);
+        var buyer = new CurrentUser(1, "admin", "INTERNAL", null);
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var audit = new AuditService([]);
+        var ipms = new StubIpms();
+        var items = new OutsourceItemService(factory, audit, ipms);
+        var sync = new OutsourceIpmsSyncService(factory, audit, ipms, new AppOptions(), NullLogger<OutsourceIpmsSyncService>.Instance);
+        var mails = new OutsourceMailService(factory, audit, new OutsourceMailSignal());
+        var settings = new OutsourceSettingsService(factory, audit);
+        var vendor = await OutsourceTestVendors.CreateAsync(factory, "主管同步测试厂", ct);
+        await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendor.Id, "vendor@example.invalid", ct);
+        var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料制造", 1), ct);
+        await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
+        string[] orders = ["DIFFERENT", "SAME", "CLEARED", "NO-LEADER"];
+        foreach (var no in orders) ipms.Add(no);
+        ipms.Orders["NO-LEADER"] = ipms.Orders["NO-LEADER"] with { MechanicalOwner = "未知人员" };
+        var imported = await items.ImportAsync(buyer, new(orders.Select((no, i) =>
+            new OutsourceImportRow(i + 2, "2026-11-04", no, vendor.Name, "OEMA")).ToArray()), ct);
+        Assert.Equal(orders.Length, imported.Created);
+        var before = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List;
+        Assert.All(before.Where(item => item.WorkOrderNo != "NO-LEADER"), item => Assert.Equal("甲主管", item.MechanicalSection));
+        var ids = before.Select(item => item.Id).ToArray();
+        var preview = await mails.PreviewAsync(buyer, new(ids), ct);
+        await mails.SendAsync(buyer, new(ids, preview.Fingerprint, "supervisor-first-notice", null), ct);
+
+        ipms.Orders["DIFFERENT"] = ipms.Orders["DIFFERENT"] with { MechanicalOwner = "机构乙" };
+        ipms.Orders["SAME"] = ipms.Orders["SAME"] with { MechanicalOwner = "机构丙" };
+        ipms.Orders["CLEARED"] = ipms.Orders["CLEARED"] with { MechanicalOwner = null, ElectricalOwner = "机构乙" };
+        ipms.Orders["NO-LEADER"] = ipms.Orders["NO-LEADER"] with { MechanicalOwner = null, ElectricalOwner = "机构乙" };
+        await sync.SyncNowAsync(buyer, new(ids), ct);
+        var after = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.ToDictionary(item => item.WorkOrderNo);
+        Assert.Equal(("乙主管", "PENDING_NOTICE"), (after["DIFFERENT"].MechanicalSection, after["DIFFERENT"].SendStatus));
+        Assert.Equal(("甲主管", "SENT"), (after["SAME"].MechanicalSection, after["SAME"].SendStatus));
+        Assert.Equal((null, "PENDING_NOTICE"), (after["CLEARED"].MechanicalSection, after["CLEARED"].SendStatus));
+        Assert.Equal((null, "SENT"), (after["NO-LEADER"].MechanicalSection, after["NO-LEADER"].SendStatus));
+        var queue = (await items.ListAsync(buyer, Query(false) with { SendQueue = true }, 1, 20, 0, ct)).List;
+        Assert.Equal(["CLEARED", "DIFFERENT"], queue.Select(item => item.WorkOrderNo).Order(StringComparer.Ordinal));
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task PurchasingMarksItemsCompletedAndCanReopenThem()
     {
         var ct = TestContext.Current.CancellationToken;
