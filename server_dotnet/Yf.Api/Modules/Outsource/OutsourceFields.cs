@@ -73,7 +73,7 @@ internal static class OutsourceBuiltInFields
         new("machineModel", OutsourceFieldCategories.Ipms, 14, x => x.MachineModel),
         new("type", OutsourceFieldCategories.Process, 24, x => x.TypeLabel ?? x.TypeCode),
         new("vendor", OutsourceFieldCategories.Process, 14, x => x.VendorName),
-        new("mechanicalSection", OutsourceFieldCategories.Ipms, 14, x => x.MechanicalSection),
+        new("supervisor", OutsourceFieldCategories.Ipms, 14, x => x.Supervisor),
         new("mechanicalOwner", OutsourceFieldCategories.Ipms, 12, x => x.MechanicalOwner),
         new("electricalOwner", OutsourceFieldCategories.Ipms, 12, x => x.ElectricalOwner),
         new("workOrderIssuedOn", OutsourceFieldCategories.Ipms, 12, x => Date(x.WorkOrderIssuedOn)),

@@ -20,7 +20,8 @@ public sealed class MigrationRoundTripTests
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
     private const string BeforeElectricalHandoff = "20261124003700_CorrectOutsourceDueDatesFromCustomerDate";
     private const string BeforeMechanicalSupervisor = "20261124010000_AddOutsourceElectricalHandoff";
-    private const string Latest = "20261124032519_RenameOutsourceMechanicalSupervisor";
+    private const string RenameSupervisor = "20261124032519_RenameOutsourceMechanicalSupervisor";
+    private const string Latest = "20261124060404_RenameOutsourceSupervisorKey";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -87,7 +88,7 @@ public sealed class MigrationRoundTripTests
         var before = await ReadFieldAsync();
         Assert.Equal("机构课别", before.Label);
 
-        await migrator.MigrateAsync(Latest, ct);
+        await migrator.MigrateAsync(RenameSupervisor, ct);
         Assert.Equal((before.Id, "上级主管", 321, false, "DISABLED"), await ReadFieldAsync());
         await migrator.MigrateAsync(BeforeMechanicalSupervisor, ct);
         Assert.Equal(before, await ReadFieldAsync());

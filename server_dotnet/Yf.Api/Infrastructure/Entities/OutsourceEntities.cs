@@ -85,7 +85,6 @@ public sealed class OutsourceItem
     public ulong VendorId { get; set; }
     public string? Customer { get; set; }
     public string? MachineModel { get; set; }
-    public string? MechanicalSection { get; set; }
     public string? MechanicalOwner { get; set; }
     public string? ElectricalOwner { get; set; }
     public DateOnly? WorkOrderIssuedOn { get; set; }
@@ -385,7 +384,6 @@ public sealed class OutsourceItemConfig : IEntityTypeConfiguration<OutsourceItem
         b.Property(x => x.VendorId).HasColumnName("vendor_id");
         b.Property(x => x.Customer).HasColumnName("customer").HasMaxLength(128);
         b.Property(x => x.MachineModel).HasColumnName("machine_model").HasMaxLength(128);
-        b.Property(x => x.MechanicalSection).HasColumnName("mechanical_section").HasMaxLength(64);
         b.Property(x => x.MechanicalOwner).HasColumnName("mechanical_owner").HasMaxLength(64);
         b.Property(x => x.ElectricalOwner).HasColumnName("electrical_owner").HasMaxLength(64);
         b.Property(x => x.WorkOrderIssuedOn).HasColumnName("work_order_issued_on").HasColumnType("date");

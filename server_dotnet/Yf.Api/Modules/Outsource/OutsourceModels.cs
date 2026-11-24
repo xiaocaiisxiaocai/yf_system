@@ -51,7 +51,7 @@ public sealed record OutsourceImportPreviewResponse(int Ready, int Skipped, int 
 
 public sealed record OutsourceItemResponse(
     ulong Id, uint SerialNo, string WorkOrderNo, DateOnly OutsourceDate, ulong VendorId, string VendorName,
-    string? Customer, string? MachineModel, string? MechanicalSection, string? MechanicalOwner, string? ElectricalOwner,
+    string? Customer, string? MachineModel, string? Supervisor, string? MechanicalOwner, string? ElectricalOwner,
     DateOnly? WorkOrderIssuedOn, DateOnly? BomOn, DateOnly? DrawingReleasedOn,
     string? TypeCode, ulong? TypeId, string? TypeLabel, int? Quantity, DateOnly? OriginalDueDate, DateOnly? LatestDueDate,
     string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt,

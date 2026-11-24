@@ -773,7 +773,11 @@ internal sealed class OutsourceReference
     {
         var missing = items.Where(item => !values.ContainsKey(item.Id)).ToArray();
         if (missing.Length == 0) return;
-        var supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, missing.Select(item => item.MechanicalOwner), ct);
+        // The directory lookup is only needed while the column is on; a disabled column is never shown, mailed or compared.
+        var showsSupervisor = Layout.Everything.Any(column => column.Key == "supervisor" && column.Active);
+        var supervisors = showsSupervisor
+            ? await MechanicalSupervisorDirectory.ResolveAsync(context, missing.Select(item => item.MechanicalOwner), ct)
+            : new Dictionary<string, string>();
         foreach (var item in missing)
         {
             var supervisor = item.MechanicalOwner is { } owner ? supervisors.GetValueOrDefault(owner) : null;
@@ -921,11 +925,18 @@ internal static class OutsourceWorkbook
     internal static Dictionary<string, string?> Snapshot(OutsourceItemResponse item, IReadOnlyList<Field> fields) =>
         fields.ToDictionary(field => field.Key, field => field.Value(item), StringComparer.Ordinal);
 
+    /// <summary>
+    /// Stored by migration in place of the 机构课别 name that snapshots held before the column became 上级主管: no real baseline,
+    /// so it never counts as a change and the next IPMS sync replaces it with the current supervisor.
+    /// </summary>
+    internal const string LegacyBaseline = "~legacy-section~";
+
     /// <summary>Keys whose value differs from the snapshot; empty when there is no snapshot.</summary>
     internal static IReadOnlySet<string> Changed(OutsourceItemResponse item, IReadOnlyDictionary<string, string?>? snapshot, IReadOnlyList<Field> fields)
     {
         if (snapshot is null) return new HashSet<string>(StringComparer.Ordinal);
-        return fields.Where(field => !snapshot.TryGetValue(field.Key, out var before) || before != field.Value(item))
+        return fields.Where(field => !snapshot.TryGetValue(field.Key, out var before)
+                || (before != field.Value(item) && before != LegacyBaseline))
             .Select(field => field.Key).ToHashSet(StringComparer.Ordinal);
     }
 
@@ -966,7 +977,7 @@ internal static class OutsourceHistory
     private static readonly Dictionary<string, string> Labels = new(StringComparer.Ordinal)
     {
         ["outsourceDate"] = "外发日期", ["vendor"] = "外发厂商", ["remark"] = "备注", ["status"] = "状态",
-        ["customer"] = "客户", ["machineModel"] = "机型", ["mechanicalSection"] = "上级主管",
+        ["customer"] = "客户", ["machineModel"] = "机型", ["supervisor"] = "上级主管",
         ["mechanicalOwner"] = "机构执行人", ["electricalOwner"] = "电控执行人", ["workOrderIssuedOn"] = "工令下发",
         ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
         ["latestDueDate"] = "最新交期", ["completed"] = "完成状态", ["sendStatus"] = "发送状态",

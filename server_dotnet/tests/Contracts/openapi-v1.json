@@ -15887,7 +15887,6 @@
           "machineModel",
           "matchState",
           "mechanicalOwner",
-          "mechanicalSection",
           "modifiedAt",
           "modifiedBy",
           "originalDueDate",
@@ -15897,6 +15896,7 @@
           "sendStatus",
           "serialNo",
           "status",
+          "supervisor",
           "typeCode",
           "typeId",
           "typeLabel",
@@ -15938,7 +15938,7 @@
             "type": "string",
             "nullable": true
           },
-          "mechanicalSection": {
+          "supervisor": {
             "type": "string",
             "nullable": true
           },

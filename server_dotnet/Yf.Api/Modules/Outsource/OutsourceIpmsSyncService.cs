@@ -198,7 +198,7 @@ public sealed class OutsourceIpmsSyncService(
     private static async Task<HashSet<ulong>> SupervisorNoticesAsync(YfDbContext context, OutsourceItem[] batch,
         IReadOnlyDictionary<string, IpmsWorkOrder> orders, IReadOnlySet<string> vendorKeys, CancellationToken ct)
     {
-        const string supervisorKey = "mechanicalSection";
+        const string supervisorKey = "supervisor";
         if (!vendorKeys.Contains(supervisorKey)) return [];
         var sentItems = new List<(OutsourceItem Item, string? NextOwner)>();
         foreach (var item in batch)
@@ -215,6 +215,15 @@ public sealed class OutsourceIpmsSyncService(
         {
             var snapshot = OutsourceChangeMarks.LastNoticeValues(item);
             var before = snapshot is null ? SupervisorOf(item.MechanicalOwner) : snapshot.GetValueOrDefault(supervisorKey);
+            if (snapshot is not null && before == OutsourceWorkbook.LegacyBaseline)
+            {
+                // A snapshot from before 上级主管 existed: adopt what the vendor was last told, i.e. the supervisor of the stored owner.
+                before = SupervisorOf(item.MechanicalOwner);
+                snapshot[supervisorKey] = before;
+                var rebased = System.Text.Json.JsonSerializer.Serialize(snapshot);
+                await context.OutsourceItems.Where(x => x.Id == item.Id && x.LastSentSnapshot == item.LastSentSnapshot)
+                    .ExecuteUpdateAsync(s => s.SetProperty(x => x.LastSentSnapshot, rebased).SetProperty(x => x.UpdatedAt, x => x.UpdatedAt), ct);
+            }
             if (before != SupervisorOf(nextOwner)) notices.Add(item.Id);
         }
         return notices;

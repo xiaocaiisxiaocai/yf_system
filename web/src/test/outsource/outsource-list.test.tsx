@@ -18,7 +18,7 @@ function setSession(permissions: string[]) {
 }
 
 const base = {
-  outsourceDate: '2026-11-04', customer: '超穎(泰國)', machineModel: 'ST-201L', mechanicalSection: '王家琦',
+  outsourceDate: '2026-11-04', customer: '超穎(泰國)', machineModel: 'ST-201L', supervisor: '王家琦',
   mechanicalOwner: null, electricalOwner: null, workOrderIssuedOn: '2026-09-30', bomOn: null, drawingReleasedOn: null,
   quantity: 1, originalDueDate: '2026-12-31', latestDueDate: '2026-12-31', remark: null, closed: false,
   ipmsSyncedAt: '2026-11-10T00:00:00Z', electricalHandoff: false, electricalHandoffAt: null, electricalHandoffSigner: null,
@@ -48,7 +48,7 @@ const FIELD_ORDER: [string, string, string, boolean][] = [
   ['outsourceDate', '外发日期', 'PROCESS', true], ['status', '状态', 'PROCESS', true], ['electricalHandoff', '是否转迅得电控', 'FIXED', false],
   ['workOrderNo', '工令', 'FIXED', false],
   ['customer', '客户', 'IPMS', false], ['machineModel', '机型', 'IPMS', false], ['type', '外发类型', 'PROCESS', true],
-  ['vendor', '外发厂商', 'PROCESS', true], ['mechanicalSection', '上级主管', 'IPMS', false], ['mechanicalOwner', '机构执行人', 'IPMS', false],
+  ['vendor', '外发厂商', 'PROCESS', true], ['supervisor', '上级主管', 'IPMS', false], ['mechanicalOwner', '机构执行人', 'IPMS', false],
   ['electricalOwner', '电控执行人', 'IPMS', false], ['workOrderIssuedOn', '工令下发', 'IPMS', false], ['bomOn', 'BOM时间', 'IMPORTED', false],
   ['drawingReleasedOn', '发图', 'IMPORTED', false], ['originalDueDate', '原始交期', 'IPMS', false], ['latestDueDate', '最新交期', 'PROCESS', true],
   ['quantity', '数量', 'IPMS', false], ['remark', '备注', 'MANUAL', true],
