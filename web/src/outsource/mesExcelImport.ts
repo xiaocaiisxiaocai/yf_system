@@ -195,6 +195,13 @@ export async function readMesExcelImport(file: File): Promise<MesExcelImportResu
       continue
     }
     const rowNumber = row + 1
+    // An Excel error (#N/A, #REF!…) is not data: never import its display text as a work order or MES value.
+    const errorColumns = [...mapped.keys()].filter((column) => cells?.[column]?.t === 'e')
+    if (errorColumns.length > 0) {
+      const where = errorColumns.map((column) => `${XLSX.utils.encode_col(column)} 列（${cells?.[column]?.w ?? '错误值'}）`).join('、')
+      invalid.push({ rowNumber, workOrder, reason: `含 Excel 错误值：${where}` })
+      continue
+    }
     if (workOrder.length > 64) {
       invalid.push({ rowNumber, workOrder, reason: '工单号长度需为 1–64 个字符' })
       continue

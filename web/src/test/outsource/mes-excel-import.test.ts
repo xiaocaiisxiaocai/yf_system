@@ -126,6 +126,18 @@ describe('IPMS Excel 导入解析', () => {
     expect(result.invalid).toEqual([{ rowNumber: 3, workOrder: tooLong, reason: '工单号长度需为 1–64 个字符' }])
   })
 
+  it('含 Excel 错误值的行列为无效，不把 #N/A 等文字当成工单号或字段值导入', async () => {
+    const sheet = XLSX.utils.aoa_to_sheet([['工单号', '机型'], ['WO-1', 'M-1'], ['WO-2', 'M-2'], ['WO-3', 'M-3']])
+    sheet.B3 = { t: 'e', v: 0x2a, w: '#N/A' }
+    sheet.A4 = { t: 'e', v: 0x17, w: '#REF!' }
+    const result = await readMesExcelImport(fileOf(sheet))
+    expect(result.rows).toEqual([{ rowNumber: 2, workOrder: 'WO-1', values: { workOrder: 'WO-1', deviceModels: 'M-1' } }])
+    expect(result.invalid).toEqual([
+      { rowNumber: 3, workOrder: 'WO-2', reason: '含 Excel 错误值：B 列（#N/A）' },
+      { rowNumber: 4, workOrder: '#REF!', reason: '含 Excel 错误值：A 列（#REF!）' },
+    ])
+  })
+
   it('缺少工单号栏时使用指定错误文案', async () => {
     await expect(readMesExcelImport(fileOf(XLSX.utils.aoa_to_sheet([['机型'], ['M-1']]))))
       .rejects.toThrow('找不到“工单号”栏')
