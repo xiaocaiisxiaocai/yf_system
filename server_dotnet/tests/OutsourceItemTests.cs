@@ -116,6 +116,12 @@ public sealed class OutsourceItemTests
         var all = await service.ListAsync(viewer, Query(), 1, 20, 0, ct);
         Assert.Equal(2UL, all.Total);
         Assert.Equal(["21089902", "21089901"], all.List.Select(x => x.WorkOrderNo));
+        Assert.All(all.List, item =>
+        {
+            Assert.False(item.ElectricalHandoff);
+            Assert.Null(item.ElectricalHandoffAt);
+            Assert.Null(item.ElectricalHandoffSigner);
+        });
         var first = all.List.Single(x => x.WorkOrderNo == "21089901");
         Assert.Equal((OutsourceMatchStates.Ok, "鼎亚", new DateOnly(2026, 12, 31), "UNSENT", "NORMAL"),
             (first.MatchState, first.VendorName, first.OriginalDueDate, first.SendStatus, first.Status));

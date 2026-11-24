@@ -28,6 +28,19 @@ internal static class OutsourcePermissions
     internal const string DateImport = "outsource:date_import";
 }
 
+internal static class OutsourceDefaultCcModules
+{
+    internal const string Notice = "OUTSOURCE_NOTICE";
+    internal const string ElectricalHandoff = "ELECTRICAL_HANDOFF";
+
+    internal static string Label(string module) => module switch
+    {
+        Notice => "外发邮件",
+        ElectricalHandoff => "转迅得电控",
+        _ => module,
+    };
+}
+
 /// <summary>
 /// Purchasing-maintained reference data of the outsourcing list: the outsourcing-type dictionary with its vendor
 /// mapping and the default internal copy list. Vendors and their mail contacts are the ODM/OEMA companies and
@@ -373,44 +386,63 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
 
     // ---- default copy list ----
 
-    public async Task<OutsourceCcUserResponse[]> DefaultCcAsync(CurrentUser actor, CancellationToken ct)
+    public async Task<OutsourceDefaultCcResponse[]> DefaultCcAsync(CurrentUser actor, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await AuthorizeReadAsync(context, actor, ct);
-        return await DefaultCcQuery(context).ToArrayAsync(ct);
+        return await ReadDefaultCcAsync(context, ct);
     }
 
     /// <summary>Replaces the default copy list. Members must be active internal accounts with an email address.</summary>
-    public async Task<OutsourceCcUserResponse[]> SetDefaultCcAsync(CurrentUser actor, OutsourceDefaultCcRequest request, CancellationToken ct)
+    public async Task<OutsourceDefaultCcResponse[]> SetDefaultCcAsync(CurrentUser actor, OutsourceDefaultCcRequest request, CancellationToken ct)
     {
-        var userIds = (request.UserIds ?? []).Distinct().ToArray();
-        if (userIds.Length > MaximumDefaultCc) throw ApiException.BadRequest($"默认抄送最多 {MaximumDefaultCc} 人");
+        var entries = request.Entries ?? throw ApiException.BadRequest("请提供默认抄送名单");
+        if (entries.Count > MaximumDefaultCc) throw ApiException.BadRequest($"默认抄送最多 {MaximumDefaultCc} 人");
+        var modulesByUser = new Dictionary<ulong, string[]>();
+        var userIds = new List<ulong>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (entry?.Modules is not { Count: > 0 } modules)
+                throw ApiException.BadRequest("每位默认抄送人员至少选择一个模块");
+            if (modules.Any(x => x is not (OutsourceDefaultCcModules.Notice or OutsourceDefaultCcModules.ElectricalHandoff)))
+                throw ApiException.BadRequest("默认抄送模块无效");
+            if (!modulesByUser.TryAdd(entry.UserId, modules.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray()))
+                throw ApiException.BadRequest("默认抄送人员不能重复");
+            userIds.Add(entry.UserId);
+        }
+
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, ct);
+        // Replacing the entire list needs to serialize even when it was empty, and with account changes.
+        actor = await AuthorizeWriteAsync(context, actor, ct, management: true);
         var users = await context.Users.AsNoTracking().Where(x => userIds.Contains(x.Id))
             .Select(x => new { x.Id, x.RealName, x.Email, x.UserType, x.Status }).ToArrayAsync(ct);
-        if (users.Length != userIds.Length) throw ApiException.BadRequest("所选人员不存在");
+        if (users.Length != userIds.Count) throw ApiException.BadRequest("所选人员不存在");
         if (users.Any(x => x.UserType != UserTypes.Internal || x.Status != AccountStatuses.Active))
             throw ApiException.BadRequest("默认抄送只能选择启用的内部账号");
         if (users.Any(x => string.IsNullOrWhiteSpace(x.Email)))
             throw ApiException.BadRequest("所选人员没有填写邮箱，无法接收抄送");
-        var before = await DefaultCcQuery(context).Select(x => x.RealName).ToArrayAsync(ct);
-        var beforeIds = await context.OutsourceDefaultCc.Select(x => x.UserId).ToArrayAsync(ct);
-        if (!beforeIds.SequenceEqual(userIds))
+        var before = await ReadDefaultCcAsync(context, ct);
+        var changed = !before.Select(x => x.UserId).SequenceEqual(userIds)
+            || before.Any(x => !x.Modules.SequenceEqual(modulesByUser[x.UserId]));
+        if (changed)
         {
             await context.OutsourceDefaultCc.ExecuteDeleteAsync(ct);
             context.OutsourceDefaultCc.AddRange(userIds.Select((userId, index) => new OutsourceDefaultCc { UserId = userId, SortNo = index }));
+            context.OutsourceDefaultCcModules.AddRange(userIds.SelectMany(userId => modulesByUser[userId]
+                .Select(module => new OutsourceDefaultCcModuleRow { UserId = userId, Module = module })));
             await context.SaveChangesAsync(ct);
             var byId = users.ToDictionary(x => x.Id, x => x.RealName);
+            static string Display(string name, IEnumerable<string> modules) => $"{name}（{string.Join("、", modules.Select(OutsourceDefaultCcModules.Label))}）";
             await WriteAuditAsync(context, actor, "OUTSOURCE_DEFAULT_CC", "outsource_settings", null, new
             {
                 targetName = "默认抄送",
                 changes = AuditChange.OnlyChanged(new AuditChange("defaultCc", "默认抄送",
-                    string.Join("、", before), string.Join("、", userIds.Select(x => byId[x])))),
+                    string.Join("、", before.Select(x => Display(x.RealName, x.Modules))),
+                    string.Join("、", userIds.Select(x => Display(byId[x], modulesByUser[x]))))),
             }, ct);
         }
-        var result = await DefaultCcQuery(context).ToArrayAsync(ct);
+        var result = changed ? await ReadDefaultCcAsync(context, ct) : before;
         await transaction.CommitAsync(ct);
         return result;
     }
@@ -436,12 +468,17 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
     private static Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct) =>
         OutsourceItemService.AuthorizeReadAsync(context, actor, null, ct);
 
-    private static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, CancellationToken ct)
+    private static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, CancellationToken ct, bool management = false)
     {
         AccessService.RequireInternal(actor);
         var connection = context.Database.Connection();
         var transaction = context.Database.RequireTransaction();
-        actor = await AccessService.LockActorAsync(connection, transaction, actor, ct);
+        if (management)
+        {
+            await AccessService.LockManagementAsync(connection, transaction, ct);
+            actor = await AccessService.ReadActorAsync(connection, transaction, actor, ct);
+        }
+        else actor = await AccessService.LockActorAsync(connection, transaction, actor, ct);
         AccessService.RequireInternal(actor);
         await AccessService.RequirePermissionAsync(connection, transaction, actor, OutsourcePermissions.Settings, ct);
         return actor;
@@ -459,11 +496,20 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         { throw ApiException.Conflict(duplicateMessage); }
     }
 
-    private static IQueryable<OutsourceCcUserResponse> DefaultCcQuery(YfDbContext context) =>
-        context.OutsourceDefaultCc.AsNoTracking()
-            .Join(context.Users, cc => cc.UserId, user => user.Id, (cc, user) => new { cc, user })
-            .OrderBy(x => x.cc.SortNo).ThenBy(x => x.cc.UserId)
-            .Select(x => new OutsourceCcUserResponse(x.user.Id, x.user.EmployeeNo, x.user.RealName, x.user.Email, x.user.Status));
+    private static async Task<OutsourceDefaultCcResponse[]> ReadDefaultCcAsync(YfDbContext context, CancellationToken ct)
+    {
+        var rows = await (from cc in context.OutsourceDefaultCc.AsNoTracking()
+                          join user in context.Users on cc.UserId equals user.Id
+                          join module in context.OutsourceDefaultCcModules on cc.UserId equals module.UserId into modules
+                          from module in modules.DefaultIfEmpty()
+                          orderby cc.SortNo, cc.UserId
+                          select new { user.Id, user.EmployeeNo, user.RealName, user.Email, user.Status, Module = (string?)module.Module })
+            .ToArrayAsync(ct);
+        return rows.GroupBy(x => new { x.Id, x.EmployeeNo, x.RealName, x.Email, x.Status })
+            .Select(group => new OutsourceDefaultCcResponse(group.Key.Id, group.Key.EmployeeNo, group.Key.RealName, group.Key.Email,
+                group.Key.Status, group.Select(x => x.Module).OfType<string>().Order(StringComparer.Ordinal).ToArray()))
+            .ToArray();
+    }
 
     private static async Task<OutsourceType> LockTypeAsync(YfDbContext context, ulong id, CancellationToken ct) =>
         await context.OutsourceTypes.FromSqlInterpolated($"SELECT * FROM outsource_types WHERE id={id} FOR UPDATE")

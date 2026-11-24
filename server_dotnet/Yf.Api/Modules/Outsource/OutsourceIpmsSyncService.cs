@@ -139,7 +139,7 @@ public sealed class OutsourceIpmsSyncService(
         string? error = null;
         try
         {
-            var vendorKeys = (await OutsourceFieldLayout.LoadAsync(context, ct)).VendorKeys;
+            var vendorKeys = (await OutsourceFieldLayout.LoadAsync(context, ct)).NoticeKeys;
             ulong afterId = 0;
             while (true)
             {

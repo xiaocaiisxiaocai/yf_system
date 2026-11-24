@@ -8148,6 +8148,56 @@
         }
       }
     },
+    "/api/v1/oem/outsource-items/{id}/electrical-handoff": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceElectricalHandoffRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceVendorRow"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/oem/outsource-items/export": {
       "get": {
         "tags": [
@@ -8848,7 +8898,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/OutsourceCcUserResponse"
+                    "$ref": "#/components/schemas/OutsourceDefaultCcResponse"
                   }
                 }
               }
@@ -8888,7 +8938,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/OutsourceCcUserResponse"
+                    "$ref": "#/components/schemas/OutsourceDefaultCcResponse"
                   }
                 }
               }
@@ -14840,18 +14890,95 @@
         },
         "additionalProperties": false
       },
-      "OutsourceDefaultCcRequest": {
+      "OutsourceDefaultCcEntry": {
         "required": [
-          "userIds"
+          "modules",
+          "userId"
         ],
         "type": "object",
         "properties": {
-          "userIds": {
+          "userId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "modules": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64"
+              "type": "string"
             },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDefaultCcRequest": {
+        "required": [
+          "entries"
+        ],
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceDefaultCcEntry"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDefaultCcResponse": {
+        "required": [
+          "email",
+          "employeeNo",
+          "modules",
+          "realName",
+          "status",
+          "userId"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "realName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceElectricalHandoffRequest": {
+        "required": [
+          "expected",
+          "handoff",
+          "signerName"
+        ],
+        "type": "object",
+        "properties": {
+          "handoff": {
+            "type": "boolean"
+          },
+          "expected": {
+            "type": "boolean"
+          },
+          "signerName": {
+            "type": "string",
             "nullable": true
           }
         },
@@ -15397,6 +15524,9 @@
           "customer",
           "customerFullName",
           "drawingReleasedOn",
+          "electricalHandoff",
+          "electricalHandoffAt",
+          "electricalHandoffSigner",
           "electricalOwner",
           "id",
           "importedAt",
@@ -15536,6 +15666,18 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "electricalHandoff": {
+            "type": "boolean"
+          },
+          "electricalHandoffAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "electricalHandoffSigner": {
+            "type": "string",
+            "nullable": true
           },
           "changedFields": {
             "type": "array",
@@ -16343,6 +16485,7 @@
       "OutsourceVendorRow": {
         "required": [
           "closed",
+          "electricalHandoff",
           "id",
           "status",
           "values"
@@ -16357,6 +16500,9 @@
             "type": "string"
           },
           "closed": {
+            "type": "boolean"
+          },
+          "electricalHandoff": {
             "type": "boolean"
           },
           "values": {

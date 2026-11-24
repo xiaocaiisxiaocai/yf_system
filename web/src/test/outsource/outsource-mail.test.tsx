@@ -106,4 +106,36 @@ describe('外协邮件发送', () => {
     await user.click(within(row).getByRole('button', { name: '重新发送' }))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/mails/5/retry'))
   })
+
+  it('显示厂商发起的两种转迅得电控邮件，失败可重发', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:send'])
+    const handoff = {
+      id: 6, kind: 'ELECTRICAL_HANDOFF', vendorId: 1, vendorName: '鼎亚', subject: '【转迅得电控】鼎亚 工令 A1', status: 'SENT',
+      recipients: [], workOrderNos: ['A1'], attachmentName: null, attempts: 1, lastError: null,
+      createdByName: '鼎亚（签名：王小明）', createdAt: '2026-11-24T01:00:00Z', sentAt: '2026-11-24T01:00:01Z',
+    }
+    const withdrawn = {
+      ...handoff, id: 7, kind: 'ELECTRICAL_HANDOFF_WITHDRAW', subject: '【撤回转迅得电控】鼎亚 工令 A1', status: 'FAILED', sentAt: null,
+      createdByName: '鼎亚（签名：李小美）',
+    }
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/mails' ? { list: [handoff, withdrawn], total: 2, page: 1, pageSize: 20 } : [],
+    } as never))
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ...withdrawn, status: 'QUEUED' } } as never)
+    render(<MemoryRouter><OutsourceMailsPage /></MemoryRouter>)
+
+    const sent = within((await screen.findByText(handoff.subject)).closest('tr')!)
+    const failed = within(screen.getByText(withdrawn.subject).closest('tr')!)
+    expect(sent.getByText('转迅得电控')).toBeInTheDocument()
+    expect(sent.getByText(handoff.createdByName)).toBeInTheDocument()
+    expect(failed.getByText('撤回转迅得电控')).toBeInTheDocument()
+    expect(failed.getByRole('button', { name: '附件' })).toBeDisabled()
+    await user.click(failed.getByRole('button', { name: '详情' }))
+    const dialog = within(await screen.findByRole('dialog', { name: '邮件发送详情' }))
+    expect(dialog.getByText(withdrawn.createdByName)).toBeInTheDocument()
+    expect(dialog.getByText('无附件')).toBeInTheDocument()
+    await user.click(failed.getByRole('button', { name: '重新发送' }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/mails/7/retry'))
+  })
 })
