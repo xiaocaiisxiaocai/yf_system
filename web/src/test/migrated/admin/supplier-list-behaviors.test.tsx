@@ -130,6 +130,46 @@ describe('供应商与分页列表行为', () => {
     expect(sheets[0].headers).not.toContain('初始密码')
   })
 
+  it.each([
+    ['导入账号', '导入 Robot 供应商账号', 'Robot供应商账号导入模板.xlsx', ['供应商名称', '账号', '角色', '初始密码'], ['示例供应商', 'demo001', '供应商人员', 'T7!kmQ4n']],
+    ['导入联络人', '导入 Robot 供应商联络人', 'Robot供应商联络人导入模板.xlsx', ['供应商名称', '联络人姓名', '邮箱', '排序'], ['示例供应商', '示例联络人', 'example@example.com', '1']],
+  ])('Robot 供应商%s模板的数据表包含一行范例', async (menu, title, filename, headers, example) => {
+    const user = userEvent.setup()
+    render(<MemoryRouter><SupplierList /></MemoryRouter>)
+
+    await user.click(await screen.findByRole('button', { name: '导入' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: menu }))
+    const dialog = await screen.findByRole('dialog', { name: title })
+    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
+    await waitFor(() => expect(mocks.downloadExcelWorkbook).toHaveBeenCalledTimes(1))
+    const [name, sheets] = mocks.downloadExcelWorkbook.mock.calls[0]
+    expect(name).toBe(filename)
+    expect(sheets[0]).toEqual({ name: '数据', headers, rows: [example] })
+  })
+
+  it('公司内部账号导入模板同时包含一行范例和组织角色选项', async () => {
+    installGet(async (url: string) => {
+      if (url === '/departments') return { data: [{ id: 1, name: '业务部门', kind: 'DEPARTMENT', status: 'ACTIVE', children: [] }] }
+      if (url === '/admin/user-role-options') return { data: [{ id: 1, name: '业务角色' }] }
+      return { data: page() }
+    })
+    const user = userEvent.setup()
+    render(<UserList />)
+
+    const importButton = await screen.findByRole('button', { name: '导入 Excel' })
+    await waitFor(() => expect(importButton).toBeEnabled())
+    await user.click(importButton)
+    const dialog = await screen.findByRole('dialog', { name: '导入公司内部账号' })
+    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
+    await waitFor(() => expect(mocks.downloadExcelWorkbook).toHaveBeenCalledTimes(1))
+    const [filename, sheets] = mocks.downloadExcelWorkbook.mock.calls[0]
+    expect(filename).toBe('公司内部账号导入模板.xlsx')
+    expect(sheets.slice(0, 2)).toEqual([
+      { name: '数据', headers: ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码'], rows: [['demo001', '示例员工', 'example@example.com', '示例部门', '示例角色', 'T7!kmQ4n']] },
+      { name: '选项', headers: ['所属组织', '组织层级', '角色名称'], rows: [['业务部门', '部门', '业务角色']] },
+    ])
+  })
+
   it('project interaction wording and navigation match the current supplier access model', async () => {
     installGet(async (url: string) => {
       if (url === '/projects') return { data: page() }

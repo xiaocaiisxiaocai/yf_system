@@ -35,6 +35,42 @@ function Harness({ commit }: { commit: (rows: Row[]) => Promise<ImportBatchOutco
 }
 
 describe('ExcelImportDialog', () => {
+  it('ignores the exact example and imports a row with one edited cell', async () => {
+    const user = userEvent.setup()
+    const commit = vi.fn(async () => importResult)
+    const prepare = vi.fn((rows: ExcelImportRow[]) => ({
+      payload: rows.map(row => ({ rowNumber: row.rowNumber, employeeNo: row.values['账号'], initialPassword: '' })),
+      preview: rows.map(row => ({ rowNumber: row.rowNumber, key: row.values['账号'], detail: '', status: 'READY' as const })),
+    }))
+    const headers = ['账号', '备注']
+    const example = ['demo001', '']
+    const template = { name: '数据', headers, rows: [example] }
+    render(<ExcelImportDialog<Row>
+      visible title="账号导入" templateName="账号模板.xlsx" requiredHeaders={headers}
+      optionalHeaders={['状态']} templateSheets={[template]} maxRows={1} prepare={prepare} commit={commit} onClose={() => undefined}
+    />)
+
+    const input = screen.getByLabelText('选择 Excel 文件')
+    const sampleOnly = await createExcelWorkbook([template])
+    await user.upload(input, new File([sampleOnly], 'template.xlsx'))
+    expect(await screen.findByText('已忽略范例行')).toBeVisible()
+    expect(prepare).not.toHaveBeenCalled()
+    const confirm = screen.getByRole('button', { name: '确认导入' })
+    expect(confirm).toBeDisabled()
+
+    const edited = await createExcelWorkbook([{
+      ...template, headers: [...headers, '状态'], rows: [['demo001', '  ', '启用'], ['demo001', '已修改', '']],
+    }])
+    await user.upload(input, new File([edited], 'edited.xlsx'))
+    expect(await screen.findByText('待导入 1')).toBeVisible()
+    expect(screen.getByText('已忽略范例行')).toBeVisible()
+    expect(prepare).toHaveBeenCalledExactlyOnceWith([
+      expect.objectContaining({ rowNumber: 3, values: { 账号: 'demo001', 备注: '已修改', 状态: '' } }),
+    ])
+    await user.click(confirm)
+    expect(commit).toHaveBeenCalledExactlyOnceWith([{ rowNumber: 3, employeeNo: 'demo001', initialPassword: '' }])
+  })
+
   it('shows a preview before committing and reports persisted row results', async () => {
     const user = userEvent.setup()
     const commit = vi.fn(async () => importResult)

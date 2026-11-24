@@ -228,7 +228,10 @@ async function openReleasedFile(page, url, fileName) {
         const templatePath = OUT + '/template-' + fileName;
         await templateDownload.saveAs(templatePath);
         const templateBook = XLSX.read(fs.readFileSync(templatePath), { type: 'buffer' });
-        assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 })[0], headers,
+        const example = buttonName === '导入账号'
+          ? ['示例厂商', 'demo001', 'T7!kmQ4n']
+          : ['示例厂商', '示例联络人', 'example@example.com', '1'];
+        assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 }), [headers, example],
           'ODM/OEM template fields must match the import contract');
         await modal.getByLabel('选择 Excel 文件', { exact: true }).setInputFiles({
           name: fileName,
@@ -303,11 +306,12 @@ async function openReleasedFile(page, url, fileName) {
       const templatePath = OUT + '/oem-company-template.xlsx';
       await template.saveAs(templatePath);
       const templateBook = XLSX.read(fs.readFileSync(templatePath), { type: 'buffer' });
-      assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 })[0], ['厂商名称', '备注']);
+      const templateRows = XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 });
+      assert.deepEqual(templateRows, [['厂商名称', '备注'], ['示例厂商', '示例备注']]);
 
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
-        ['厂商名称', '备注'],
+        ...templateRows,
         [importedCompanyName, 'Excel 主档测试'],
         [companyName, '既有厂商不覆盖'],
       ]), '数据');
@@ -318,6 +322,8 @@ async function openReleasedFile(page, url, fileName) {
         buffer: companyFile,
       });
       await modal.getByRole('row').filter({ hasText: importedCompanyName }).getByText('待导入', { exact: true }).waitFor();
+      await modal.getByText('已忽略范例行', { exact: true }).waitFor();
+      assert.equal(await modal.getByRole('row').filter({ hasText: '示例厂商' }).count(), 0);
       await modal.getByRole('row').filter({ hasText: companyName }).getByText('跳过', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
       // A skipped duplicate is not a failure, so this dialog closes itself as well.

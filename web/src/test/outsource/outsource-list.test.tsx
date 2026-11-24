@@ -261,12 +261,12 @@ describe('外协清单页面', () => {
     }))
   })
 
-  it('汇入模板与提交带外发类型，提示里写明要填类型', async () => {
+  it('汇入模板含外发类型范例，预览请求保留外发类型并排除范例', async () => {
     const user = userEvent.setup()
     setSession(['outsource:manage'])
     mockApi()
     const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
-      rowNumber: 2, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',
+      rowNumber: 3, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',
       customer: '超穎(泰國)', machineModel: 'ST-201L', typeLabel: 'OEMA【进料+制造】', quantity: 1, latestDueDate: '2026-12-31',
     }] } } as never)
     const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
@@ -277,14 +277,33 @@ describe('外协清单页面', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText(/填写外发日期、工令、外发类型和外发厂商/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
-    await waitFor(() => expect(download).toHaveBeenCalled())
-    expect(download.mock.calls[0][1][0].headers).toEqual(['外发日期', '工令', '外发类型', '外发厂商'])
+    await waitFor(() => expect(download).toHaveBeenCalledWith('外协清单汇入模板.xlsx', [{
+      name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商'],
+      rows: [['2026-11-23', '21000001', 'OEMA', '示例厂商']],
+    }]))
 
-    const buffer = await workbook.createExcelWorkbook([{ name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商'], rows: [['2026-11-04', '21089901', 'OEMA', '鼎亚']] }])
+    const [sheet] = download.mock.calls[0][1]
+    const buffer = await workbook.createExcelWorkbook([{ ...sheet, rows: [...sheet.rows, ['2026-11-04', '21089901', 'OEMA', '鼎亚']] }])
     await user.upload(within(dialog).getByLabelText('选择 Excel 文件') as HTMLInputElement, new File([buffer], 'items.xlsx'))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', {
-      rows: [{ rowNumber: 2, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],
+      rows: [{ rowNumber: 3, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],
     }))
+  })
+
+  it('BOM 时间与发图导入模板的数据表包含一行日期范例', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:date_import'])
+    mockApi()
+    const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    await screen.findByText('21089901')
+    await user.click(screen.getByRole('button', { name: '导入BOM/发图' }))
+    const dialog = await screen.findByRole('dialog', { name: '导入BOM时间与发图' })
+    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
+    await waitFor(() => expect(download).toHaveBeenCalledWith('BOM时间与发图导入模板.xlsx', [{
+      name: '数据', headers: ['工令', 'BOM时间', '发图'], rows: [['21000001', '2026-11-24', '2026-11-25']],
+    }]))
   })
 
   it('显示最近一次 IPMS 同步，采购可立即同步所选记录', async () => {
