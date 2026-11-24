@@ -152,6 +152,8 @@ describe('外协清单页面', () => {
     const first = within(screen.getByText('21089901').closest('tr')!)
     const second = within(screen.getByText('21089961').closest('tr')!)
     expect(first.getByText('否')).toBeInTheDocument()
+    expect(first.getByText('否').closest('td')).not.toHaveClass('outsource-cell-handed-off')
+    expect(second.getByText('是').closest('td')).toHaveClass('outsource-cell-handed-off')
     await user.hover(second.getByText('是'))
     expect(await screen.findByText(/签名：王小明.*时间：/)).toHaveTextContent(fmtTime(items[1].electricalHandoffAt))
 

@@ -33,6 +33,12 @@
   background-color: #fff176 !important;
 }
 
+.outsource-table .arco-table-tr > .arco-table-td.outsource-cell-handed-off {
+  background-color: rgb(var(--arcoblue-2));
+  color: rgb(var(--arcoblue-8));
+  font-weight: 600;
+}
+
 .outsource-due-changed {
   color: rgb(var(--orange-6));
   font-weight: 600;

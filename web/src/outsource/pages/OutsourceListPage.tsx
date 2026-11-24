@@ -374,6 +374,9 @@ export default function OutsourceListPage() {
       ...column,
       render: (value: unknown, item: Item, index: number) => {
         const content = base.render ? base.render(value, item, index) : (value ?? '')
+        if (field.key === 'electricalHandoff' && item.electricalHandoff) {
+          return { children: content, props: { className: 'outsource-cell-handed-off' } }
+        }
         return item.changedFields?.includes(field.key) ? { children: content, props: { className: 'outsource-cell-changed' } } : content
       },
     }
