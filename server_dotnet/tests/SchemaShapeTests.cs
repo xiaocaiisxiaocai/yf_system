@@ -83,6 +83,7 @@ public sealed class SchemaShapeTests
         "20261120065922_StopInternalRobotVEditing",
         "20261120071443_AddOutsourceVendorEmails",
         "20261124003700_CorrectOutsourceDueDatesFromCustomerDate",
+        "20261124010000_AddOutsourceElectricalHandoff",
     ];
 
     [Fact]

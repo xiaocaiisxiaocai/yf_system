@@ -23,6 +23,12 @@ const STATUS: Record<string, { label: string; color: string }> = {
   FAILED: { label: '失败', color: 'red' },
 }
 const STATUS_OPTIONS = Object.entries(STATUS).filter(([key]) => key !== 'SENDING').map(([value, item]) => ({ value, label: item.label }))
+const MAIL_KIND: Record<string, { label: string; detail: string; color: string }> = {
+  NOTICE: { label: '外发', detail: '外发通知', color: 'arcoblue' },
+  WITHDRAW: { label: '撤回', detail: '撤回通知', color: 'orange' },
+  ELECTRICAL_HANDOFF: { label: '转迅得电控', detail: '转迅得电控', color: 'arcoblue' },
+  ELECTRICAL_HANDOFF_WITHDRAW: { label: '撤回转迅得电控', detail: '撤回转迅得电控', color: 'orange' },
+}
 const POLL_MS = 5000
 
 function Recipients({ list, kind }: { list: Recipient[]; kind: 'TO' | 'CC' }) {
@@ -115,8 +121,8 @@ export default function OutsourceMailsPage() {
   const columns: TableColumnProps<Mail>[] = [
     { title: '时间', width: 160, render: (_, mail) => fmtTime(mail.createdAt) },
     {
-      title: '类型', width: 90, align: 'center',
-      render: (_, mail) => <Tag color={mail.kind === 'WITHDRAW' ? 'orange' : 'arcoblue'}>{mail.kind === 'WITHDRAW' ? '撤回' : '外发'}</Tag>,
+      title: '类型', width: 140, align: 'center',
+      render: (_, mail) => <Tag color={MAIL_KIND[mail.kind]?.color}>{MAIL_KIND[mail.kind]?.label ?? mail.kind}</Tag>,
     },
     { title: '厂商', dataIndex: 'vendorName', width: 110, ellipsis: true },
     { title: '主旨', dataIndex: 'subject', width: 280, ellipsis: true },
@@ -131,7 +137,8 @@ export default function OutsourceMailsPage() {
       render: (_, mail) => <Tag color={STATUS[mail.status]?.color}>{STATUS[mail.status]?.label ?? mail.status}</Tag>,
     },
     { title: '说明', dataIndex: 'lastError', width: 220, ellipsis: true, render: (value: string | null) => value ?? '' },
-    { title: '发送人', dataIndex: 'createdByName', width: 100, ellipsis: true },
+    { title: '发送人', width: 170, ellipsis: true, render: (_, mail) => mail.createdByName
+      ? <Tooltip content={mail.createdByName}><span>{mail.createdByName}</span></Tooltip> : '—' },
     {
       title: '操作', width: 180, align: 'center', fixed: 'right',
       render: (_, mail) => actionSlots([
@@ -166,7 +173,7 @@ export default function OutsourceMailsPage() {
           size="small"
           data={[
             { label: '发送时间', value: fmtTime(viewing.createdAt) },
-            { label: '邮件类型', value: viewing.kind === 'WITHDRAW' ? '撤回通知' : '外发通知' },
+            { label: '邮件类型', value: MAIL_KIND[viewing.kind]?.detail ?? viewing.kind },
             { label: '外发厂商', value: viewing.vendorName },
             { label: '邮件主旨', value: viewing.subject },
             { label: '关联工令', value: viewing.workOrderNos.join('、') || '—' },

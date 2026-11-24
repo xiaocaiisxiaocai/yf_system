@@ -81,7 +81,9 @@ public sealed class OutsourceMailTests
         await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "ODM窗口", "odm@vendor.invalid", ct, sortNo: 1);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id, duopu.Id]), ct);
-        await settings.SetDefaultCcAsync(buyer, new([9913]), ct);
+        await settings.SetDefaultCcAsync(buyer, new([
+            new(9913, [OutsourceDefaultCcModules.Notice, OutsourceDefaultCcModules.ElectricalHandoff]),
+            new(9914, [OutsourceDefaultCcModules.ElectricalHandoff])]), ct);
         foreach (var (no, customer) in new[] { ("A1", "客户甲"), ("B1", "客户乙"), ("C1", "客户甲") })
             ipms.Orders[no] = new(no, customer, "ST-201L", null, null, null, null, 1, new DateOnly(2026, 12, 31), false);
         await items.ImportAsync(buyer, new([new(2, "2026-11-04", "A1", "鼎亚", "OEMA"), new(3, "2026-11-04", "B1", "鼎亚", "OEMA"), new(4, "2026-11-04", "C1", "多普", "OEMA")]), ct);
@@ -182,6 +184,7 @@ public sealed class OutsourceMailTests
         Assert.StartsWith("【外发撤回】鼎亚 ", withdrawal.Subject, StringComparison.Ordinal);
         Assert.Equal(["B1"], withdrawal.WorkOrderNos);
         Assert.DoesNotContain("多普", withdrawal.HtmlBody, StringComparison.Ordinal);
+        Assert.All(again.Mails, x => Assert.Equal(["planner@example.invalid"], x.DefaultCc.Select(recipient => recipient.Email)));
         var second = await mails.SendAsync(buyer, new([a.Id, b.Id], again.Fingerprint, "key-second-0001", null), ct);
         Assert.Null(second.Mails.Single(x => x.Kind == "WITHDRAW").AttachmentName);
         // Sent once to the new vendor, a later preview no longer withdraws from the old one.

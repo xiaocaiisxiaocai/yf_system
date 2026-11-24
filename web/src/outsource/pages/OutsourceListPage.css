@@ -65,6 +65,18 @@
   }
 }
 
+@media (max-width: 1000px) {
+  /* 窄屏让左侧列随表格滚动，给其余栏位留出可读空间。 */
+  .outsource-table .arco-table-col-fixed-left {
+    position: static;
+  }
+
+  .outsource-table .arco-table-col-fixed-left::before,
+  .outsource-table .arco-table-col-fixed-left-last::after {
+    display: none;
+  }
+}
+
 .outsource-table .outsource-row--closed > .arco-table-td {
   color: var(--color-text-3);
 }

@@ -8,6 +8,10 @@ internal static class OutsourceMailKinds
 {
     internal const string Notice = "NOTICE";
     internal const string Withdraw = "WITHDRAW";
+    internal const string ElectricalHandoff = "ELECTRICAL_HANDOFF";
+    internal const string ElectricalHandoffWithdraw = "ELECTRICAL_HANDOFF_WITHDRAW";
+
+    internal static bool IsElectricalHandoff(string kind) => kind is ElectricalHandoff or ElectricalHandoffWithdraw;
 }
 
 /// <summary>
@@ -85,6 +89,34 @@ internal static class OutsourceMailContent
         text.AppendLine(string.Join(" | ", fields.Select(field => field.Header)));
         foreach (var item in items) text.AppendLine(string.Join(" | ", fields.Select(field => field.Value(item) ?? "")));
         return text.ToString();
+    }
+
+    internal static (string Subject, string Html, string Text) ElectricalHandoff(
+        OutsourceItemResponse item, string signer, DateTime occurredAt)
+    {
+        var action = item.ElectricalHandoff ? "转迅得电控" : "撤回转迅得电控";
+        var subject = $"【{action}】{item.VendorName} 工令 {item.WorkOrderNo}";
+        var time = occurredAt.AddHours(8).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+        (string Label, string Value)[] details =
+        [
+            ("工令", item.WorkOrderNo),
+            ("客户", item.Customer ?? ""),
+            ("机型", item.MachineModel ?? ""),
+            ("外发类型", item.TypeLabel ?? item.TypeCode ?? ""),
+            ("外发厂商", item.VendorName),
+            ("签名人", signer),
+            ("操作时间", $"{time} (UTC+8)"),
+        ];
+        var html = new StringBuilder("<table style=\"border-collapse:collapse;font-size:13px;\">");
+        var text = new StringBuilder();
+        foreach (var (label, value) in details)
+        {
+            html.Append("<tr><th scope=\"row\" style=\"").Append(Header).Append("\">").Append(label)
+                .Append("</th><td style=\"").Append(Cell).Append("\">").Append(E(value)).Append("</td></tr>");
+            text.Append(label).Append('：').AppendLine(value);
+        }
+        html.Append("</table>");
+        return (subject, html.ToString(), text.ToString());
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value);
