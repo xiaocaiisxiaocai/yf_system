@@ -254,7 +254,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
                   ))}
                 </Space>
               )}
-              {destination && <div>发送给：{destination}</div>}
+              {destination && <div>{realm === 'internal' ? '发送给' : '客户'}：{destination}</div>}
               {matchedWorkOrder?.disabledReason && (
                 <Typography.Text type="error">{matchedWorkOrder.disabledReason}</Typography.Text>
               )}
