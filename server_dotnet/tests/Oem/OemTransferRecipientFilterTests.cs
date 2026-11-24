@@ -25,13 +25,15 @@ public sealed class OemTransferRecipientFilterTests
         var userB = await host.LoginInternalAsync("recipient_b", password, ct);
         var vendor = await host.CreateVendorAsync(admin, "来件厂商", "recipient_vendor", ct);
         var companyId = await host.CompanyIdOfAsync("recipient_vendor", ct);
+        var outsourceItemId = await host.CreateOutsourceItemAsync(companyId, "WO-RECIPIENT-FILTER", ct);
         const string listPath = "/api/v1/oem/transfers";
-        async Task<ulong> Create(ApiClient sender, object body) => TransferId(await sender.PostAsync(listPath, body, ct).Ok());
+        async Task<ulong> Create(ApiClient sender, string title) =>
+            TransferId(await sender.PostAsync(listPath, new { title, outsourceItemId }, ct).Ok());
 
-        var toA = await Create(vendor, new { title = "发给 A" });
-        var toB = await Create(vendor, new { title = "发给 B" });
-        var sentByA = await Create(userA, new { title = "A 发给厂商", oemCompanyId = companyId });
-        var pendingToVendor = await Create(userA, new { title = "待审批", oemCompanyId = companyId });
+        var toA = await Create(vendor, "发给 A");
+        var toB = await Create(vendor, "发给 B");
+        var sentByA = await Create(userA, "A 发给厂商");
+        var pendingToVendor = await Create(userA, "待审批");
 
         // Seed send outcomes in the disposable database so this test exercises the list independently of approval and upload.
         await using (var db = await host.OpenAsync(ct))

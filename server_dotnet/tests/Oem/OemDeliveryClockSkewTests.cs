@@ -133,7 +133,7 @@ public sealed class OemDeliveryClockSkewTests
     private static async Task<Fixture> ReleasedInboundAsync(OemTestHost host, byte[] content, CancellationToken ct)
     {
         var world = await OutboundWorldAsync(host, ct);
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "时钟偏差" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "时钟偏差", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var file = await host.UploadAsync(world.Vendor, TransferId(draft), "skew.pdf", content, ct);
         await world.Vendor.VendorSendAsync(TransferId(draft), Version(draft) + 1, ct).Ok();
         await host.RunOemJobsAsync(ct);

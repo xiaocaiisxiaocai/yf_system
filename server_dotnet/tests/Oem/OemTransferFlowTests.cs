@@ -16,7 +16,8 @@ namespace Yf.Api.Tests.Oem;
 public sealed class OemTransferFlowTests
 {
     internal sealed record OutboundWorld(OemTestHost Host, ApiClient Admin, ApiClient Sender, ApiClient Leader, ApiClient Vendor,
-        ApiClient Viewer, ulong CompanyId, ulong KeepTemplateId, (ulong Division, ulong Department, ulong Section) Org, ulong LeaderId, ulong SenderId);
+        ApiClient Viewer, ulong CompanyId, ulong OutsourceItemId, ulong KeepTemplateId,
+        (ulong Division, ulong Department, ulong Section) Org, ulong LeaderId, ulong SenderId);
 
     internal static async Task<OutboundWorld> OutboundWorldAsync(OemTestHost host, CancellationToken ct)
     {
@@ -29,18 +30,19 @@ public sealed class OemTransferFlowTests
         await admin.PutAsync($"/api/v1/admin/departments/{org.Section}/leader", new { leaderUserId = leaderId }, ct).Ok();
         var vendor = await host.CreateVendorAsync(admin, "精工代工", "vendor_out", ct);
         var companyId = await host.CompanyIdOfAsync("vendor_out", ct);
+        var outsourceItemId = await host.CreateOutsourceItemAsync(companyId, "WO-VENDOR-OUT", ct);
         var keep = (await admin.GetAsync("/api/v1/oem/retention-templates", ct).Ok()).AsArray().Single(item => item!["mode"]!.GetValue<string>() == "KEEP")!.Id();
         return new OutboundWorld(host, admin,
             await host.LoginInternalAsync("zp_sender", "Sender#2026x", ct),
             await host.LoginInternalAsync("zp_leader", "Leader#2026x", ct),
             vendor,
             await host.LoginInternalAsync("zp_viewer", "Viewer#2026x", ct),
-            companyId, keep, org, leaderId, senderId);
+            companyId, outsourceItemId, keep, org, leaderId, senderId);
     }
 
     internal static async Task<JsonNode> CreateOutboundAsync(OutboundWorld world, string title, CancellationToken ct) =>
         await world.Sender.PostAsync("/api/v1/oem/transfers",
-            new { title, description = "图纸第一版", oemCompanyId = world.CompanyId }, ct).Ok();
+            new { title, description = "图纸第一版", oemCompanyId = world.CompanyId, outsourceItemId = world.OutsourceItemId }, ct).Ok();
 
     internal static ulong TransferId(JsonNode detail) => detail["summary"]!.Id();
     internal static ulong Version(JsonNode detail) => detail["summary"]!["version"]!.GetValue<ulong>();
@@ -83,7 +85,7 @@ public sealed class OemTransferFlowTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = world.CompanyId }, ct).Ok();
+        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = world.CompanyId, outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var id = TransferId(draft);
         Assert.Equal(OemTransferService.DraftTitlePlaceholder, draft["summary"]!["title"]!.GetValue<string>());
 
@@ -170,6 +172,7 @@ public sealed class OemTransferFlowTests
         {
             title = "策略原题",
             oemCompanyId = world.CompanyId,
+            outsourceItemId = world.OutsourceItemId,
             retentionTemplateId = world.KeepTemplateId,
         }, ct).Ok();
         var id = TransferId(draft);
@@ -299,9 +302,9 @@ public sealed class OemTransferFlowTests
         var viewOnly = await host.LoginInternalAsync("view_only", "ViewOnly#2026x", ct);
 
         // The OEM account cannot pick another vendor.
-        await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "越权", oemCompanyId = world.CompanyId + 99 }, ct)
+        await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "越权", oemCompanyId = world.CompanyId + 99, outsourceItemId = world.OutsourceItemId }, ct)
             .Status(HttpStatusCode.BadRequest);
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传工艺文件" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传工艺文件", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var id = TransferId(draft);
         Assert.Equal("OEM_TO_INTERNAL", draft["summary"]!["direction"]!.GetValue<string>());
         // Extension whitelist for the inbound direction.
@@ -345,7 +348,7 @@ public sealed class OemTransferFlowTests
             await conn.ExecuteAsync("INSERT INTO role_permissions(role_id,permission_id) SELECT ur.role_id,p.id FROM user_roles ur JOIN permissions p ON p.code='oem:transfer_create' WHERE ur.user_id=@id",
                 new { id = world.LeaderId });
         var draft = await world.Leader.PostAsync("/api/v1/oem/transfers",
-            new { title = "主管自发", oemCompanyId = world.CompanyId }, ct).Ok();
+            new { title = "主管自发", oemCompanyId = world.CompanyId, outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var id = TransferId(draft);
         await host.UploadAsync(world.Leader, id, "self.pdf", OemTestHost.Pdf("self"), ct);
         var sent = await world.Leader.PostAsync($"/api/v1/oem/transfers/{id}/send", new { version = Version(draft) + 1 }, ct).Ok();
@@ -361,7 +364,7 @@ public sealed class OemTransferFlowTests
         await host.CreateInternalUserAsync("direct_staff", "Direct#2026x", ["oem:transfer_create"], world.Org.Department, ct);
         var direct = await host.LoginInternalAsync("direct_staff", "Direct#2026x", ct);
         var directDraft = await direct.PostAsync("/api/v1/oem/transfers",
-            new { title = "直属发送", oemCompanyId = world.CompanyId }, ct).Ok();
+            new { title = "直属发送", oemCompanyId = world.CompanyId, outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var directId = TransferId(directDraft);
         await host.UploadAsync(direct, directId, "direct.pdf", OemTestHost.Pdf("direct"), ct);
         var directSent = await direct.PostAsync($"/api/v1/oem/transfers/{directId}/send", new { version = Version(directDraft) + 1 }, ct).Ok();
@@ -440,7 +443,7 @@ public sealed class OemTransferFlowTests
         // Inbound transfers have no internal approval-recovery flow. Even while sealed,
         // they cannot be terminated through the recovery endpoint by guessing an id.
         var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers",
-            new { title = "入站不可恢复终止" }, ct).Ok();
+            new { title = "入站不可恢复终止", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var inboundId = TransferId(inbound);
         await host.UploadAsync(world.Vendor, inboundId, "inbound.pdf", OemTestHost.Pdf("inbound"), ct);
         var inboundSent = await world.Vendor.VendorSendAsync(inboundId, Version(inbound) + 1, ct).Ok();
@@ -505,7 +508,7 @@ public sealed class OemTransferFlowTests
 
         var outbound = await CreateOutboundAsync(world, "占用配额", ct);
         await host.UploadAsync(world.Sender, TransferId(outbound), "big.pdf", OemTestHost.Pdf(new string('a', 700_000)), ct);
-        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "超出配额" }, ct).Ok();
+        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "超出配额", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{TransferId(inbound)}/uploads/init", new { fileName = "more.pdf", fileSize = 500_000 }, ct)
             .Status(HttpStatusCode.Conflict);
 

@@ -981,6 +981,14 @@ export interface OemRoutingScopeResponse {
   kind: string
 }
 
+export interface OemSendableItemResponse {
+  id: number
+  workOrderNo: string
+  customer: string | null
+  vendorName: string
+  disabledReason: string | null
+}
+
 export interface OemSettingItem {
   key: string
   value?: string | null
@@ -1063,6 +1071,8 @@ export interface OemTransferSummaryResponse {
   direction: string
   companyId: number
   companyName: string | null
+  outsourceItemId?: number | null
+  workOrderNo?: string | null
   title: string
   sender: OemPersonRefResponse
   signerName: string | null
@@ -2185,6 +2195,7 @@ export interface TransferCreate {
   title?: string | null
   description?: string | null
   oemCompanyId?: number | null
+  outsourceItemId?: number | null
 }
 
 export interface TransferSendRequest {
@@ -2430,6 +2441,7 @@ export interface ApiResponses {
   "GET /oem/retention-templates": Array<OemRetentionTemplateResponse>
   "POST /oem/retention-templates": OemRetentionTemplateResponse
   "PUT /oem/retention-templates/{id}": OemRetentionTemplateResponse
+  "GET /oem/sendable-items": Array<OemSendableItemResponse>
   "GET /oem/transfer-recipient-choices": Array<OemRecipientChoiceResponse>
   "GET /oem/transfers": OemPageResponseOfOemTransferSummaryResponse
   "POST /oem/transfers": OemTransferDetailResponse

@@ -7231,6 +7231,38 @@
         }
       }
     },
+    "/api/v1/oem/sendable-items": {
+      "get": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OemSendableItemResponse"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/oem/transfers": {
       "get": {
         "tags": [
@@ -14254,6 +14286,37 @@
         },
         "additionalProperties": false
       },
+      "OemSendableItemResponse": {
+        "required": [
+          "customer",
+          "disabledReason",
+          "id",
+          "vendorName",
+          "workOrderNo"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "workOrderNo": {
+            "type": "string"
+          },
+          "customer": {
+            "type": "string",
+            "nullable": true
+          },
+          "vendorName": {
+            "type": "string"
+          },
+          "disabledReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "OemSettingItem": {
         "required": [
           "key",
@@ -14614,6 +14677,15 @@
             "format": "int64"
           },
           "companyName": {
+            "type": "string",
+            "nullable": true
+          },
+          "outsourceItemId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "workOrderNo": {
             "type": "string",
             "nullable": true
           },
@@ -19277,6 +19349,7 @@
         "required": [
           "description",
           "oemCompanyId",
+          "outsourceItemId",
           "title"
         ],
         "type": "object",
@@ -19290,6 +19363,11 @@
             "nullable": true
           },
           "oemCompanyId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "outsourceItemId": {
             "type": "integer",
             "format": "int64",
             "nullable": true

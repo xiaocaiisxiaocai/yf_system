@@ -17,12 +17,18 @@ public sealed class OemUploadHardeningTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
         var second = await host.CreateVendorAsync(world.Admin, "第二代工厂", "vendor_two", ct);
+        var secondCompanyId = await host.CompanyIdOfAsync("vendor_two", ct);
+        var secondOutsourceItemId = await host.CreateOutsourceItemAsync(secondCompanyId, "WO-VENDOR-TWO", ct);
 
         // The first vendor uploads three files before the second one uploads three: strict age order would
         // validate all of the first vendor's files before any of the second's.
-        foreach (var (vendor, title) in new[] { (world.Vendor, "第一家回传"), (second, "第二家回传") })
+        foreach (var (vendor, title, outsourceItemId) in new[]
         {
-            var draft = await vendor.PostAsync("/api/v1/oem/transfers", new { title }, ct).Ok();
+            (world.Vendor, "第一家回传", world.OutsourceItemId),
+            (second, "第二家回传", secondOutsourceItemId),
+        })
+        {
+            var draft = await vendor.PostAsync("/api/v1/oem/transfers", new { title, outsourceItemId }, ct).Ok();
             for (var index = 0; index < 3; index++)
                 await host.UploadAsync(vendor, TransferId(draft), $"queue-{index}.pdf", OemTestHost.Pdf(title + index), ct);
         }
@@ -65,7 +71,7 @@ public sealed class OemUploadHardeningTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "积压回传" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "积压回传", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var id = TransferId(draft);
         await host.UploadAsync(world.Vendor, id, "first.pdf", OemTestHost.Pdf("first"), ct);
 
@@ -82,7 +88,10 @@ public sealed class OemUploadHardeningTests
 
         // Another vendor is not affected by this vendor's backlog.
         var other = await host.CreateVendorAsync(world.Admin, "无积压厂商", "vendor_idle", ct);
-        var otherDraft = await other.PostAsync("/api/v1/oem/transfers", new { title = "无积压回传" }, ct).Ok();
+        var otherCompanyId = await host.CompanyIdOfAsync("vendor_idle", ct);
+        var otherOutsourceItemId = await host.CreateOutsourceItemAsync(otherCompanyId, "WO-VENDOR-IDLE", ct);
+        var otherDraft = await other.PostAsync("/api/v1/oem/transfers",
+            new { title = "无积压回传", outsourceItemId = otherOutsourceItemId }, ct).Ok();
         await other.PostAsync($"/api/v1/oem/transfers/{TransferId(otherDraft)}/uploads/init", init, ct).Ok();
 
         // Finished jobs no longer count.

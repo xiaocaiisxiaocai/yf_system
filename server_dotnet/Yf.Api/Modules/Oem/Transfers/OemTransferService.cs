@@ -18,7 +18,8 @@ namespace Yf.Api.Modules.Oem.Transfers;
 public sealed record TransferCreate(
     string? Title = null,
     string? Description = null,
-    ulong? OemCompanyId = null);
+    ulong? OemCompanyId = null,
+    ulong? OutsourceItemId = null);
 public sealed record TransferUpdate(
     string? Title = null,
     string? Description = null,
@@ -52,22 +53,32 @@ public sealed class OemTransferService(
         var description = OemValidation.OptionalText(request.Description, "说明", 1024);
         await using var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        if (current is InternalOemActor) await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+        var outsourceItemId = request.OutsourceItemId ?? throw ApiException.BadRequest("请选择外协清单中的工令");
+        var vendorCompanyId = (current as OemAccountActor)?.CompanyId;
+        // Keep the work order open and assigned to the same vendor through draft creation.
+        var items = uow.Db.OutsourceItems
+            .FromSqlInterpolated($"SELECT * FROM outsource_items WHERE id={outsourceItemId} LOCK IN SHARE MODE")
+            .AsNoTracking();
+        if (vendorCompanyId is ulong vendorId) items = items.Where(item => item.VendorId == vendorId);
+        var item = await items.Select(item => new { item.VendorId, item.WorkOrderNo, item.ClosedAt }).SingleOrDefaultAsync(ct)
+            ?? throw ApiException.BadRequest("所选工令不存在或不可选");
+        if (item.ClosedAt is not null) throw ApiException.BadRequest("所选工令已完成，不能创建传递单");
+
         string direction;
-        ulong companyId;
-        if (current is OemAccountActor account)
+        var companyId = item.VendorId;
+        if (request.OemCompanyId is ulong requested && requested != companyId)
+            throw ApiException.BadRequest(vendorCompanyId.HasValue ? "只能向本厂商创建传递单" : "目标厂商与所选工令的厂商不一致");
+        if (current is OemAccountActor)
         {
-            if (request.OemCompanyId is ulong requested && requested != account.CompanyId) throw ApiException.BadRequest("只能向本厂商创建传递单");
             direction = TransferDirections.OemToInternal;
-            companyId = account.CompanyId;
             // The draft references its vendor sender (see OemAccountLock).
             await OemAccountLock.ShareAsync(uow, current, ct);
         }
         else
         {
-            await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
             try { await planning.LoadOrgPathAsync(uow, current.Id, ct); }
             catch (ApprovalPlanningException error) { throw ApiException.BadRequest(error.Message); }
-            companyId = request.OemCompanyId ?? throw ApiException.BadRequest("请选择目标 ODM/OEMA 厂商");
             if (!await uow.Db.OemCompanies.AnyAsync(company => company.Id == companyId && company.Status == OemStatus.Active, ct))
                 throw ApiException.BadRequest("目标厂商不存在或已停用");
             await OemRecipientPolicy.RequireEnabledAccountAsync(uow.Db, companyId, ct);
@@ -76,7 +87,7 @@ public sealed class OemTransferService(
         var retention = await OemRetentionTemplateService.EffectiveActiveAsync(uow.Db, ct);
         var transfer = new OemTransfer
         {
-            Direction = direction, OemCompanyId = companyId, Title = title, Description = description,
+            Direction = direction, OemCompanyId = companyId, OutsourceItemId = outsourceItemId, Title = title, Description = description,
             InternalSenderUserId = current is InternalOemActor ? current.Id : null,
             OemSenderAccountId = current is OemAccountActor ? current.Id : null,
             LifecycleStatus = TransferLifecycle.Draft, RetentionTemplateId = retention.Id,
@@ -85,7 +96,7 @@ public sealed class OemTransferService(
         uow.Db.OemTransfers.Add(transfer);
         await uow.Db.SaveChangesAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_TRANSFER_CREATE", "oem_transfer", transfer.Id,
-            new { targetName = title, direction, companyId }, ct);
+            new { targetName = title, direction, companyId, outsourceItemId, workOrderNo = item.WorkOrderNo }, ct);
         await dispatcher.CommitAsync(uow, ct);
         return await reader.DetailAsync(current, transfer.Id, ct);
     }

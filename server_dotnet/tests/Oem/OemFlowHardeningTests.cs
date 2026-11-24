@@ -34,7 +34,7 @@ public sealed class OemFlowHardeningTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
         var content = OemTestHost.Pdf(new string('r', 2000));
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "范围头" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "范围头", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var file = await host.UploadAsync(world.Vendor, TransferId(draft), "range.pdf", content, ct);
         await world.Vendor.VendorSendAsync(TransferId(draft), Version(draft) + 1, ct).Ok();
         await host.RunOemJobsAsync(ct);
@@ -101,7 +101,7 @@ public sealed class OemFlowHardeningTests
         var world = await OutboundWorldAsync(host, ct);
         var userId = await host.CreateInternalUserAsync("zp_revoked", "Revoked#2026x", ["oem:transfer_create", "oem:transfer_view"], world.Org.Section, ct);
         var sender = await host.LoginInternalAsync("zp_revoked", "Revoked#2026x", ct);
-        var draft = await sender.PostAsync("/api/v1/oem/transfers", new { title = "撤权", oemCompanyId = world.CompanyId }, ct).Ok();
+        var draft = await sender.PostAsync("/api/v1/oem/transfers", new { title = "撤权", oemCompanyId = world.CompanyId, outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var content = OemTestHost.Pdf("revoked");
         var init = await sender.PostAsync($"/api/v1/oem/transfers/{TransferId(draft)}/uploads/init",
             new { fileName = "revoked.pdf", fileSize = (ulong)content.Length }, ct).Ok();
@@ -172,7 +172,7 @@ public sealed class OemFlowHardeningTests
         var world = await OutboundWorldAsync(host, ct);
         var uploader = portalLogout ? world.Vendor : world.Sender;
         var draft = portalLogout
-            ? await uploader.PostAsync("/api/v1/oem/transfers", new { title = "分片重传" }, ct).Ok()
+            ? await uploader.PostAsync("/api/v1/oem/transfers", new { title = "分片重传", outsourceItemId = world.OutsourceItemId }, ct).Ok()
             : await CreateOutboundAsync(world, "分片重传", ct);
         var original = OemTestHost.Pdf(new string('a', 64 * 1024));
         var replacement = OemTestHost.Pdf(new string('b', 64 * 1024));

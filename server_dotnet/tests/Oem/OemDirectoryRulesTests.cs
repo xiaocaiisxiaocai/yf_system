@@ -61,7 +61,7 @@ public sealed class OemDirectoryRulesTests
         var outboundId = TransferId(outbound);
         await host.UploadAsync(world.Sender, outboundId, "out.pdf", OemTestHost.Pdf("in flight out"), ct);
         outbound = await world.Sender.GetAsync($"/api/v1/oem/transfers/{outboundId}", ct).Ok();
-        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "进行中入站" }, ct).Ok();
+        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "进行中入站", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var inboundId = TransferId(inbound);
         await host.UploadAsync(world.Vendor, inboundId, "in.pdf", OemTestHost.Pdf("in flight in"), ct);
         inbound = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{inboundId}", ct).Ok();
@@ -103,14 +103,14 @@ public sealed class OemDirectoryRulesTests
         var effective = (await world.Admin.GetAsync("/api/v1/oem/retention-templates", ct).Ok()).AsArray()
             .Where(item => item!["status"]!.GetValue<string>() == "ACTIVE").Min(item => item!.Id());
 
-        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { title = "无策略字段", oemCompanyId = world.CompanyId }, ct).Ok();
+        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { title = "无策略字段", oemCompanyId = world.CompanyId, outsourceItemId = world.OutsourceItemId }, ct).Ok();
         Assert.Equal(effective, draft["retention"]!["templateId"]!.GetValue<ulong>());
         draft = await world.Sender.PutAsync($"/api/v1/oem/transfers/{TransferId(draft)}",
             new { title = "无策略字段（改）", version = Version(draft) }, ct).Ok();
         Assert.Equal("无策略字段（改）", draft["summary"]!["title"]!.GetValue<string>());
         Assert.Equal(effective, draft["retention"]!["templateId"]!.GetValue<ulong>());
 
-        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传无策略字段" }, ct).Ok();
+        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传无策略字段", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         Assert.Equal(effective, inbound["retention"]!["templateId"]!.GetValue<ulong>());
     }
 

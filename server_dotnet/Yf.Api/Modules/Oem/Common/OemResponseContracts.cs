@@ -9,6 +9,8 @@ public sealed record OemOptionResponse(ulong Id, string Name);
 
 public sealed record OemCompanyOptionResponse(ulong Id, string Name, bool CanReceive, string? UnavailableReason);
 
+public sealed record OemSendableItemResponse(ulong Id, string WorkOrderNo, string? Customer, string VendorName, string? DisabledReason);
+
 public sealed record OemCompanyListItemResponse(
     ulong Id,
     string Name,
@@ -153,6 +155,8 @@ public sealed record OemTransferSummaryResponse(
     string Direction,
     ulong CompanyId,
     string? CompanyName,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ulong? OutsourceItemId,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? WorkOrderNo,
     string Title,
     OemPersonRefResponse Sender,
     /// <summary>For a vendor-sent transfer: the vendor contact who signed it.</summary>

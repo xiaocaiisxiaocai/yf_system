@@ -84,7 +84,7 @@ public sealed class OemDeliveryTests
     private static async Task<(ulong TransferId, ulong FileId, byte[] Content)> ReleasedInboundAsync(OutboundWorld world, CancellationToken ct)
     {
         var content = OemTestHost.Pdf(new string('d', 4000));
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传工装" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传工装", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var file = await world.Host.UploadAsync(world.Vendor, TransferId(draft), "fixture.pdf", content, ct);
         await world.Vendor.VendorSendAsync(TransferId(draft), Version(draft) + 1, ct).Ok();
         await world.Host.RunOemJobsAsync(ct);

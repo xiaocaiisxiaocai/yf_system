@@ -11,7 +11,7 @@ public sealed class OemStorageSafetyTests
 {
     private static async Task<(ulong FileId, string Path)[]> ReleasedInboundFilesAsync(OemTestHost host, OutboundWorld world, int count, CancellationToken ct)
     {
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "批量回传" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "批量回传", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var id = TransferId(draft);
         for (var index = 0; index < count; index++)
             await host.UploadAsync(world.Vendor, id, $"bulk-{index}.pdf", OemTestHost.Pdf("bulk" + index), ct);
@@ -84,7 +84,7 @@ public sealed class OemStorageSafetyTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "找回文件" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "找回文件", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var transferId = TransferId(draft);
         await host.UploadAsync(world.Vendor, transferId, "restored.pdf", OemTestHost.Pdf("restored"), ct);
         var detail = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();

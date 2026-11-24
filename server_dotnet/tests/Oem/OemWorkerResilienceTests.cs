@@ -153,7 +153,7 @@ public sealed class OemWorkerResilienceTests
         var world = await OutboundWorldAsync(host, ct);
         await host.LoginOemAsync("vendor_out", "Vendor#2026", ct);
 
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "清理会话" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "清理会话", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var fileId = (await host.UploadAsync(world.Vendor, TransferId(draft), "session.pdf", OemTestHost.Pdf("session"), ct)).Id();
         await world.Vendor.VendorSendAsync(TransferId(draft), Version(draft) + 1, ct).Ok();
         await host.RunOemJobsAsync(ct);

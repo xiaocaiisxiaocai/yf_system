@@ -21,7 +21,7 @@ public sealed class OemOrganisationFilterTests
         var otherSender = await host.LoginInternalAsync("other_sender", "Sender#2026x", ct);
 
         async Task<ulong> Create(ApiClient client, string title) => TransferId(await client.PostAsync("/api/v1/oem/transfers",
-            new { title, oemCompanyId = world.CompanyId }, ct).Ok());
+            new { title, oemCompanyId = world.CompanyId, outsourceItemId = world.OutsourceItemId }, ct).Ok());
         var sectionFirst = await Create(world.Sender, "同课一");
         var sectionSecond = await Create(world.Sender, "同课二");
         var departmentDirect = await Create(departmentSender, "直属部门");
@@ -31,7 +31,7 @@ public sealed class OemOrganisationFilterTests
         var noOrganisation = await Create(world.Admin, "没有组织");
         await using (var db = await host.OpenAsync(ct))
             await db.ExecuteAsync("UPDATE users SET department_id=NULL WHERE employee_no='admin'");
-        var inbound = TransferId(await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "厂商回传" }, ct).Ok());
+        var inbound = TransferId(await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "厂商回传", outsourceItemId = world.OutsourceItemId }, ct).Ok());
         var privateDraft = await Create(world.Sender, "私人草稿");
         // This suite tests the read projection, not sending/approval. Keep one genuinely private draft.
         await using (var db = await host.OpenAsync(ct))

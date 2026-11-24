@@ -17,7 +17,7 @@ public sealed class OemDirectoryVisibilityTests
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await SetupAsync(host, ct);
-        var otherCompanyTransfer = await CreateDraftAsync(world.Sender, world.JunCompany, ct);
+        var otherCompanyTransfer = await CreateDraftAsync(world.Sender, world.JunOutsourceItemId, ct);
         if (abandon) await AbandonAsync(world.Sender, otherCompanyTransfer, ct);
 
         await world.Admin.DeleteAsync($"/api/v1/oem/accounts/{world.YuanAccount}", ct).Ok();
@@ -39,18 +39,20 @@ public sealed class OemDirectoryVisibilityTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await SetupAsync(host, ct);
 
+        var yuanOutsourceItemId = await host.CreateOutsourceItemAsync(world.YuanCompany, "WO-YUAN", ct);
+
         // Account deletion owns only the vendor-authored direction, in both hidden DRAFT and visible ABANDONED states.
-        var inboundDraft = await CreateDraftAsync(world.YuanVendor, world.YuanCompany, ct);
-        var inboundAbandoned = await CreateDraftAsync(world.YuanVendor, world.YuanCompany, ct);
+        var inboundDraft = await CreateDraftAsync(world.YuanVendor, yuanOutsourceItemId, ct);
+        var inboundAbandoned = await CreateDraftAsync(world.YuanVendor, yuanOutsourceItemId, ct);
         await AbandonAsync(world.YuanVendor, inboundAbandoned, ct);
 
         // Internal outbound drafts remain until company deletion, again covering both lifecycle states.
-        var outboundDraft = await CreateDraftAsync(world.Sender, world.YuanCompany, ct);
-        var outboundAbandoned = await CreateDraftAsync(world.Sender, world.YuanCompany, ct);
+        var outboundDraft = await CreateDraftAsync(world.Sender, yuanOutsourceItemId, ct);
+        var outboundAbandoned = await CreateDraftAsync(world.Sender, yuanOutsourceItemId, ct);
         await AbandonAsync(world.Sender, outboundAbandoned, ct);
 
         // Cleanup is always scoped to the selected company.
-        var otherCompanyAbandoned = await CreateDraftAsync(world.Sender, world.JunCompany, ct);
+        var otherCompanyAbandoned = await CreateDraftAsync(world.Sender, world.JunOutsourceItemId, ct);
         await AbandonAsync(world.Sender, otherCompanyAbandoned, ct);
 
         var yuanIds = new[]
@@ -81,6 +83,13 @@ public sealed class OemDirectoryVisibilityTests
         }
         Assert.Equal(auditCount, await TransferAuditCountAsync(host, yuanIds, ct));
 
+        // Model pre-link drafts so company deletion can reach its cleanup without an outsourcing reference.
+        await using (var legacy = await host.OpenAsync(ct))
+            await legacy.ExecuteAsync(new CommandDefinition("""
+                UPDATE oem_transfers SET outsource_item_id=NULL WHERE outsource_item_id=@yuanOutsourceItemId;
+                DELETE FROM outsource_items WHERE id=@yuanOutsourceItemId;
+                """, new { yuanOutsourceItemId }, cancellationToken: ct));
+
         await world.Admin.DeleteAsync($"/api/v1/oem/companies/{world.YuanCompany}", ct).Ok();
         await using (var afterCompany = await host.OpenAsync(ct))
         {
@@ -99,13 +108,15 @@ public sealed class OemDirectoryVisibilityTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await SetupAsync(host, ct);
 
-        var emptyDraft = await CreateDraftAsync(world.YuanVendor, world.YuanCompany, ct);
-        var uploadingDraft = await CreateDraftAsync(world.YuanVendor, world.YuanCompany, ct);
+        var yuanOutsourceItemId = await host.CreateOutsourceItemAsync(world.YuanCompany, "WO-YUAN", ct);
+
+        var emptyDraft = await CreateDraftAsync(world.YuanVendor, yuanOutsourceItemId, ct);
+        var uploadingDraft = await CreateDraftAsync(world.YuanVendor, yuanOutsourceItemId, ct);
         var upload = await world.YuanVendor.PostAsync(
             $"/api/v1/oem/transfers/{TransferId(uploadingDraft)}/uploads/init",
             new { fileName = "pending.pdf", fileSize = (ulong)OemTestHost.Pdf("pending").Length }, ct).Ok();
 
-        var removedFileDraft = await CreateDraftAsync(world.YuanVendor, world.YuanCompany, ct);
+        var removedFileDraft = await CreateDraftAsync(world.YuanVendor, yuanOutsourceItemId, ct);
         var removedFile = await host.UploadAsync(world.YuanVendor, TransferId(removedFileDraft),
             "removed.pdf", OemTestHost.Pdf("removed"), ct);
         await world.YuanVendor.DeleteAsync($"/api/v1/oem/files/{removedFile.Id()}", ct).Ok();
@@ -143,8 +154,10 @@ public sealed class OemDirectoryVisibilityTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await SetupAsync(host, ct);
 
-        var emptyDraft = await CreateDraftAsync(world.Sender, world.YuanCompany, ct);
-        var uploadingDraft = await CreateDraftAsync(world.Sender, world.YuanCompany, ct);
+        var yuanOutsourceItemId = await host.CreateOutsourceItemAsync(world.YuanCompany, "WO-YUAN", ct);
+
+        var emptyDraft = await CreateDraftAsync(world.Sender, yuanOutsourceItemId, ct);
+        var uploadingDraft = await CreateDraftAsync(world.Sender, yuanOutsourceItemId, ct);
         var upload = await world.Sender.PostAsync(
             $"/api/v1/oem/transfers/{TransferId(uploadingDraft)}/uploads/init",
             new { fileName = "company-pending.pdf", fileSize = (ulong)OemTestHost.Pdf("pending").Length }, ct).Ok();
@@ -167,7 +180,7 @@ public sealed class OemDirectoryVisibilityTests
 
     private sealed record World(
         ApiClient Admin, ApiClient Sender, ApiClient YuanVendor,
-        ulong JunCompany, ulong YuanCompany, ulong YuanAccount);
+        ulong JunCompany, ulong YuanCompany, ulong YuanAccount, ulong JunOutsourceItemId);
 
     private static async Task<World> SetupAsync(OemTestHost host, CancellationToken ct)
     {
@@ -186,14 +199,15 @@ public sealed class OemDirectoryVisibilityTests
             new { oldPassword = "Vendor#2026", newPassword = "Vendor#2027x" }, ct).Ok();
         yuanVendor = await host.LoginOemAsync("YK001", "Vendor#2027x", ct);
 
+        var junOutsourceItemId = await host.CreateOutsourceItemAsync(jun, "WO-JUN", ct);
         var org = await host.CreateOrgPathAsync("删除验收", ct);
         await host.CreateInternalUserAsync("draft_author", "Sender#2026x", ["oem:transfer_create"], org.Section, ct);
         return new(admin, await host.LoginInternalAsync("draft_author", "Sender#2026x", ct),
-            yuanVendor, jun, yuan, yuanAccount);
+            yuanVendor, jun, yuan, yuanAccount, junOutsourceItemId);
     }
 
-    private static Task<JsonNode> CreateDraftAsync(ApiClient author, ulong companyId, CancellationToken ct) =>
-        author.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Ok();
+    private static Task<JsonNode> CreateDraftAsync(ApiClient author, ulong outsourceItemId, CancellationToken ct) =>
+        author.PostAsync("/api/v1/oem/transfers", new { outsourceItemId }, ct).Ok();
 
     private static async Task AbandonAsync(ApiClient author, JsonNode draft, CancellationToken ct) =>
         await author.DeleteAsync($"/api/v1/oem/transfers/{TransferId(draft)}?version={Version(draft)}", ct).Ok();

@@ -83,6 +83,7 @@
   "GET /api/v1/oem/outsource-items",
   "GET /api/v1/oem/outsource-items/export",
   "GET /api/v1/oem/retention-templates",
+  "GET /api/v1/oem/sendable-items",
   "GET /api/v1/oem/transfer-recipient-choices",
   "GET /api/v1/oem/transfers",
   "GET /api/v1/oem/transfers/{}",

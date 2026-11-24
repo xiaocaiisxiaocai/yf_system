@@ -9,6 +9,8 @@ internal static class OemTransferEndpoints
 {
     public static void Map(RouteGroupBuilder oem)
     {
+        oem.MapGet("/sendable-items", (HttpContext c, OemTransferReader r, CancellationToken ct) => r.SendableItemsAsync(OemActorAccessor.Get(c), ct))
+            .Produces<IReadOnlyList<OemSendableItemResponse>>();
         oem.MapGet("/transfers", (HttpContext c, OemTransferReader r, CancellationToken ct) => r.ListAsync(OemActorAccessor.Get(c), c.Request, ct))
             .Produces<OemPageResponse<OemTransferSummaryResponse>>();
         oem.MapPost("/transfers", (TransferCreate body, HttpContext c, OemTransferService s, CancellationToken ct) =>
