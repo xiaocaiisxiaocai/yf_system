@@ -977,7 +977,7 @@ internal static class OutsourceHistory
     private static readonly Dictionary<string, string> Labels = new(StringComparer.Ordinal)
     {
         ["outsourceDate"] = "外发日期", ["vendor"] = "外发厂商", ["remark"] = "备注", ["status"] = "状态",
-        ["customer"] = "客户", ["machineModel"] = "机型", ["supervisor"] = "上级主管",
+        ["customer"] = "客户", ["machineModel"] = "机型", ["supervisor"] = "机构课别",
         ["mechanicalOwner"] = "机构执行人", ["electricalOwner"] = "电控执行人", ["workOrderIssuedOn"] = "工令下发",
         ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
         ["latestDueDate"] = "最新交期", ["completed"] = "完成状态", ["sendStatus"] = "发送状态",
