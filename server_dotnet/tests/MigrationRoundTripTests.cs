@@ -21,7 +21,7 @@ public sealed class MigrationRoundTripTests
     private const string BeforeElectricalHandoff = "20261124003700_CorrectOutsourceDueDatesFromCustomerDate";
     private const string BeforeMechanicalSupervisor = "20261124010000_AddOutsourceElectricalHandoff";
     private const string RenameSupervisor = "20261124032519_RenameOutsourceMechanicalSupervisor";
-    private const string Latest = "20261124055650_MarkLegacyOutsourceSupervisorBaseline";
+    private const string Latest = "20261124060404_RenameOutsourceSupervisorKey";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =

@@ -353,7 +353,7 @@ export default function OutsourceListPage() {
       </Space>,
     },
     vendor: { dataIndex: 'vendorName', width: 110, ellipsis: true },
-    mechanicalSection: { dataIndex: 'mechanicalSection', width: 110, ellipsis: true },
+    supervisor: { dataIndex: 'supervisor', width: 110, ellipsis: true },
     mechanicalOwner: { dataIndex: 'mechanicalOwner', width: 100, ellipsis: true },
     electricalOwner: { dataIndex: 'electricalOwner', width: 100, ellipsis: true },
     workOrderIssuedOn: { width: 110, render: (_, item) => date(item.workOrderIssuedOn) },

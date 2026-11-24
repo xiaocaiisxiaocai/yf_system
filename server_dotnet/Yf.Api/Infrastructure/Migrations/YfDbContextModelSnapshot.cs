@@ -1230,11 +1230,6 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(64)")
                         .HasColumnName("mechanical_owner");
 
-                    b.Property<string>("MechanicalSection")
-                        .HasMaxLength(64)
-                        .HasColumnType("varchar(64)")
-                        .HasColumnName("mechanical_section");
-
                     b.Property<DateTime?>("ModifiedAt")
                         .HasColumnType("datetime(3)")
                         .HasColumnName("modified_at");

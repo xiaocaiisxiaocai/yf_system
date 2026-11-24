@@ -198,7 +198,7 @@ public sealed class OutsourceIpmsSyncService(
     private static async Task<HashSet<ulong>> SupervisorNoticesAsync(YfDbContext context, OutsourceItem[] batch,
         IReadOnlyDictionary<string, IpmsWorkOrder> orders, IReadOnlySet<string> vendorKeys, CancellationToken ct)
     {
-        const string supervisorKey = "mechanicalSection";
+        const string supervisorKey = "supervisor";
         if (!vendorKeys.Contains(supervisorKey)) return [];
         var sentItems = new List<(OutsourceItem Item, string? NextOwner)>();
         foreach (var item in batch)

@@ -88,7 +88,7 @@ public sealed class OutsourceFieldTests
 
         var settings = await f.Fields.SettingsAsync(f.Admin, ct);
         Assert.Equal(["outsourceDate", "status", "electricalHandoff", "workOrderNo", "customer", "machineModel", "hasRobotV", "type", "vendor",
-                "mechanicalSection", "mechanicalOwner", "electricalOwner", "workOrderIssuedOn", "bomOn", "drawingReleasedOn",
+                "supervisor", "mechanicalOwner", "electricalOwner", "workOrderIssuedOn", "bomOn", "drawingReleasedOn",
                 "originalDueDate", "latestDueDate", "quantity", "remark"],
             settings.Fields.Select(x => x.Key));
         var robotV = settings.Fields.Single(x => x.Key == "hasRobotV");

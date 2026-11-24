@@ -1370,7 +1370,7 @@ export interface OutsourceItemResponse {
   vendorName: string
   customer: string | null
   machineModel: string | null
-  mechanicalSection: string | null
+  supervisor: string | null
   mechanicalOwner: string | null
   electricalOwner: string | null
   workOrderIssuedOn: string | null

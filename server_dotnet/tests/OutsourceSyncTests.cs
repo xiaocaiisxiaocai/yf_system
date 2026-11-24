@@ -161,8 +161,8 @@ public sealed class OutsourceSyncTests
         await database.InitializeAsync(ct);
         await database.ExecuteAsync("""
             UPDATE users SET must_change_password=0 WHERE employee_no='admin';
-            UPDATE outsource_fields SET vendor_visible=(field_key='mechanicalSection')
-              WHERE field_key IN ('mechanicalOwner','electricalOwner','mechanicalSection');
+            UPDATE outsource_fields SET vendor_visible=(field_key='supervisor')
+              WHERE field_key IN ('mechanicalOwner','electricalOwner','supervisor');
             INSERT INTO departments(id,name,kind,sort_no,status,created_at,updated_at) VALUES
               (9001,'机构一组','DIVISION',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9002,'机构二组','DIVISION',2,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
@@ -194,7 +194,7 @@ public sealed class OutsourceSyncTests
             new OutsourceImportRow(i + 2, "2026-11-04", no, vendor.Name, "OEMA")).ToArray()), ct);
         Assert.Equal(orders.Length, imported.Created);
         var before = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List;
-        Assert.All(before.Where(item => item.WorkOrderNo != "NO-LEADER"), item => Assert.Equal("甲主管", item.MechanicalSection));
+        Assert.All(before.Where(item => item.WorkOrderNo != "NO-LEADER"), item => Assert.Equal("甲主管", item.Supervisor));
         var ids = before.Select(item => item.Id).ToArray();
         var preview = await mails.PreviewAsync(buyer, new(ids), ct);
         await mails.SendAsync(buyer, new(ids, preview.Fingerprint, "supervisor-first-notice", null), ct);
@@ -205,28 +205,28 @@ public sealed class OutsourceSyncTests
         ipms.Orders["NO-LEADER"] = ipms.Orders["NO-LEADER"] with { MechanicalOwner = null, ElectricalOwner = "机构乙" };
         await sync.SyncNowAsync(buyer, new(ids), ct);
         var after = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.ToDictionary(item => item.WorkOrderNo);
-        Assert.Equal(("乙主管", "PENDING_NOTICE"), (after["DIFFERENT"].MechanicalSection, after["DIFFERENT"].SendStatus));
-        Assert.Equal(("甲主管", "SENT"), (after["SAME"].MechanicalSection, after["SAME"].SendStatus));
-        Assert.Equal((null, "PENDING_NOTICE"), (after["CLEARED"].MechanicalSection, after["CLEARED"].SendStatus));
-        Assert.Equal((null, "SENT"), (after["NO-LEADER"].MechanicalSection, after["NO-LEADER"].SendStatus));
+        Assert.Equal(("乙主管", "PENDING_NOTICE"), (after["DIFFERENT"].Supervisor, after["DIFFERENT"].SendStatus));
+        Assert.Equal(("甲主管", "SENT"), (after["SAME"].Supervisor, after["SAME"].SendStatus));
+        Assert.Equal((null, "PENDING_NOTICE"), (after["CLEARED"].Supervisor, after["CLEARED"].SendStatus));
+        Assert.Equal((null, "SENT"), (after["NO-LEADER"].Supervisor, after["NO-LEADER"].SendStatus));
         var queue = (await items.ListAsync(buyer, Query(false) with { SendQueue = true }, 1, 20, 0, ct)).List;
         Assert.Equal(["CLEARED", "DIFFERENT"], queue.Select(item => item.WorkOrderNo).Order(StringComparer.Ordinal));
 
         // The IPMS owner remains 机构丙 while the organisation replaces the leader of their unit.
         await database.ExecuteAsync("""
             UPDATE departments SET leader_account_id=9913 WHERE id=9001;
-            UPDATE outsource_fields SET vendor_visible=0 WHERE field_key='mechanicalSection';
+            UPDATE outsource_fields SET vendor_visible=0 WHERE field_key='supervisor';
             """, ct);
         await sync.SyncNowAsync(buyer, new(ids), ct);
         var hidden = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.Single(item => item.WorkOrderNo == "SAME");
-        Assert.Equal(("机构丙", "机构甲", "SENT"), (hidden.MechanicalOwner, hidden.MechanicalSection, hidden.SendStatus));
+        Assert.Equal(("机构丙", "机构甲", "SENT"), (hidden.MechanicalOwner, hidden.Supervisor, hidden.SendStatus));
 
-        await database.ExecuteAsync("UPDATE outsource_fields SET vendor_visible=1 WHERE field_key='mechanicalSection'", ct);
+        await database.ExecuteAsync("UPDATE outsource_fields SET vendor_visible=1 WHERE field_key='supervisor'", ct);
         await sync.SyncNowAsync(buyer, new(ids), ct);
         var visible = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.ToDictionary(item => item.WorkOrderNo);
         Assert.Equal(("机构丙", "机构甲", "PENDING_NOTICE"),
-            (visible["SAME"].MechanicalOwner, visible["SAME"].MechanicalSection, visible["SAME"].SendStatus));
-        Assert.Equal((null, "SENT"), (visible["NO-LEADER"].MechanicalSection, visible["NO-LEADER"].SendStatus));
+            (visible["SAME"].MechanicalOwner, visible["SAME"].Supervisor, visible["SAME"].SendStatus));
+        Assert.Equal((null, "SENT"), (visible["NO-LEADER"].Supervisor, visible["NO-LEADER"].SendStatus));
 
         // A notice containing the new supervisor becomes the baseline for the next sync.
         ulong[] same = [visible["SAME"].Id];
@@ -272,16 +272,17 @@ public sealed class OutsourceSyncTests
         await mails.SendAsync(buyer, new([id], preview.Fingerprint, "legacy-first-notice", null), ct);
 
         // What the database held before the upgrade: the 机构课别 name, not the supervisor.
-        await database.ExecuteAsync($"UPDATE outsource_items SET last_sent_snapshot=JSON_SET(last_sent_snapshot,'$.mechanicalSection','机构一课'), mechanical_section='机构一课' WHERE id={id}", ct);
+        await database.ExecuteAsync($"UPDATE outsource_items SET last_sent_snapshot=JSON_SET(JSON_REMOVE(last_sent_snapshot,'$.supervisor'),'$.mechanicalSection','机构一课') WHERE id={id}", ct);
         await database.ExecuteAsync(Yf.Api.Infrastructure.Migrations.MarkLegacyOutsourceSupervisorBaseline.MarkLegacySnapshotsSql, ct);
+        await database.ExecuteAsync(Yf.Api.Infrastructure.Migrations.RenameOutsourceSupervisorKey.RenameKeySql, ct);
 
         var listed = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.Single();
-        Assert.Equal("甲主管", listed.MechanicalSection);
-        Assert.DoesNotContain("mechanicalSection", listed.ChangedFields ?? []);
+        Assert.Equal("甲主管", listed.Supervisor);
+        Assert.DoesNotContain("supervisor", listed.ChangedFields ?? []);
         await sync.SyncNowAsync(buyer, new([id]), ct);
         var synced = (await items.ListAsync(buyer, Query(false), 1, 20, 0, ct)).List.Single();
         Assert.Equal("SENT", synced.SendStatus);
-        Assert.DoesNotContain("mechanicalSection", synced.ChangedFields ?? []);
+        Assert.DoesNotContain("supervisor", synced.ChangedFields ?? []);
 
         // The baseline now follows the supervisor, so a later real change is still noticed.
         await database.ExecuteAsync("UPDATE departments SET leader_account_id=9913 WHERE id=9001", ct);
