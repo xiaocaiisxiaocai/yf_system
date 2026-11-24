@@ -13,7 +13,7 @@ namespace Yf.Api.Modules.Outsource.Ipms.Mes;
 /// stopped; what it fetched then waits in staging until a person discards it or merges it (never deleting rows).
 /// See 设计 → 抓取流程、手动抓取.
 /// </summary>
-public sealed class MesMirrorSyncService(
+public sealed partial class MesMirrorSyncService(
     IDbContextFactory<YfDbContext> dbFactory,
     AuditService audit,
     IMesSource source,
@@ -179,7 +179,8 @@ public sealed class MesMirrorSyncService(
     }
 
     private Task WriteAuditAsync(YfDbContext context, ulong? actorId, object detail, CancellationToken ct) =>
-        audit.WriteAsync(context.Database.Connection(), null, actorId, "OUTSOURCE_MES_MIRROR", "mes_work_orders", null, detail, null, ct);
+        audit.WriteAsync(context.Database.Connection(), context.Database.CurrentTransaction is null ? null : context.Database.RequireTransaction(),
+            actorId, "OUTSOURCE_MES_MIRROR", "mes_work_orders", null, detail, null, ct);
 
     private async Task<MesPage> FetchWithRetryAsync(int page, int pageSize, CancellationToken ct)
     {

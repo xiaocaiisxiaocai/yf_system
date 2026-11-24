@@ -79,6 +79,8 @@ export class OemApi {
   outsourceItems = (query: { page: number; pageSize: number; keyword?: string; includeClosed?: boolean }) =>
     this.get<'GET /oem/outsource-items', ApiResponses['GET /oem/outsource-items']>('/oem/outsource-items',
       { ...query, keyword: query.keyword || undefined, includeClosed: query.includeClosed ? 'true' : undefined })
+  setOutsourceElectricalHandoff = (id: number, body: Api.OutsourceElectricalHandoffRequest) =>
+    this.post<'POST /oem/outsource-items/{id}/electrical-handoff', Api.OutsourceVendorRow>(`/oem/outsource-items/${id}/electrical-handoff`, body)
   outsourceExport = async (query: { keyword?: string; includeClosed?: boolean }) =>
     (await this.http.get<ApiResponses['GET /oem/outsource-items/export']>('/oem/outsource-items/export', {
       params: { keyword: query.keyword || undefined, includeClosed: query.includeClosed ? 'true' : undefined },

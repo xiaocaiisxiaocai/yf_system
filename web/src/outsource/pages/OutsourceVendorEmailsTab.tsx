@@ -22,7 +22,7 @@ const MAXIMUM_PER_VENDOR = 50
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const IMPORT_HEADERS = ['厂商名称', '邮箱'] as const
 const WORKBOOK: ExcelWorkbookSheet[] = [
-  { name: '数据', headers: [...IMPORT_HEADERS], rows: [] },
+  { name: '数据', headers: IMPORT_HEADERS, rows: [['示例厂商', 'example@example.com']] },
   { name: '说明', headers: ['说明'], rows: [
     ['一行一个邮箱；同一厂商有多个邮箱时，重复填写厂商名称。'],
     ['厂商是 ODM/OEMA 厂商管理里已有的厂商，名称须与系统中的一致。'],

@@ -278,7 +278,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var reference = await OutsourceReference.LoadAsync(context, ct);
         var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
         var total = (ulong)await filtered.LongCountAsync(ct);
-        var rows = await filtered.OrderByDescending(x => x.OutsourceDate).ThenByDescending(x => x.Id)
+        var rows = await ListOrder(context, filtered)
             .Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size).ToArrayAsync(ct);
         return new(await reference.JsonMarkedAsync(context, rows, ct), total, page, size);
     }
@@ -291,7 +291,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
         if (await filtered.CountAsync(ct) > MaximumExportRows)
             throw ApiException.BadRequest($"一次最多导出 {MaximumExportRows} 条，请缩小筛选范围");
-        var rows = await filtered.OrderByDescending(x => x.OutsourceDate).ThenByDescending(x => x.Id).ToArrayAsync(ct);
+        var rows = await ListOrder(context, filtered).ToArrayAsync(ct);
         // Cells that differ from the last mail are yellow, as in the list and the vendor attachment.
         var responses = await reference.JsonMarkedAsync(context, rows, ct);
         var changed = responses.Where(x => x.ChangedFields is { Length: > 0 })
@@ -301,6 +301,11 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         return new(content, $"外协清单{vendorPart}_{today}.xlsx");
     }
+
+    /// <summary>List and export order (外协清单契约 → 清单排序): vendor name, then newest outsourcing date, then work order.</summary>
+    private static IOrderedQueryable<OutsourceItem> ListOrder(YfDbContext context, IQueryable<OutsourceItem> items) =>
+        items.OrderBy(x => context.OemCompanies.Where(c => c.Id == x.VendorId).Select(c => c.Name).FirstOrDefault())
+            .ThenBy(x => x.VendorId).ThenByDescending(x => x.OutsourceDate).ThenBy(x => x.WorkOrderNo).ThenBy(x => x.Id);
 
     private static IQueryable<OutsourceItem> Filter(IQueryable<OutsourceItem> items, OutsourceItemQuery query, OutsourceReference reference)
     {
@@ -471,7 +476,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             throw ApiException.Conflict($"工令 {other.WorkOrderNo} 不是未发送或有变更待通知的记录");
         var baseline = await OutsourceReference.LoadAsync(context, ct);
         await baseline.LoadValuesAsync(context, locked.Select(x => x.Id).ToArray(), ct);
-        var vendorFields = baseline.Layout.WorkbookFields(vendor: true);
+        var vendorFields = baseline.Layout.MailWorkbookFields();
         foreach (var before in locked)
         {
             var after = before.SendStatus == OutsourceSendStatuses.PendingNotice ? OutsourceSendStatuses.Sent : OutsourceSendStatuses.NotNeeded;
@@ -581,7 +586,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var layout = reference.Layout;
         var custom = CustomChanges(layout, change.Custom);
         await reference.LoadValuesAsync(context, locked.Select(x => x.Id).ToArray(), ct);
-        var vendorKeys = layout.VendorKeys;
+        var vendorKeys = layout.NoticeKeys;
         var modifiedAt = await DbClock.UtcNowAsync(context, ct, 3);
         foreach (var before in locked)
         {
@@ -853,7 +858,9 @@ internal sealed class OutsourceReference
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
         item.Remark, item.Status, item.SendStatus, Match(item.TypeCode, item.VendorId), item.ClosedAt is not null,
-        item.IpmsSyncedAt, item.UpdatedAt, null, null, CreatedAtOf(item), null, item.ModifiedAt, item.Customer,
+        item.IpmsSyncedAt, item.UpdatedAt, item.ElectricalHandoff,
+        item.ElectricalHandoffAt is { } handoffAt ? DateTime.SpecifyKind(handoffAt, DateTimeKind.Utc) : null, item.ElectricalHandoffSigner,
+        null, null, CreatedAtOf(item), null, item.ModifiedAt, item.Customer,
         ActiveValuesOf(item.Id)).Marked(item, Layout);
 
     private static DateTime? CreatedAtOf(OutsourceItem item) => item.CreatedBy is null ? null : item.CreatedAt;
@@ -867,7 +874,7 @@ internal static class OutsourceChangeMarks
 {
     /// <summary>
     /// Marks the columns that differ from the last mail to the item's current vendor (none before it was ever sent).
-    /// Only the columns vendors see are compared: that is what the mail showed.
+    /// Only the columns included in the notice are compared.
     /// </summary>
     internal static OutsourceItemResponse Marked(this OutsourceItemResponse response, OutsourceItem item, OutsourceFieldLayout layout)
     {
@@ -875,7 +882,7 @@ internal static class OutsourceChangeMarks
         try
         {
             var snapshot = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string?>>(json);
-            return response with { ChangedFields = [.. OutsourceWorkbook.Changed(response, snapshot, layout.WorkbookFields(vendor: true))] };
+            return response with { ChangedFields = [.. OutsourceWorkbook.Changed(response, snapshot, layout.MailWorkbookFields())] };
         }
         catch (System.Text.Json.JsonException) { return response; }
     }
@@ -950,6 +957,7 @@ internal static class OutsourceHistory
         ["mechanicalOwner"] = "机构执行人", ["electricalOwner"] = "电控执行人", ["workOrderIssuedOn"] = "工令下发",
         ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
         ["latestDueDate"] = "最新交期", ["completed"] = "完成状态", ["sendStatus"] = "发送状态",
+        [OutsourceBuiltInFields.ElectricalHandoffKey] = OutsourceBuiltInFields.ElectricalHandoffLabel,
     };
 
     internal static string Label(string field) => Labels.GetValueOrDefault(field, field);

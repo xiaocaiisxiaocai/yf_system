@@ -64,6 +64,7 @@ const SCOPE_LABELS: Record<string, string> = {
   SELF: '仅本人', ORG: '本组织及下级', ALL: '全部',
 }
 const USER_IMPORT_HEADERS = ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码'] as const
+const USER_IMPORT_EXAMPLE = ['demo001', '示例员工', 'example@example.com', '示例部门', '示例角色', 'T7!kmQ4n'] as const
 // 2026-11 之前的模板第 4 列叫“课别”，旧文件仍可导入。
 const USER_IMPORT_HEADER_ALIASES = { 课别: '所属组织' } as const
 const USER_EXPORT_HEADERS = ['状态', '需改密', '最近登录'] as const
@@ -222,7 +223,7 @@ export default function UserList() {
       roles[index]?.name ?? '',
     ])
     return [
-      { name: '数据', headers: [...USER_IMPORT_HEADERS], rows: [] },
+      { name: '数据', headers: USER_IMPORT_HEADERS, rows: [USER_IMPORT_EXAMPLE] },
       { name: '选项', headers: USER_OPTION_HEADERS, rows: optionRows },
       { name: '说明', headers: ['说明'], rows: [
         ['仅新增账号；已存在账号会跳过，不会覆盖。'],

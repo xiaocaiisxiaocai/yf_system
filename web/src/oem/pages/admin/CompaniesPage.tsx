@@ -13,10 +13,17 @@ import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../../utils/excelWorkbook'
 
 const OEM_COMPANY_IMPORT_HEADERS = ['厂商名称', '备注'] as const
+const OEM_COMPANY_WORKBOOK: ExcelWorkbookSheet[] = [
+  { name: '数据', headers: OEM_COMPANY_IMPORT_HEADERS, rows: [['示例厂商', '示例备注']] },
+  { name: '说明', headers: ['说明'], rows: [
+    ['本模板仅新增 ODM/OEMA 厂商资料；已存在的厂商名称会跳过，不覆盖现有资料。'],
+    ['“状态”、账号数和联络人数为只读信息，不参与导入。新建厂商默认为启用。'],
+  ] },
+]
 const OEM_ACCOUNT_IMPORT_HEADERS = ['厂商名称', '账号', '初始密码'] as const
 const OEM_ACCOUNT_EXPORT_HEADERS = ['厂商名称', '账号', '状态', '最近登录'] as const
 const OEM_ACCOUNT_WORKBOOK: ExcelWorkbookSheet[] = [
-  { name: '数据', headers: [...OEM_ACCOUNT_IMPORT_HEADERS], rows: [] },
+  { name: '数据', headers: OEM_ACCOUNT_IMPORT_HEADERS, rows: [['示例厂商', 'demo001', 'T7!kmQ4n']] },
   { name: '说明', headers: ['说明'], rows: [
     ['一行一个账号；同一厂商有多个账号时，重复填写厂商名称。'],
     ['厂商必须已存在，名称须与系统中的厂商名称一致。'],
@@ -64,7 +71,7 @@ interface AccountsDrawerProps {
 const OEM_CONTACT_IMPORT_HEADERS = ['厂商名称', '联络人姓名', '邮箱', '排序'] as const
 const OEM_CONTACT_EXPORT_HEADERS = ['状态'] as const
 const OEM_CONTACT_WORKBOOK: ExcelWorkbookSheet[] = [
-  { name: '数据', headers: [...OEM_CONTACT_IMPORT_HEADERS], rows: [] },
+  { name: '数据', headers: OEM_CONTACT_IMPORT_HEADERS, rows: [['示例厂商', '示例联络人', 'example@example.com', '1']] },
   { name: '说明', headers: ['说明'], rows: [
     ['一行一个联络人；同一厂商有多个联络人时，重复填写厂商名称。'],
     ['厂商必须已存在，名称须与系统中的厂商名称一致。'],
@@ -761,14 +768,6 @@ export default function CompaniesPage() {
     }
   }
 
-  const companyTemplateSheets: ExcelWorkbookSheet[] = [
-    { name: '数据', headers: [...OEM_COMPANY_IMPORT_HEADERS], rows: [] },
-    { name: '说明', headers: ['说明'], rows: [
-      ['本模板仅新增 ODM/OEMA 厂商资料；已存在的厂商名称会跳过，不覆盖现有资料。'],
-        ['“状态”、账号数和联络人数为只读信息，不参与导入。新建厂商默认为启用。'],
-    ] },
-  ]
-
   const prepareCompanyImport = async (sourceRows: ExcelImportRow[]): Promise<PreparedImport<OemCompanyImportPayload>> => {
     const existing = new Set((await fetchAllCompanies()).map(company => company.name.trim().toLowerCase()))
     const sourceCounts = new Map<string, number>()
@@ -811,7 +810,7 @@ export default function CompaniesPage() {
       ])
       await downloadExcelWorkbook('ODM-OEMA厂商.xlsx', [
         { name: '数据', headers: [...OEM_COMPANY_IMPORT_HEADERS, '状态', '账号数', '启用账号数', '联络人'], rows },
-        ...companyTemplateSheets.slice(1),
+        ...OEM_COMPANY_WORKBOOK.slice(1),
       ])
       Message.success(`已导出 ${rows.length} 家厂商`)
     } catch (error) {
@@ -987,7 +986,7 @@ export default function CompaniesPage() {
         templateName="ODM-OEMA厂商导入模板.xlsx"
         requiredHeaders={OEM_COMPANY_IMPORT_HEADERS}
         optionalHeaders={['状态', '账号数', '启用账号数', '联络人']}
-        templateSheets={companyTemplateSheets}
+        templateSheets={OEM_COMPANY_WORKBOOK}
         maxRows={500}
         prepare={prepareCompanyImport}
         commit={importCompanies}

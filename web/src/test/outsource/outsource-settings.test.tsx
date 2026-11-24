@@ -32,7 +32,7 @@ const aliases = [
   { id: 31, fullName: '庆鼎精密电子(淮安)有限公司', shortName: '庆鼎', manual: false, updatedAt: '2026-11-17T06:00:00.000Z' },
   { id: 32, fullName: '超颖电子电路股份有限公司', shortName: '超穎', manual: true, updatedAt: '2026-11-17T06:00:00.000Z' },
 ]
-const cc = [{ userId: 21, employeeNo: 'pm', realName: '生管甲', email: 'pm@example.test', status: 'ACTIVE' }]
+const cc = [{ userId: 21, employeeNo: 'pm', realName: '生管甲', email: 'pm@example.test', status: 'ACTIVE', modules: ['OUTSOURCE_NOTICE'] }]
 
 function mockSettings() {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
@@ -105,6 +105,49 @@ describe('外协清单入口与设定', () => {
     expect(await screen.findByRole('option', { name: /未填写邮箱/ })).toHaveClass('arco-select-option-disabled')
     expect(get.mock.calls.filter(([url]) => url === '/outsource/settings/cc-user-options')).toHaveLength(1)
     expect(get).toHaveBeenCalledWith('/outsource/settings/cc-user-options')
+  })
+
+  it('默认抄送新增和修改时按人员保存多个模块，每人至少一个', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    const option = { userId: 22, employeeNo: 'ee', realName: '电控甲', email: 'ee@example.test', status: 'ACTIVE' }
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/cc-user-options') ? [option] : url.endsWith('/default-cc') ? cc : [],
+    } as never))
+    const both = ['OUTSOURCE_NOTICE', 'ELECTRICAL_HANDOFF']
+    const put = vi.spyOn(http, 'put').mockResolvedValueOnce({ data: [...cc, { ...option, modules: both }] } as never)
+      .mockResolvedValueOnce({ data: [...cc, { ...option, modules: ['ELECTRICAL_HANDOFF'] }] } as never)
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+    await user.click(await screen.findByRole('tab', { name: '默认抄送' }))
+    await screen.findByText('生管甲')
+
+    const modules = within(screen.getByRole('group', { name: '新增人员的适用模块' }))
+    const notice = modules.getByRole('checkbox', { name: '外发邮件' })
+    await user.click(notice)
+    await user.click(screen.getByRole('combobox', { name: '选择抄送人员' }))
+    fireEvent.click(await screen.findByRole('option', { name: /电控甲/ }))
+    const add = screen.getByRole('button', { name: '加入' })
+    expect(add).toBeDisabled()
+    expect(put).not.toHaveBeenCalled()
+    await user.click(notice)
+    await user.click(modules.getByRole('checkbox', { name: '转迅得电控' }))
+    await user.click(add)
+    const existing = { userId: 21, modules: ['OUTSOURCE_NOTICE'] }
+    expect(put).toHaveBeenLastCalledWith('/outsource/settings/default-cc', { entries: [existing, { userId: 22, modules: both }] })
+
+    const added = within(await screen.findByRole('group', { name: '电控甲的适用模块' }))
+    const addedNotice = added.getByRole('checkbox', { name: '外发邮件' })
+    const addedHandoff = added.getByRole('checkbox', { name: '转迅得电控' })
+    expect(addedNotice).toBeChecked()
+    expect(addedHandoff).toBeChecked()
+    await user.click(addedNotice)
+    expect(put).toHaveBeenLastCalledWith('/outsource/settings/default-cc', {
+      entries: [existing, { userId: 22, modules: ['ELECTRICAL_HANDOFF'] }],
+    })
+    await waitFor(() => expect(addedHandoff).toBeDisabled())
+    expect(addedHandoff).toBeChecked()
+    await user.click(addedHandoff)
+    expect(put).toHaveBeenCalledTimes(2)
   })
 
   it('更新外协清单的定时同步可以停止和开启', async () => {
@@ -240,6 +283,8 @@ describe('外协清单入口与设定', () => {
     })
     const settings = {
       fields: [
+        field(19, 'electricalHandoff', '是否转迅得电控', { category: 'FIXED', dataType: 'BOOLEAN', pinned: true, vendorVisibleLocked: true,
+          editorScope: 'NONE', editorScopeAllowed: false }),
         field(3, 'workOrderNo', '工令', { category: 'FIXED', pinned: true, vendorVisibleLocked: true, editorScope: 'NONE', editorScopeAllowed: false }),
         field(6, 'hasRobotV', '是否有RobotV', { builtIn: false, dataType: 'BOOLEAN', category: 'CUSTOM', vendorVisible: false }),
         field(18, 'remark', '备注'),
@@ -254,6 +299,10 @@ describe('外协清单入口与设定', () => {
 
     await user.click(await screen.findByRole('tab', { name: '栏位设定' }))
     expect(await screen.findByRole('switch', { name: '工令 厂商可见' })).toBeDisabled()
+    const handoff = within(screen.getByText('是否转迅得电控').closest('tr')!)
+    expect(handoff.getByRole('button', { name: '编辑' })).toBeDisabled()
+    expect(handoff.getByRole('switch')).toBeDisabled()
+    expect(handoff.getByRole('switch')).toBeChecked()
     expect(screen.queryByRole('button', { name: /新增栏位/ })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('switch', { name: '是否有RobotV 厂商可见' }))

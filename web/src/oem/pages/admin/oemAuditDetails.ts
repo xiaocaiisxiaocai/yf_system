@@ -14,6 +14,8 @@ const action = (label: string, categoryCode: string, categoryLabel: string, colo
 
 /** OEM 审计动作编码 → 中文名称与分类；编码取自服务端 OemAuditWriter 的全部写入点。 */
 export const OEM_ACTIONS: Record<string, ActionMeta> = {
+  OUTSOURCE_ELECTRICAL_HANDOFF: action('转迅得电控', 'OUTSOURCE', '外协清单', 'arcoblue'),
+  OUTSOURCE_ELECTRICAL_HANDOFF_WITHDRAW: action('撤回转迅得电控', 'OUTSOURCE', '外协清单', 'orange'),
   OEM_LOGIN: action('登录成功', 'AUTH', '认证安全', 'green'),
   OEM_EMAIL_SENT: action('邮件发送成功', 'MAIL', '邮件通知', 'green'),
   OEM_EMAIL_FAILED: action('邮件发送失败', 'MAIL', '邮件通知', 'red'),
@@ -71,7 +73,7 @@ export const OEM_ACTIONS: Record<string, ActionMeta> = {
 
 export const OEM_CATEGORY_LABELS: Record<string, string> = {
   AUTH: '认证安全', TRANSFER: '传递单', APPROVAL: '审批', FILE: '文件',
-  DIRECTORY: '厂商与账号', POLICY: '策略与设置', MAIL: '邮件通知', SYSTEM: '系统维护',
+  DIRECTORY: '厂商与账号', POLICY: '策略与设置', MAIL: '邮件通知', OUTSOURCE: '外协清单', SYSTEM: '系统维护',
 }
 
 /** 「具体操作」下拉按分类分组，分类顺序与上表一致。 */
@@ -83,7 +85,7 @@ export const OEM_ACTION_GROUPS = Object.entries(OEM_CATEGORY_LABELS).map(([code,
 const OEM_TARGET_LABELS: Record<string, string> = {
   oem_transfer: '传递单', oem_file: '文件', oem_company: '厂商', oem_account: '厂商账号',
   oem_flow_template: '审批流程', oem_retention_template: '删除策略', oem_settings: '设置', oem_storage: '存储',
-  department: '组织', user: '用户',
+  department: '组织', user: '用户', outsource_item: '外协记录',
 }
 
 const PURPOSE_LABELS: Record<string, string> = { RECIPIENT: '接收方', SENDER: '发送方', REVIEW: '审批人', NONE: '无', DOWNLOAD: '下载', PREVIEW: '预览' }

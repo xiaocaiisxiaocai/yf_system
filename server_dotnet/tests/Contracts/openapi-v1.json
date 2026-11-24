@@ -8148,6 +8148,56 @@
         }
       }
     },
+    "/api/v1/oem/outsource-items/{id}/electrical-handoff": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OutsourceElectricalHandoffRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutsourceVendorRow"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/oem/outsource-items/export": {
       "get": {
         "tags": [
@@ -8848,7 +8898,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/OutsourceCcUserResponse"
+                    "$ref": "#/components/schemas/OutsourceDefaultCcResponse"
                   }
                 }
               }
@@ -8888,7 +8938,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/OutsourceCcUserResponse"
+                    "$ref": "#/components/schemas/OutsourceDefaultCcResponse"
                   }
                 }
               }
@@ -10018,6 +10068,84 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MesMirrorStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/import/preview": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesImportPreviewResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesImportConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesImportConfirmResponse"
                 }
               }
             }
@@ -11666,6 +11794,279 @@
           "expiresInSeconds": {
             "type": "integer",
             "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportConfirmRequest": {
+        "required": [
+          "chosenRows",
+          "overwrite",
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportRow"
+            }
+          },
+          "overwrite": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "chosenRows": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportConfirmResponse": {
+        "required": [
+          "added",
+          "invalid",
+          "overwritten",
+          "skipped",
+          "unchanged"
+        ],
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "overwritten": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "invalid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportInvalidRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportDuplicate": {
+        "required": [
+          "alreadyExists",
+          "rows",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "workOrder": {
+            "type": "string"
+          },
+          "alreadyExists": {
+            "type": "boolean"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportDuplicateRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportDuplicateRow": {
+        "required": [
+          "customerName",
+          "deviceModels",
+          "existing",
+          "planEndDate",
+          "rowNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "customerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deviceModels": {
+            "type": "string",
+            "nullable": true
+          },
+          "planEndDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "existing": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MesImportExisting"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportExisting": {
+        "required": [
+          "changedFields",
+          "current",
+          "excel",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "workOrder": {
+            "type": "string"
+          },
+          "current": {
+            "$ref": "#/components/schemas/MesImportOrderSummary"
+          },
+          "excel": {
+            "$ref": "#/components/schemas/MesImportOrderSummary"
+          },
+          "changedFields": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportInvalidRow": {
+        "required": [
+          "reason",
+          "rowNumber",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workOrder": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportOrderSummary": {
+        "required": [
+          "customerName",
+          "deviceModels",
+          "planEndDate"
+        ],
+        "type": "object",
+        "properties": {
+          "customerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deviceModels": {
+            "type": "string",
+            "nullable": true
+          },
+          "planEndDate": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportPreviewResponse": {
+        "required": [
+          "added",
+          "duplicates",
+          "existing",
+          "invalid",
+          "unchanged"
+        ],
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "invalid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportInvalidRow"
+            }
+          },
+          "existing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportExisting"
+            }
+          },
+          "duplicates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportDuplicate"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportRow": {
+        "required": [
+          "rowNumber",
+          "values",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workOrder": {
+            "type": "string"
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            }
           }
         },
         "additionalProperties": false
@@ -14840,18 +15241,95 @@
         },
         "additionalProperties": false
       },
-      "OutsourceDefaultCcRequest": {
+      "OutsourceDefaultCcEntry": {
         "required": [
-          "userIds"
+          "modules",
+          "userId"
         ],
         "type": "object",
         "properties": {
-          "userIds": {
+          "userId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "modules": {
             "type": "array",
             "items": {
-              "type": "integer",
-              "format": "int64"
+              "type": "string"
             },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDefaultCcRequest": {
+        "required": [
+          "entries"
+        ],
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutsourceDefaultCcEntry"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceDefaultCcResponse": {
+        "required": [
+          "email",
+          "employeeNo",
+          "modules",
+          "realName",
+          "status",
+          "userId"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "employeeNo": {
+            "type": "string"
+          },
+          "realName": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceElectricalHandoffRequest": {
+        "required": [
+          "expected",
+          "handoff",
+          "signerName"
+        ],
+        "type": "object",
+        "properties": {
+          "handoff": {
+            "type": "boolean"
+          },
+          "expected": {
+            "type": "boolean"
+          },
+          "signerName": {
+            "type": "string",
             "nullable": true
           }
         },
@@ -15397,6 +15875,9 @@
           "customer",
           "customerFullName",
           "drawingReleasedOn",
+          "electricalHandoff",
+          "electricalHandoffAt",
+          "electricalHandoffSigner",
           "electricalOwner",
           "id",
           "importedAt",
@@ -15536,6 +16017,18 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "electricalHandoff": {
+            "type": "boolean"
+          },
+          "electricalHandoffAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "electricalHandoffSigner": {
+            "type": "string",
+            "nullable": true
           },
           "changedFields": {
             "type": "array",
@@ -16343,6 +16836,7 @@
       "OutsourceVendorRow": {
         "required": [
           "closed",
+          "electricalHandoff",
           "id",
           "status",
           "values"
@@ -16357,6 +16851,9 @@
             "type": "string"
           },
           "closed": {
+            "type": "boolean"
+          },
+          "electricalHandoff": {
             "type": "boolean"
           },
           "values": {

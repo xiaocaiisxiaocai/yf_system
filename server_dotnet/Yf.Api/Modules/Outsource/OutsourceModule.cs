@@ -161,6 +161,10 @@ public static class OutsourceModule
             s.StopAsync(AccessService.GetCurrent(c), ct));
         mirror.MapPost("/confirm", (MesMirrorConfirmRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.ConfirmAsync(AccessService.GetCurrent(c), r, ct));
+        mirror.MapPost("/import/preview", (MesImportRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.PreviewImportAsync(AccessService.GetCurrent(c), r, ct));
+        mirror.MapPost("/import", (MesImportConfirmRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
+            s.ConfirmImportAsync(AccessService.GetCurrent(c), r, ct));
         mirror.MapPost("/orders/query", (MesOrdersQuery r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
         {
             var size = (uint)Math.Clamp(r.PageSize ?? 20, 1UL, 100UL);
@@ -175,4 +179,12 @@ public static class OutsourceModule
             s.TestAsync(AccessService.GetCurrent(c), r, ct));
         return endpoints;
     }
+
+    // Same as the Kestrel/IIS request cap: ~5000 rows with every MES column filled can pass 16 MiB of JSON.
+    internal const long MesImportRequestLimitBytes = 64L * 1024 * 1024;
+
+    internal static bool IsMesImport(HttpRequest request) =>
+        HttpMethods.IsPost(request.Method) &&
+        (string.Equals(request.Path.Value?.TrimEnd('/'), "/api/v1/outsource/mes-mirror/import", StringComparison.OrdinalIgnoreCase) ||
+         string.Equals(request.Path.Value?.TrimEnd('/'), "/api/v1/outsource/mes-mirror/import/preview", StringComparison.OrdinalIgnoreCase));
 }

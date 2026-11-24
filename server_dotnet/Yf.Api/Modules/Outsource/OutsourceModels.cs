@@ -6,7 +6,8 @@ public sealed record OutsourceTypeUpsert(string? Code, string? Name, int? SortNo
 
 public sealed record OutsourceTypeVendorsRequest(ulong[]? VendorIds);
 
-public sealed record OutsourceDefaultCcRequest(ulong[]? UserIds);
+public sealed record OutsourceDefaultCcEntry(ulong UserId, IReadOnlyList<string>? Modules);
+public sealed record OutsourceDefaultCcRequest(IReadOnlyList<OutsourceDefaultCcEntry>? Entries);
 
 /// <summary>客户全称 → 简称; <paramref name="Manual"/> marks a short name set by hand, which syncs keep.</summary>
 public sealed record OutsourceCustomerAliasResponse(ulong Id, string FullName, string ShortName, bool Manual, DateTime UpdatedAt);
@@ -34,6 +35,8 @@ public sealed record OutsourceVendorResponse(ulong Id, string Name, string Statu
 public sealed record OutsourceTypeResponse(ulong Id, string Code, string Name, string Status, int SortNo, ulong[] VendorIds);
 
 public sealed record OutsourceCcUserResponse(ulong UserId, string EmployeeNo, string RealName, string Email, string Status);
+public sealed record OutsourceDefaultCcResponse(ulong UserId, string EmployeeNo, string RealName, string Email, string Status,
+    IReadOnlyList<string> Modules);
 
 public sealed record OutsourceImportRow(int RowNumber, string? OutsourceDate, string? WorkOrderNo, string? VendorName, string? TypeName);
 
@@ -52,6 +55,7 @@ public sealed record OutsourceItemResponse(
     DateOnly? WorkOrderIssuedOn, DateOnly? BomOn, DateOnly? DrawingReleasedOn,
     string? TypeCode, ulong? TypeId, string? TypeLabel, int? Quantity, DateOnly? OriginalDueDate, DateOnly? LatestDueDate,
     string? Remark, string Status, string SendStatus, string MatchState, bool Closed, DateTime? IpmsSyncedAt, DateTime UpdatedAt,
+    bool ElectricalHandoff, DateTime? ElectricalHandoffAt, string? ElectricalHandoffSigner,
     string[]? ChangedFields = null, string? ImportedBy = null, DateTime? ImportedAt = null, string? ModifiedBy = null, DateTime? ModifiedAt = null,
     string? CustomerFullName = null, IReadOnlyDictionary<string, string?>? CustomValues = null);
 

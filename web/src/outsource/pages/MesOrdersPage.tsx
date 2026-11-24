@@ -6,7 +6,10 @@ import http from '../../api/client'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
 import ResizableTable from '../../components/ResizableTable'
+import { useAuth } from '../../store/auth'
 import { isGroup, MES_CODE_TEXT, MES_FIXED_COLUMNS, MES_LAYOUT, MES_PINNED_PROPS, type MesColumn } from '../mesColumns'
+import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
+import MesExcelImportControl from './MesExcelImportControl'
 import './MesOrdersPage.css'
 
 type Order = ApiResponses['POST /outsource/mes-mirror/orders/query']['list'][number]
@@ -67,6 +70,7 @@ function FilterPanel({ column, value, onApply }: { column: MesColumn; value: str
 
 /** The IPMS MES monitoring table, filled from the mirrored data: same columns, same header groups. */
 export default function MesOrdersPage() {
+  const canImport = useAuth((state) => state.permissions.includes(OUTSOURCE_PERMISSIONS.settings))
   const [orders, setOrders] = useState<Order[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -194,6 +198,7 @@ export default function MesOrdersPage() {
       <Space wrap size={12}>
         <Button type="primary" icon={<IconSync />} loading={starting || syncing}
           disabled={mirror === null || mirror.phase === 'AWAITING_CONFIRM'} onClick={() => void sync()}>{syncLabel}</Button>
+        {canImport && <MesExcelImportControl onImported={() => void reloadRef.current()} />}
         {activeFilterEntries.length > 0 && <div role="region" aria-label="已启用筛选">
           <Space wrap size={8}>
             {activeFilterEntries.map(([prop, value]) => (

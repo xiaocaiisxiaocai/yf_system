@@ -18,7 +18,8 @@ public sealed class MigrationRoundTripTests
     private const string ReplaceScanning = "20261006031500_ReplaceOemMalwareScanningWithValidation";
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
-    private const string Latest = "20261120071443_AddOutsourceVendorEmails";
+    private const string BeforeElectricalHandoff = "20261124003700_CorrectOutsourceDueDatesFromCustomerDate";
+    private const string Latest = "20261124010000_AddOutsourceElectricalHandoff";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -75,6 +76,28 @@ public sealed class MigrationRoundTripTests
         var latestCatalog = await CatalogCountsAsync(database, ct);
         Assert.Equal((6, 40, 5), latestCatalog);
 
+        await migrator.MigrateAsync(BeforeElectricalHandoff, ct);
+        var beforeElectricalHandoff = await SchemaAsync(database, ct);
+        Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("table|outsource_default_cc_modules|", StringComparison.Ordinal));
+        Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|outsource_items|electrical_handoff", StringComparison.Ordinal));
+        Assert.Contains(beforeElectricalHandoff, line => line.StartsWith("column|outsource_mails|kind|varchar(16)|", StringComparison.Ordinal));
+        Assert.Contains(beforeElectricalHandoff, line => line.StartsWith("column|outsource_mails|created_by|bigint(20) unsigned|NO|", StringComparison.Ordinal)
+            || line.StartsWith("column|outsource_mails|created_by|bigint unsigned|NO|", StringComparison.Ordinal));
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_fields WHERE field_key='electricalHandoff'"));
+            await conn.ExecuteAsync("INSERT INTO outsource_default_cc(user_id) SELECT id FROM users WHERE employee_no='admin'");
+        }
+        await migrator.MigrateAsync(cancellationToken: ct);
+        Assert.Equal(latestSchema, await SchemaAsync(database, ct));
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal("OUTSOURCE_NOTICE", await conn.QuerySingleAsync<string>("SELECT module FROM outsource_default_cc_modules"));
+            Assert.Equal(new[] { "status", "electricalHandoff", "workOrderNo" }, await conn.QueryAsync<string>(
+                "SELECT field_key FROM outsource_fields WHERE field_key IN ('status','electricalHandoff','workOrderNo') ORDER BY sort_no, id"));
+            await conn.ExecuteAsync("DELETE FROM outsource_default_cc");
+        }
+
         // AddProjectRobotOwnerName + SeedArmCatalogAndRobotTypes (Down keeps the catalog, Up skips existing rows) + AddProjectRobotType
         // + AllowMacroAndBinaryExcelUploads (Down keeps the whitelist) + AddOemApprovalTaskActivatedAt + AddMessageClientId
         // + AddProjectMaterialReview (Down keeps its notification switch row) + AddSupplierContactsAndSignatures
@@ -110,6 +133,8 @@ public sealed class MigrationRoundTripTests
         // + AddOutsourceDateImportPermission (Down keeps outsource:date_import and its administrator grant).
         // + StopInternalRobotVEditing (Down leaves 是否有RobotV at 内部不填写).
         // + AddOutsourceVendorEmails (Down drops outsource_vendor_emails).
+        // + CorrectOutsourceDueDatesFromCustomerDate (data only; Down keeps the corrected due dates).
+        // + AddOutsourceElectricalHandoff (Down drops handoff fields and default CC module assignments).
         await migrator.MigrateAsync(HardenIdentity, ct);
         Assert.Equal(latestCatalog, await CatalogCountsAsync(database, ct));
         var rolledBack = await SchemaAsync(database, ct);
@@ -481,6 +506,44 @@ public sealed class MigrationRoundTripTests
     {
         await using var connection = await database.Database.OpenAsync(ct);
         return (await connection.QueryAsync<string>("SELECT MigrationId FROM __EFMigrationsHistory ORDER BY MigrationId")).ToArray();
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task DueDateCorrectionTakesTheIpmsCustomerDateAndKeepsDatesPurchasingChanged()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("due_date_fix", ct);
+        await database.InitializeAsync(ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync("20261120071443_AddOutsourceVendorEmails", ct);
+        await database.ExecuteAsync("""
+            INSERT INTO oem_companies(id,name,status,created_at,updated_at) VALUES (8801,'交期厂',  'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,raw_json) VALUES
+              ('W1','b',UTC_TIMESTAMP(3),'{"deliveryDate":"2026-09-30","customerEndDate":"2026-11-20"}'),
+              ('W2','b',UTC_TIMESTAMP(3),'{"deliveryDate":"2026-09-30","customerEndDate":"2026-12-05 00:00:00"}'),
+              ('W3','b',UTC_TIMESTAMP(3),'{"deliveryDate":"2026-09-30","customerEndDate":null}'),
+              ('W4','b',UTC_TIMESTAMP(3),'{"deliveryDate":"2026-09-30","customerEndDate":"garbage"}');
+            INSERT INTO outsource_items(work_order_no,serial_no,outsource_date,vendor_id,original_due_date,latest_due_date,status,send_status,created_at,updated_at) VALUES
+              ('W1',1,'2026-11-01',8801,'2026-09-30','2026-09-30','NORMAL','UNSENT',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('W2',2,'2026-11-01',8801,'2026-09-30','2026-10-15','NORMAL','SENT',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('W3',3,'2026-11-01',8801,'2026-09-30','2026-09-30','NORMAL','UNSENT',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('W4',4,'2026-11-01',8801,'2026-09-30','2026-09-30','NORMAL','UNSENT',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              ('W5',5,'2026-11-01',8801,'2026-09-30','2026-09-30','NORMAL','UNSENT',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            """, ct);
+
+        await migrator.MigrateAsync(Latest, ct);
+
+        await using var conn = await database.Database.OpenAsync(ct);
+        var rows = (await conn.QueryAsync<(string No, DateTime Original, DateTime Latest, string Send)>(
+            "SELECT work_order_no, original_due_date, latest_due_date, send_status FROM outsource_items ORDER BY work_order_no"))
+            .ToDictionary(x => x.No);
+        // W1 was never changed by purchasing: both dates move. W2's latest date was changed by hand and stays.
+        // No usable customer date (null, garbage, not in the mirror) leaves the item alone. Send status never changes.
+        Assert.Equal((new DateTime(2026, 11, 20), new DateTime(2026, 11, 20)), (rows["W1"].Original, rows["W1"].Latest));
+        Assert.Equal((new DateTime(2026, 12, 5), new DateTime(2026, 10, 15), "SENT"), (rows["W2"].Original, rows["W2"].Latest, rows["W2"].Send));
+        foreach (var no in new[] { "W3", "W4", "W5" })
+            Assert.Equal((new DateTime(2026, 9, 30), new DateTime(2026, 9, 30)), (rows[no].Original, rows[no].Latest));
     }
 
     private static async Task<string> LastMigrationAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct) =>

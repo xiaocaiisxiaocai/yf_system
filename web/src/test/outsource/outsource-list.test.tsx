@@ -21,13 +21,14 @@ const base = {
   outsourceDate: '2026-11-04', customer: '超穎(泰國)', machineModel: 'ST-201L', mechanicalSection: '4.王家琦',
   mechanicalOwner: null, electricalOwner: null, workOrderIssuedOn: '2026-09-30', bomOn: null, drawingReleasedOn: null,
   quantity: 1, originalDueDate: '2026-12-31', latestDueDate: '2026-12-31', remark: null, closed: false,
-  ipmsSyncedAt: '2026-11-10T00:00:00Z',
+  ipmsSyncedAt: '2026-11-10T00:00:00Z', electricalHandoff: false, electricalHandoffAt: null, electricalHandoffSigner: null,
 }
 const items = [
   { ...base, id: 1, workOrderNo: '21089901', vendorId: 1, vendorName: '鼎亚', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
     status: 'PAUSED', sendStatus: 'UNSENT', matchState: 'OK', updatedAt: '2026-11-10T01:02:03.456Z' },
   { ...base, id: 2, workOrderNo: '21089961', vendorId: 2, vendorName: '元控', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
-    status: 'NORMAL', sendStatus: 'SENT', matchState: 'VENDOR_MISMATCH', updatedAt: '2026-11-10T01:02:03.456Z' },
+    status: 'NORMAL', sendStatus: 'SENT', matchState: 'VENDOR_MISMATCH', updatedAt: '2026-11-10T01:02:03.456Z',
+    electricalHandoff: true, electricalHandoffAt: '2026-11-24T01:02:03Z', electricalHandoffSigner: '王小明' },
 ]
 const vendors = [
   { id: 1, name: '鼎亚', remark: null, status: 'ACTIVE', sortNo: 1, contacts: [] },
@@ -44,7 +45,8 @@ const syncStatus = {
 }
 
 const FIELD_ORDER: [string, string, string, boolean][] = [
-  ['outsourceDate', '外发日期', 'PROCESS', true], ['status', '状态', 'PROCESS', true], ['workOrderNo', '工令', 'FIXED', false],
+  ['outsourceDate', '外发日期', 'PROCESS', true], ['status', '状态', 'PROCESS', true], ['electricalHandoff', '是否转迅得电控', 'FIXED', false],
+  ['workOrderNo', '工令', 'FIXED', false],
   ['customer', '客户', 'IPMS', false], ['machineModel', '机型', 'IPMS', false], ['type', '外发类型', 'PROCESS', true],
   ['vendor', '外发厂商', 'PROCESS', true], ['mechanicalSection', '机构课别', 'IPMS', false], ['mechanicalOwner', '机构执行人', 'IPMS', false],
   ['electricalOwner', '电控执行人', 'IPMS', false], ['workOrderIssuedOn', '工令下发', 'IPMS', false], ['bomOn', 'BOM时间', 'IMPORTED', false],
@@ -54,7 +56,8 @@ const FIELD_ORDER: [string, string, string, boolean][] = [
 /** The default columns (外协清单契约 → 栏位设定): today's built-in columns, each one an editor may fill in marked canEdit. */
 const fieldLayout = {
   fields: FIELD_ORDER.map(([key, label, category, canEdit]) => ({
-    key, label, dataType: 'TEXT', options: [], category, pinned: ['outsourceDate', 'status', 'workOrderNo'].includes(key),
+    key, label, dataType: key === 'electricalHandoff' ? 'BOOLEAN' : 'TEXT', options: [], category,
+    pinned: ['outsourceDate', 'status', 'electricalHandoff', 'workOrderNo'].includes(key),
     vendorVisible: true, vendorEditable: false, canEdit,
   })),
 }
@@ -134,6 +137,32 @@ describe('外协清单页面', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
       vendorId: 1, typeId: 5, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
     }))
+  })
+
+  it('转迅得电控列紧跟状态，显示签名与时间，管理员也没有编辑入口', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:manage', 'outsource:settings'])
+    useAuth.setState({ user: { ...useAuth.getState().user!, isSystemAdmin: true } })
+    mockApi()
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    const handoff = await screen.findByRole('columnheader', { name: /是否转迅得电控/ })
+    expect(handoff.previousElementSibling).toHaveTextContent('状态')
+    expect(handoff.nextElementSibling).toHaveTextContent('工令')
+    const first = within(screen.getByText('21089901').closest('tr')!)
+    const second = within(screen.getByText('21089961').closest('tr')!)
+    expect(first.getByText('否')).toBeInTheDocument()
+    await user.hover(second.getByText('是'))
+    expect(await screen.findByText(/签名：王小明.*时间：/)).toHaveTextContent(fmtTime(items[1].electricalHandoffAt))
+
+    await user.click(first.getByRole('button', { name: '编辑工令 21089901' }))
+    const dialog = await screen.findByRole('dialog', { name: /编辑工令/ })
+    expect(within(dialog).queryByText('是否转迅得电控')).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: '取消' }))
+    await user.click(first.getByRole('checkbox'))
+    await user.click(screen.getByRole('button', { name: /批量修改/ }))
+    const batch = await screen.findByRole('dialog', { name: /批量修改/ })
+    expect(within(batch).queryByText('是否转迅得电控')).not.toBeInTheDocument()
   })
 
   it('编辑时可改外发类型，厂商下拉随所选类型过滤，原厂商不适用时要重新选择', async () => {
@@ -232,12 +261,12 @@ describe('外协清单页面', () => {
     }))
   })
 
-  it('汇入模板与提交带外发类型，提示里写明要填类型', async () => {
+  it('汇入模板含外发类型范例，预览请求保留外发类型并排除范例', async () => {
     const user = userEvent.setup()
     setSession(['outsource:manage'])
     mockApi()
     const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
-      rowNumber: 2, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',
+      rowNumber: 3, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',
       customer: '超穎(泰國)', machineModel: 'ST-201L', typeLabel: 'OEMA【进料+制造】', quantity: 1, latestDueDate: '2026-12-31',
     }] } } as never)
     const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
@@ -248,14 +277,33 @@ describe('外协清单页面', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText(/填写外发日期、工令、外发类型和外发厂商/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
-    await waitFor(() => expect(download).toHaveBeenCalled())
-    expect(download.mock.calls[0][1][0].headers).toEqual(['外发日期', '工令', '外发类型', '外发厂商'])
+    await waitFor(() => expect(download).toHaveBeenCalledWith('外协清单汇入模板.xlsx', [{
+      name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商'],
+      rows: [['2026-11-23', '21000001', 'OEMA', '示例厂商']],
+    }]))
 
-    const buffer = await workbook.createExcelWorkbook([{ name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商'], rows: [['2026-11-04', '21089901', 'OEMA', '鼎亚']] }])
+    const [sheet] = download.mock.calls[0][1]
+    const buffer = await workbook.createExcelWorkbook([{ ...sheet, rows: [...sheet.rows, ['2026-11-04', '21089901', 'OEMA', '鼎亚']] }])
     await user.upload(within(dialog).getByLabelText('选择 Excel 文件') as HTMLInputElement, new File([buffer], 'items.xlsx'))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', {
-      rows: [{ rowNumber: 2, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],
+      rows: [{ rowNumber: 3, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],
     }))
+  })
+
+  it('BOM 时间与发图导入模板的数据表包含一行日期范例', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:date_import'])
+    mockApi()
+    const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    await screen.findByText('21089901')
+    await user.click(screen.getByRole('button', { name: '导入BOM/发图' }))
+    const dialog = await screen.findByRole('dialog', { name: '导入BOM时间与发图' })
+    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
+    await waitFor(() => expect(download).toHaveBeenCalledWith('BOM时间与发图导入模板.xlsx', [{
+      name: '数据', headers: ['工令', 'BOM时间', '发图'], rows: [['21000001', '2026-11-24', '2026-11-25']],
+    }]))
   })
 
   it('显示最近一次 IPMS 同步，采购可立即同步所选记录', async () => {
@@ -311,7 +359,7 @@ describe('外协清单页面', () => {
     const robotV = { key: 'hasRobotV', label: '是否有RobotV', dataType: 'BOOLEAN', options: [], category: 'CUSTOM', pinned: false,
       vendorVisible: false, vendorEditable: false, canEdit: true }
     const layout = {
-      fields: [...fieldLayout.fields.slice(0, 5), robotV, ...fieldLayout.fields.slice(5)]
+      fields: [...fieldLayout.fields.slice(0, 6), robotV, ...fieldLayout.fields.slice(6)]
         .map((field) => field.key === 'remark' ? { ...field, canEdit: false } : field),
     }
     const list = [{ ...items[0], remark: '内部备注', customValues: { hasRobotV: 'true' } }, items[1]]

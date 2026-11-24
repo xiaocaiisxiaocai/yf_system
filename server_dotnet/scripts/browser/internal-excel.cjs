@@ -57,11 +57,17 @@ const marker = crypto.randomBytes(5).toString('hex');
       const target = OUT + '/company-internal-account-template.xlsx';
       await file.saveAs(target);
       const workbook = XLSX.read(require('node:fs').readFileSync(target), { type: 'buffer' });
-      const dataHeaders = XLSX.utils.sheet_to_json(workbook.Sheets.数据, { header: 1 })[0];
-      assert.deepEqual(dataHeaders, ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码']);
+      const dataRows = XLSX.utils.sheet_to_json(workbook.Sheets.数据, { header: 1 });
+      assert.deepEqual(dataRows, [
+        ['账号', '姓名', '邮箱', '所属组织', '角色', '初始密码'],
+        ['demo001', '示例员工', 'example@example.com', '示例部门', '示例角色', 'T7!kmQ4n'],
+      ]);
       const optionRows = XLSX.utils.sheet_to_json(workbook.Sheets.选项, { header: 1 });
       assert.deepEqual(optionRows[0], ['所属组织', '组织层级', '角色名称']);
       assert(optionRows.some(row => row[0] === sectionName && row[1] === '课别'));
+      await modal.getByLabel('选择 Excel 文件', { exact: true }).setInputFiles(target);
+      await modal.getByText('已忽略范例行', { exact: true }).waitFor();
+      assert.equal(await modal.getByRole('button', { name: '确认导入', exact: true }).isDisabled(), true);
       await modal.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
