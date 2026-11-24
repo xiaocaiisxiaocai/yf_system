@@ -11,7 +11,6 @@ public sealed record IpmsWorkOrder(
     string WorkOrderNo,
     string? Customer,
     string? MachineModel,
-    string? MechanicalSection,
     string? MechanicalOwner,
     string? ElectricalOwner,
     DateOnly? WorkOrderIssuedOn,
@@ -119,7 +118,7 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
         {
             var no = row.WorkOrderNo?.Trim();
             if (string.IsNullOrEmpty(no) || !wanted.Contains(no)) continue;
-            result[no] = new(no, row.Customer, row.MachineModel, row.MechanicalSection, row.MechanicalOwner, row.ElectricalOwner,
+            result[no] = new(no, row.Customer, row.MachineModel, row.MechanicalOwner, row.ElectricalOwner,
                 row.WorkOrderIssuedOn, row.Quantity, row.DueDate, row.Closed);
         }
         return result;
@@ -136,7 +135,6 @@ public sealed class FakeIpmsClient(string path) : IIpmsClient
         public string? WorkOrderNo { get; set; }
         public string? Customer { get; set; }
         public string? MachineModel { get; set; }
-        public string? MechanicalSection { get; set; }
         public string? MechanicalOwner { get; set; }
         public string? ElectricalOwner { get; set; }
         public DateOnly? WorkOrderIssuedOn { get; set; }

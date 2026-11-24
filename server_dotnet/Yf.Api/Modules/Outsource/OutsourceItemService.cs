@@ -243,7 +243,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     {
         item.Customer = Cut(order.Customer, 128);
         item.MachineModel = Cut(order.MachineModel, 128);
-        item.MechanicalSection = Cut(order.MechanicalSection, 64);
         item.MechanicalOwner = Cut(order.MechanicalOwner, 64);
         item.ElectricalOwner = Cut(order.ElectricalOwner, 64);
         item.WorkOrderIssuedOn = order.WorkOrderIssuedOn;
@@ -353,7 +352,9 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             .GroupJoin(context.Users, change => change.ActorUserId, user => (ulong?)user.Id, (change, users) => new { change, users })
             .SelectMany(x => x.users.DefaultIfEmpty(), (x, user) => new { x.change, Name = user == null ? null : user.RealName })
             .ToArrayAsync(ct);
-        return rows.Select(x => new OutsourceItemChangeResponse(x.change.Id, x.change.Field, layout.Label(x.change.Field == "typeCode" ? "type" : x.change.Field),
+        return rows.Select(x => new OutsourceItemChangeResponse(x.change.Id, x.change.Field,
+            // Only historical IPMS syncs wrote a department name under this key.
+            x.change.Field == "mechanicalSection" ? "机构课别" : layout.Label(ColumnKey(x.change.Field)),
             x.change.OldValue, x.change.NewValue, x.change.Source, x.Name, DateTime.SpecifyKind(x.change.ChangedAt, DateTimeKind.Utc),
             x.change.SignerName)).ToArray();
     }
@@ -475,7 +476,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         if (locked.FirstOrDefault(x => !OutsourceSendStatuses.AwaitsSender(x.SendStatus)) is { } other)
             throw ApiException.Conflict($"工令 {other.WorkOrderNo} 不是未发送或有变更待通知的记录");
         var baseline = await OutsourceReference.LoadAsync(context, ct);
-        await baseline.LoadValuesAsync(context, locked.Select(x => x.Id).ToArray(), ct);
+        await baseline.LoadValuesAsync(context, locked, ct);
         var vendorFields = baseline.Layout.MailWorkbookFields();
         foreach (var before in locked)
         {
@@ -585,7 +586,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         }
         var layout = reference.Layout;
         var custom = CustomChanges(layout, change.Custom);
-        await reference.LoadValuesAsync(context, locked.Select(x => x.Id).ToArray(), ct);
+        await reference.LoadValuesAsync(context, locked, ct);
         var vendorKeys = layout.NoticeKeys;
         var modifiedAt = await DbClock.UtcNowAsync(context, ct, 3);
         foreach (var before in locked)
@@ -727,8 +728,8 @@ internal sealed class OutsourceReference
     private readonly Dictionary<string, string> customerFullNames;
     /// <summary>The configured columns (外协清单契约 → 栏位设定).</summary>
     public OutsourceFieldLayout Layout { get; }
-    /// <summary>Custom values of the items loaded with <see cref="LoadValuesAsync"/>, by item id and field key.</summary>
-    private readonly Dictionary<ulong, Dictionary<string, string?>> values = [];
+    /// <summary>Directory and custom values for the items loaded in this request.</summary>
+    private readonly Dictionary<ulong, (string? Supervisor, Dictionary<string, string?> Custom)> values = [];
 
     private OutsourceReference(Dictionary<string, (ulong, string, string)> types, HashSet<(ulong, ulong)> mapping,
         Dictionary<ulong, string> vendorNames, HashSet<ulong> activeVendorIds,
@@ -765,17 +766,24 @@ internal sealed class OutsourceReference
                 .ToDictionary(x => x.Key, x => (x.First().FullName, x.First().ShortName), StringComparer.Ordinal), layout);
     }
 
-    /// <summary>Loads the custom values of these items (active and disabled fields) so <see cref="Json"/> includes them.</summary>
-    public async Task LoadValuesAsync(YfDbContext context, IReadOnlyCollection<ulong> itemIds, CancellationToken ct)
+    /// <summary>Batch-loads the current supervisor and stored custom fields for a set of items.</summary>
+    public async Task LoadValuesAsync(YfDbContext context, IReadOnlyCollection<OutsourceItem> items, CancellationToken ct)
     {
-        var missing = itemIds.Where(id => !values.ContainsKey(id)).Distinct().ToArray();
+        var missing = items.Where(item => !values.ContainsKey(item.Id)).ToArray();
         if (missing.Length == 0) return;
+        var supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, missing.Select(item => item.MechanicalOwner), ct);
+        foreach (var item in missing)
+        {
+            var supervisor = item.MechanicalOwner is { } owner ? supervisors.GetValueOrDefault(owner) : null;
+            values[item.Id] = (supervisor, new Dictionary<string, string?>(StringComparer.Ordinal));
+        }
         var keys = Layout.Everything.Where(x => x.BuiltIn is null).ToDictionary(x => x.Field.Id, x => x.Key);
-        var rows = await context.OutsourceItemValues.AsNoTracking().Where(x => missing.Contains(x.ItemId)).ToArrayAsync(ct);
-        foreach (var id in missing) values[id] = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (keys.Count == 0) return;
+        var ids = missing.Select(item => item.Id).ToArray();
+        var rows = await context.OutsourceItemValues.AsNoTracking().Where(x => ids.Contains(x.ItemId)).ToArrayAsync(ct);
         foreach (var row in rows)
         {
-            if (keys.TryGetValue(row.FieldId, out var key)) values[row.ItemId][key] = row.Value;
+            if (keys.TryGetValue(row.FieldId, out var key)) values[row.ItemId].Custom[key] = row.Value;
         }
     }
 
@@ -787,7 +795,7 @@ internal sealed class OutsourceReference
 
     /// <summary>The stored custom values of a loaded item by field key.</summary>
     public IReadOnlyDictionary<string, string?> ValuesOf(ulong itemId) =>
-        values.TryGetValue(itemId, out var found) ? found : new Dictionary<string, string?>(StringComparer.Ordinal);
+        values.TryGetValue(itemId, out var found) ? found.Custom : new Dictionary<string, string?>(StringComparer.Ordinal);
 
     /// <summary>The active custom values the list shows, by field key.</summary>
     private Dictionary<string, string?> ActiveValuesOf(ulong itemId)
@@ -825,7 +833,7 @@ internal sealed class OutsourceReference
     /// </summary>
     public async Task<OutsourceItemResponse[]> JsonMarkedAsync(YfDbContext context, IReadOnlyList<OutsourceItem> items, CancellationToken ct)
     {
-        await LoadValuesAsync(context, items.Select(x => x.Id).ToArray(), ct);
+        await LoadValuesAsync(context, items, ct);
         var responses = items.Select(Json).ToArray();
         // Who imported and who last edited each row, by name.
         var userIds = items.SelectMany(x => new[] { x.CreatedBy, x.ModifiedBy }).OfType<ulong>().Distinct().ToArray();
@@ -854,7 +862,7 @@ internal sealed class OutsourceReference
 
     public OutsourceItemResponse Json(OutsourceItem item) => new OutsourceItemResponse(
         item.Id, item.SerialNo, item.WorkOrderNo, item.OutsourceDate, item.VendorId, VendorNames.GetValueOrDefault(item.VendorId) ?? "",
-        CustomerShown(item.Customer), item.MachineModel, item.MechanicalSection, item.MechanicalOwner, item.ElectricalOwner,
+        CustomerShown(item.Customer), item.MachineModel, values[item.Id].Supervisor, item.MechanicalOwner, item.ElectricalOwner,
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
         item.Remark, item.Status, item.SendStatus, Match(item.TypeCode, item.VendorId), item.ClosedAt is not null,
@@ -953,7 +961,7 @@ internal static class OutsourceHistory
     private static readonly Dictionary<string, string> Labels = new(StringComparer.Ordinal)
     {
         ["outsourceDate"] = "外发日期", ["vendor"] = "外发厂商", ["remark"] = "备注", ["status"] = "状态",
-        ["customer"] = "客户", ["machineModel"] = "机型", ["mechanicalSection"] = "机构课别",
+        ["customer"] = "客户", ["machineModel"] = "机型", ["mechanicalSection"] = "上级主管",
         ["mechanicalOwner"] = "机构执行人", ["electricalOwner"] = "电控执行人", ["workOrderIssuedOn"] = "工令下发",
         ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
         ["latestDueDate"] = "最新交期", ["completed"] = "完成状态", ["sendStatus"] = "发送状态",

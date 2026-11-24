@@ -203,7 +203,6 @@ public sealed class OutsourceIpmsSyncService(
         var changes = AuditChange.OnlyChanged(
             new AuditChange("customer", "", item.Customer, next.Customer),
             new AuditChange("machineModel", "", item.MachineModel, next.MachineModel),
-            new AuditChange("mechanicalSection", "", item.MechanicalSection, next.MechanicalSection),
             new AuditChange("mechanicalOwner", "", item.MechanicalOwner, next.MechanicalOwner),
             new AuditChange("electricalOwner", "", item.ElectricalOwner, next.ElectricalOwner),
             new AuditChange("workOrderIssuedOn", "", item.WorkOrderIssuedOn, next.WorkOrderIssuedOn),
@@ -226,7 +225,7 @@ public sealed class OutsourceIpmsSyncService(
             var sendStatus = noticeNeeded && item.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : item.SendStatus;
             updated = await row.ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.Customer, next.Customer).SetProperty(x => x.MachineModel, next.MachineModel)
-                .SetProperty(x => x.MechanicalSection, next.MechanicalSection).SetProperty(x => x.MechanicalOwner, next.MechanicalOwner)
+                .SetProperty(x => x.MechanicalOwner, next.MechanicalOwner)
                 .SetProperty(x => x.ElectricalOwner, next.ElectricalOwner).SetProperty(x => x.WorkOrderIssuedOn, next.WorkOrderIssuedOn)
                 .SetProperty(x => x.Quantity, next.Quantity)
                 .SetProperty(x => x.LatestDueDate, latestDue).SetProperty(x => x.OriginalDueDate, originalDue)
