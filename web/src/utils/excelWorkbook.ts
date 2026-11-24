@@ -12,6 +12,8 @@ export interface ExcelTableOptions {
   optionalHeaders?: readonly string[]
   /** Header names from older templates, mapped to the current name, so files filled in earlier still import. */
   headerAliases?: Readonly<Record<string, string>>
+  /** Allows one extra worksheet row for the template example. */
+  ignoreExampleRow?: (row: ExcelImportRow) => boolean
   maxRows: number
   maxBytes?: number
 }
@@ -41,6 +43,7 @@ export async function createExcelWorkbook(sheets: readonly ExcelWorkbookSheet[])
 export async function readExcelTable(file: File, options: ExcelTableOptions): Promise<ExcelImportRow[]> {
   const sheetName = options.sheetName ?? '数据'
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES
+  const maxSheetRows = options.maxRows + (options.ignoreExampleRow ? 1 : 0)
   if (!file.name.toLowerCase().endsWith('.xlsx')) throw new Error('仅支持 .xlsx 文件')
   if (file.size === 0 || file.size > maxBytes) throw new Error(`文件大小必须为 1–${Math.floor(maxBytes / 1024 / 1024)} MiB`)
   if (!Number.isInteger(options.maxRows) || options.maxRows < 1) throw new Error('导入行数上限配置无效')
@@ -49,7 +52,7 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
   let workbook: ReturnType<typeof XLSX.read>
   try {
     workbook = XLSX.read(await file.arrayBuffer(), {
-      type: 'array', cellFormula: true, cellDates: false, sheetRows: options.maxRows + 1,
+      type: 'array', cellFormula: true, cellDates: false, sheetRows: maxSheetRows + 1,
     })
   } catch {
     throw new Error('Excel 文件损坏或格式不受支持')
@@ -60,7 +63,7 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
 
   const range = XLSX.utils.decode_range(sheet['!ref'])
   const fullRange = sheet['!fullref'] ? XLSX.utils.decode_range(sheet['!fullref']) : range
-  if (fullRange.e.c >= 64 || fullRange.e.r > options.maxRows)
+  if (fullRange.e.c >= 64 || fullRange.e.r > maxSheetRows)
     throw new Error(`工作表最多支持 ${options.maxRows} 条数据、64 列`)
   for (let row = 1; row <= range.e.r; row++) {
     for (let column = 0; column <= range.e.c; column++) {
@@ -80,11 +83,11 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
   if (new Set(headers).size !== headers.length) throw new Error('表头不能重复')
 
   const result: ExcelImportRow[] = []
+  let examples = 0
   for (let index = 1; index < matrix.length; index++) {
     const values = matrix[index] ?? []
     if (values.every(value => stringCell(value) === '')) continue
     const rowNumber = index + 1
-    if (result.length >= options.maxRows) throw new Error(`最多导入 ${options.maxRows} 条数据`)
     const row: Record<string, string> = {}
     const numericCells = new Set<string>()
     headers.forEach((header, column) => {
@@ -92,9 +95,12 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
       const cell = sheet[XLSX.utils.encode_cell({ r: index, c: column })] as { t?: string } | undefined
       if (cell?.t === 'n') numericCells.add(header)
     })
-    result.push({ rowNumber, values: row, numericCells })
+    const parsed = { rowNumber, values: row, numericCells }
+    if (options.ignoreExampleRow?.(parsed)) examples++
+    else result.push(parsed)
   }
-  if (result.length === 0) throw new Error('没有可导入的数据行')
+  if (fullRange.e.r - examples > options.maxRows) throw new Error(`工作表最多支持 ${options.maxRows} 条数据、64 列`)
+  if (result.length === 0 && examples === 0) throw new Error('没有可导入的数据行')
   return result
 }
 

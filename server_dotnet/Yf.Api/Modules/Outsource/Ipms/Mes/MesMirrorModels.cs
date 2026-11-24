@@ -47,3 +47,17 @@ public sealed record MesMirrorTestRequest(string? BaseUrl, string? Account, stri
 public sealed record MesOrdersQuery(ulong? Page, ulong? PageSize, Dictionary<string, string?>? Filters);
 
 public sealed record MesOrderRow(string WorkOrderNo, DateTime FetchedAt, IReadOnlyDictionary<string, string?> Values);
+
+public sealed record MesImportRow(int RowNumber, string WorkOrder, Dictionary<string, string?> Values);
+public sealed record MesImportRequest(MesImportRow[] Rows);
+public sealed record MesImportConfirmRequest(MesImportRow[] Rows, string[] Overwrite, Dictionary<string, int> ChosenRows);
+
+public sealed record MesImportInvalidRow(int RowNumber, string WorkOrder, string Reason);
+public sealed record MesImportOrderSummary(string? CustomerName, string? DeviceModels, string? PlanEndDate);
+public sealed record MesImportExisting(string WorkOrder, MesImportOrderSummary Current, MesImportOrderSummary Excel, int ChangedFields);
+public sealed record MesImportDuplicateRow(
+    int RowNumber, string? CustomerName, string? DeviceModels, string? PlanEndDate, MesImportExisting? Existing);
+public sealed record MesImportDuplicate(string WorkOrder, bool AlreadyExists, MesImportDuplicateRow[] Rows);
+public sealed record MesImportPreviewResponse(
+    int Added, int Unchanged, MesImportInvalidRow[] Invalid, MesImportExisting[] Existing, MesImportDuplicate[] Duplicates);
+public sealed record MesImportConfirmResponse(int Added, int Overwritten, int Skipped, int Unchanged, MesImportInvalidRow[] Invalid);

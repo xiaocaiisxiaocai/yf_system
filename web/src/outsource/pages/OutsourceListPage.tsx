@@ -10,7 +10,7 @@ import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type ImportRowOutcome } from '../../components/ExcelImportDialog'
 import LoadError from '../../components/LoadError'
 import { useAuth } from '../../store/auth'
-import type { ExcelImportRow } from '../../utils/excelWorkbook'
+import type { ExcelImportRow, ExcelWorkbookSheet } from '../../utils/excelWorkbook'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { normalizeImportDate } from '../importDate'
 import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
@@ -65,6 +65,12 @@ const BOOLEAN_OPTIONS = [{ label: '是', value: 'true' }, { label: '否', value:
 
 const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
 const DATE_IMPORT_HEADERS = ['工令', 'BOM时间', '发图'] as const
+const IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
+  { name: '数据', headers: IMPORT_HEADERS, rows: [['2026-11-23', '21000001', 'OEMA', '示例厂商']] },
+]
+const DATE_IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
+  { name: '数据', headers: DATE_IMPORT_HEADERS, rows: [['21000001', '2026-11-24', '2026-11-25']] },
+]
 
 interface Filters {
   keyword: string
@@ -468,12 +474,12 @@ export default function OutsourceListPage() {
     <SendMailDialog itemIds={mailing} onClose={() => setMailing(null)}
       onSent={() => { setMailing(null); setSelected([]); void load() }} />
     <ExcelImportDialog<ImportRow> visible={importOpen} title="汇入外协清单" templateName="外协清单汇入模板.xlsx"
-      requiredHeaders={IMPORT_HEADERS} maxRows={500} keyTitle="工令"
+      requiredHeaders={IMPORT_HEADERS} templateSheets={IMPORT_WORKBOOK} maxRows={500} keyTitle="工令"
       notice={<>填写外发日期、工令、外发类型和外发厂商，序号自动编，其余字段由 IPMS 带出。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}
       prepare={prepareImport} commit={commitImport}
       onImported={() => { void load() }} onClose={() => setImportOpen(false)} />
     <ExcelImportDialog<DateImportRow> visible={dateImportOpen} title="导入BOM时间与发图" templateName="BOM时间与发图导入模板.xlsx"
-      requiredHeaders={DATE_IMPORT_HEADERS} maxRows={500} keyTitle="工令"
+      requiredHeaders={DATE_IMPORT_HEADERS} templateSheets={DATE_IMPORT_WORKBOOK} maxRows={500} keyTitle="工令"
       notice={<>按工令更新外协清单中的 BOM时间 和发图，空白单元格保留原值。清单中没有的工令和已完成的记录会跳过。最多 500 行。</>}
       prepare={prepareDateImport} commit={commitDateImport}
       onImported={() => { void load() }} onClose={() => setDateImportOpen(false)} />

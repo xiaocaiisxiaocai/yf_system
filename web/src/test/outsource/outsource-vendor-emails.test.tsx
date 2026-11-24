@@ -133,11 +133,19 @@ describe('外协清单设定 → 外协邮箱', () => {
     const user = userEvent.setup()
     setSession()
     mockApi()
-    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { created: 1, skipped: 0, failed: 0, rows: [{ rowNumber: 2, key: 'new@vendor.test', status: 'CREATED', message: null }] } } as never)
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { created: 1, skipped: 0, failed: 0, rows: [{ rowNumber: 3, key: 'new@vendor.test', status: 'CREATED', message: null }] } } as never)
+    const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
     await openTab(user)
 
     await user.click(screen.getByRole('button', { name: '导入' }))
-    const buffer = await createExcelWorkbook([{ name: '数据', headers: ['厂商名称', '邮箱'], rows: [
+    const dialog = await screen.findByRole('dialog', { name: '导入外协邮箱' })
+    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
+    await waitFor(() => expect(download).toHaveBeenCalled())
+    const [fileName, [sheet]] = download.mock.calls[0]
+    expect(fileName).toBe('外协邮箱导入模板.xlsx')
+    expect(sheet).toEqual({ name: '数据', headers: ['厂商名称', '邮箱'], rows: [['示例厂商', 'example@example.com']] })
+    const buffer = await createExcelWorkbook([{ ...sheet, rows: [
+      ...sheet.rows,
       ['元控', 'new@vendor.test'],
       ['鼎亚', 'A@vendor.test'],
       ['鼎亚', 'dup@vendor.test'],
@@ -146,7 +154,7 @@ describe('外协清单设定 → 外协邮箱', () => {
       ['没有的厂商', 'y@vendor.test'],
       ['元控', 'bad-address'],
     ] }])
-    await user.upload(screen.getByLabelText('选择 Excel 文件') as HTMLInputElement,
+    await user.upload(within(dialog).getByLabelText('选择 Excel 文件') as HTMLInputElement,
       new File([buffer], 'emails.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
     expect(await screen.findByText('待导入 1')).toBeInTheDocument()
     expect(screen.getByText('跳过 3')).toBeInTheDocument()
@@ -155,6 +163,6 @@ describe('外协清单设定 → 外协邮箱', () => {
 
     await user.click(screen.getByRole('button', { name: '确认导入' }))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/settings/vendor-emails/import',
-      { rows: [{ rowNumber: 2, vendorName: '元控', email: 'new@vendor.test' }] }))
+      { rows: [{ rowNumber: 3, vendorName: '元控', email: 'new@vendor.test' }] }))
   })
 })

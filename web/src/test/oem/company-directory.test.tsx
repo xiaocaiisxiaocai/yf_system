@@ -216,6 +216,25 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     expect(sheets[0].headers).not.toContain('初始密码')
   })
 
+  it.each([
+    ['导入厂商', '导入 ODM/OEMA 厂商资料', 'ODM-OEMA厂商导入模板.xlsx', ['厂商名称', '备注'], ['示例厂商', '示例备注']],
+    ['导入账号', '导入 ODM/OEMA 厂商账号', 'ODM-OEMA账号导入模板.xlsx', ['厂商名称', '账号', '初始密码'], ['示例厂商', 'demo001', 'T7!kmQ4n']],
+    ['导入联络人', '导入 ODM/OEMA 厂商联络人', 'ODM-OEMA联络人导入模板.xlsx', ['厂商名称', '联络人姓名', '邮箱', '排序'], ['示例厂商', '示例联络人', 'example@example.com', '1']],
+  ])('%s模板的数据表包含一行范例', async (menu, title, filename, headers, example) => {
+    const user = userEvent.setup()
+    vi.mocked(downloadExcelWorkbook).mockClear()
+    renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
+
+    await user.click(await screen.findByRole('button', { name: '导入' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: menu }))
+    const dialog = await screen.findByRole('dialog', { name: title })
+    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
+    await waitFor(() => expect(downloadExcelWorkbook).toHaveBeenCalledTimes(1))
+    const [name, sheets] = vi.mocked(downloadExcelWorkbook).mock.calls[0]
+    expect(name).toBe(filename)
+    expect(sheets[0]).toEqual({ name: '数据', headers, rows: [example] })
+  })
+
   it('共用 ODM/OEMA 登录账号不显示或要求填写联系人姓名和邮箱', async () => {
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:account_manage'])

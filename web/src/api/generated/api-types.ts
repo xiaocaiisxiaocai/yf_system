@@ -369,6 +369,71 @@ export interface MediaSessionResponse {
   expiresInSeconds: number
 }
 
+export interface MesImportConfirmRequest {
+  rows: Array<MesImportRow>
+  overwrite: Array<string>
+  chosenRows: Record<string, number>
+}
+
+export interface MesImportConfirmResponse {
+  added: number
+  overwritten: number
+  skipped: number
+  unchanged: number
+  invalid: Array<MesImportInvalidRow>
+}
+
+export interface MesImportDuplicate {
+  workOrder: string
+  alreadyExists: boolean
+  rows: Array<MesImportDuplicateRow>
+}
+
+export interface MesImportDuplicateRow {
+  rowNumber: number
+  customerName: string | null
+  deviceModels: string | null
+  planEndDate: string | null
+  existing: MesImportExisting | null
+}
+
+export interface MesImportExisting {
+  workOrder: string
+  current: MesImportOrderSummary
+  excel: MesImportOrderSummary
+  changedFields: number
+}
+
+export interface MesImportInvalidRow {
+  rowNumber: number
+  workOrder: string
+  reason: string
+}
+
+export interface MesImportOrderSummary {
+  customerName: string | null
+  deviceModels: string | null
+  planEndDate: string | null
+}
+
+export interface MesImportPreviewResponse {
+  added: number
+  unchanged: number
+  invalid: Array<MesImportInvalidRow>
+  existing: Array<MesImportExisting>
+  duplicates: Array<MesImportDuplicate>
+}
+
+export interface MesImportRequest {
+  rows: Array<MesImportRow>
+}
+
+export interface MesImportRow {
+  rowNumber: number
+  workOrder: string
+  values: Record<string, string | null>
+}
+
 export interface MesMirrorConfirmRequest {
   apply: boolean
 }
@@ -2374,6 +2439,8 @@ export interface ApiResponses {
   "GET /outsource/mails/{id}/attachment": Blob
   "POST /outsource/mails/{id}/retry": OutsourceMailResponse
   "POST /outsource/mes-mirror/confirm": MesMirrorStatusResponse
+  "POST /outsource/mes-mirror/import": MesImportConfirmResponse
+  "POST /outsource/mes-mirror/import/preview": MesImportPreviewResponse
   "POST /outsource/mes-mirror/orders/query": PageResponseOfMesOrderRow
   "POST /outsource/mes-mirror/run": MesMirrorStatusResponse
   "PUT /outsource/mes-mirror/schedule": MesMirrorSettingsResponse

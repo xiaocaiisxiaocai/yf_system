@@ -45,7 +45,7 @@ interface SupplierContactWorkbookRow {
 }
 
 const SUPPLIER_ACCOUNT_WORKBOOK: ExcelWorkbookSheet[] = [
-  { name: '数据', headers: [...SUPPLIER_ACCOUNT_HEADERS], rows: [] },
+  { name: '数据', headers: SUPPLIER_ACCOUNT_HEADERS, rows: [['示例供应商', 'demo001', '供应商人员', 'T7!kmQ4n']] },
   { name: '说明', headers: ['说明'], rows: [
     ['一行一个账号；同一供应商有多个账号时，重复填写供应商名称。'],
     ['供应商必须已存在，名称须与系统中的供应商名称一致。'],
@@ -55,7 +55,7 @@ const SUPPLIER_ACCOUNT_WORKBOOK: ExcelWorkbookSheet[] = [
 ]
 
 const SUPPLIER_CONTACT_WORKBOOK: ExcelWorkbookSheet[] = [
-  { name: '数据', headers: [...SUPPLIER_CONTACT_HEADERS], rows: [] },
+  { name: '数据', headers: SUPPLIER_CONTACT_HEADERS, rows: [['示例供应商', '示例联络人', 'example@example.com', '1']] },
   { name: '说明', headers: ['说明'], rows: [
     ['一行一个联络人；同一供应商有多个联络人时，重复填写供应商名称。'],
     ['供应商必须已存在，名称须与系统中的供应商名称一致。'],

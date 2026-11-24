@@ -13,6 +13,8 @@
   "DELETE /api/v1/oem/uploads/{}",
   "DELETE /api/v1/outsource/settings/customers/{}",
   "POST /api/v1/outsource/mes-mirror/confirm",
+  "POST /api/v1/outsource/mes-mirror/import",
+  "POST /api/v1/outsource/mes-mirror/import/preview",
   "POST /api/v1/outsource/mes-mirror/orders/query",
   "POST /api/v1/outsource/mes-mirror/run",
   "PUT /api/v1/outsource/mes-mirror/schedule",

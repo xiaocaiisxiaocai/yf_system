@@ -194,7 +194,9 @@ public static class ApiApplication
                     && !ApiRequestPolicy.IsChunkUpload(context.Request))
                     limit.MaxRequestBodySize = ProjectsModule.IsMessageImageUpload(context.Request)
                         ? MessageService.MultipartRequestLimitBytes
-                        : 2L * 1024 * 1024;
+                        : OutsourceModule.IsMesImport(context.Request)
+                            ? OutsourceModule.MesImportRequestLimitBytes
+                            : 2L * 1024 * 1024;
             }
             await next(context);
         });

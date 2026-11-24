@@ -68,6 +68,7 @@ export default function ExcelImportDialog<T>({
   const [prepared, setPrepared] = useState<PreparedImport<T> | null>(null)
   const [source, setSource] = useState<ExcelImportRow[]>([])
   const [previewError, setPreviewError] = useState('')
+  const [exampleSkipped, setExampleSkipped] = useState(false)
   const [parsing, setParsing] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -84,6 +85,7 @@ export default function ExcelImportDialog<T>({
     setPrepared(null)
     setSource([])
     setPreviewError('')
+    setExampleSkipped(false)
     setParsing(false)
     setSaving(false)
     if (inputRef.current) inputRef.current.value = ''
@@ -100,10 +102,23 @@ export default function ExcelImportDialog<T>({
     setFileName(file.name)
     setPrepared(null)
     setPreviewError('')
+    setExampleSkipped(false)
     setParsing(true)
     try {
-      const table = await readExcelTable(file, { requiredHeaders, optionalHeaders, headerAliases, maxRows })
-      const next = await prepare(table)
+      const dataSheet = templateSheets.find(sheet => sheet.name === '数据')
+      const example = dataSheet?.rows[0]
+      const exampleValues = dataSheet && example
+        ? dataSheet.headers.map((header, index) => [header, example[index]?.trim() ?? ''] as const)
+        : undefined
+      let ignored = false
+      const ignoreExampleRow = exampleValues && (({ values }: ExcelImportRow) => {
+        const matches = exampleValues.every(([header, value]) => (values[header] ?? '') === value)
+        ignored ||= matches
+        return matches
+      })
+      const table = await readExcelTable(file, { requiredHeaders, optionalHeaders, headerAliases, maxRows, ignoreExampleRow })
+      setExampleSkipped(ignored)
+      const next = table.length ? await prepare(table) : { payload: [], preview: [] }
       if (next.preview.length !== table.length) throw new Error('预览结果与源文件行数不一致，请重新生成文件')
       setSource(table)
       setPrepared(next)
@@ -209,6 +224,7 @@ export default function ExcelImportDialog<T>({
             <Typography.Text>待导入 {counts.ready}</Typography.Text>
             <Typography.Text type="secondary">跳过 {counts.skipped}</Typography.Text>
             <Typography.Text type={counts.invalid ? 'error' : 'secondary'}>错误 {counts.invalid}</Typography.Text>
+            {exampleSkipped && <Typography.Text type="secondary">已忽略范例行</Typography.Text>}
             {counts.created > 0 && <Typography.Text type="success">已新增 {counts.created}</Typography.Text>}
             {counts.invalid > 0 && <Button size="mini" status="danger" onClick={() => void exportErrorRows()}>导出错误数据</Button>}
           </Space>

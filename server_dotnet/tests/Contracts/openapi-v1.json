@@ -10035,6 +10035,84 @@
         }
       }
     },
+    "/api/v1/outsource/mes-mirror/import/preview": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesImportPreviewResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/outsource/mes-mirror/import": {
+      "post": {
+        "tags": [
+          "Yf.Api.Tests"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MesImportConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MesImportConfirmResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/outsource/mes-mirror/orders/query": {
       "post": {
         "tags": [
@@ -11666,6 +11744,279 @@
           "expiresInSeconds": {
             "type": "integer",
             "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportConfirmRequest": {
+        "required": [
+          "chosenRows",
+          "overwrite",
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportRow"
+            }
+          },
+          "overwrite": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "chosenRows": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportConfirmResponse": {
+        "required": [
+          "added",
+          "invalid",
+          "overwritten",
+          "skipped",
+          "unchanged"
+        ],
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "overwritten": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "invalid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportInvalidRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportDuplicate": {
+        "required": [
+          "alreadyExists",
+          "rows",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "workOrder": {
+            "type": "string"
+          },
+          "alreadyExists": {
+            "type": "boolean"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportDuplicateRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportDuplicateRow": {
+        "required": [
+          "customerName",
+          "deviceModels",
+          "existing",
+          "planEndDate",
+          "rowNumber"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "customerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deviceModels": {
+            "type": "string",
+            "nullable": true
+          },
+          "planEndDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "existing": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MesImportExisting"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportExisting": {
+        "required": [
+          "changedFields",
+          "current",
+          "excel",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "workOrder": {
+            "type": "string"
+          },
+          "current": {
+            "$ref": "#/components/schemas/MesImportOrderSummary"
+          },
+          "excel": {
+            "$ref": "#/components/schemas/MesImportOrderSummary"
+          },
+          "changedFields": {
+            "type": "integer",
+            "format": "int32"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportInvalidRow": {
+        "required": [
+          "reason",
+          "rowNumber",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workOrder": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportOrderSummary": {
+        "required": [
+          "customerName",
+          "deviceModels",
+          "planEndDate"
+        ],
+        "type": "object",
+        "properties": {
+          "customerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "deviceModels": {
+            "type": "string",
+            "nullable": true
+          },
+          "planEndDate": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportPreviewResponse": {
+        "required": [
+          "added",
+          "duplicates",
+          "existing",
+          "invalid",
+          "unchanged"
+        ],
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unchanged": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "invalid": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportInvalidRow"
+            }
+          },
+          "existing": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportExisting"
+            }
+          },
+          "duplicates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportDuplicate"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportRequest": {
+        "required": [
+          "rows"
+        ],
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MesImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MesImportRow": {
+        "required": [
+          "rowNumber",
+          "values",
+          "workOrder"
+        ],
+        "type": "object",
+        "properties": {
+          "rowNumber": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "workOrder": {
+            "type": "string"
+          },
+          "values": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            }
           }
         },
         "additionalProperties": false

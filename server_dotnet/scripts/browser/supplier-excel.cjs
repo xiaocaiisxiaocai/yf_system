@@ -59,8 +59,10 @@ let accountSpecs = [];
       const templatePath = OUT + '/robot-account-template.xlsx';
       await template.saveAs(templatePath);
       const templateBook = XLSX.read(fs.readFileSync(templatePath), { type: 'buffer' });
-      assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 })[0],
-        ['供应商名称', '账号', '角色', '初始密码']);
+      const [headers, example, ...additionalRows] = XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 });
+      assert.deepEqual(headers, ['供应商名称', '账号', '角色', '初始密码']);
+      assert.deepEqual(example, ['示例供应商', 'demo001', '供应商人员', 'T7!kmQ4n']);
+      assert.equal(additionalRows.length, 0);
 
       const rejectedName = 'robot_short_' + marker;
       await modal.getByLabel('选择 Excel 文件', { exact: true }).setInputFiles({
@@ -79,13 +81,15 @@ let accountSpecs = [];
       modal = await openAccountImport();
       await modal.getByLabel('选择 Excel 文件', { exact: true }).setInputFiles({
         name: 'robot-accounts.xlsx', mimeType: emailType,
-        buffer: makeFile(['供应商名称', '账号', '角色', '初始密码'], [
+        buffer: makeFile(headers, [
+          example,
           [supplierName, accountSpecs[0].employeeNo, '供应商人员', accountSpecs[0].password],
           [supplierName, accountSpecs[1].employeeNo, '', accountSpecs[1].password],
         ]),
       });
       for (const account of accountSpecs)
         await modal.getByRole('row').filter({ hasText: account.employeeNo }).getByText('待导入', { exact: true }).waitFor();
+      await modal.getByText('已忽略范例行', { exact: true }).waitFor();
       await modal.getByRole('button', { name: '确认导入', exact: true }).click();
       await modal.getByRole('button', { name: '确认导入', exact: true }).waitFor({ state: 'hidden' }); // the dialog closes itself when no row failed
       accounts = await read('GET', `/admin/suppliers/${supplier.id}/accounts`);
@@ -122,8 +126,10 @@ let accountSpecs = [];
       const templatePath = OUT + '/robot-contact-template.xlsx';
       await template.saveAs(templatePath);
       const templateBook = XLSX.read(fs.readFileSync(templatePath), { type: 'buffer' });
-      assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 })[0],
-        ['供应商名称', '联络人姓名', '邮箱', '排序']);
+      assert.deepEqual(XLSX.utils.sheet_to_json(templateBook.Sheets.数据, { header: 1 }), [
+        ['供应商名称', '联络人姓名', '邮箱', '排序'],
+        ['示例供应商', '示例联络人', 'example@example.com', '1'],
+      ]);
 
       const contactSpecs = [1, 2].map(index => ({
         name: `Robot Excel 联络人 ${index}-${marker}`,
