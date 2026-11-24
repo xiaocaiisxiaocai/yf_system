@@ -19,16 +19,16 @@ public sealed class MesMirrorIpmsClientTests
              "jjtActualDate":"2026-07-06","deliveryDate":"2027-01-08","customerEndDate":"2027-03-01","planEndDate":"2027-02-01"}
             """);
 
-        // 机构课别 is not in MES (it comes from the owner's account) and neither is 电控执行人; the due date is MES 原交期. BOM时间 and 发图 are entered by staff, not read from MES.
+        // 机构课别 is not in MES (it comes from the owner's account) and neither is 电控执行人; the due date is MES 客户交期 (customerEndDate), not 原交期. BOM时间 and 发图 are entered by staff, not read from MES.
         Assert.Equal(new IpmsWorkOrder("21091052", "Peng Shen (Thailand)", "SFC-1500", null, "周晓淋", null,
             new DateOnly(2026, 6, 7),
-            3, new DateOnly(2027, 1, 8), false), order);
+            3, new DateOnly(2027, 3, 1), false), order);
     }
 
     [Theory]
-    [InlineData("""{"deviceNum":"2","deliveryDate":"2026-12-30 00:00:00"}""", 2, "2026-12-30")]
-    [InlineData("""{"deviceNum":"x","deliveryDate":"garbage"}""", null, null)]
-    [InlineData("""{"deviceNum":null,"deliveryDate":null}""", null, null)]
+    [InlineData("""{"deviceNum":"2","customerEndDate":"2026-12-30 00:00:00","deliveryDate":"2026-01-01"}""", 2, "2026-12-30")]
+    [InlineData("""{"deviceNum":"x","customerEndDate":"garbage"}""", null, null)]
+    [InlineData("""{"deviceNum":null,"customerEndDate":null,"deliveryDate":"2026-01-01"}""", null, null)]
     [InlineData("""{}""", null, null)]
     public void ToleratesMissingOrMalformedValues(string json, int? quantity, string? due)
     {
@@ -80,7 +80,7 @@ public sealed class MesMirrorIpmsClientTests
             await database.ExecuteAsync($$"""
                 INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,customer_name,device_models,raw_json)
                 VALUES('{{no}}','b',UTC_TIMESTAMP(3),'客户{{no}}','M-{{no}}',
-                  '{"workOrder":"{{no}}","customerName":"客户{{no}}","deviceModels":"M-{{no}}","deviceNum":2,"deliveryDate":"2027-02-0{{no[1]}}"}')
+                  '{"workOrder":"{{no}}","customerName":"客户{{no}}","deviceModels":"M-{{no}}","deviceNum":2,"customerEndDate":"2027-02-0{{no[1]}}"}')
                 """, ct);
 
         var found = await client.LookupAsync(["A1", "A3", "NOPE"], ct);
