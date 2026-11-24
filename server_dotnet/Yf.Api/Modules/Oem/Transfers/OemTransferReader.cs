@@ -18,34 +18,40 @@ namespace Yf.Api.Modules.Oem.Transfers;
 /// </summary>
 public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
 {
-    public async Task<IReadOnlyList<OemSendableItemResponse>> SendableItemsAsync(OemActor actor, CancellationToken ct)
+    public async Task<IReadOnlyList<OemSendableItemResponse>> SendableItemsAsync(OemActor actor, string? workOrderNo, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        if (current is not OemAccountActor)
+            await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+        if (string.IsNullOrWhiteSpace(workOrderNo)) return [];
+
         var db = uow.Db;
-        var openItems = db.OutsourceItems.AsNoTracking().Where(item => item.ClosedAt == null);
+        var term = workOrderNo.Trim().ToLowerInvariant();
+        var pattern = QueryValues.ContainsPattern(term);
+        var matches =
+            from item in db.OutsourceItems.AsNoTracking()
+            join company in db.OemCompanies on item.VendorId equals company.Id
+            let number = EF.Functions.Collate(item.WorkOrderNo.ToLower(), "utf8mb4_bin")
+            where item.ClosedAt == null && EF.Functions.Like(number, pattern, QueryValues.LikeEscape)
+            orderby number == term descending, item.WorkOrderNo
+            select new { Item = item, Company = company };
 
         if (current is OemAccountActor account)
         {
             var layout = await OutsourceFieldLayout.LoadAsync(db, ct);
             var showCustomer = layout.Find("customer") is { Active: true, VendorVisible: true };
-            return await (
-                from item in openItems
-                where item.VendorId == account.CompanyId
-                join company in db.OemCompanies on item.VendorId equals company.Id
-                orderby item.WorkOrderNo
-                select new OemSendableItemResponse(item.Id, item.WorkOrderNo, showCustomer ? item.Customer : null,
-                    company.Name, null)).ToArrayAsync(ct);
+            return await matches.Where(match => match.Company.Id == account.CompanyId).Take(20)
+                .Select(match => new OemSendableItemResponse(match.Item.Id, match.Item.WorkOrderNo,
+                    showCustomer ? match.Item.Customer : null, match.Company.Name, null))
+                .ToArrayAsync(ct);
         }
 
-        await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
-        return await (
-            from item in openItems
-            join company in db.OemCompanies.Where(company => company.Status == OemStatus.Active) on item.VendorId equals company.Id
-            orderby item.WorkOrderNo
-            select new OemSendableItemResponse(item.Id, item.WorkOrderNo, item.Customer, company.Name,
-                db.OemAccounts.Any(recipient => recipient.OemCompanyId == company.Id && recipient.Status == OemStatus.Active)
-                    ? null : OemRecipientPolicy.MissingAccountMessage)).ToArrayAsync(ct);
+        return await matches.Where(match => match.Company.Status == OemStatus.Active).Take(20)
+            .Select(match => new OemSendableItemResponse(match.Item.Id, match.Item.WorkOrderNo, match.Item.Customer,
+                match.Company.Name, db.OemAccounts.Any(recipient => recipient.OemCompanyId == match.Company.Id
+                    && recipient.Status == OemStatus.Active) ? null : OemRecipientPolicy.MissingAccountMessage))
+            .ToArrayAsync(ct);
     }
 
     public async Task<OemPageResponse<OemTransferSummaryResponse>> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)

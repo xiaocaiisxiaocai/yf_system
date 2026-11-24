@@ -7236,6 +7236,15 @@
         "tags": [
           "Yf.Api.Tests"
         ],
+        "parameters": [
+          {
+            "name": "workOrderNo",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",

@@ -1,6 +1,6 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs, TreeSelect } from '@arco-design/web-react'
+import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Spin, Table, Tabs, TreeSelect, Typography } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconSearch, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
@@ -44,7 +44,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   const { api, realm, base, queryScope } = useOem()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [form] = Form.useForm<{ outsourceItemId?: number; recipientUserIds?: number[]; signerName?: string }>()
+  const [form] = Form.useForm<{ workOrderNo?: string; recipientUserIds?: number[]; signerName?: string }>()
   const uploader = useRef<OemUploaderHandle>(null)
   const submitLocked = useRef(false)
   const [saving, setSaving] = useState(false)
@@ -55,19 +55,34 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   const recipientChoices = useRecipientChoices()
   const choices = recipientChoices.data ?? []
 
+  const workOrderNo = (Form.useWatch('workOrderNo', form) ?? '').trim()
+  const workOrderTimer = useRef<number>()
+  const [lookupWorkOrderNo, setLookupWorkOrderNo] = useState('')
+  useEffect(() => () => window.clearTimeout(workOrderTimer.current), [])
+
+  const scheduleWorkOrderLookup = (value: string) => {
+    window.clearTimeout(workOrderTimer.current)
+    setLookupWorkOrderNo('')
+    const next = value.trim()
+    if (next) workOrderTimer.current = window.setTimeout(() => setLookupWorkOrderNo(next), 300)
+  }
+
+  const lookupReady = workOrderNo !== '' && workOrderNo === lookupWorkOrderNo
   const sendableItems = useQuery({
-    queryKey: ['oem', ...queryScope, 'sendable-items'],
-    queryFn: () => api.sendableItems(),
-    enabled: visible,
+    queryKey: ['oem', ...queryScope, 'sendable-items', workOrderNo],
+    queryFn: ({ signal }) => api.sendableItems(workOrderNo, signal),
+    enabled: visible && lookupReady,
     gcTime: 0,
     retry: false,
     refetchOnReconnect: false,
   })
-  const workOrders = sendableItems.data ?? []
-  const workOrdersLoading = sendableItems.isPending || sendableItems.isFetching
-  const selectedWorkOrderId = Form.useWatch('outsourceItemId', form)
-  const selectedWorkOrder = workOrders.find((item) => item.id === selectedWorkOrderId)
-  const canUseWorkOrder = selectedWorkOrder && !selectedWorkOrder.disabledReason && !workOrdersLoading && !sendableItems.isError
+  const workOrdersLoading = workOrderNo !== '' && (!lookupReady || sendableItems.isPending || sendableItems.isFetching)
+  const workOrders = lookupReady && !workOrdersLoading && sendableItems.isSuccess ? sendableItems.data : []
+  const normalizedWorkOrderNo = workOrderNo.toLowerCase()
+  const matchedWorkOrder = workOrders.find((item) => item.workOrderNo.toLowerCase() === normalizedWorkOrderNo)
+  const canUseWorkOrder = matchedWorkOrder && !matchedWorkOrder.disabledReason
+  const customer = matchedWorkOrder?.customer?.trim()
+  const destination = realm === 'internal' ? [matchedWorkOrder?.vendorName, customer].filter(Boolean).join(' · ') : customer
 
   const finish = (id: number, message: string) => {
     void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
@@ -122,7 +137,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       if (!activeDraftId) {
         let created
         try {
-          created = await api.createTransfer({ outsourceItemId: selectedWorkOrder.id })
+          created = await api.createTransfer({ outsourceItemId: matchedWorkOrder.id })
         } catch (error) {
           const status = (error as { response?: { status?: number } })?.response?.status
           // A transport/5xx failure may have happened after the non-idempotent create committed.
@@ -213,33 +228,46 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       unmountOnExit
     >
       <Form onSubmit={() => void submit()} form={form} layout="vertical">
-        <Form.Item field="outsourceItemId" label="工令" rules={[{ required: true, message: '请选择工令' }]}>
-          <Select
+        <Form.Item
+          field="workOrderNo"
+          label="工令"
+          rules={[{ required: true, match: /\S/, message: '请输入工令号' }]}
+          extra={workOrderNo && (
+            <>
+              {workOrdersLoading && <span role="status"><Spin size={14} /> 正在查询工令…</span>}
+              {!workOrdersLoading && sendableItems.isError && (
+                <Alert type="error" content={oemRequestError(sendableItems.error, '工令查询失败')}
+                  action={<Button size="small" onClick={() => void sendableItems.refetch()}>重试</Button>} />
+              )}
+              {!workOrdersLoading && sendableItems.isSuccess && workOrders.length === 0 && (
+                <span role="status">外协清单里没有这个工令，或该工令已完成</span>
+              )}
+              {workOrders.length > 0 && !matchedWorkOrder && (
+                <Space wrap>
+                  {workOrders.slice(0, 5).map((item) => (
+                    <Button key={item.id} size="mini" onClick={() => {
+                      form.setFieldValue('workOrderNo', item.workOrderNo)
+                      scheduleWorkOrderLookup(item.workOrderNo)
+                    }}>
+                      {item.workOrderNo}
+                    </Button>
+                  ))}
+                </Space>
+              )}
+              {destination && <div>发送给：{destination}</div>}
+              {matchedWorkOrder?.disabledReason && (
+                <Typography.Text type="error">{matchedWorkOrder.disabledReason}</Typography.Text>
+              )}
+            </>
+          )}
+        >
+          <Input
             aria-label="工令"
-            showSearch
-            loading={workOrdersLoading}
-            disabled={busy || draftId !== null || workOrdersLoading || sendableItems.isError}
-            placeholder="选择工令"
-            options={workOrders.map(({ id, workOrderNo, customer, vendorName, disabledReason }) => {
-              const label = [workOrderNo, customer, vendorName].filter(Boolean).join(' · ')
-              return {
-                value: id,
-                label: disabledReason ? `${label}（${disabledReason}）` : label,
-                disabled: Boolean(disabledReason),
-              }
-            })}
+            disabled={busy || draftId !== null}
+            placeholder="输入工令号"
+            onChange={scheduleWorkOrderLookup}
           />
         </Form.Item>
-        {realm === 'internal' && selectedWorkOrder && (
-          <div style={{ marginBottom: 12 }}>发送给：{selectedWorkOrder.vendorName}</div>
-        )}
-        {!workOrdersLoading && sendableItems.isError && (
-          <Alert type="error" style={{ marginBottom: 12 }} content={oemRequestError(sendableItems.error, '工令加载失败')}
-            action={<Button size="small" onClick={() => void sendableItems.refetch()}>重试</Button>} />
-        )}
-        {sendableItems.isSuccess && !workOrdersLoading && !workOrders.some((item) => !item.disabledReason) && (
-          <Alert type="warning" style={{ marginBottom: 12 }} content="外协清单里没有可发送的工令" />
-        )}
         {realm === 'oem' && recipientChoices.isSuccess && (
           <Form.Item field="recipientUserIds" label="通知公司人员"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请选择要通知的公司人员' }]}>

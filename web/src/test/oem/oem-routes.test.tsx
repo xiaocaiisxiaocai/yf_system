@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import axios from 'axios'
@@ -538,7 +538,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(useAuth.getState()).toMatchObject({ token: 'internal-token', user: internalUser })
   })
 
-  it('厂商门户通过厂商会话加载回传单工令且不要求选择目标厂商', async () => {
+  it('厂商门户通过厂商会话查询输入的回传工令且不显示目标厂商', async () => {
     const user = userEvent.setup()
     usePortalAuth.setState({
       token: 'portal-token',
@@ -569,12 +569,13 @@ describe('ODM/OEMA 前端入口与路由', () => {
     )
 
     await user.click(await screen.findByRole('button', { name: '发送文件' }))
-    expect(await screen.findByText('拖放文件到这里，或点击选择多个文件')).toBeInTheDocument()
-    const workOrders = screen.getByRole('combobox', { name: '工令' })
-    await waitFor(() => expect(workOrders).toHaveAttribute('aria-disabled', 'false'))
-    await user.click(workOrders)
-    expect(await screen.findByRole('option', { name: 'WO-109 · 测试代工厂' })).toBeVisible()
-    expect(get).toHaveBeenCalledWith('/oem/sendable-items', expect.anything())
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('拖放文件到这里，或点击选择多个文件')).toBeInTheDocument()
+    const workOrder = within(dialog).getByRole('textbox', { name: '工令' })
+    await user.type(workOrder, 'WO-109')
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/oem/sendable-items', expect.objectContaining({ params: { workOrderNo: 'WO-109' } })))
+    await waitFor(() => expect(within(dialog).queryByText('正在查询工令…')).not.toBeInTheDocument())
+    expect(within(dialog).queryByText(/发送给：|测试代工厂/)).not.toBeInTheDocument()
     expect(screen.queryByText('目标 ODM/OEMA 厂商')).not.toBeInTheDocument()
     expect(screen.queryByText('标题')).not.toBeInTheDocument()
     expect(screen.queryByText('删除策略')).not.toBeInTheDocument()

@@ -128,8 +128,8 @@ public sealed class OemTransferOutsourceLinkTests
         var closed = await host.CreateOutsourceItemAsync(world.CompanyId, "WO-CLOSED", ct, closed: true);
         var disabledItem = await host.CreateOutsourceItemAsync(disabled, "WO-DISABLED", ct);
 
-        await world.Viewer.GetAsync(SendableItems, ct).Status(HttpStatusCode.Forbidden);
-        var rows = (await world.Sender.GetAsync(SendableItems, ct).Ok()).AsArray();
+        await world.Viewer.GetAsync(SendableLookup("WO-"), ct).Status(HttpStatusCode.Forbidden);
+        var rows = (await world.Sender.GetAsync(SendableLookup("WO-"), ct).Ok()).AsArray();
         var listedIds = rows.Select(row => row!.Id()).ToArray();
         Assert.DoesNotContain(closed, listedIds);
         Assert.DoesNotContain(disabledItem, listedIds);
@@ -151,11 +151,11 @@ public sealed class OemTransferOutsourceLinkTests
         var otherCompanyId = await CreateCompanyAsync(world.Admin, "另一厂商", ct);
         var own = await host.CreateOutsourceItemAsync(world.CompanyId, "WO-VENDOR", ct, customer: "测试客户");
         var closed = await host.CreateOutsourceItemAsync(world.CompanyId, "WO-VENDOR-CLOSED", ct, closed: true);
-        var other = await host.CreateOutsourceItemAsync(otherCompanyId, "WO-OTHER", ct);
+        var other = await host.CreateOutsourceItemAsync(otherCompanyId, "WO-VENDOR-OTHER", ct);
 
         await using (var connection = await host.OpenAsync(ct))
             await connection.ExecuteAsync("UPDATE outsource_fields SET vendor_visible=1 WHERE field_key='customer'");
-        var rows = (await world.Vendor.GetAsync(SendableItems, ct).Ok()).AsArray();
+        var rows = (await world.Vendor.GetAsync(SendableLookup("WO-VENDOR"), ct).Ok()).AsArray();
         var listedIds = rows.Select(row => row!.Id()).ToArray();
         Assert.DoesNotContain(closed, listedIds);
         Assert.DoesNotContain(other, listedIds);
@@ -166,9 +166,92 @@ public sealed class OemTransferOutsourceLinkTests
 
         await using (var connection = await host.OpenAsync(ct))
             await connection.ExecuteAsync("UPDATE outsource_fields SET vendor_visible=0 WHERE field_key='customer'");
-        rows = (await world.Vendor.GetAsync(SendableItems, ct).Ok()).AsArray();
+        rows = (await world.Vendor.GetAsync(SendableLookup("WO-VENDOR"), ct).Ok()).AsArray();
         Assert.Null(Assert.Single(rows, row => row!.Id() == own)!["customer"]);
     }
+
+    [Fact(Timeout = 180_000)]
+    public async Task SendableItemsRequireWorkOrderText()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        await host.CreateOutsourceItemAsync(world.CompanyId, "WO-OPEN", ct);
+
+        foreach (var url in new[] { SendableItems, SendableLookup(""), SendableLookup(" \t ") })
+        {
+            Assert.Empty((await world.Sender.GetAsync(url, ct).Ok()).AsArray());
+            Assert.Empty((await world.Vendor.GetAsync(url, ct).Ok()).AsArray());
+        }
+        await world.Viewer.GetAsync(SendableItems, ct).Status(HttpStatusCode.Forbidden);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task SendableItemsMatchContainsAndPutExactFirst()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        foreach (var number in new[] { "Z-WO-SEARCH", "WO-OTHER", "WO-SEARCH-2", "A-WO-SEARCH", "WO-SEARCH" })
+            await host.CreateOutsourceItemAsync(world.CompanyId, number, ct);
+
+        var rows = (await world.Sender.GetAsync(SendableLookup(" wo-search "), ct).Ok()).AsArray();
+
+        Assert.Equal(["WO-SEARCH", "A-WO-SEARCH", "WO-SEARCH-2", "Z-WO-SEARCH"], WorkOrderNumbers(rows));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task SendableItemsEscapeLikeWildcards()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        await host.CreateOutsourceItemAsync(world.CompanyId, "WO-PLAIN", ct);
+        await host.CreateOutsourceItemAsync(world.CompanyId, "WO-%-LITERAL", ct);
+        await host.CreateOutsourceItemAsync(world.CompanyId, "WO-_-LITERAL", ct);
+
+        foreach (var symbol in new[] { "%", "_" })
+        {
+            var rows = (await world.Sender.GetAsync(SendableLookup(symbol), ct).Ok()).AsArray();
+            Assert.Equal($"WO-{symbol}-LITERAL", Assert.Single(WorkOrderNumbers(rows)));
+        }
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task SendableItemsAreCappedAtTwenty()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var numbers = Enumerable.Range(1, 25).Select(i => $"{i:D2}-WO-LIMIT").ToArray();
+        foreach (var number in numbers.Reverse())
+            await host.CreateOutsourceItemAsync(world.CompanyId, number, ct);
+        await host.CreateOutsourceItemAsync(world.CompanyId, "WO-LIMIT", ct);
+
+        var url = SendableLookup("WO-LIMIT");
+        var expected = new[] { "WO-LIMIT" }.Concat(numbers.Take(19)).ToArray();
+        Assert.Equal(expected, WorkOrderNumbers((await world.Sender.GetAsync(url, ct).Ok()).AsArray()));
+        Assert.Equal(expected, WorkOrderNumbers((await world.Vendor.GetAsync(url, ct).Ok()).AsArray()));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task VendorSendableLookupStaysOwnCompany()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var otherCompany = await CreateCompanyAsync(world.Admin, "另一厂商", ct);
+        await host.CreateOutsourceItemAsync(otherCompany, "WO-HIDDEN", ct);
+        await host.CreateOutsourceItemAsync(world.CompanyId, "WO-HIDDEN-OWN", ct);
+
+        var rows = (await world.Vendor.GetAsync(SendableLookup("wo-hidden"), ct).Ok()).AsArray();
+        Assert.Equal("WO-HIDDEN-OWN", Assert.Single(WorkOrderNumbers(rows)));
+    }
+
+    private static string SendableLookup(string text) => $"{SendableItems}?workOrderNo={Uri.EscapeDataString(text)}";
+
+    private static string[] WorkOrderNumbers(JsonArray rows) =>
+        rows.Select(row => row!["workOrderNo"]!.GetValue<string>()).ToArray();
 
     private static async Task<ulong> CreateCompanyAsync(ApiClient admin, string name, CancellationToken ct) =>
         (await admin.PostAsync("/api/v1/oem/companies", new { name }, ct).Ok()).Id();

@@ -57,8 +57,8 @@ export class OemApi {
     this.http = http
   }
 
-  private async get<K extends RouteOf<'GET'>, T extends Relaxed<ApiResponses[K]>>(url: string, params?: object): Promise<T> {
-    return (await this.http.get<T>(url, { params })).data
+  private async get<K extends RouteOf<'GET'>, T extends Relaxed<ApiResponses[K]>>(url: string, params?: object, config?: AxiosRequestConfig): Promise<T> {
+    return (await this.http.get<T>(url, { ...config, params })).data
   }
 
   private async post<K extends RouteOf<'POST'>, T extends Relaxed<ApiResponses[K]>>(url: string, body?: object, config?: AxiosRequestConfig): Promise<T> {
@@ -89,7 +89,8 @@ export class OemApi {
     })).data as Blob
 
   // Transfers
-  sendableItems = () => this.get<'GET /oem/sendable-items', SendableItem[]>('/oem/sendable-items')
+  sendableItems = (workOrderNo: string, signal?: AbortSignal) =>
+    this.get<'GET /oem/sendable-items', SendableItem[]>('/oem/sendable-items', { workOrderNo }, { signal })
   listTransfers = (query: TransferQuery) =>
     this.get<'GET /oem/transfers', Page<TransferSummary>>('/oem/transfers', {
       ...query, mine: query.mine ? 'true' : undefined, toMe: query.toMe ? 'true' : undefined,
