@@ -5,8 +5,6 @@ import {
 } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
-import http from '../../api/client'
-import { useSessionQueryScope } from '../../api/queryClient'
 import { useAuth } from '../../store/auth'
 import { OemApi } from '../api/OemApi'
 import {
@@ -15,11 +13,10 @@ import {
 } from '../api/portalSession'
 import { OEM_SETTINGS_PERMISSIONS, oemHome } from '../oemNavigation'
 import { OemProvider } from '../OemContext'
+import { useInternalOem } from '../useInternalOem'
 import Shell, { type MenuEntry } from '../../layouts/SectionShell'
 import AccountMenu from '../../components/AccountMenu'
 import './OemLayouts.css'
-
-const internalApi = new OemApi(http)
 
 export function OemLanding() {
   const permissions = useAuth((state) => state.permissions)
@@ -33,11 +30,10 @@ export function OemLanding() {
  * collaboration line is shown here, and nothing from here appears there.
  */
 export function OemInternalLayout() {
-  const { permissions, user } = useAuth()
-  const sessionScope = useSessionQueryScope()
+  const user = useAuth((state) => state.user)
+  const oemValue = useInternalOem()
   const navigate = useNavigate()
-  const set = useMemo(() => new Set(permissions), [permissions])
-  const has = (code: string) => set.has(code)
+  const has = (code: string) => oemValue.permissions.has(code)
   if (user?.userType !== 'INTERNAL') return <Result status="403" title="ODM/OEMA 内部入口仅供公司员工使用" />
   const menu: MenuEntry[] = [
     { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: has('oem:transfer_create') || has('oem:transfer_view') },
@@ -48,7 +44,7 @@ export function OemInternalLayout() {
   ]
   if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 ODM/OEMA 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
   return (
-    <OemProvider value={{ api: internalApi, realm: 'internal', base: '/oem', permissions: set, userId: user?.id ?? null, queryScope: ['internal', ...sessionScope] }}>
+    <OemProvider value={oemValue}>
       <Shell title="ODM/OEMA 文件传递" menu={menu} line="oem" account={<AccountMenu />} />
     </OemProvider>
   )

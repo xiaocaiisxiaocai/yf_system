@@ -108,6 +108,9 @@ public static class OemModule
         // A vendor's outsourcing list and electrical handoff action (外协清单契约 → 厂商查看).
         secured.MapGet("/outsource-items", (HttpContext c, Outsource.OutsourceVendorViewService s, CancellationToken ct) =>
             s.ListAsync(OemActorAccessor.Get(c), c.Request, ct)).Produces<Outsource.OutsourceVendorPageResponse>();
+        secured.MapGet("/outsource-items/{id:long}/files",
+            (ulong id, HttpContext c, Outsource.OutsourceVendorViewService s, CancellationToken ct) =>
+                s.FilesAsync(OemActorAccessor.Get(c), id, ct));
         secured.MapPost("/outsource-items/{id:long}/electrical-handoff",
             (ulong id, Outsource.OutsourceElectricalHandoffRequest r, HttpContext c, Outsource.OutsourceVendorViewService s, CancellationToken ct) =>
                 s.SetElectricalHandoffAsync(OemActorAccessor.Get(c), id, r, ct));

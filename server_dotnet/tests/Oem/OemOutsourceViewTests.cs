@@ -50,7 +50,7 @@ public sealed class OemOutsourceViewTests
         Assert.Equal(("PAUSED", "超穎", "暂停", "外协代工甲"), (a2["status"]!.GetValue<string>(),
             a2["values"]!["customer"]!.GetValue<string>(), a2["values"]!["status"]!.GetValue<string>(), a2["values"]!["vendor"]!.GetValue<string>()));
         var columns = page["columns"]!.AsArray().Select(x => x!["key"]!.GetValue<string>()).ToArray();
-        Assert.Equal(["serialNo", "outsourceDate", "status", "electricalHandoff", "workOrderNo"], columns.Take(5));
+        Assert.Equal(["serialNo", "outsourceDate", "status", "electricalHandoff", "workOrderNo", "files"], columns.Take(6));
         Assert.False(a2["electricalHandoff"]!.GetValue<bool>());
         Assert.Equal("否", a2["values"]!["electricalHandoff"]!.GetValue<string>());
         Assert.DoesNotContain("sendStatus", columns);

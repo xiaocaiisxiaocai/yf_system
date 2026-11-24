@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Table, Tabs, TreeSelect } from '@arco-design/web-react'
+import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Spin, Table, Tabs, TreeSelect, Typography } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconSearch, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
 import { oemRequestError } from '../api/requestError'
-import type { CompanyOption, DepartmentNode, TransferFile, TransferSummary } from '../api/types'
+import type { DepartmentNode, TransferFile, TransferSummary } from '../api/types'
 import { downloadOemFile } from '../components/downloadOemFile'
 import OemFilePreview from '../components/OemFilePreview'
 import { OEM_PREVIEW_MAX_BYTES, oemPreviewKind } from '../components/oemPreview'
@@ -17,7 +17,6 @@ import { ApprovalTag, LifecycleTag, ValidationTag } from '../components/StatusTa
 import { LIFECYCLE_OPTIONS, transferClosedNotice } from '../components/statusLabels'
 import Counterpart from '../components/Counterpart'
 import { useCan, useOem } from '../OemContext'
-import { useLatestRequest, useLoadEffect } from '../useLoadEffect'
 import { ColumnResizeProvider } from '../../components/columnResize'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
@@ -27,6 +26,7 @@ import { TABLE_PAGINATION } from '../../components/tablePagination'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
+  { key: 'workOrderNo', title: '工令', defaultWidth: 110, minWidth: 80 },
   // 往来对象：内部看到厂商名称，厂商门户看到“SAA”；箭头和动词表示发出或收到。
   { key: 'counterpart', title: '往来厂商', defaultWidth: 240, minWidth: 140 },
   { key: 'sender', title: '发送人', defaultWidth: 104, minWidth: 88 },
@@ -40,50 +40,49 @@ const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
 const PORTAL_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = OEM_TRANSFER_COLUMNS
   .map((spec) => spec.key === 'counterpart' ? { ...spec, title: '往来' } : spec)
 
-const NO_RECEIVING_ACCOUNT_REASON = '该厂商没有启用的登录账号，请先新增或启用账号后再发送'
-
 function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { api, realm, base, queryScope } = useOem()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const [form] = Form.useForm()
+  const [form] = Form.useForm<{ workOrderNo?: string; recipientUserIds?: number[]; signerName?: string }>()
   const uploader = useRef<OemUploaderHandle>(null)
   const submitLocked = useRef(false)
-  const [companies, setCompanies] = useState<CompanyOption[]>([])
-  const [companyOptionsLoading, setCompanyOptionsLoading] = useState(false)
-  const [companyOptionsError, setCompanyOptionsError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [fileCount, setFileCount] = useState(0)
   const [draftId, setDraftId] = useState<number | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [createOutcomeUnknown, setCreateOutcomeUnknown] = useState(false)
-  const beginCompanyRequest = useLatestRequest()
   const recipientChoices = useRecipientChoices()
   const choices = recipientChoices.data ?? []
 
-  const loadCompanyOptions = useCallback(async (): Promise<CompanyOption[]> => {
-    const isLatest = beginCompanyRequest()
-    setCompanyOptionsLoading(true)
-    setCompanyOptionsError(null)
-    try {
-      const options = await api.companyOptions()
-      if (isLatest()) setCompanies(options)
-      return options
-    } catch (error) {
-      const message = oemRequestError(error, '目标 ODM/OEMA 厂商加载失败，请稍后重试')
-      // Keep the previous options so the chosen vendor still shows its name, not a bare id.
-      if (isLatest()) setCompanyOptionsError(message)
-      throw new Error(message)
-    } finally {
-      if (isLatest()) setCompanyOptionsLoading(false)
-    }
-  }, [api, beginCompanyRequest])
+  const workOrderNo = (Form.useWatch('workOrderNo', form) ?? '').trim()
+  const workOrderTimer = useRef<number>()
+  const [lookupWorkOrderNo, setLookupWorkOrderNo] = useState('')
+  useEffect(() => () => window.clearTimeout(workOrderTimer.current), [])
 
-  const loadInitialCompanies = useCallback(
-    () => (visible && realm === 'internal' ? loadCompanyOptions() : undefined),
-    [visible, realm, loadCompanyOptions],
-  )
-  useLoadEffect(loadInitialCompanies)
+  const scheduleWorkOrderLookup = (value: string) => {
+    window.clearTimeout(workOrderTimer.current)
+    setLookupWorkOrderNo('')
+    const next = value.trim()
+    if (next) workOrderTimer.current = window.setTimeout(() => setLookupWorkOrderNo(next), 300)
+  }
+
+  const lookupReady = workOrderNo !== '' && workOrderNo === lookupWorkOrderNo
+  const sendableItems = useQuery({
+    queryKey: ['oem', ...queryScope, 'sendable-items', workOrderNo],
+    queryFn: ({ signal }) => api.sendableItems(workOrderNo, signal),
+    enabled: visible && lookupReady,
+    gcTime: 0,
+    retry: false,
+    refetchOnReconnect: false,
+  })
+  const workOrdersLoading = workOrderNo !== '' && (!lookupReady || sendableItems.isPending || sendableItems.isFetching)
+  const workOrders = lookupReady && !workOrdersLoading && sendableItems.isSuccess ? sendableItems.data : []
+  const normalizedWorkOrderNo = workOrderNo.toLowerCase()
+  const matchedWorkOrder = workOrders.find((item) => item.workOrderNo.toLowerCase() === normalizedWorkOrderNo)
+  const canUseWorkOrder = matchedWorkOrder && !matchedWorkOrder.disabledReason
+  const customer = matchedWorkOrder?.customer?.trim()
+  const destination = realm === 'internal' ? [matchedWorkOrder?.vendorName, customer].filter(Boolean).join(' · ') : customer
 
   const finish = (id: number, message: string) => {
     void queryClient.invalidateQueries({ queryKey: ['oem', ...queryScope, 'transfers'] })
@@ -104,7 +103,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   }
 
   const submit = async () => {
-    if (submitLocked.current || createOutcomeUnknown) return
+    if (submitLocked.current || createOutcomeUnknown || !canUseWorkOrder) return
     submitLocked.current = true
     setSaving(true)
     setSubmitError(null)
@@ -126,35 +125,19 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
         }
         activeDraftId = null
       }
-      let oemCompanyId: number | undefined
       // A vendor names the company staff to notify; when nobody can be notified it may still send (no mail).
       let recipientUserIds: number[] | undefined
       let signerName: string | undefined
       if (realm === 'oem') {
-        const values = await form.validate().catch(() => null) as { recipientUserIds?: number[]; signerName?: string } | null
+        const values = await form.validate().catch(() => null)
         if (!values) return
         recipientUserIds = values.recipientUserIds ?? []
         signerName = values.signerName
       }
-      if (realm === 'internal') {
-        // 校验未通过时由表单自己标红，不当作失败提示。
-        const values = await form.validate().catch(() => null) as { oemCompanyId: number } | null
-        if (!values) return
-        oemCompanyId = values.oemCompanyId
-        // A draft can stay open while its recipient account is disabled. Refresh
-        // the options before resuming uploads so an invalid recipient never gets
-        // another upload attempt; the server still checks again when sending.
-        // A failed refresh is already shown next to the vendor field, with a retry action.
-        const company = companies.find((item) => item.id === oemCompanyId)
-        if (!company?.canReceive) {
-          setSubmitError(company?.unavailableReason || NO_RECEIVING_ACCOUNT_REASON)
-          return
-        }
-      }
       if (!activeDraftId) {
         let created
         try {
-          created = await api.createTransfer(realm === 'internal' ? { oemCompanyId } : {})
+          created = await api.createTransfer({ outsourceItemId: matchedWorkOrder.id })
         } catch (error) {
           const status = (error as { response?: { status?: number } })?.response?.status
           // A transport/5xx failure may have happened after the non-idempotent create committed.
@@ -241,54 +224,50 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       maskClosable={!busy}
       escToExit={!busy}
       cancelButtonProps={{ disabled: busy }}
-      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown 
-        || (realm === 'internal' && (companyOptionsLoading || !!companyOptionsError || !companies.some((company) => company.canReceive))) }}
+      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown || !canUseWorkOrder }}
       unmountOnExit
     >
       <Form onSubmit={() => void submit()} form={form} layout="vertical">
-        {realm === 'internal' && (
-          <Form.Item field="oemCompanyId" label="目标 ODM/OEMA 厂商" rules={[{ required: true, message: '请选择厂商' }]}>
-            <Select
-              showSearch
-              loading={companyOptionsLoading}
-              disabled={busy || draftId !== null || companyOptionsLoading || !!companyOptionsError}
-              placeholder="选择厂商"
-              options={companies.map((company) => ({
-                value: company.id,
-                label: company.canReceive ? company.name : `${company.name}（${company.unavailableReason || NO_RECEIVING_ACCOUNT_REASON}）`,
-                disabled: !company.canReceive,
-              }))}
-              filterOption={(input, option) => String(option?.props?.children ?? '').includes(input)}
-            />
-          </Form.Item>
-        )}
-        {realm === 'internal' && companyOptionsError && (
-          <Alert type="error" style={{ marginBottom: 12 }} content={(
-            <Space size="small">
-              <span>目标 ODM/OEMA 厂商加载失败：{companyOptionsError}</span>
-              <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
-                onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
-            </Space>
-          )} />
-        )}
-        {realm === 'internal' && !companyOptionsLoading && !companyOptionsError && companies.length === 0 && (
-          <Alert type="warning" style={{ marginBottom: 12 }} content={(
-            <Space size="small">
-              <span>暂无可发送的 ODM/OEMA 厂商，请先启用厂商后再试。</span>
-              <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
-                onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
-            </Space>
-          )} />
-        )}
-        {realm === 'internal' && !companyOptionsLoading && !companyOptionsError && companies.length > 0 && !companies.some((company) => company.canReceive) && (
-          <Alert type="warning" style={{ marginBottom: 12 }} content={(
-            <Space size="small">
-              <span>当前没有可接收的 ODM/OEMA 厂商，请先新增或启用至少一个 ODM/OEMA 登录账号后再发送。</span>
-              <Button type="text" size="small" loading={companyOptionsLoading} disabled={saving || companyOptionsLoading}
-                onClick={() => void loadCompanyOptions().catch(() => undefined)}>刷新厂商</Button>
-            </Space>
-          )} />
-        )}
+        <Form.Item
+          field="workOrderNo"
+          label="工令"
+          rules={[{ required: true, match: /\S/, message: '请输入工令号' }]}
+          extra={workOrderNo && (
+            <>
+              {workOrdersLoading && <span role="status"><Spin size={14} /> 正在查询工令…</span>}
+              {!workOrdersLoading && sendableItems.isError && (
+                <Alert type="error" content={oemRequestError(sendableItems.error, '工令查询失败')}
+                  action={<Button size="small" onClick={() => void sendableItems.refetch()}>重试</Button>} />
+              )}
+              {!workOrdersLoading && sendableItems.isSuccess && workOrders.length === 0 && (
+                <span role="status">外协清单里没有这个工令，或该工令已完成</span>
+              )}
+              {workOrders.length > 0 && !matchedWorkOrder && (
+                <Space wrap>
+                  {workOrders.slice(0, 5).map((item) => (
+                    <Button key={item.id} size="mini" onClick={() => {
+                      form.setFieldValue('workOrderNo', item.workOrderNo)
+                      scheduleWorkOrderLookup(item.workOrderNo)
+                    }}>
+                      {item.workOrderNo}
+                    </Button>
+                  ))}
+                </Space>
+              )}
+              {destination && <div>发送给：{destination}</div>}
+              {matchedWorkOrder?.disabledReason && (
+                <Typography.Text type="error">{matchedWorkOrder.disabledReason}</Typography.Text>
+              )}
+            </>
+          )}
+        >
+          <Input
+            aria-label="工令"
+            disabled={busy || draftId !== null}
+            placeholder="输入工令号"
+            onChange={scheduleWorkOrderLookup}
+          />
+        </Form.Item>
         {realm === 'oem' && recipientChoices.isSuccess && (
           <Form.Item field="recipientUserIds" label="通知公司人员"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请选择要通知的公司人员' }]}>
@@ -539,6 +518,7 @@ export default function TransferListPage() {
         <Link className="table-link" to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>{value}</Link>
       ),
     },
+    { key: 'workOrderNo', title: '工令', dataIndex: 'workOrderNo', ellipsis: true, render: (value?: string | null) => value || '—' },
     {
       key: 'counterpart', title: realm === 'internal' ? '往来厂商' : '往来',
       render: (_: unknown, row: TransferSummary) => <Counterpart direction={row.direction} companyName={row.companyName} recipientNames={row.recipientNames}

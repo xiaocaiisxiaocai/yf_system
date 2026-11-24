@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import axios from 'axios'
@@ -28,6 +28,8 @@ const blockedSummary = {
   companyId: 9,
   companyName: '测试代工厂',
   title: '等待处置的传递单',
+  outsourceItemId: 109,
+  workOrderNo: 'WO-109',
   sender: { realm: 'internal' as const, id: 7, employeeNo: 'A0007', realName: 'ODM/OEMA 内部用户' }, signerName: null, recipientNames: [],
   lifecycleStatus: 'SEALED' as const,
   approvalStatus: 'APPROVAL_BLOCKED' as const,
@@ -243,6 +245,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     )
 
     expect(await screen.findByText('等待处置的传递单')).toBeInTheDocument()
+    expect(screen.getByText('WO-109')).toBeVisible()
     expect(screen.queryByText('无操作权限')).not.toBeInTheDocument()
   })
 
@@ -535,7 +538,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(useAuth.getState()).toMatchObject({ token: 'internal-token', user: internalUser })
   })
 
-  it('厂商门户允许 ODM/OEMA 账号创建回传单且不要求选择目标厂商', async () => {
+  it('厂商门户通过厂商会话查询输入的回传工令且不显示目标厂商', async () => {
     const user = userEvent.setup()
     usePortalAuth.setState({
       token: 'portal-token',
@@ -549,9 +552,11 @@ describe('ODM/OEMA 前端入口与路由', () => {
       booted: true,
       generation: 3,
     })
-    vi.spyOn(portalHttp, 'get').mockImplementation(async (url) => {
+    const get = vi.spyOn(portalHttp, 'get').mockImplementation(async (url) => {
       if (url === '/oem/transfers') return { data: { list: [], total: 0, page: 1, pageSize: 20 } } as never
-      if (url === '/oem/retention-template-options') return { data: [{ id: 1, name: '保留七天', summary: '发布后七天删除' }] } as never
+      if (url === '/oem/sendable-items') return { data: [{ id: 109, workOrderNo: 'WO-109', customer: null, vendorName: '测试代工厂', disabledReason: null }] } as never
+      if (url === '/oem/upload-rules') return { data: { allowedExtensions: ['pdf'] } } as never
+      if (url === '/oem/transfer-recipient-choices') return { data: [] } as never
       throw new Error(`unexpected GET ${String(url)}`)
     })
     const client = createAppQueryClient()
@@ -564,7 +569,13 @@ describe('ODM/OEMA 前端入口与路由', () => {
     )
 
     await user.click(await screen.findByRole('button', { name: '发送文件' }))
-    expect(await screen.findByText('拖放文件到这里，或点击选择多个文件')).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog')
+    expect(await within(dialog).findByText('拖放文件到这里，或点击选择多个文件')).toBeInTheDocument()
+    const workOrder = within(dialog).getByRole('textbox', { name: '工令' })
+    await user.type(workOrder, 'WO-109')
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/oem/sendable-items', expect.objectContaining({ params: { workOrderNo: 'WO-109' } })))
+    await waitFor(() => expect(within(dialog).queryByText('正在查询工令…')).not.toBeInTheDocument())
+    expect(within(dialog).queryByText(/发送给：|测试代工厂/)).not.toBeInTheDocument()
     expect(screen.queryByText('目标 ODM/OEMA 厂商')).not.toBeInTheDocument()
     expect(screen.queryByText('标题')).not.toBeInTheDocument()
     expect(screen.queryByText('删除策略')).not.toBeInTheDocument()

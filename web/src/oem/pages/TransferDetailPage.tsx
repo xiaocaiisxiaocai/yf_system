@@ -453,6 +453,7 @@ export default function TransferDetailPage() {
           size="small"
           column={{ xs: 1, md: 2, xl: 3 }}
           data={[
+            { label: '工令', value: summary.workOrderNo || '—' },
             {
               label: '发送人',
               value: summary.signerName ? `${summary.signerName}（${summary.sender.realName}）`

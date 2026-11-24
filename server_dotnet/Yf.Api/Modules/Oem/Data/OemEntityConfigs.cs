@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using Yf.Api.Infrastructure.Entities;
 
 namespace Yf.Api.Modules.Oem.Data;
 
@@ -179,6 +180,7 @@ public sealed class OemTransferConfig : IEntityTypeConfiguration<OemTransfer>
         b.Table("oem_transfers").HasKey(x => x.Id);
         b.Property(x => x.Direction).Text("direction", 24);
         b.Property(x => x.OemCompanyId).HasColumnName("oem_company_id");
+        b.Property(x => x.OutsourceItemId).HasColumnName("outsource_item_id");
         b.Property(x => x.Title).Text("title", 128);
         b.Property(x => x.Description).OptionalText("description", 1024);
         b.Property(x => x.InternalSenderUserId).HasColumnName("internal_sender_user_id");
@@ -202,12 +204,15 @@ public sealed class OemTransferConfig : IEntityTypeConfiguration<OemTransfer>
         b.Property(x => x.UpdatedAt).Clock("updated_at");
         b.Property(x => x.ConcurrencyVersion).Version();
         b.HasIndex(x => new { x.OemCompanyId, x.LifecycleStatus }).HasDatabaseName("idx_oem_transfers_company_status");
+        b.HasIndex(x => x.OutsourceItemId).HasDatabaseName("idx_oem_transfers_outsource_item");
         b.HasIndex(x => x.InternalSenderUserId).HasDatabaseName("idx_oem_transfers_internal_sender");
         b.HasIndex(x => x.OemSenderAccountId).HasDatabaseName("idx_oem_transfers_oem_sender");
         b.HasIndex(x => new { x.LifecycleStatus, x.ReleasedAt }).HasDatabaseName("idx_oem_transfers_status_released");
         b.HasIndex(x => new { x.ClosedByRealm, x.ClosedById }).HasDatabaseName("idx_oem_transfers_closed_by");
         b.HasOne<OemCompany>().WithMany().HasForeignKey(x => x.OemCompanyId)
             .HasConstraintName("fk_oem_transfers_company").OnDelete(DeleteBehavior.Restrict);
+        b.HasOne<OutsourceItem>().WithMany().HasForeignKey(x => x.OutsourceItemId)
+            .HasConstraintName("fk_oem_transfers_outsource_item").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<OemAccount>().WithMany().HasForeignKey(x => x.OemSenderAccountId)
             .HasConstraintName("fk_oem_transfers_oem_sender").OnDelete(DeleteBehavior.Restrict);
         b.HasOne<OemRetentionTemplate>().WithMany().HasForeignKey(x => x.RetentionTemplateId)

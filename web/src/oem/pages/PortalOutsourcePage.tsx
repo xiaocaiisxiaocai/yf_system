@@ -8,6 +8,7 @@ import { actionSlots } from '../../components/ActionSlots'
 import LoadError from '../../components/LoadError'
 import ResizableTable from '../../components/ResizableTable'
 import { TABLE_PAGINATION } from '../../components/tablePagination'
+import ItemFilesPopover from '../../outsource/components/ItemFilesPopover'
 import { saveBlob } from '../../utils/saveBlob'
 import { useOem } from '../OemContext'
 import '../../outsource/pages/OutsourceListPage.css'
@@ -31,7 +32,8 @@ const rowClass = (row: Row) => [
 
 /** The vendor's own outsourcing records and electrical handoff actions. */
 export default function PortalOutsourcePage() {
-  const { api } = useOem()
+  const { api, queryScope } = useOem()
+  const filesScope = JSON.stringify(queryScope)
   const [data, setData] = useState<Page | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -104,12 +106,16 @@ export default function PortalOutsourcePage() {
   }
 
   const columns = useMemo<TableColumnProps<Row>[]>(() => [
-    ...(data?.columns ?? []).map((column) => ({
+    ...(data?.columns ?? []).map<TableColumnProps<Row>>((column) => column.key === 'files' ? {
+      title: column.title, key: column.key, width: 120, align: 'center',
+      render: (_, row) => <ItemFilesPopover key={filesScope} fileCount={row.fileCount} purgedFileCount={row.purgedFileCount}
+        loadFiles={() => api.itemFiles(row.id)} />,
+    } : {
       title: column.title, key: column.key, width: WIDTHS[column.key] ?? 110, ellipsis: true,
       fixed: FIXED.has(column.key) ? 'left' as const : undefined,
       align: CENTERED.has(column.key) ? 'center' as const : undefined,
       render: (_: unknown, row: Row) => row.values[column.key] ?? '',
-    })),
+    }),
     {
       title: '操作', width: 112, align: 'center', fixed: 'right',
       render: (_, row) => actionSlots([
@@ -119,7 +125,7 @@ export default function PortalOutsourcePage() {
         }}>{handoffLabel(row.electricalHandoff)}</Button>,
       ], 'outsource-handoff'),
     },
-  ], [data?.columns, loading, saving])
+  ], [api, data?.columns, filesScope, loading, saving])
 
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外协清单</h1>

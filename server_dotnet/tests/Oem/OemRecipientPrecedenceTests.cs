@@ -19,11 +19,12 @@ public sealed class OemRecipientPrecedenceTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
         var companyId = (await world.Admin.PostAsync("/api/v1/oem/companies", new { name = "停用且无账号厂商" }, ct).Ok()).Id();
+        var outsourceItemId = await host.CreateOutsourceItemAsync(companyId, "WO-RECIPIENT-PRECEDENCE", ct);
         var accountId = (await world.Admin.PostAsync($"/api/v1/oem/companies/{companyId}/accounts", new
         {
             employeeNo = "precedence_only", password = "Recipient#2026",
         }, ct).Ok()).Id();
-        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Ok();
+        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId, outsourceItemId }, ct).Ok();
         var transferId = TransferId(draft);
         await host.UploadAsync(world.Sender, transferId, "precedence.pdf", OemTestHost.Pdf("precedence"), ct);
         draft = await world.Sender.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
@@ -37,7 +38,7 @@ public sealed class OemRecipientPrecedenceTests
         Assert.Equal("目标厂商已停用", Message(send));
         Assert.NotEqual(OemRecipientPolicy.MissingAccountMessage, Message(send));
 
-        var create = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct)
+        var create = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId, outsourceItemId }, ct)
             .Status(HttpStatusCode.BadRequest);
         Assert.Equal("目标厂商不存在或已停用", Message(create));
 

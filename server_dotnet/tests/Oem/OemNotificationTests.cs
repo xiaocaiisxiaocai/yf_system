@@ -112,7 +112,7 @@ public sealed class OemNotificationTests
         // The OEM "released" switch suppresses recipient mail only.
         await world.Admin.PutAsync("/api/v1/oem/notify-policies",
             new { items = new[] { new { key = "oem.notify.event.transfer_released", value = "false" } } }, ct).Ok();
-        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传" }, ct).Ok();
+        var inbound = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "回传", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         await host.UploadAsync(world.Vendor, TransferId(inbound), "r.pdf", OemTestHost.Pdf("r"), ct);
         await world.Vendor.VendorSendAsync(TransferId(inbound), Version(inbound) + 1, ct).Ok();
         await host.RunOemJobsAsync(ct);
@@ -208,7 +208,7 @@ public sealed class OemNotificationTests
             .Select(item => item!["userId"]!.GetValue<ulong>()).ToArray();
         Assert.Contains(noMail, choices);
 
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "无邮箱接收人" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "无邮箱接收人", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var id = TransferId(draft);
         await host.UploadAsync(world.Vendor, id, "in.pdf", OemTestHost.Pdf("nm"), ct);
         await world.Vendor.PostAsync($"/api/v1/oem/transfers/{id}/send",
@@ -254,7 +254,7 @@ public sealed class OemNotificationTests
 
         async Task<(ulong Id, ulong Version)> DraftAsync(string title)
         {
-            var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title }, ct).Ok();
+            var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title, outsourceItemId = world.OutsourceItemId }, ct).Ok();
             await host.UploadAsync(world.Vendor, TransferId(draft), "in.pdf", OemTestHost.Pdf(title), ct);
             return (TransferId(draft), Version(draft) + 1);
         }
@@ -359,7 +359,7 @@ public sealed class OemNotificationTests
         var receiverClient = await host.LoginInternalAsync("zp_receiver", "Receiver#2026x", ct);
         static ulong[] Ids(JsonNode page) => page["list"]!.AsArray().Select(item => item!.Id()).ToArray();
 
-        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "签名回传" }, ct).Ok();
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "签名回传", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         var id = TransferId(draft);
         await host.UploadAsync(world.Vendor, id, "in.pdf", OemTestHost.Pdf("in"), ct);
         var version = Version(draft) + 1;
@@ -407,7 +407,7 @@ public sealed class OemNotificationTests
         Assert.Contains(TransferId(outbound), Ids(await upperLeader.GetAsync("/api/v1/oem/transfers", ct).Ok()));
 
         // The signature is free text: any person's name works even when the vendor has no registered contact, but it stays required.
-        var noContact = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "无联络人" }, ct).Ok();
+        var noContact = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "无联络人", outsourceItemId = world.OutsourceItemId }, ct).Ok();
         await host.UploadAsync(world.Vendor, TransferId(noContact), "n.pdf", OemTestHost.Pdf("n"), ct);
         await using (var conn = await host.OpenAsync(ct))
             await conn.ExecuteAsync("UPDATE oem_company_contacts SET status='DISABLED' WHERE oem_company_id=@CompanyId", new { world.CompanyId });

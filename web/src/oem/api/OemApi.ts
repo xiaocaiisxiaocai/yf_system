@@ -5,7 +5,7 @@ import type {
   AccountCreate, ActiveStatus, ApiResponses, ApiRoute, ApprovalStatus, ApproverOption, AuditRow, Company,
   CompanyListItem, CompanyOption, CompanyUpsert, DepartmentNode, DownloadSession, FlowNodeInput, FlowTemplate,
   FlowTemplateCreate, FlowTemplateDefinitionUpdate, FlowTemplateUpdate, InternalUserOption, Page, PendingTask,
-  RetentionTemplate, RetentionTemplateCreate, RetentionTemplateUpdate, RoutingPreview, SettingItem, SettingUpdateItem,
+  RetentionTemplate, RetentionTemplateCreate, RetentionTemplateUpdate, RoutingPreview, SendableItem, SettingItem, SettingUpdateItem,
   TransferCreate, TransferDetail, TransferSummary, TransferUpdate, UploadedFile, UploadInit, UploadInitRequest,
   CompanyContact, CompanyContactUpsert, InternalRecipient, RecipientChoice, VendorAccount,
 } from './types'
@@ -57,8 +57,8 @@ export class OemApi {
     this.http = http
   }
 
-  private async get<K extends RouteOf<'GET'>, T extends Relaxed<ApiResponses[K]>>(url: string, params?: object): Promise<T> {
-    return (await this.http.get<T>(url, { params })).data
+  private async get<K extends RouteOf<'GET'>, T extends Relaxed<ApiResponses[K]>>(url: string, params?: object, config?: AxiosRequestConfig): Promise<T> {
+    return (await this.http.get<T>(url, { ...config, params })).data
   }
 
   private async post<K extends RouteOf<'POST'>, T extends Relaxed<ApiResponses[K]>>(url: string, body?: object, config?: AxiosRequestConfig): Promise<T> {
@@ -79,6 +79,7 @@ export class OemApi {
   outsourceItems = (query: { page: number; pageSize: number; keyword?: string; includeClosed?: boolean }) =>
     this.get<'GET /oem/outsource-items', ApiResponses['GET /oem/outsource-items']>('/oem/outsource-items',
       { ...query, keyword: query.keyword || undefined, includeClosed: query.includeClosed ? 'true' : undefined })
+  itemFiles = (id: number) => this.get<'GET /oem/outsource-items/{id}/files', Api.OutsourceItemFilesResponse>(`/oem/outsource-items/${id}/files`)
   setOutsourceElectricalHandoff = (id: number, body: Api.OutsourceElectricalHandoffRequest) =>
     this.post<'POST /oem/outsource-items/{id}/electrical-handoff', Api.OutsourceVendorRow>(`/oem/outsource-items/${id}/electrical-handoff`, body)
   outsourceExport = async (query: { keyword?: string; includeClosed?: boolean }) =>
@@ -88,6 +89,8 @@ export class OemApi {
     })).data as Blob
 
   // Transfers
+  sendableItems = (workOrderNo: string, signal?: AbortSignal) =>
+    this.get<'GET /oem/sendable-items', SendableItem[]>('/oem/sendable-items', { workOrderNo }, { signal })
   listTransfers = (query: TransferQuery) =>
     this.get<'GET /oem/transfers', Page<TransferSummary>>('/oem/transfers', {
       ...query, mine: query.mine ? 'true' : undefined, toMe: query.toMe ? 'true' : undefined,

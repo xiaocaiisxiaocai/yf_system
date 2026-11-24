@@ -100,6 +100,7 @@ public sealed class OemTransfer
     public ulong Id { get; set; }
     public string Direction { get; set; } = null!;
     public ulong OemCompanyId { get; set; }
+    public ulong? OutsourceItemId { get; set; }
     public string Title { get; set; } = null!;
     public string? Description { get; set; }
     public ulong? InternalSenderUserId { get; set; }

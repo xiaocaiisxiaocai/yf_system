@@ -65,6 +65,7 @@ export type PendingTask = Api.OemPendingApprovalResponse
 export type Option = Api.OemOptionResponse
 
 export type CompanyOption = Api.OemCompanyOptionResponse
+export type SendableItem = Api.OemSendableItemResponse
 
 export type RetentionTemplate = Narrow<Api.OemRetentionTemplateResponse, { mode: RetentionMode; status: ActiveStatus }>
 
@@ -118,7 +119,7 @@ export type RecipientChoice = Api.OemRecipientChoiceResponse
 export type AccountBrief = Api.OemAccountBrief
 
 // Request bodies (generated request schemas, enum-like fields narrowed).
-export type TransferCreate = Api.TransferCreate
+export type TransferCreate = { outsourceItemId: NonNullable<Api.TransferCreate['outsourceItemId']> }
 export type TransferUpdate = Api.TransferUpdate
 export type UploadInitRequest = Api.OemUploadInit
 export type CompanyUpsert = Api.OemCompanyUpsert

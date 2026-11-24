@@ -11,7 +11,8 @@ namespace Yf.Api.Modules.Outsource;
 public sealed record OutsourceVendorColumn(string Key, string Title);
 
 /// <summary>One outsourcing record as its vendor sees it, with display values and the handoff state.</summary>
-public sealed record OutsourceVendorRow(ulong Id, string Status, bool Closed, bool ElectricalHandoff, IReadOnlyDictionary<string, string?> Values);
+public sealed record OutsourceVendorRow(ulong Id, string Status, bool Closed, bool ElectricalHandoff, IReadOnlyDictionary<string, string?> Values,
+    int FileCount = 0, int PurgedFileCount = 0);
 
 public sealed record OutsourceVendorPageResponse(
     OutsourceVendorColumn[] Columns, IReadOnlyList<OutsourceVendorRow> List, ulong Total, ulong Page, uint PageSize);
@@ -30,13 +31,24 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
     {
         var (page, size, offset) = QueryValues.Page(request);
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
-        var (db, reference, items) = await FilteredAsync(uow, actor, request, ct);
+        var (db, reference, items, companyId) = await FilteredAsync(uow, actor, request, ct);
         var total = (ulong)await items.LongCountAsync(ct);
         var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
         await reference.LoadValuesAsync(db, rows, ct);
+        var counts = await OutsourceFiles.CountsAsync(db, rows.Select(x => x.Id).ToArray(), companyId, ct);
         OutsourceVendorColumn[] columns =
             [new(SerialKey, "序号"), .. reference.Layout.VendorColumns.Select(column => new OutsourceVendorColumn(column.Key, column.Label))];
-        return new(columns, rows.Select(item => Row(reference.Layout, reference.Json(item))).ToArray(), total, page, size);
+        return new(columns, rows.Select(item => Row(reference.Layout, reference.Json(item), counts.GetValueOrDefault(item.Id))).ToArray(), total, page, size);
+    }
+
+    public async Task<OutsourceItemFilesResponse> FilesAsync(OemActor actor, ulong id, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        var account = await RequireVendorAsync(uow, actor, ct);
+        var db = uow.Db;
+        if (!await db.OutsourceItems.AnyAsync(x => x.Id == id && x.VendorId == account.CompanyId, ct))
+            throw ApiException.NotFound("外协记录不存在或已被删除");
+        return new(true, await OutsourceFiles.ListAsync(db, id, account.CompanyId, ct));
     }
 
     /// <summary>
@@ -46,7 +58,7 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
     public async Task<OutsourceExport> ExportAsync(OemActor actor, HttpRequest request, CancellationToken ct)
     {
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
-        var (db, reference, items) = await FilteredAsync(uow, actor, request, ct);
+        var (db, reference, items, _) = await FilteredAsync(uow, actor, request, ct);
         if (await items.CountAsync(ct) > OutsourceItemService.MaximumExportRows)
             throw ApiException.BadRequest($"一次最多导出 {OutsourceItemService.MaximumExportRows} 条，请缩小筛选范围");
         var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).ToArrayAsync(ct);
@@ -89,7 +101,8 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         var reference = await OutsourceReference.LoadAsync(db, ct);
         await reference.LoadValuesAsync(db, [item], ct);
         var updated = reference.Json(item);
-        var response = Row(reference.Layout, updated);
+        var counts = await OutsourceFiles.CountsAsync(db, [item.Id], account.CompanyId, ct);
+        var response = Row(reference.Layout, updated, counts.GetValueOrDefault(item.Id));
         var mailQueued = await OutsourceMailService.QueueElectricalHandoffAsync(db, updated, account.AccountId, signer, now, ct);
         await audit.WriteAsync(uow, account,
             request.Handoff ? "OUTSOURCE_ELECTRICAL_HANDOFF" : "OUTSOURCE_ELECTRICAL_HANDOFF_WITHDRAW",
@@ -99,14 +112,17 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         return response;
     }
 
-    private static async Task<(YfDbContext Db, OutsourceReference Reference, IQueryable<OutsourceItem> Items)> FilteredAsync(
+    private static async Task<OemAccountActor> RequireVendorAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct) =>
+        await OemAuthorizer.RecheckAsync(uow, actor, ct) as OemAccountActor
+            ?? throw ApiException.Forbidden("外协清单请在外协模块中查看");
+
+    private static async Task<(YfDbContext Db, OutsourceReference Reference, IQueryable<OutsourceItem> Items, ulong CompanyId)> FilteredAsync(
         OemUnitOfWork uow, OemActor actor, HttpRequest request, CancellationToken ct)
     {
         var keyword = request.Query["keyword"].ToString().Trim();
         var includeClosed = string.Equals(request.Query["includeClosed"], "true", StringComparison.OrdinalIgnoreCase);
         // Rechecks the account, its company and its session; only vendor accounts have a list here.
-        if (await OemAuthorizer.RecheckAsync(uow, actor, ct) is not OemAccountActor account)
-            throw ApiException.Forbidden("外协清单请在外协模块中查看");
+        var account = await RequireVendorAsync(uow, actor, ct);
         var db = uow.Db;
         var reference = await OutsourceReference.LoadAsync(db, ct);
         var items = db.OutsourceItems.AsNoTracking().Where(x => x.VendorId == account.CompanyId);
@@ -120,14 +136,14 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
                 || byShortName.Contains(x.Customer!)
                 || EF.Functions.Like(x.MachineModel!, pattern, QueryValues.LikeEscape));
         }
-        return (db, reference, items);
+        return (db, reference, items, account.CompanyId);
     }
 
-    private static OutsourceVendorRow Row(OutsourceFieldLayout layout, OutsourceItemResponse item)
+    private static OutsourceVendorRow Row(OutsourceFieldLayout layout, OutsourceItemResponse item, (int FileCount, int PurgedFileCount) counts)
     {
         var values = new Dictionary<string, string?>(StringComparer.Ordinal)
             { [SerialKey] = item.SerialNo.ToString(CultureInfo.InvariantCulture) };
         foreach (var column in layout.VendorColumns) values[column.Key] = column.Value(item);
-        return new(item.Id, item.Status, item.Closed, item.ElectricalHandoff, values);
+        return new(item.Id, item.Status, item.Closed, item.ElectricalHandoff, values, counts.FileCount, counts.PurgedFileCount);
     }
 }

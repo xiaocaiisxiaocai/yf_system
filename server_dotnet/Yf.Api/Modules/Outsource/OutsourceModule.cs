@@ -120,6 +120,8 @@ public static class OutsourceModule
             s.SetCompletionAsync(AccessService.GetCurrent(c), r, ct));
         items.MapGet("/{id:long}/changes", (ulong id, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.ChangesAsync(AccessService.GetCurrent(c), id, ct));
+        items.MapGet("/{id:long}/files", (ulong id, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            s.FilesAsync(AccessService.GetCurrent(c), id, ct));
         items.MapPost("/sync", (OutsourceSyncRequest r, HttpContext c, OutsourceIpmsSyncService s, CancellationToken ct) =>
             s.SyncNowAsync(AccessService.GetCurrent(c), r, ct));
         endpoints.MapGet("/api/v1/outsource/send-queue", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>

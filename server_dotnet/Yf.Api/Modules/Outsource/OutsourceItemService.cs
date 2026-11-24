@@ -5,6 +5,7 @@ using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Admin;
+using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Outsource.Ipms;
 
 namespace Yf.Api.Modules.Outsource;
@@ -284,6 +285,16 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         return new(await reference.JsonMarkedAsync(context, rows, ct), total, page, size);
     }
 
+    public async Task<OutsourceItemFilesResponse> FilesAsync(CurrentUser actor, ulong id, CancellationToken ct)
+    {
+        await using var context = await dbFactory.CreateDbContextAsync(ct);
+        await AuthorizeReadAsync(context, actor, null, ct);
+        if (!await context.OutsourceItems.AnyAsync(x => x.Id == id, ct))
+            throw ApiException.NotFound("外协记录不存在或已被删除");
+        var canOpen = await AccessService.HasPermissionAsync(context.Database.Connection(), null, actor.Id, OemPermissions.OutsourceFileView, ct);
+        return new(canOpen, await OutsourceFiles.ListAsync(context, id, null, ct));
+    }
+
     public async Task<OutsourceExport> ExportAsync(CurrentUser actor, OutsourceItemQuery query, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -390,9 +401,15 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
         var locked = await LockAsync(context, versions, ct);
+        var ids = locked.Select(x => x.Id).ToArray();
+        var boundItemId = await context.OemTransfers.AsNoTracking()
+            .Where(x => x.OutsourceItemId.HasValue && ids.Contains(x.OutsourceItemId.Value))
+            .Select(x => x.OutsourceItemId).OrderBy(x => x).FirstOrDefaultAsync(ct);
+        if (boundItemId is { } bound)
+            throw ApiException.Conflict($"工令 {locked.Single(x => x.Id == bound).WorkOrderNo} 已有往来文件，不能删除");
+
         // Anyone with the edit-and-send permission may delete, sent rows included: the vendor is not told, so the audit
         // record says whether the row had been mailed. Its mail history keeps the work order number (no FK to items).
-        var ids = locked.Select(x => x.Id).ToArray();
         await context.OutsourceItems.Where(x => ids.Contains(x.Id)).ExecuteDeleteAsync(ct);
         var vendors = await VendorNamesAsync(context, ct);
         foreach (var item in locked)
@@ -846,10 +863,13 @@ internal sealed class OutsourceReference
         var names = userIds.Length == 0 ? [] : await context.Users.AsNoTracking().Where(x => userIds.Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, x => x.RealName, ct);
         var byId = items.ToDictionary(x => x.Id);
+        var counts = await OutsourceFiles.CountsAsync(context, byId.Keys, null, ct);
         responses = responses.Select(response => response with
         {
             ImportedBy = byId[response.Id].CreatedBy is { } importer ? names.GetValueOrDefault(importer) : null,
             ModifiedBy = byId[response.Id].ModifiedBy is { } editor ? names.GetValueOrDefault(editor) : null,
+            FileCount = counts.GetValueOrDefault(response.Id).FileCount,
+            PurgedFileCount = counts.GetValueOrDefault(response.Id).PurgedFileCount,
         }).ToArray();
         var unsent = items.Where(x => x.NotifiedVendorId != x.VendorId || x.LastSentSnapshot is null).Select(x => x.Id).ToArray();
         if (unsent.Length == 0) return responses;
@@ -982,6 +1002,7 @@ internal static class OutsourceHistory
         ["bomOn"] = "BOM时间", ["drawingReleasedOn"] = "发图", ["typeCode"] = "外发类型", ["quantity"] = "数量",
         ["latestDueDate"] = "最新交期", ["completed"] = "完成状态", ["sendStatus"] = "发送状态",
         [OutsourceBuiltInFields.ElectricalHandoffKey] = OutsourceBuiltInFields.ElectricalHandoffLabel,
+        [OutsourceBuiltInFields.FilesKey] = OutsourceBuiltInFields.FilesLabel,
     };
 
     internal static string Label(string field) => Labels.GetValueOrDefault(field, field);

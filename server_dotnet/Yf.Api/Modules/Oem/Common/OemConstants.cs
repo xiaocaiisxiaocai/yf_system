@@ -36,6 +36,7 @@ public static class OemPermissions
     public const string NotifyManage = "oem:notify_manage";
     public const string AuditView = "oem:audit_view";
     public const string DepartmentLeaderManage = "dept:leader_manage";
+    public const string OutsourceFileView = "outsource:file_view";
 
     public const string MenuCode = "oem";
 

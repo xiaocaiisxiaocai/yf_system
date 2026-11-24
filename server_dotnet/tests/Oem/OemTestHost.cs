@@ -187,6 +187,18 @@ internal sealed class OemTestHost : IAsyncDisposable
         return await conn.ExecuteScalarAsync<ulong>("SELECT oem_company_id FROM oem_accounts WHERE employee_no=@employeeNo", new { employeeNo });
     }
 
+    public async Task<ulong> CreateOutsourceItemAsync(
+        ulong companyId, string workOrderNo, CancellationToken ct, bool closed = false, string? customer = null)
+    {
+        await using var conn = await OpenAsync(ct);
+        return await conn.ExecuteScalarAsync<ulong>(new CommandDefinition("""
+            INSERT INTO outsource_items(work_order_no,serial_no,outsource_date,vendor_id,status,customer,closed_at)
+            SELECT @workOrderNo,COALESCE(MAX(serial_no),0)+1,CURRENT_DATE(),@companyId,'NORMAL',@customer,IF(@closed,UTC_TIMESTAMP(3),NULL)
+            FROM outsource_items;
+            SELECT LAST_INSERT_ID();
+            """, new { companyId, workOrderNo, closed, customer }, cancellationToken: ct));
+    }
+
     public static byte[] Pdf(string text) => System.Text.Encoding.ASCII.GetBytes("%PDF-1.4\n" + text + "\n%%EOF\n");
 
     public async Task<MySqlConnection> OpenAsync(CancellationToken ct)

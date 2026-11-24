@@ -27,11 +27,11 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
   const queued = useSendQueue((state) => state.count)
   const lines = [
     ...(collaborationPath ? [{ key: 'collaboration' as const, label: 'Robot仿真协作', short: '仿真协作', icon: <IconRobot />, path: collaborationPath }] : []),
-    ...(oemPath ? [{ key: 'oem' as const, label: 'ODM/OEMA 文件传递', short: 'ODM/OEMA', icon: <IconSwap />, path: oemPath }] : []),
     ...(outsourcePath ? [{
       key: 'outsource' as const, label: '外协清单', short: '外协清单', icon: <IconList />,
       path: canSend && queued > 0 ? SEND_QUEUE_PATH : outsourcePath, badge: canSend ? queued : 0,
     }] : []),
+    ...(oemPath ? [{ key: 'oem' as const, label: 'ODM/OEMA 文件传递', short: 'ODM/OEMA', icon: <IconSwap />, path: oemPath }] : []),
   ]
   if (lines.length === 0 || (lines.length === 1 && lines[0].key === active)) return null
   const go = (line: (typeof lines)[number]) => {

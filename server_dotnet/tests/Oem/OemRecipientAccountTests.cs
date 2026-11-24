@@ -15,10 +15,11 @@ public sealed class OemRecipientAccountTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
         var companyId = (await world.Admin.PostAsync("/api/v1/oem/companies", new { name = "待配置接收账号厂商" }, ct).Ok()).Id();
+        var outsourceItemId = await host.CreateOutsourceItemAsync(companyId, "WO-RECIPIENT-ACCOUNT", ct);
 
         // Another vendor's active account cannot make this company a valid recipient.
         await AssertOptionAsync(world.Sender, companyId, false, ct);
-        var noAccount = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct)
+        var noAccount = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId, outsourceItemId }, ct)
             .Status(HttpStatusCode.BadRequest);
         Assert.Equal(OemRecipientPolicy.MissingAccountMessage, JsonNode.Parse(noAccount.Body)!["message"]!.GetValue<string>());
 
@@ -26,14 +27,14 @@ public sealed class OemRecipientAccountTests
         // A vendor without transfers may disable its only account, but cannot receive a transfer.
         await world.Admin.PutAsync($"/api/v1/oem/accounts/{accountId}/status", new { status = "DISABLED" }, ct).Ok();
         await AssertOptionAsync(world.Sender, companyId, false, ct);
-        await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Status(HttpStatusCode.BadRequest);
+        await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId, outsourceItemId }, ct).Status(HttpStatusCode.BadRequest);
         await using (var conn = await host.OpenAsync(ct))
             Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM oem_transfers WHERE oem_company_id=@companyId", new { companyId }));
 
         // A newly provisioned active account qualifies even before its first password change.
         await CreateAccountAsync(world.Admin, companyId, "recipient_two", ct);
         await AssertOptionAsync(world.Sender, companyId, true, ct);
-        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Ok();
+        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId, outsourceItemId }, ct).Ok();
         Assert.Equal("DRAFT", draft["summary"]!["lifecycleStatus"]!.GetValue<string>());
     }
 
@@ -46,8 +47,9 @@ public sealed class OemRecipientAccountTests
         await using var host = await OemTestHost.StartAsync(ct);
         var world = await OutboundWorldAsync(host, ct);
         var companyId = (await world.Admin.PostAsync("/api/v1/oem/companies", new { name = "上传期间账号变化厂商" }, ct).Ok()).Id();
+        var outsourceItemId = await host.CreateOutsourceItemAsync(companyId, "WO-RECIPIENT-CHANGED", ct);
         var accountId = await CreateAccountAsync(world.Admin, companyId, "recipient_before", ct);
-        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId }, ct).Ok();
+        var draft = await world.Sender.PostAsync("/api/v1/oem/transfers", new { oemCompanyId = companyId, outsourceItemId }, ct).Ok();
         var transferId = TransferId(draft);
         await host.UploadAsync(world.Sender, transferId, "drawing.pdf", OemTestHost.Pdf("recipient prerequisite"), ct);
         draft = await world.Sender.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();

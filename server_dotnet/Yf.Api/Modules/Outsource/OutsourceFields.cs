@@ -58,6 +58,8 @@ internal static class OutsourceBuiltInFields
 {
     internal const string ElectricalHandoffKey = "electricalHandoff";
     internal const string ElectricalHandoffLabel = "是否转迅得电控";
+    internal const string FilesKey = "files";
+    internal const string FilesLabel = "档案";
     internal static string YesNo(bool value) => value ? "是" : "否";
 
     private static string? Date(DateOnly? value) => value?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -69,6 +71,7 @@ internal static class OutsourceBuiltInFields
         new("status", OutsourceFieldCategories.Process, 8, x => OutsourceItemStatuses.Label(x.Status), Pinned: true, AlwaysVendorVisible: true),
         new(ElectricalHandoffKey, OutsourceFieldCategories.Fixed, 18, x => YesNo(x.ElectricalHandoff), Pinned: true, AlwaysVendorVisible: true),
         new("workOrderNo", OutsourceFieldCategories.Fixed, 12, x => x.WorkOrderNo, Pinned: true, AlwaysVendorVisible: true),
+        new(FilesKey, OutsourceFieldCategories.Fixed, 12, _ => null, AlwaysVendorVisible: true),
         new("customer", OutsourceFieldCategories.Ipms, 18, x => x.Customer),
         new("machineModel", OutsourceFieldCategories.Ipms, 14, x => x.MachineModel),
         new("type", OutsourceFieldCategories.Process, 24, x => x.TypeLabel ?? x.TypeCode),
@@ -169,7 +172,7 @@ internal sealed class OutsourceFieldLayout
         Everything = everything;
         Columns = everything.Where(x => x.Active).ToArray();
         VendorColumns = Columns.Where(x => x.VendorVisible).ToArray();
-        MailColumns = VendorColumns.Where(x => x.Key != OutsourceBuiltInFields.ElectricalHandoffKey).ToArray();
+        MailColumns = VendorColumns.Where(x => x.Key is not (OutsourceBuiltInFields.ElectricalHandoffKey or OutsourceBuiltInFields.FilesKey)).ToArray();
         byKey = everything.ToDictionary(x => x.Key, StringComparer.Ordinal);
     }
 
@@ -179,7 +182,8 @@ internal sealed class OutsourceFieldLayout
 
     public IReadOnlySet<string> NoticeKeys => MailColumns.Select(x => x.Key).ToHashSet(StringComparer.Ordinal);
 
-    public OutsourceWorkbook.Field[] WorkbookFields(bool vendor) => (vendor ? VendorColumns : Columns).Select(x => x.AsWorkbookField()).ToArray();
+    public OutsourceWorkbook.Field[] WorkbookFields(bool vendor) => (vendor ? VendorColumns : Columns)
+        .Where(x => x.Key != OutsourceBuiltInFields.FilesKey).Select(x => x.AsWorkbookField()).ToArray();
 
     public OutsourceWorkbook.Field[] MailWorkbookFields() => MailColumns.Select(x => x.AsWorkbookField()).ToArray();
 

@@ -73,6 +73,32 @@ public sealed class OemInspectionTests
     }
 
     [Fact]
+    public void ReferenceAccessPreservesVisibilityAndExistingContentPurposes()
+    {
+        var outbound = Outbound(TransferLifecycle.Released) with { BoundToOutsourceItem = true };
+        var inbound = Inbound(TransferLifecycle.Released) with { BoundToOutsourceItem = true };
+        var reference = Staff(2) with { HasOutsourceFileAccess = true };
+
+        foreach (var transfer in new[] { outbound, inbound })
+        {
+            var capabilities = TransferAccess.Evaluate(transfer, reference);
+            Assert.Equal(ContentPurpose.Reference, capabilities.ContentAccess);
+            Assert.True(capabilities.CanReadContent);
+            Assert.False(capabilities.View);
+            Assert.False(capabilities.IsRecipient);
+        }
+
+        var viewer = reference with { CanView = true, IsNotified = true };
+        Assert.True(TransferAccess.Evaluate(inbound, viewer).View);
+        Assert.Equal(ContentPurpose.Reference, TransferAccess.Evaluate(inbound, viewer).ContentAccess);
+        Assert.Equal(ContentPurpose.Recipient, TransferAccess.Evaluate(inbound, viewer with { CanDownload = true }).ContentAccess);
+        Assert.Equal(ContentPurpose.Sender, TransferAccess.Evaluate(outbound, reference with { Id = 1 }).ContentAccess);
+        Assert.Equal(ContentPurpose.Review, TransferAccess.Evaluate(outbound, reference with { HasAnyTask = true }).ContentAccess);
+        Assert.Equal(ContentPurpose.None,
+            TransferAccess.Evaluate(outbound, Vendor(company: Company + 1) with { HasOutsourceFileAccess = true }).ContentAccess);
+    }
+
+    [Fact]
     public void RecoveryPermissionSeesOnlyBlockedApprovalMetadataWithoutFileContent()
     {
         var blocked = new TransferFacts(TransferDirections.InternalToOem, Company, TransferLifecycle.Sealed, 1, null,

@@ -1,20 +1,20 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { AxiosError } from 'axios'
+import axios, { AxiosError } from 'axios'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
-import type { OemApi } from '../../oem/api/OemApi'
+import { OemApi } from '../../oem/api/OemApi'
 import { OemProvider } from '../../oem/OemContext'
 import PortalOutsourcePage from '../../oem/pages/PortalOutsourcePage'
 
 const columns = [
   { key: 'serialNo', title: '序号' }, { key: 'outsourceDate', title: '外发日期' }, { key: 'status', title: '状态' },
   { key: 'electricalHandoff', title: '是否转迅得电控' },
-  { key: 'workOrderNo', title: '工令' }, { key: 'customer', title: '客户' }, { key: 'remark', title: '备注' },
+  { key: 'workOrderNo', title: '工令' }, { key: 'files', title: '档案' }, { key: 'customer', title: '客户' }, { key: 'remark', title: '备注' },
 ]
 const row = (id: number, no: string, status: string, label: string, electricalHandoff = false, closed = false) => ({
-  id, status, closed, electricalHandoff,
+  id, status, closed, electricalHandoff, fileCount: 0, purgedFileCount: 0,
   values: { serialNo: String(id), outsourceDate: '2026-11-04', status: label, workOrderNo: no, customer: '超穎', remark: null,
     electricalHandoff: electricalHandoff ? '是' : '否' },
 })
@@ -42,7 +42,7 @@ describe('ODM/OEMA 门户外协清单', () => {
     expect(within(paused).getByText('暂停')).toBeInTheDocument()
     expect(screen.getByText('A1').closest('tr')).toHaveClass('outsource-row--normal')
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual(
-      expect.arrayContaining(['序号', '外发日期', '状态', '是否转迅得电控', '工令', '客户', '备注', '操作']))
+      expect.arrayContaining(['序号', '外发日期', '状态', '是否转迅得电控', '工令', '档案', '客户', '备注', '操作']))
     expect(screen.queryByRole('button', { name: /编辑|删除|发送/ })).not.toBeInTheDocument()
     expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, keyword: '', includeClosed: false })
 
@@ -53,6 +53,29 @@ describe('ODM/OEMA 门户外协清单', () => {
     await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, keyword: 'A2', includeClosed: false }))
     await user.click(screen.getByText('显示已完成'))
     await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, keyword: 'A2', includeClosed: true }))
+  })
+
+  it('vendor portal shows the column and loads from the vendor endpoint', async () => {
+    const user = userEvent.setup()
+    const vendorRow = { ...row(17, 'A17', 'NORMAL', '正常'), fileCount: 1 }
+    const file = { fileId: 81, transferId: 19, name: '厂商图纸.pdf', sizeBytes: 2048, direction: 'OEM_TO_INTERNAL',
+      vendorName: '本厂商', sentAt: '2026-11-24T01:30:00Z', state: 'AVAILABLE' }
+    const portalHttp = axios.create()
+    const get = vi.spyOn(portalHttp, 'get').mockResolvedValueOnce({ data: page([vendorRow]) })
+      .mockResolvedValueOnce({ data: { canOpen: true, files: [file] } })
+    renderPortal(new OemApi(portalHttp))
+
+    const header = await screen.findByRole('columnheader', { name: /^档案/ })
+    expect(header.previousElementSibling).toHaveTextContent('工令')
+    expect(header).not.toHaveClass('arco-table-col-fixed-left')
+    expect(get).toHaveBeenCalledTimes(1)
+    await user.click(screen.getByRole('button', { name: '档案：1 个文件' }))
+    expect(get).toHaveBeenNthCalledWith(2, '/oem/outsource-items/17/files', { params: undefined })
+    const fileRow = within((await screen.findByText(file.name)).closest('li')!)
+    expect(fileRow.getByText('厂商发来')).toBeInTheDocument()
+    expect(fileRow.getByText(file.vendorName)).toBeInTheDocument()
+    expect(fileRow.getByRole('button', { name: `预览 ${file.name}` })).toBeEnabled()
+    expect(fileRow.getByRole('button', { name: `下载 ${file.name}` })).toBeEnabled()
   })
 
   it('按转交状态提供签名操作，两种状态的已完成记录均禁用操作', async () => {

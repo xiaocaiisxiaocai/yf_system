@@ -7,6 +7,7 @@ using Yf.Api.Modules.Oem.Data;
 using Yf.Api.Modules.Oem.Delivery;
 using Yf.Api.Modules.Oem.Policies;
 using Yf.Api.Modules.Oem.Validation;
+using Yf.Api.Modules.Outsource;
 
 namespace Yf.Api.Modules.Oem.Transfers;
 
@@ -17,6 +18,50 @@ namespace Yf.Api.Modules.Oem.Transfers;
 /// </summary>
 public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
 {
+    public async Task<IReadOnlyList<OemSendableItemResponse>> SendableItemsAsync(OemActor actor, string? workOrderNo, CancellationToken ct)
+    {
+        await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
+        var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
+        if (current is not OemAccountActor)
+            await OemAuthorizer.RequireAsync(uow, current, OemPermissions.TransferCreate, ct);
+        if (string.IsNullOrWhiteSpace(workOrderNo)) return [];
+
+        var db = uow.Db;
+        var term = workOrderNo.Trim().ToLowerInvariant();
+        var pattern = QueryValues.ContainsPattern(term);
+        var matches =
+            from item in db.OutsourceItems.AsNoTracking()
+            join company in db.OemCompanies on item.VendorId equals company.Id
+            let number = EF.Functions.Collate(item.WorkOrderNo.ToLower(), "utf8mb4_bin")
+            where item.ClosedAt == null && EF.Functions.Like(number, pattern, QueryValues.LikeEscape)
+            orderby number == term descending, item.WorkOrderNo
+            select new { Item = item, Company = company };
+
+        if (current is OemAccountActor account)
+        {
+            var layout = await OutsourceFieldLayout.LoadAsync(db, ct);
+            var showCustomer = layout.Find("customer") is { Active: true, VendorVisible: true };
+            var own = await matches.Where(match => match.Company.Id == account.CompanyId).Take(20)
+                .Select(match => new { match.Item.Id, match.Item.WorkOrderNo, match.Item.Customer, VendorName = match.Company.Name })
+                .ToArrayAsync(ct);
+            // The same short name the work-order list shows (客户简称), never the stored full name.
+            var shown = await OutsourceReference.LoadAsync(db, ct);
+            return own.Select(row => new OemSendableItemResponse(row.Id, row.WorkOrderNo,
+                showCustomer ? shown.CustomerShown(row.Customer) : null, row.VendorName, null)).ToArray();
+        }
+
+        var rows = await matches.Where(match => match.Company.Status == OemStatus.Active).Take(20)
+            .Select(match => new
+            {
+                match.Item.Id, match.Item.WorkOrderNo, match.Item.Customer, VendorName = match.Company.Name,
+                Reason = db.OemAccounts.Any(recipient => recipient.OemCompanyId == match.Company.Id
+                    && recipient.Status == OemStatus.Active) ? null : OemRecipientPolicy.MissingAccountMessage,
+            }).ToArrayAsync(ct);
+        var reference = await OutsourceReference.LoadAsync(db, ct);
+        return rows.Select(row => new OemSendableItemResponse(row.Id, row.WorkOrderNo,
+            reference.CustomerShown(row.Customer), row.VendorName, row.Reason)).ToArray();
+    }
+
     public async Task<OemPageResponse<OemTransferSummaryResponse>> ListAsync(OemActor actor, HttpRequest request, CancellationToken ct)
     {
         var (page, size, offset) = QueryValues.Page(request);
@@ -99,7 +144,9 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
             // Internal staff also find transfers by vendor name; a vendor account only ever sees its own company.
             query = query.Where(transfer => EF.Functions.Like(transfer.Title, pattern, QueryValues.LikeEscape)
                 || db.OemCompanies.Any(company => company.Id == transfer.OemCompanyId
-                    && EF.Functions.Like(company.Name, pattern, QueryValues.LikeEscape)));
+                    && EF.Functions.Like(company.Name, pattern, QueryValues.LikeEscape))
+                || db.OutsourceItems.Any(item => item.Id == transfer.OutsourceItemId
+                    && EF.Functions.Like(item.WorkOrderNo, pattern, QueryValues.LikeEscape)));
         }
         var sender = request.Query["sender"].ToString().Trim();
         if (sender.Length > 0)
@@ -299,7 +346,8 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var anyTask = canApprove && approverTaskStatuses.Any(status => status is FlowTaskStatuses.Pending or FlowTaskStatuses.Approved or FlowTaskStatuses.Rejected);
         var activeTask = canApprove && approverTaskStatuses.Contains(FlowTaskStatuses.Pending);
         var facts = new TransferFacts(transfer.Direction, transfer.OemCompanyId, transfer.LifecycleStatus,
-            transfer.InternalSenderUserId, transfer.OemSenderAccountId, approvalBlocked);
+            transfer.InternalSenderUserId, transfer.OemSenderAccountId, approvalBlocked,
+            BoundToOutsourceItem: transfer.OutsourceItemId is not null);
         return TransferAccess.Evaluate(facts, ActorFacts.For(actor, permissions, activeTask, anyTask, seesAll, notified, inScope));
     }
 
@@ -345,6 +393,9 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         var companyIds = transfers.Select(transfer => transfer.OemCompanyId).Distinct().ToArray();
         var companies = await db.OemCompanies.AsNoTracking().Where(company => Enumerable.Contains(companyIds, company.Id))
             .ToDictionaryAsync(company => company.Id, company => company.Name, ct);
+        var itemIds = transfers.Select(transfer => transfer.OutsourceItemId).OfType<ulong>().Distinct().ToArray();
+        var workOrders = await db.OutsourceItems.AsNoTracking().Where(item => Enumerable.Contains(itemIds, item.Id))
+            .ToDictionaryAsync(item => item.Id, item => item.WorkOrderNo, ct);
         var userIds = transfers.Where(transfer => transfer.InternalSenderUserId.HasValue).Select(transfer => transfer.InternalSenderUserId!.Value).Distinct().ToArray();
         var users = await db.Users.AsNoTracking().Where(user => Enumerable.Contains(userIds, user.Id))
             .ToDictionaryAsync(user => user.Id, user => new { user.EmployeeNo, user.RealName }, ct);
@@ -427,6 +478,7 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
                     : new OemPersonRefResponse("unknown", 0UL, "", "");
             result[transfer.Id] = new OemTransferSummaryResponse(
                 transfer.Id, transfer.Direction, transfer.OemCompanyId, companies.GetValueOrDefault(transfer.OemCompanyId),
+                transfer.OutsourceItemId, transfer.OutsourceItemId is ulong itemId ? workOrders.GetValueOrDefault(itemId) : null,
                 transfer.Title, sender, transfer.SignerName, recipientNames.GetValueOrDefault(transfer.Id) ?? [],
                 transfer.LifecycleStatus, approvalStatus,
                 ApprovalBlockedReason: !forVendor && instance?.Status == FlowInstanceStatuses.ApprovalBlocked ? instance.BlockedReason : null,

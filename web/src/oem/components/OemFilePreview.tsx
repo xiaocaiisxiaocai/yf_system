@@ -8,6 +8,8 @@ import type { TransferFile } from '../api/types'
 import { useOem } from '../OemContext'
 import { oemPreviewKind } from './oemPreview'
 
+export type OemPreviewFile = Pick<TransferFile, 'id' | 'originalName' | 'ext'>
+
 const PdfPreview = lazy(() => import('../../components/PdfPreview'))
 const ImagePreview = lazy(() => import('../../components/ImagePreview'))
 const ExcelPreview = lazy(() => import('../../components/ExcelPreview'))
@@ -24,7 +26,7 @@ function useViewerIdentity(): { employeeNo?: string; realName?: string } {
     : { employeeNo: internalUser?.employeeNo, realName: internalUser?.realName }
 }
 
-function OemImage({ file, toolbarContainer }: { file: TransferFile; toolbarContainer: HTMLElement | null }) {
+function OemImage({ file, toolbarContainer }: { file: OemPreviewFile; toolbarContainer: HTMLElement | null }) {
   const { api } = useOem()
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<{ url?: string; failed?: boolean }>({})
@@ -55,7 +57,7 @@ function OemImage({ file, toolbarContainer }: { file: TransferFile; toolbarConta
  * In-page OEM attachment preview with the same watermark (employee no. + name + open time)
  * and modal layout as the collaboration file preview. Bytes come from the OEM content endpoint.
  */
-export default function OemFilePreview({ file, onClose }: { file: TransferFile | null; onClose: () => void }) {
+export default function OemFilePreview({ file, onClose }: { file: OemPreviewFile | null; onClose: () => void }) {
   const { api } = useOem()
   const { employeeNo, realName } = useViewerIdentity()
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)

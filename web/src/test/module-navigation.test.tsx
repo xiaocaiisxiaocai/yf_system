@@ -66,6 +66,14 @@ describe('按可用功能决定模块导航与首页', () => {
     expect(screen.queryByText('暂未开通功能权限')).not.toBeInTheDocument()
   })
 
+  it('业务切换栏中外协清单排在 ODM/OEMA 之前', async () => {
+    useAuth.setState({ permissions: ['oem:audit_view'] })
+    renderShell('/oem/admin/audit')
+    const rail = await screen.findByRole('navigation', { name: '业务切换' })
+    expect(within(rail).getAllByRole('button').map((button) => button.getAttribute('aria-label')))
+      .toEqual(['外协清单', 'ODM/OEMA 文件传递'])
+  })
+
   it.each([
     ['supplier:list', 'supplier:account', '/suppliers'],
     ['org:user', 'user:manage', '/org/users'],

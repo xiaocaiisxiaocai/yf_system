@@ -4587,6 +4587,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("bigint unsigned")
                         .HasColumnName("oem_sender_account_id");
 
+                    b.Property<ulong?>("OutsourceItemId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("outsource_item_id");
+
                     b.Property<uint?>("ReceiptGraceMinutes")
                         .HasColumnType("int unsigned")
                         .HasColumnName("receipt_grace_minutes");
@@ -4638,6 +4642,9 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasIndex("OemSenderAccountId")
                         .HasDatabaseName("idx_oem_transfers_oem_sender");
+
+                    b.HasIndex("OutsourceItemId")
+                        .HasDatabaseName("idx_oem_transfers_outsource_item");
 
                     b.HasIndex("RetentionTemplateId");
 
@@ -5687,6 +5694,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasForeignKey("OemSenderAccountId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .HasConstraintName("fk_oem_transfers_oem_sender");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceItem", null)
+                        .WithMany()
+                        .HasForeignKey("OutsourceItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_oem_transfers_outsource_item");
 
                     b.HasOne("Yf.Api.Modules.Oem.Data.OemRetentionTemplate", null)
                         .WithMany()
