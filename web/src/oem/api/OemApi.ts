@@ -5,7 +5,7 @@ import type {
   AccountCreate, ActiveStatus, ApiResponses, ApiRoute, ApprovalStatus, ApproverOption, AuditRow, Company,
   CompanyListItem, CompanyOption, CompanyUpsert, DepartmentNode, DownloadSession, FlowNodeInput, FlowTemplate,
   FlowTemplateCreate, FlowTemplateDefinitionUpdate, FlowTemplateUpdate, InternalUserOption, Page, PendingTask,
-  RetentionTemplate, RetentionTemplateCreate, RetentionTemplateUpdate, RoutingPreview, SettingItem, SettingUpdateItem,
+  RetentionTemplate, RetentionTemplateCreate, RetentionTemplateUpdate, RoutingPreview, SendableItem, SettingItem, SettingUpdateItem,
   TransferCreate, TransferDetail, TransferSummary, TransferUpdate, UploadedFile, UploadInit, UploadInitRequest,
   CompanyContact, CompanyContactUpsert, InternalRecipient, RecipientChoice, VendorAccount,
 } from './types'
@@ -88,6 +88,7 @@ export class OemApi {
     })).data as Blob
 
   // Transfers
+  sendableItems = () => this.get<'GET /oem/sendable-items', SendableItem[]>('/oem/sendable-items')
   listTransfers = (query: TransferQuery) =>
     this.get<'GET /oem/transfers', Page<TransferSummary>>('/oem/transfers', {
       ...query, mine: query.mine ? 'true' : undefined, toMe: query.toMe ? 'true' : undefined,

@@ -17,6 +17,8 @@ import type { Realm, TransferDetail } from '../../oem/api/types'
 import { OemProvider } from '../../oem/OemContext'
 import TransferListPage from '../../oem/pages/TransferListPage'
 
+const workOrder = { id: 109, workOrderNo: 'WO-109', customer: '客户甲', vendorName: '甲厂', disabledReason: null }
+
 function detail(id: number, lifecycleStatus: TransferDetail['summary']['lifecycleStatus'] = 'DRAFT', version = 1): TransferDetail {
   return {
     summary: {
@@ -62,6 +64,7 @@ function createApi(overrides: Partial<OemApi> = {}): OemApi {
     transferRecipientChoices: vi.fn().mockResolvedValue([]),
     listTransfers: vi.fn().mockResolvedValue({ list: [], total: 0, page: 1, pageSize: 20 }),
     companyOptions: vi.fn().mockResolvedValue([{ id: 9, name: '甲厂', canReceive: true, unavailableReason: null }]),
+    sendableItems: vi.fn().mockResolvedValue([workOrder]),
     createTransfer: vi.fn().mockResolvedValue(detail(41)),
     initUpload: vi.fn().mockImplementation((_id: number, body: { fileName: string }) => Promise.resolve({
       sessionId: body.fileName,
@@ -105,11 +108,26 @@ function renderList(api: OemApi, realm: Realm = 'internal', search = '') {
   )
 }
 
-async function openInternalDialog(user: ReturnType<typeof userEvent.setup>) {
+async function openSendDialog(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole('button', { name: '发送文件' }))
-  const dialog = await screen.findByRole('dialog')
-  await user.click(within(dialog).getByRole('combobox'))
-  fireEvent.click((await screen.findAllByText('甲厂')).at(-1)!)
+  return screen.findByRole('dialog')
+}
+
+async function openWorkOrders(dialog: HTMLElement, user: ReturnType<typeof userEvent.setup>) {
+  const select = within(dialog).getByRole('combobox', { name: '工令' })
+  await waitFor(() => expect(select).toHaveAttribute('aria-disabled', 'false'))
+  await user.click(select)
+  return select
+}
+
+async function pickWorkOrder(dialog: HTMLElement, user: ReturnType<typeof userEvent.setup>) {
+  await openWorkOrders(dialog, user)
+  fireEvent.click(await screen.findByRole('option', { name: 'WO-109 · 客户甲 · 甲厂' }))
+}
+
+async function openInternalDialog(user: ReturnType<typeof userEvent.setup>) {
+  const dialog = await openSendDialog(user)
+  await pickWorkOrder(dialog, user)
   return dialog
 }
 
@@ -130,42 +148,111 @@ describe('ODM/OEMA 一键发送文件', () => {
     hashMocks.fileMd5.mockResolvedValue('md5')
   })
 
-  it('没有启用账号的厂商在下拉中禁用并显示原因', async () => {
+  it('internal send dialog has no vendor select and requires picking a work order', async () => {
     const user = userEvent.setup()
-    const api = createApi({
-      companyOptions: vi.fn().mockResolvedValue([{
-        id: 9,
-        name: '甲厂',
-        canReceive: false,
-        unavailableReason: '该厂商没有启用的登录账号，请先新增或启用账号后再发送',
-      }]),
-    } as Partial<OemApi>)
+    const api = createApi()
     renderList(api)
 
-    await user.click(await screen.findByRole('button', { name: '发送文件' }))
-    const dialog = await screen.findByRole('dialog')
-    await user.click(within(dialog).getByRole('combobox'))
-    const option = await screen.findByRole('option', { name: /甲厂.*该厂商没有启用的登录账号/ })
-    expect(option).toHaveClass('arco-select-option-disabled')
+    const dialog = await openSendDialog(user)
+    expect(within(dialog).queryByText('目标 ODM/OEMA 厂商')).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('combobox', { name: '工令' })).toBeInTheDocument()
+    await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '图纸.pdf'))
+    const submit = within(dialog).getByRole('button', { name: '提交审批' })
+    expect(submit).toBeDisabled()
+    fireEvent.submit(dialog.querySelector('form')!)
+    expect(await within(dialog).findByText('请选择工令')).toBeVisible()
+    expect(api.createTransfer).not.toHaveBeenCalled()
+
+    await pickWorkOrder(dialog, user)
+    expect(submit).toBeEnabled()
   })
 
-  it('所有厂商都没有启用账号时阻止提交', async () => {
+  it('picked work order shows its vendor read-only', async () => {
+    const user = userEvent.setup()
+    renderList(createApi({
+      sendableItems: vi.fn().mockResolvedValue([
+        workOrder,
+        { ...workOrder, id: 110, workOrderNo: 'WO-110', customer: '客户乙', vendorName: '乙厂' },
+      ]),
+    }))
+    const dialog = await openSendDialog(user)
+    expect(within(dialog).queryByText(/发送给：/)).not.toBeInTheDocument()
+    const select = await openWorkOrders(dialog, user)
+    await screen.findByRole('option', { name: 'WO-110 · 客户乙 · 乙厂' })
+    await user.type(within(select).getByRole('textbox'), '客户乙', { skipClick: true })
+    const matchingOptions = screen.getAllByRole('option')
+    expect(matchingOptions.map((option) => option.textContent)).toEqual(['WO-110 · 客户乙 · 乙厂'])
+    fireEvent.click(matchingOptions[0])
+    expect(within(dialog).getByText('发送给：乙厂')).toBeVisible()
+    expect(within(dialog).getAllByRole('combobox')).toHaveLength(1)
+  })
+
+  it('unavailable work orders are disabled with the reason', async () => {
     const user = userEvent.setup()
     const api = createApi({
-      companyOptions: vi.fn().mockResolvedValue([
-        { id: 9, name: '甲厂', canReceive: false, unavailableReason: '该厂商没有启用的登录账号，请先新增或启用账号后再发送' },
-        { id: 10, name: '乙厂', canReceive: false, unavailableReason: '该厂商没有启用的登录账号，请先新增或启用账号后再发送' },
+      sendableItems: vi.fn().mockResolvedValue([
+        { ...workOrder, disabledReason: '厂商无可接收账号' },
+        { ...workOrder, id: 110, workOrderNo: 'WO-110', customer: null, disabledReason: '工令已完成' },
       ]),
-    } as Partial<OemApi>)
+    })
     renderList(api)
 
-    await user.click(await screen.findByRole('button', { name: '发送文件' }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await openSendDialog(user)
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '阻止.pdf'))
-    const submit = within(dialog).getByRole('button', { name: '提交审批' })
-    expect(await within(dialog).findByText('当前没有可接收的 ODM/OEMA 厂商，请先新增或启用至少一个 ODM/OEMA 登录账号后再发送。')).toBeInTheDocument()
-    expect(submit).toBeDisabled()
+    expect(await within(dialog).findByText('外协清单里没有可发送的工令')).toBeVisible()
+    await openWorkOrders(dialog, user)
+    const unavailable = await screen.findByRole('option', { name: 'WO-109 · 客户甲 · 甲厂（厂商无可接收账号）' })
+    expect(unavailable).toHaveClass('arco-select-option-disabled')
+    expect(screen.getByRole('option', { name: 'WO-110 · 甲厂（工令已完成）' })).toHaveClass('arco-select-option-disabled')
+    fireEvent.click(unavailable)
+    expect(within(dialog).queryByText(/发送给：/)).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '提交审批' })).toBeDisabled()
     expect(api.createTransfer).not.toHaveBeenCalled()
+  })
+
+  it('vendor send dialog lists only the items returned for its company and hides the vendor line', async () => {
+    const user = userEvent.setup()
+    const api = createApi({ sendableItems: vi.fn().mockResolvedValue([{ ...workOrder, customer: null }]) })
+    renderList(api, 'oem')
+
+    const dialog = await openSendDialog(user)
+    await openWorkOrders(dialog, user)
+    const item = await screen.findByRole('option', { name: 'WO-109 · 甲厂' })
+    expect(screen.getAllByRole('option')).toEqual([item])
+    fireEvent.click(item)
+    expect(within(dialog).queryByText(/发送给：/)).not.toBeInTheDocument()
+    expect(api.sendableItems).toHaveBeenCalledTimes(1)
+    expect(api.companyOptions).not.toHaveBeenCalled()
+  })
+
+  it('load failure shows an error with retry', async () => {
+    const user = userEvent.setup()
+    const api = createApi({
+      sendableItems: vi.fn().mockRejectedValueOnce({ response: { data: { message: '工令服务暂不可用' } } })
+        .mockResolvedValueOnce([workOrder]),
+    })
+    renderList(api)
+
+    const dialog = await openSendDialog(user)
+    expect(await within(dialog).findByText(/工令服务暂不可用/)).toBeVisible()
+    await user.click(within(dialog).getByRole('button', { name: '重试' }))
+    await pickWorkOrder(dialog, user)
+    expect(within(dialog).queryByText(/工令服务暂不可用/)).not.toBeInTheDocument()
+    expect(api.sendableItems).toHaveBeenCalledTimes(2)
+  })
+
+  it.for(['internal', 'oem'] as const)('list shows the work order column and a dash for legacy transfers (%s)', async (realm) => {
+    const bound = { ...detail(41, 'RELEASED').summary, outsourceItemId: workOrder.id, workOrderNo: workOrder.workOrderNo }
+    const legacy = { ...detail(42, 'RELEASED').summary, title: '旧单.zip' }
+    const api = createApi({ listTransfers: vi.fn().mockResolvedValue({ list: [bound, legacy], total: 2, page: 1, pageSize: 20 }) })
+    renderList(api, realm)
+
+    const boundRow = (await screen.findByRole('link', { name: bound.title })).closest('tr')!
+    const legacyRow = screen.getByRole('link', { name: legacy.title }).closest('tr')!
+    const headers = screen.getAllByRole('columnheader').map((header) => header.textContent)
+    expect(headers.slice(1, 3)).toEqual(['文件', '工令'])
+    expect(within(boundRow).getByRole('cell', { name: workOrder.workOrderNo })).toBeVisible()
+    expect(within(legacyRow).getByRole('cell', { name: '—' })).toBeVisible()
   })
 
   it('不支持的文件格式在选择时就被拒绝：不入队、不建草稿', async () => {
@@ -182,7 +269,7 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(api.createTransfer).not.toHaveBeenCalled()
   })
 
-  it('只选厂商和多个文件即可依次建草稿、断点上传、读最新版本并提交审批', async () => {
+  it('只选工令和多个文件即可依次建草稿、断点上传、读最新版本并提交审批', async () => {
     const user = userEvent.setup()
     const api = createApi()
     renderList(api)
@@ -195,7 +282,7 @@ describe('ODM/OEMA 一键发送文件', () => {
 
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent('/oem/transfers/41'))
     expect(api.createTransfer).toHaveBeenCalledTimes(1)
-    expect(api.createTransfer).toHaveBeenCalledWith({ oemCompanyId: 9 })
+    expect(api.createTransfer).toHaveBeenCalledWith({ outsourceItemId: workOrder.id })
     expect(api.initUpload).toHaveBeenCalledTimes(2)
     expect(api.transfer).toHaveBeenCalledWith(41)
     expect(api.send).toHaveBeenCalledWith(41, 4)
@@ -246,7 +333,7 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(api.send).toHaveBeenCalledTimes(1)
   })
 
-  it('ODM/OEMA 回传无需选择厂商，发送结果未知时先查状态并避免重复发送', async () => {
+  it('ODM/OEMA 回传绑定工令，发送结果未知时先查状态并避免重复发送', async () => {
     const user = userEvent.setup()
     const inboundDraft = detail(52, 'DRAFT', 3)
     inboundDraft.summary.direction = 'OEM_TO_INTERNAL'
@@ -267,14 +354,15 @@ describe('ODM/OEMA 一键发送文件', () => {
     await user.click(await screen.findByRole('button', { name: '发送文件' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).queryByText('目标 ODM/OEMA 厂商')).not.toBeInTheDocument()
+    await pickWorkOrder(dialog, user)
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
-    await user.click(within(dialog).getByRole('combobox'))
+    await user.click(within(dialog).getByRole('combobox', { name: '通知公司人员' }))
     fireEvent.click((await screen.findAllByText('王五')).at(-1)!)
     await user.type(within(dialog).getByLabelText('签名'), '张三')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
 
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent('/oem-portal/transfers/52'))
-    expect(api.createTransfer).toHaveBeenCalledWith({})
+    expect(api.createTransfer).toHaveBeenCalledWith({ outsourceItemId: workOrder.id })
     expect(send).toHaveBeenCalledTimes(1)
     expect(transfer).toHaveBeenCalledTimes(2)
   })
@@ -289,12 +377,13 @@ describe('ODM/OEMA 一键发送文件', () => {
     await user.click(await screen.findByRole('button', { name: '发送文件' }))
     const dialog = await screen.findByRole('dialog')
     await within(dialog).findByText('通知公司人员')
+    await pickWorkOrder(dialog, user)
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
     expect(await within(dialog).findByText('请选择要通知的公司人员')).toBeInTheDocument()
     expect(api.createTransfer).not.toHaveBeenCalled()
 
-    await user.click(within(dialog).getByRole('combobox'))
+    await user.click(within(dialog).getByRole('combobox', { name: '通知公司人员' }))
     fireEvent.click((await screen.findAllByText('王五')).at(-1)!)
     // The signature is required: without it nothing is created or sent.
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
@@ -313,6 +402,7 @@ describe('ODM/OEMA 一键发送文件', () => {
     await user.click(await screen.findByRole('button', { name: '发送文件' }))
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('没有可通知的公司人员，暂时无法发送，请联系公司管理员。')).toBeInTheDocument()
+    await pickWorkOrder(dialog, user)
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
     await user.type(within(dialog).getByLabelText('签名'), '李四')
     await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
@@ -378,6 +468,7 @@ describe('ODM/OEMA 一键发送文件', () => {
     await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
     await within(dialog).findByText('文件上传失败，请修复失败项后重新提交。')
 
+    expect(within(dialog).getByRole('combobox', { name: '工令' })).toHaveAttribute('aria-disabled', 'true')
     await user.click(within(dialog).getByRole('button', { name: '提交审批' }))
 
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent('/oem/transfers/41'))
