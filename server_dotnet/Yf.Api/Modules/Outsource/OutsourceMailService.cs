@@ -188,7 +188,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         if (rows.Count != ids.Length) throw ApiException.NotFound("外协记录不存在或已被删除");
         var reference = await OutsourceReference.LoadAsync(context, ct);
         var items = rows.OrderBy(x => x.Id).ToArray();
-        await reference.LoadValuesAsync(context, items.Select(x => x.Id).ToArray(), ct);
+        await reference.LoadValuesAsync(context, items, ct);
         var responses = items.ToDictionary(x => x.Id, reference.Json);
         var vendorFields = reference.Layout.MailWorkbookFields();
         // Vendors are the ODM/OEMA directory; recipients are each vendor's own outsourcing addresses (外协邮箱),

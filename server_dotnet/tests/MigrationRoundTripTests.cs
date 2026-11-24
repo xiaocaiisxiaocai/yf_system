@@ -19,7 +19,8 @@ public sealed class MigrationRoundTripTests
     private const string DirectoryDelete = "20261006032324_AddOemDirectoryDeletePermissions";
     private const string HardenIdentity = "20261006075638_HardenOemIdentityAndIndexes";
     private const string BeforeElectricalHandoff = "20261124003700_CorrectOutsourceDueDatesFromCustomerDate";
-    private const string Latest = "20261124010000_AddOutsourceElectricalHandoff";
+    private const string BeforeMechanicalSupervisor = "20261124010000_AddOutsourceElectricalHandoff";
+    private const string Latest = "20261124032519_RenameOutsourceMechanicalSupervisor";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -60,6 +61,36 @@ public sealed class MigrationRoundTripTests
         Assert.Equal(restoredSchema, await SchemaAsync(database, ct));
         Assert.Equal(restoredData, await ReferenceDataAsync(database, ct));
         Assert.Equal(RestoreOem, await LastMigrationAsync(database, ct));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task MechanicalSupervisorRenamePreservesFieldIdentityAndSettingsOnUpgradeAndRollback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("supervisor_field_label", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(BeforeMechanicalSupervisor, ct);
+        async Task<(ulong Id, string Label, int Sort, bool Visible, string Status)> ReadFieldAsync()
+        {
+            await using var conn = await database.Database.OpenAsync(ct);
+            return await conn.QuerySingleAsync<(ulong, string, int, bool, string)>("""
+                SELECT id, label, sort_no, vendor_visible, status FROM outsource_fields
+                WHERE field_key='mechanicalSection' AND built_in=1
+                """);
+        }
+
+        await database.ExecuteAsync("""
+            UPDATE outsource_fields SET sort_no=321, vendor_visible=0, status='DISABLED'
+            WHERE field_key='mechanicalSection' AND built_in=1
+            """, ct);
+        var before = await ReadFieldAsync();
+        Assert.Equal("机构课别", before.Label);
+
+        await migrator.MigrateAsync(Latest, ct);
+        Assert.Equal((before.Id, "上级主管", 321, false, "DISABLED"), await ReadFieldAsync());
+        await migrator.MigrateAsync(BeforeMechanicalSupervisor, ct);
+        Assert.Equal(before, await ReadFieldAsync());
     }
 
     [Fact(Timeout = 180_000)]

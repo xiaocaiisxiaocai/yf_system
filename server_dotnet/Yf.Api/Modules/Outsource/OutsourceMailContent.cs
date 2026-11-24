@@ -44,79 +44,90 @@ internal static class OutsourceMailContent
     {
         var withdraw = kind == OutsourceMailKinds.Withdraw;
         var anyChanged = !withdraw && items.Any(item => changed.GetValueOrDefault(item.Id)?.Count > 0);
-        var html = new StringBuilder();
-        html.Append("<div style=\"font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;color:#1d2129;\">");
-        html.Append("<p>").Append(E(vendorName)).Append(" 您好：</p><p>");
-        html.Append(withdraw
-            ? $"以下 {items.Count} 笔工令已取消外发给贵司，请停止相关作业。"
-            : $"以下为本次外发清单，共 {items.Count} 笔，完整资料见附件。");
-        if (anyChanged) html.Append("黄色底色为与上次通知相比有变动的内容。");
-        html.Append("</p><table style=\"border-collapse:collapse;font-size:13px;\"><tr>");
-        foreach (var field in fields) html.Append("<th style=\"").Append(Header).Append("\">").Append(E(field.Header)).Append("</th>");
-        html.Append("</tr>");
-        foreach (var item in items)
+        var introduction = PurchaseIntroduction(withdraw, items.Count);
+        if (anyChanged) introduction += "黄色底色为与上次通知相比有变动的内容。";
+
+        return TableHtml(vendorName, introduction, fields.Select(field => field.Header), items.Select(item =>
         {
-            var rowColor = withdraw ? null : item.Status switch
-            {
-                OutsourceItemStatuses.Paused => "#ffe0e0",
-                OutsourceItemStatuses.Cancelled => "#fff7d1",
-                _ => "#e6f4ea",
-            };
+            var rowColor = withdraw ? null : StatusColor(item.Status);
             var itemChanged = withdraw ? null : changed.GetValueOrDefault(item.Id);
-            html.Append("<tr>");
-            foreach (var field in fields)
-            {
-                var color = itemChanged?.Contains(field.Key) == true ? "#ffff00" : rowColor;
-                html.Append("<td style=\"").Append(Cell);
-                if (color is not null) html.Append("background:").Append(color).Append(';');
-                html.Append("\">").Append(E(field.Value(item) ?? "")).Append("</td>");
-            }
-            html.Append("</tr>");
-        }
-        html.Append("</table><p style=\"color:#86909c;font-size:12px;\">此邮件由系统发送。</p></div>");
-        return html.ToString();
+            return fields.Select(field => (field.Value(item), itemChanged?.Contains(field.Key) == true ? "#ffff00" : rowColor));
+        }));
     }
 
-    internal static string Text(string kind, string vendorName, IReadOnlyList<OutsourceItemResponse> items, IReadOnlyList<OutsourceWorkbook.Field> fields)
+    internal static string Text(string kind, string vendorName, IReadOnlyList<OutsourceItemResponse> items, IReadOnlyList<OutsourceWorkbook.Field> fields) =>
+        TableText(vendorName, PurchaseIntroduction(kind == OutsourceMailKinds.Withdraw, items.Count),
+            fields.Select(field => field.Header), items.Select(item => fields.Select(field => field.Value(item))));
+
+    private static string PurchaseIntroduction(bool withdraw, int count) => withdraw
+        ? $"以下 {count} 笔工令已取消外发给贵司，请停止相关作业。"
+        : $"以下为本次外发清单，共 {count} 笔，完整资料见附件。";
+
+    private static string StatusColor(string status) => status switch
     {
-        var withdraw = kind == OutsourceMailKinds.Withdraw;
-        var text = new StringBuilder();
-        text.Append(vendorName).AppendLine(" 您好：");
-        text.AppendLine(withdraw
-            ? $"以下 {items.Count} 笔工令已取消外发给贵司，请停止相关作业。"
-            : $"以下为本次外发清单，共 {items.Count} 笔，完整资料见附件。");
-        text.AppendLine();
-        text.AppendLine(string.Join(" | ", fields.Select(field => field.Header)));
-        foreach (var item in items) text.AppendLine(string.Join(" | ", fields.Select(field => field.Value(item) ?? "")));
-        return text.ToString();
-    }
+        OutsourceItemStatuses.Paused => "#ffe0e0",
+        OutsourceItemStatuses.Cancelled => "#fff7d1",
+        _ => "#e6f4ea",
+    };
 
     internal static (string Subject, string Html, string Text) ElectricalHandoff(
         OutsourceItemResponse item, string signer, DateTime occurredAt)
     {
         var action = item.ElectricalHandoff ? "转迅得电控" : "撤回转迅得电控";
         var subject = $"【{action}】{item.VendorName} 工令 {item.WorkOrderNo}";
+        const string recipient = "迅得电控同仁";
+        var introduction = item.ElectricalHandoff
+            ? "以下 1 笔工令已由厂商签名转交迅得电控。"
+            : "厂商已签名撤回以下 1 笔工令的电控转交。";
         var time = occurredAt.AddHours(8).ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
-        (string Label, string Value)[] details =
+        (string Label, string? Value)[] details =
         [
             ("工令", item.WorkOrderNo),
-            ("客户", item.Customer ?? ""),
-            ("机型", item.MachineModel ?? ""),
-            ("外发类型", item.TypeLabel ?? item.TypeCode ?? ""),
+            ("客户", item.Customer),
+            ("机型", item.MachineModel),
+            ("外发类型", item.TypeLabel ?? item.TypeCode),
             ("外发厂商", item.VendorName),
             ("签名人", signer),
             ("操作时间", $"{time} (UTC+8)"),
         ];
-        var html = new StringBuilder("<table style=\"border-collapse:collapse;font-size:13px;\">");
-        var text = new StringBuilder();
-        foreach (var (label, value) in details)
+        var headers = details.Select(field => field.Label);
+        var color = StatusColor(item.Status);
+        return (subject,
+            TableHtml(recipient, introduction, headers, [details.Select(field => (field.Value, (string?)color))]),
+            TableText(recipient, introduction, headers, [details.Select(field => field.Value)]));
+    }
+
+    private static string TableHtml(string recipient, string introduction, IEnumerable<string> headers,
+        IEnumerable<IEnumerable<(string? Value, string? Color)>> rows)
+    {
+        var html = new StringBuilder("<div style=\"font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;color:#1d2129;\">");
+        html.Append("<p>").Append(E(recipient)).Append(" 您好：</p><p>").Append(E(introduction));
+        html.Append("</p><table style=\"border-collapse:collapse;font-size:13px;\"><tr>");
+        foreach (var header in headers)
+            html.Append("<th style=\"").Append(Header).Append("\">").Append(E(header)).Append("</th>");
+        html.Append("</tr>");
+        foreach (var row in rows)
         {
-            html.Append("<tr><th scope=\"row\" style=\"").Append(Header).Append("\">").Append(label)
-                .Append("</th><td style=\"").Append(Cell).Append("\">").Append(E(value)).Append("</td></tr>");
-            text.Append(label).Append('：').AppendLine(value);
+            html.Append("<tr>");
+            foreach (var (value, color) in row)
+            {
+                html.Append("<td style=\"").Append(Cell);
+                if (color is not null) html.Append("background:").Append(color).Append(';');
+                html.Append("\">").Append(E(value ?? "")).Append("</td>");
+            }
+            html.Append("</tr>");
         }
-        html.Append("</table>");
-        return (subject, html.ToString(), text.ToString());
+        return html.Append("</table><p style=\"color:#86909c;font-size:12px;\">此邮件由系统发送。</p></div>").ToString();
+    }
+
+    private static string TableText(string recipient, string introduction, IEnumerable<string> headers,
+        IEnumerable<IEnumerable<string?>> rows)
+    {
+        var text = new StringBuilder();
+        text.Append(recipient).AppendLine(" 您好：").AppendLine(introduction).AppendLine();
+        text.AppendLine(string.Join(" | ", headers));
+        foreach (var row in rows) text.AppendLine(string.Join(" | ", row));
+        return text.ToString();
     }
 
     private static string E(string value) => WebUtility.HtmlEncode(value);

@@ -29,9 +29,6 @@ public sealed class MesMirrorIpmsClient(IDbContextFactory<YfDbContext> dbFactory
             var rows = await context.MesWorkOrders.AsNoTracking().Where(x => wanted.Contains(x.WorkOrderNo))
                 .Select(x => new { x.WorkOrderNo, x.RawJson }).ToArrayAsync(ct);
             foreach (var row in rows) result[row.WorkOrderNo] = Map(row.WorkOrderNo, row.RawJson);
-            var sections = await SectionsOfAsync(context, result.Values.Select(x => x.MechanicalOwner), ct);
-            foreach (var (no, order) in result.ToArray())
-                if (order.MechanicalOwner is { } owner && sections.TryGetValue(owner, out var section)) result[no] = order with { MechanicalSection = section };
         }
         catch (Exception error) when (error is DbUpdateException or InvalidOperationException or MySqlConnector.MySqlException)
         {
@@ -44,44 +41,16 @@ public sealed class MesMirrorIpmsClient(IDbContextFactory<YfDbContext> dbFactory
     /// MES field → outsourcing field (names are the 外协清单 columns, 契约 → 数据与字段归属):
     /// 客户 ← customerName, 机型 ← deviceModels, 机构执行人 ← bomChargeUser (the 2D and rack-drawing owners are always the same person),
     /// 工令下发 ← applyEndTime (签收日期), 数量 ← deviceNum,
-    /// 原始交期 ← customerEndDate (客户交期, 2026-11-24; not deliveryDate 原交期). 机构课别 is derived from the owner's account (see <see cref="SectionsOfAsync"/>); MES has no
+    /// 原始交期 ← customerEndDate (客户交期, 2026-11-24; not deliveryDate 原交期). MES has no
     /// 电控执行人. The outsourcing type, BOM时间 and 发图 are entered by staff (2026-11-17). MES only lists open work orders, so none is closed here.
     /// </summary>
     internal static IpmsWorkOrder Map(string workOrderNo, string rawJson)
     {
         using var json = JsonDocument.Parse(rawJson);
         var root = json.RootElement;
-        return new(workOrderNo, Text(root, "customerName"), Text(root, "deviceModels"), null, Text(root, "bomChargeUser"), null,
+        return new(workOrderNo, Text(root, "customerName"), Text(root, "deviceModels"), Text(root, "bomChargeUser"), null,
             Date(root, "applyEndTime"),
             Quantity(root, "deviceNum"), Date(root, "customerEndDate"), false);
-    }
-
-    /// <summary>
-    /// 机构课别 of each owner name: the 课别 of the one active internal account with that real name, comparing simplified and
-    /// traditional spellings as the same (IPMS 古才鸿, account 古才鴻). Several accounts with the same name in different 课别, an owner
-    /// that is a company or has no account, or an account placed above 课别 level have no section.
-    /// </summary>
-    internal static async Task<Dictionary<string, string>> SectionsOfAsync(YfDbContext context, IEnumerable<string?> owners, CancellationToken ct)
-    {
-        var names = owners.Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!).Distinct(StringComparer.Ordinal).ToArray();
-        if (names.Length == 0) return [];
-        // The directory is small (internal accounts), and the spelling comparison cannot be done in SQL.
-        var wanted = names.Select(ChineseVariants.Simplify).ToHashSet(StringComparer.Ordinal);
-        var accounts = (await context.Users.AsNoTracking()
-            .Where(user => user.UserType == UserTypes.Internal && user.Status == AccountStatuses.Active)
-            .Select(user => new { user.RealName, user.DepartmentId }).ToArrayAsync(ct))
-            .Select(user => (Name: ChineseVariants.Simplify(user.RealName.Trim()), user.DepartmentId))
-            .Where(user => wanted.Contains(user.Name)).ToArray();
-        if (accounts.Length == 0) return [];
-        var departmentIds = accounts.Select(x => x.DepartmentId).OfType<ulong>().Distinct().ToArray();
-        var sectionNames = await context.Departments.AsNoTracking().Where(x => departmentIds.Contains(x.Id) && x.Kind == "SECTION")
-            .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        var sectionOf = accounts.GroupBy(x => x.Name, StringComparer.Ordinal)
-            .Select(group => (group.Key, Sections: group.Select(x => x.DepartmentId is { } id ? sectionNames.GetValueOrDefault(id) : null).Distinct().ToArray()))
-            .Where(x => x.Sections.Length == 1 && x.Sections[0] is not null)
-            .ToDictionary(x => x.Key, x => x.Sections[0]!, StringComparer.Ordinal);
-        return names.Where(name => sectionOf.ContainsKey(ChineseVariants.Simplify(name.Trim())))
-            .ToDictionary(name => name, name => sectionOf[ChineseVariants.Simplify(name.Trim())], StringComparer.Ordinal);
     }
 
     private static string? Text(JsonElement root, string name) =>

@@ -19,8 +19,8 @@ public sealed class MesMirrorIpmsClientTests
              "jjtActualDate":"2026-07-06","deliveryDate":"2027-01-08","customerEndDate":"2027-03-01","planEndDate":"2027-02-01"}
             """);
 
-        // 机构课别 is not in MES (it comes from the owner's account) and neither is 电控执行人; the due date is MES 客户交期 (customerEndDate), not 原交期. BOM时间 and 发图 are entered by staff, not read from MES.
-        Assert.Equal(new IpmsWorkOrder("21091052", "Peng Shen (Thailand)", "SFC-1500", null, "周晓淋", null,
+        // MES has no 电控执行人. Use 客户交期 rather than 原交期; BOM时间 and 发图 are entered by staff.
+        Assert.Equal(new IpmsWorkOrder("21091052", "Peng Shen (Thailand)", "SFC-1500", "周晓淋", null,
             new DateOnly(2026, 6, 7),
             3, new DateOnly(2027, 3, 1), false), order);
     }
@@ -55,7 +55,7 @@ public sealed class MesMirrorIpmsClientTests
         Assert.Equal(expected, ChineseVariants.Simplify(input));
 
     [Fact(Timeout = 180_000)]
-    public async Task LooksUpOnlyTheRequestedWorkOrdersFromTheMirror()
+    public async Task ResolvesMirrorOrdersAndMechanicalSupervisorsFromTheirRespectiveSources()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("mes_mirror_client", ct);
@@ -88,31 +88,45 @@ public sealed class MesMirrorIpmsClientTests
         Assert.Equal(["A1", "A3"], found.Keys.Order());
         Assert.Equal(("客户A3", "M-A3", 2, new DateOnly(2027, 2, 3)), (found["A3"].Customer, found["A3"].MachineModel, found["A3"].Quantity, found["A3"].DueDate));
 
-        // 机构课别 is the 课别 of the one active internal account named like the owner; no account, a company, a name used in
-        // two 课别, or an account placed above 课别 level leave it empty.
         await database.ExecuteAsync("""
             INSERT INTO departments(id,name,parent_id,kind,sort_no,status,created_at,updated_at) VALUES
               (9001,'研发事业部',NULL,'DIVISION',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9002,'机构部',9001,'DEPARTMENT',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9003,'机构一课',9002,'SECTION',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9004,'机构二课',9002,'SECTION',2,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
-            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
-              (9901,'sec_a','unused','周晓淋','a@example.invalid','INTERNAL',NULL,9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9902,'sec_b','unused','重名','b@example.invalid','INTERNAL',NULL,9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9903,'sec_c','unused','重名','c@example.invalid','INTERNAL',NULL,9004,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9904,'sec_d','unused','部门级','d@example.invalid','INTERNAL',NULL,9002,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9905,'sec_e','unused','已停用','e@example.invalid','INTERNAL',NULL,9003,'DISABLED',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
-              (9906,'sec_f','unused','古才鴻','f@example.invalid','INTERNAL',NULL,9004,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+              (9004,'机构二课',9002,'SECTION',2,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9005,'未设主管事业部',NULL,'DIVISION',2,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,department_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9901,'sec_a','unused','周晓淋','a@example.invalid','INTERNAL',9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9902,'sec_b','unused','重名','b@example.invalid','INTERNAL',9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9903,'sec_c','unused','重名','c@example.invalid','INTERNAL',9004,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9904,'sec_d','unused','无主管','d@example.invalid','INTERNAL',9005,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9905,'sec_e','unused','已停用','e@example.invalid','INTERNAL',9003,'DISABLED',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9906,'sec_f','unused','古才鴻','f@example.invalid','INTERNAL',9004,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9907,'sec_g','unused','未分配','g@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9911,'lead_s','unused','王課長','s@example.invalid','INTERNAL',9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9912,'lead_d','unused','陳經理','h@example.invalid','INTERNAL',9003,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9913,'lead_v','unused','周總監','v@example.invalid','INTERNAL',9001,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            UPDATE departments SET leader_account_id=9911 WHERE id=9003;
+            UPDATE departments SET leader_account_id=9912 WHERE id=9002;
+            UPDATE departments SET leader_account_id=9913 WHERE id=9001;
+            INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,customer_name,device_models,raw_json)
+              VALUES('S1','b',UTC_TIMESTAMP(3),'c','m','{"bomChargeUser":"周晓淋"}');
             """, ct);
-        var owners = new[] { ("S1", "周晓淋"), ("S2", "重名"), ("S3", "部门级"), ("S4", "鼎亚研发"), ("S5", "已停用"), ("S6", "古才鸿") };
-        foreach (var (no, owner) in owners)
-            await database.ExecuteAsync($$"""
-                INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,customer_name,device_models,raw_json)
-                VALUES('{{no}}','b',UTC_TIMESTAMP(3),'c','m','{"bomChargeUser":"{{owner}}"}')
-                """, ct);
-        var owned = await client.LookupAsync(owners.Select(x => x.Item1).ToArray(), ct);
-        Assert.Equal(new (string, string?)[] { ("S1", "机构一课"), ("S2", null), ("S3", null), ("S4", null), ("S5", null), ("S6", "机构二课") }, // S6: IPMS writes 古才鸿, the account 古才鴻
-            owners.Select(x => (x.Item1, owned[x.Item1].MechanicalSection)));
-        Assert.Equal("周晓淋", owned["S1"].MechanicalOwner);
+        var owner = (await client.LookupAsync(["S1"], ct))["S1"].MechanicalOwner;
+        Assert.Equal("周晓淋", owner);
+        await using var context = await factory.CreateDbContextAsync(ct);
+        string?[] owners = [owner, " 古才鸿 ", "王课长", "陳經理", "周总监", "重名", "无主管", "已停用", "未分配", "找不到", null, " "];
+        var supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, owners, ct);
+        Assert.Equal(4, supervisors.Count);
+        Assert.Equal("王課長", supervisors["周晓淋"]);
+        Assert.Equal("陳經理", supervisors[" 古才鸿 "]); // simplified owner, traditional account, no section head
+        Assert.Equal("陳經理", supervisors["王课长"]);  // section head reports to department head
+        Assert.Equal("周總監", supervisors["陳經理"]);   // department head resides in the section they oversee
+
+        // The same work order reflects directory changes without an IPMS sync. Inactive leaders are not shown.
+        await database.ExecuteAsync("UPDATE users SET status='DISABLED' WHERE id=9911", ct);
+        supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, [owner, "重名"], ct);
+        Assert.Equal("陳經理", supervisors["周晓淋"]);
+        Assert.Equal("陳經理", supervisors["重名"]); // the two employees now report to the same account
     }
 }

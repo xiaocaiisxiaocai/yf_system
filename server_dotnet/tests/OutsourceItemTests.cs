@@ -25,7 +25,7 @@ public sealed class OutsourceItemTests
         }
 
         public void Add(string no, bool closed = false) => Orders[no] = new(
-            no, "超穎(泰國)", "ST-201L", "4.王家琦", "机构甲", "电控乙", new DateOnly(2026, 9, 30),
+            no, "超穎(泰國)", "ST-201L", "机构甲", "电控乙", new DateOnly(2026, 9, 30),
             1, new DateOnly(2026, 12, 31), closed);
     }
 
@@ -112,9 +112,19 @@ public sealed class OutsourceItemTests
         Assert.Equal((503, "IPMS 暂时无法连接，请稍后再试"), (outage.Status, outage.Message));
         ipms.Unavailable = false;
 
+        // Older rows can still contain a department name. The list and export must read the supervisor from the directory.
+        await database.ExecuteAsync("""
+            INSERT INTO departments(id,name,kind,sort_no,status,leader_account_id,created_at,updated_at)
+            VALUES (8701,'机构测试课','SECTION',1,'ACTIVE',9713,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            UPDATE users SET real_name='机构甲',department_id=8701 WHERE id=9711;
+            UPDATE outsource_items SET mechanical_section='历史机构测试课';
+            UPDATE outsource_items SET mechanical_owner=NULL,electrical_owner='机构甲' WHERE work_order_no='21089902';
+            """, ct);
         // List, filters and tab counts.
         var all = await service.ListAsync(viewer, Query(), 1, 20, 0, ct);
         Assert.Equal(2UL, all.Total);
+        Assert.Equal("主管丙", all.List.Single(x => x.WorkOrderNo == "21089901").MechanicalSection);
+        Assert.Null(all.List.Single(x => x.WorkOrderNo == "21089902").MechanicalSection);
         Assert.Equal(["21089902", "21089901"], all.List.Select(x => x.WorkOrderNo));
         Assert.All(all.List, item =>
         {
@@ -173,6 +183,9 @@ public sealed class OutsourceItemTests
             using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
             var sheet = await reader.ReadToEndAsync(ct);
             Assert.Contains("21089901", sheet, StringComparison.Ordinal);
+            Assert.Contains("上级主管", sheet, StringComparison.Ordinal);
+            Assert.Contains("主管丙", sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain("历史机构测试课", sheet, StringComparison.Ordinal);
             Assert.Contains("超穎(泰國)", sheet, StringComparison.Ordinal);
             Assert.Contains("<c r=\"A2\" s=\"7\"", sheet, StringComparison.Ordinal);
         }
@@ -191,6 +204,9 @@ public sealed class OutsourceItemTests
         Assert.Equal(0UL, (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).Total);
         var closed = (await service.ListAsync(buyer, Query(includeClosed: true), 1, 20, 0, ct)).List.Single();
         Assert.True(closed.Closed);
+        Assert.Equal("主管丙", closed.MechanicalSection);
+        await database.ExecuteAsync("UPDATE departments SET leader_account_id=NULL WHERE id=8701", ct);
+        Assert.Null((await service.ListAsync(buyer, Query(includeClosed: true), 1, 20, 0, ct)).List.Single().MechanicalSection);
         Assert.Equal("已完成的记录不能修改，请先重新开启", (await Assert.ThrowsAsync<ApiException>(() =>
             service.UpdateAsync(buyer, closed.Id, new("2026-11-08", dingya.Id, null, null, "NORMAL", closed.UpdatedAt), ct))).Message);
 

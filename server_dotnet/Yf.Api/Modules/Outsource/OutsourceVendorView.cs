@@ -33,7 +33,7 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         var (db, reference, items) = await FilteredAsync(uow, actor, request, ct);
         var total = (ulong)await items.LongCountAsync(ct);
         var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
-        await reference.LoadValuesAsync(db, rows.Select(x => x.Id).ToArray(), ct);
+        await reference.LoadValuesAsync(db, rows, ct);
         OutsourceVendorColumn[] columns =
             [new(SerialKey, "序号"), .. reference.Layout.VendorColumns.Select(column => new OutsourceVendorColumn(column.Key, column.Label))];
         return new(columns, rows.Select(item => Row(reference.Layout, reference.Json(item))).ToArray(), total, page, size);
@@ -50,7 +50,7 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         if (await items.CountAsync(ct) > OutsourceItemService.MaximumExportRows)
             throw ApiException.BadRequest($"一次最多导出 {OutsourceItemService.MaximumExportRows} 条，请缩小筛选范围");
         var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).ToArrayAsync(ct);
-        await reference.LoadValuesAsync(db, rows.Select(x => x.Id).ToArray(), ct);
+        await reference.LoadValuesAsync(db, rows, ct);
         var content = OutsourceWorkbook.Build(rows.Select(reference.Json).ToArray(), null,
             reference.Layout.WorkbookFields(vendor: true), forVendor: true);
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
@@ -87,7 +87,7 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         await db.SaveChangesAsync(ct);
 
         var reference = await OutsourceReference.LoadAsync(db, ct);
-        await reference.LoadValuesAsync(db, [id], ct);
+        await reference.LoadValuesAsync(db, [item], ct);
         var updated = reference.Json(item);
         var response = Row(reference.Layout, updated);
         var mailQueued = await OutsourceMailService.QueueElectricalHandoffAsync(db, updated, account.AccountId, signer, now, ct);

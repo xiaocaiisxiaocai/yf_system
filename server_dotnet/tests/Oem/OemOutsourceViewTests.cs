@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Net;
 using System.Text.Json.Nodes;
+using System.Xml.Linq;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -286,7 +287,10 @@ public sealed class OemOutsourceViewTests
             Assert.Contains(value, message.TextBody, StringComparison.Ordinal);
         Assert.DoesNotContain("客户电控全称", message.TextBody, StringComparison.Ordinal);
         Assert.DoesNotContain("转交<签名>", message.HtmlBody, StringComparison.Ordinal);
-        Assert.Empty(Assert.Single(transport.Messages, x => x.Subject == "【撤回转迅得电控】外协电控厂商 工令 HANDOFF-1").Attachments);
+        var withdrawal = Assert.Single(transport.Messages, x => x.Subject == "【撤回转迅得电控】外协电控厂商 工令 HANDOFF-1");
+        Assert.Empty(withdrawal.Attachments);
+        AssertHandoffLayout(message, "转交<签名>", turnedAt, "已由厂商签名转交迅得电控");
+        AssertHandoffLayout(withdrawal, "撤回签名", withdrawnRow["electricalHandoffAt"]!.GetValue<DateTime>(), "签名撤回");
 
         // When the last eligible address is removed the item still changes, without creating a fifth mail.
         await admin.PutAsync(ccPath, new { entries = new[] { new { userId = noticeUser, modules = new[] { "OUTSOURCE_NOTICE" } } } }, ct).Ok();
@@ -316,6 +320,27 @@ public sealed class OemOutsourceViewTests
             Assert.All(audits, x => Assert.Equal(oemAccountId, x.AccountId));
             Assert.Equal([true, true, false], audits.Select(x => JsonNode.Parse(x.Detail)!["mailQueued"]!.GetValue<bool>()));
         }
+    }
+
+    private static void AssertHandoffLayout(MimeMessage message, string signer, DateTime occurredAt, string action)
+    {
+        var body = XElement.Parse(message.HtmlBody!);
+        var paragraphs = body.Elements("p").Select(p => p.Value).ToArray();
+        Assert.Equal("迅得电控同仁 您好：", paragraphs[0]);
+        Assert.Contains(action, paragraphs[1], StringComparison.Ordinal);
+        Assert.Equal("此邮件由系统发送。", paragraphs[^1]);
+
+        string[] headers = ["工令", "客户", "机型", "外发类型", "外发厂商", "签名人", "操作时间"];
+        var rows = body.Element("table")!.Elements("tr").ToArray();
+        Assert.Equal(2, rows.Length);
+        Assert.Equal(headers, rows[0].Elements("th").Select(cell => cell.Value));
+        var values = rows[1].Elements("td").Select(cell => cell.Value).ToArray();
+        Assert.Equal(headers.Length, values.Length);
+        Assert.Equal(signer, values[^2]);
+        var time = occurredAt.AddHours(8).ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal($"{time} (UTC+8)", values[^1]);
+        Assert.Contains(string.Join(" | ", headers), message.TextBody, StringComparison.Ordinal);
+        Assert.Contains(string.Join(" | ", values), message.TextBody, StringComparison.Ordinal);
     }
 
     private sealed class CaptureTransport : IOutsourceMailTransport

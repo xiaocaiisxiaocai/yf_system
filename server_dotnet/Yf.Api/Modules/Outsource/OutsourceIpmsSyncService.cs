@@ -152,13 +152,14 @@ public sealed class OutsourceIpmsSyncService(
                 try { found = await ipms.LookupAsync(batch.Select(x => x.WorkOrderNo).ToArray(), ct); }
                 catch (IpmsUnavailableException unavailable) { error = unavailable.Message; break; }
                 var byNo = found.Values.ToDictionary(x => x.WorkOrderNo, StringComparer.OrdinalIgnoreCase);
+                var supervisorNotices = await SupervisorNoticesAsync(context, batch, byNo, vendorKeys, ct);
                 var now = await DbClock.UtcNowAsync(context, ct, 3);
                 foreach (var item in batch)
                 {
                     processed++;
                     if (!byNo.TryGetValue(item.WorkOrderNo, out var order)) { missing++; continue; }
                     var result = await ApplyAsync(context, item, order, now,
-                        trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, vendorKeys, ct);
+                        trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, vendorKeys, supervisorNotices.Contains(item.Id), ct);
                     if (result.Changed) changed++;
                     if (result.Closed) closed++;
                 }
@@ -193,22 +194,47 @@ public sealed class OutsourceIpmsSyncService(
         return new(processed, changed, closed, missing, error);
     }
 
+    // A vendor-visible supervisor can change when the directory changes, even if IPMS returns the same owner.
+    private static async Task<HashSet<ulong>> SupervisorNoticesAsync(YfDbContext context, OutsourceItem[] batch,
+        IReadOnlyDictionary<string, IpmsWorkOrder> orders, IReadOnlySet<string> vendorKeys, CancellationToken ct)
+    {
+        const string supervisorKey = "mechanicalSection";
+        if (!vendorKeys.Contains(supervisorKey)) return [];
+        var sentItems = new List<(OutsourceItem Item, string? NextOwner)>();
+        foreach (var item in batch)
+        {
+            if (item.SendStatus != OutsourceSendStatuses.Sent || !orders.TryGetValue(item.WorkOrderNo, out var order)) continue;
+            sentItems.Add((item, OutsourceItemService.MechanicalOwnerOf(order)));
+        }
+        var owners = sentItems.Select(x => x.Item.MechanicalOwner).Concat(sentItems.Select(x => x.NextOwner));
+        var supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, owners, ct);
+        string? SupervisorOf(string? owner) => owner is null ? null : supervisors.GetValueOrDefault(owner);
+
+        var notices = new HashSet<ulong>();
+        foreach (var (item, nextOwner) in sentItems)
+        {
+            var snapshot = OutsourceChangeMarks.LastNoticeValues(item);
+            var before = snapshot is null ? SupervisorOf(item.MechanicalOwner) : snapshot.GetValueOrDefault(supervisorKey);
+            if (before != SupervisorOf(nextOwner)) notices.Add(item.Id);
+        }
+        return notices;
+    }
+
     private sealed record ItemResult(bool Changed, bool Closed);
 
     private static async Task<ItemResult> ApplyAsync(YfDbContext context, OutsourceItem item, IpmsWorkOrder order, DateTime now,
-        string source, ulong? actorId, IReadOnlySet<string> vendorKeys, CancellationToken ct)
+        string source, ulong? actorId, IReadOnlySet<string> vendorKeys, bool supervisorNotice, CancellationToken ct)
     {
         var next = new OutsourceItem();
         OutsourceItemService.ApplyIpms(next, order, now);
         var changes = AuditChange.OnlyChanged(
             new AuditChange("customer", "", item.Customer, next.Customer),
             new AuditChange("machineModel", "", item.MachineModel, next.MachineModel),
-            new AuditChange("mechanicalSection", "", item.MechanicalSection, next.MechanicalSection),
             new AuditChange("mechanicalOwner", "", item.MechanicalOwner, next.MechanicalOwner),
             new AuditChange("electricalOwner", "", item.ElectricalOwner, next.ElectricalOwner),
             new AuditChange("workOrderIssuedOn", "", item.WorkOrderIssuedOn, next.WorkOrderIssuedOn),
             new AuditChange("quantity", "", item.Quantity, next.Quantity));
-        var changed = changes.Length > 0;
+        var changed = supervisorNotice || changes.Length > 0;
         // IPMS supplies only the original due date, once; the latest due date is purchasing's, so a sync never moves it
         // (it is only filled in when it was empty).
         var originalDue = item.OriginalDueDate ?? order.DueDate;
@@ -222,11 +248,11 @@ public sealed class OutsourceIpmsSyncService(
         if (changed)
         {
             // A sent item with new IPMS data the vendor sees waits for purchasing to notify the vendor; nothing is mailed here.
-            var noticeNeeded = changes.Any(x => vendorKeys.Contains(x.Field));
+            var noticeNeeded = supervisorNotice || changes.Any(x => vendorKeys.Contains(x.Field));
             var sendStatus = noticeNeeded && item.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : item.SendStatus;
             updated = await row.ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.Customer, next.Customer).SetProperty(x => x.MachineModel, next.MachineModel)
-                .SetProperty(x => x.MechanicalSection, next.MechanicalSection).SetProperty(x => x.MechanicalOwner, next.MechanicalOwner)
+                .SetProperty(x => x.MechanicalOwner, next.MechanicalOwner)
                 .SetProperty(x => x.ElectricalOwner, next.ElectricalOwner).SetProperty(x => x.WorkOrderIssuedOn, next.WorkOrderIssuedOn)
                 .SetProperty(x => x.Quantity, next.Quantity)
                 .SetProperty(x => x.LatestDueDate, latestDue).SetProperty(x => x.OriginalDueDate, originalDue)
@@ -240,7 +266,7 @@ public sealed class OutsourceIpmsSyncService(
                 .SetProperty(x => x.IpmsSyncedAt, now).SetProperty(x => x.OriginalDueDate, originalDue)
                 .SetProperty(x => x.LatestDueDate, latestDue).SetProperty(x => x.ClosedAt, closedAt).SetProperty(x => x.UpdatedAt, x => x.UpdatedAt), ct);
         }
-        if (updated > 0 && changed)
+        if (updated > 0 && changes.Length > 0)
         {
             OutsourceHistory.Add(context, item.Id, changes, source, actorId);
             await context.SaveChangesAsync(ct);
