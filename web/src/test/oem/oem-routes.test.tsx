@@ -368,10 +368,11 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(screen.getByText('等待处置的传递单')).toBeInTheDocument()
   })
 
-  it('完整 App 保留内部双向传递路由并使用当前内部 HTTP 会话', async () => {
+  it('内部传递列表通过当前 HTTP 会话应用互斥的发送人和接收人筛选', async () => {
+    const user = userEvent.setup()
     setInternalSession(['oem:transfer_create', 'oem:transfer_view'])
     const get = vi.spyOn(http, 'get').mockImplementation(async (url) => {
-      if (url === '/oem/transfers') return { data: { list: [], total: 0, page: 1, pageSize: 20 } } as never
+      if (url === '/oem/transfers') return { data: { list: [], total: 41, page: 1, pageSize: 20 } } as never
       if (url === '/departments' || url === '/oem/company-options') return { data: [] } as never
       throw new Error(`unexpected GET ${String(url)}`)
     })
@@ -387,7 +388,29 @@ describe('ODM/OEMA 前端入口与路由', () => {
 
     expect(await screen.findByText('SAA发出')).toBeInTheDocument()
     expect(screen.getByText('ODM/OEMA 发来')).toBeInTheDocument()
-    await waitFor(() => expect(get).toHaveBeenCalledWith('/oem/transfers', expect.objectContaining({ params: expect.any(Object) })))
+    const mine = screen.getByRole('checkbox', { name: '只看我发送的' })
+    const toMe = screen.getByRole('checkbox', { name: '只看发给我的' })
+    const expectListParams = (params: object) => waitFor(() => {
+      const listRequest = get.mock.calls.filter(([url]) => url === '/oem/transfers').at(-1)
+      expect(listRequest?.[1]?.params).toMatchObject(params)
+    })
+    await expectListParams({ page: 1, mine: undefined, toMe: undefined })
+
+    await user.click(mine)
+    expect(mine).toBeChecked()
+    await expectListParams({ page: 1, mine: 'true', toMe: undefined })
+    await user.click(await screen.findByLabelText('下一页'))
+    await expectListParams({ page: 2, mine: 'true', toMe: undefined })
+
+    await user.click(toMe)
+    expect(toMe).toBeChecked()
+    expect(mine).not.toBeChecked()
+    await expectListParams({ page: 1, mine: undefined, toMe: 'true' })
+
+    await user.click(mine)
+    expect(mine).toBeChecked()
+    expect(toMe).not.toBeChecked()
+    await expectListParams({ page: 1, mine: 'true', toMe: undefined })
   })
 
   it('厂商门户登录不依赖内部登录态', async () => {
@@ -445,6 +468,8 @@ describe('ODM/OEMA 前端入口与路由', () => {
     )
 
     expect(await screen.findByPlaceholderText('搜索传递记录')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '只看我发送的' })).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: '只看发给我的' })).not.toBeInTheDocument()
     expect(internalRefresh).not.toHaveBeenCalled()
     expect(useAuth.getState()).toMatchObject({ user: internalUser, token: null, booted: false })
 

@@ -426,6 +426,7 @@ export default function TransferListPage() {
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [mine, setMine] = useState(false)
+  const [toMe, setToMe] = useState(false)
   const [scope, setScope] = useState<'latest' | 'purged'>('latest')
   const [sender, setSender] = useState('')
   const [sentRange, setSentRange] = useState<[string, string] | undefined>()
@@ -434,7 +435,7 @@ export default function TransferListPage() {
   const [busyAction, setBusyAction] = useState<'download' | 'preview'>('download')
   // 勾选只跨页保留；换了筛选条件后，上一个视图里的行不再可见，也不该被批量下载带上，
   // 所以勾选记着它属于哪一组筛选条件，条件变了就视为空。
-  const filterKey = JSON.stringify([scope, direction, status, keyword, mine, companyId, sender, sentRange, departmentId])
+  const filterKey = JSON.stringify([scope, direction, status, keyword, mine, toMe, companyId, sender, sentRange, departmentId])
   const [selection, setSelection] = useState<{ key: string; ids: (string | number)[] }>({ key: '', ids: [] })
   const selectedIds = selection.key === filterKey ? selection.ids : EMPTY_SELECTION
   const setSelectedIds = (ids: (string | number)[]) => setSelection({ key: filterKey, ids })
@@ -444,9 +445,9 @@ export default function TransferListPage() {
   const tableHostRef = useRef<HTMLDivElement>(null)
 
   const transfers = useQuery({
-    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, companyId, scope, sender, sentRange, departmentId }],
+    queryKey: ['oem', ...queryScope, 'transfers', { page, pageSize, direction, status, keyword, mine, toMe, companyId, scope, sender, sentRange, departmentId }],
     queryFn: () => api.listTransfers({
-      page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, companyId, scope,
+      page, pageSize, direction: direction || undefined, status, keyword: keyword || undefined, mine, toMe, companyId, scope,
       sender: sender || undefined,
       departmentId,
       sentFrom: sentRange ? dayStart(sentRange[0]) : undefined,
@@ -634,7 +635,18 @@ export default function TransferListPage() {
           />}
           <DatePicker.RangePicker aria-label="提交时间" style={{ width: 240 }} placeholder={['提交时间起', '提交时间止']}
             onChange={(value) => { setSentRange(value?.length === 2 ? [value[0], value[1]] : undefined); setPage(1) }} />
-          <Checkbox checked={mine} onChange={(value) => { setMine(value); setPage(1) }}>只看我发送的</Checkbox>
+          <Checkbox checked={mine} onChange={(value) => {
+            setMine(value)
+            if (value) setToMe(false)
+            setPage(1)
+          }}>只看我发送的</Checkbox>
+          {realm === 'internal' && (
+            <Checkbox checked={toMe} onChange={(value) => {
+              setToMe(value)
+              if (value) setMine(false)
+              setPage(1)
+            }}>只看发给我的</Checkbox>
+          )}
           <Button icon={<IconDownload />} disabled={selectedIds.length === 0} loading={batching} onClick={() => void downloadSelected()}>
             批量下载{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
           </Button>

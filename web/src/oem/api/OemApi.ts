@@ -19,6 +19,7 @@ export interface TransferQuery {
   keyword?: string
   companyId?: number
   mine?: boolean
+  toMe?: boolean
   /** latest（默认）：仍有文件在服务器上；purged：全部文件已从服务器删除的历史记录。 */
   scope?: 'latest' | 'purged'
   sender?: string
@@ -88,7 +89,9 @@ export class OemApi {
 
   // Transfers
   listTransfers = (query: TransferQuery) =>
-    this.get<'GET /oem/transfers', Page<TransferSummary>>('/oem/transfers', { ...query, mine: query.mine ? 'true' : undefined })
+    this.get<'GET /oem/transfers', Page<TransferSummary>>('/oem/transfers', {
+      ...query, mine: query.mine ? 'true' : undefined, toMe: query.toMe ? 'true' : undefined,
+    })
   transfer = (id: number) => this.get<'GET /oem/transfers/{id}', TransferDetail>(`/oem/transfers/${id}`)
   createTransfer = (body: TransferCreate) => this.post<'POST /oem/transfers', TransferDetail>('/oem/transfers', body)
   updateTransfer = (id: number, body: TransferUpdate) => this.put<'PUT /oem/transfers/{id}', TransferDetail>(`/oem/transfers/${id}`, body)

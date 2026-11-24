@@ -80,6 +80,10 @@ public sealed class OemTransferReader(IDbContextFactory<YfDbContext> dbFactory)
         if (request.Query["mine"] == "true")
             query = current is OemAccountActor ? query.Where(transfer => transfer.OemSenderAccountId == current.Id)
                 : query.Where(transfer => transfer.InternalSenderUserId == current.Id);
+        if (request.Query["toMe"] == "true")
+            query = current is OemAccountActor ? query.Where(transfer => transfer.Direction == TransferDirections.InternalToOem)
+                : query.Where(transfer => transfer.Direction == TransferDirections.OemToInternal
+                    && db.OemTransferInternalRecipients.Any(recipient => recipient.TransferId == transfer.Id && recipient.UserId == current.Id));
         if (departmentId is ulong selectedDepartment)
         {
             var departmentIds = await DepartmentSubtreeAsync(db, selectedDepartment, ct);
