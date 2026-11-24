@@ -115,7 +115,7 @@ async function openSendDialog(user: ReturnType<typeof userEvent.setup>) {
 
 async function enterWorkOrder(dialog: HTMLElement, user: ReturnType<typeof userEvent.setup>, realm: Realm = 'internal') {
   await user.type(within(dialog).getByRole('textbox', { name: '工令' }), workOrder.workOrderNo)
-  await within(dialog).findByText(realm === 'internal' ? '发送给：甲厂 · 客户甲' : '发送给：客户甲')
+  await within(dialog).findByText(realm === 'internal' ? '发送给：甲厂 · 客户甲' : '客户：客户甲')
 }
 
 async function openInternalDialog(user: ReturnType<typeof userEvent.setup>) {
