@@ -9,8 +9,11 @@ import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type ImportRowOutcome } from '../../components/ExcelImportDialog'
 import LoadError from '../../components/LoadError'
+import { OemProvider } from '../../oem/OemContext'
+import { useInternalOem } from '../../oem/useInternalOem'
 import { useAuth } from '../../store/auth'
 import type { ExcelImportRow, ExcelWorkbookSheet } from '../../utils/excelWorkbook'
+import ItemFilesPopover from '../components/ItemFilesPopover'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { normalizeImportDate } from '../importDate'
 import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
@@ -92,6 +95,8 @@ const today = () => {
 /** The outsourcing list (外协清单契约 → 页面). */
 export default function OutsourceListPage() {
   const permissions = useAuth((state) => state.permissions)
+  const oem = useInternalOem()
+  const filesScope = JSON.stringify(oem.queryScope)
   const canManage = permissions.includes(OUTSOURCE_PERMISSIONS.manage)
   const canSend = permissions.includes(OUTSOURCE_PERMISSIONS.send)
   const canDateImport = permissions.includes(OUTSOURCE_PERMISSIONS.dateImport)
@@ -331,6 +336,11 @@ export default function OutsourceListPage() {
   const date = (value?: string | null) => value ?? ''
   // Built-in columns by key; their titles, order and presence come from the field settings (外协清单契约 → 栏位设定).
   const builtIn: Record<string, Partial<TableColumnProps<Item>>> = {
+    files: {
+      width: 120, align: 'center',
+      render: (_, item) => <ItemFilesPopover key={filesScope} fileCount={item.fileCount} purgedFileCount={item.purgedFileCount}
+        loadFiles={async () => (await http.get<ApiResponses['GET /outsource/items/{id}/files']>(`/outsource/items/${item.id}/files`)).data} />,
+    },
     outsourceDate: { dataIndex: 'outsourceDate', width: 110 },
     status: { width: 80, align: 'center', render: (_, item) => <Tag color={STATUS_TAG[item.status]?.color}>{STATUS_TAG[item.status]?.label ?? item.status}</Tag> },
     electricalHandoff: {
@@ -368,6 +378,7 @@ export default function OutsourceListPage() {
     const base: Partial<TableColumnProps<Item>> = builtIn[field.key]
       ?? { width: field.dataType === 'TEXT' ? 160 : 110, ellipsis: true, render: (_, item) => customText(field, item.customValues?.[field.key]) }
     const column: TableColumnProps<Item> = { ...base, key: field.key, title: field.label, fixed: field.pinned ? 'left' : undefined }
+    if (field.key === 'files') return column
     // A cell that differs from what was last mailed to the vendor is yellow, as in the mail and its Excel attachment.
     // Arco takes a cell's class from what its render function returns (`props`), not from `onCell`.
     return {
@@ -464,17 +475,19 @@ export default function OutsourceListPage() {
       </Space>
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
-      : <ResizableTable<Item> tableId="outsource-items" className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
-        rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : 'outsource-row--normal',
-          item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
-        rowSelection={canManage || canSend || editable.length > 0 ? {
-          type: 'checkbox', selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]),
-        } : undefined}
-        noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}
-        scroll={{ x: 2350, y: 'var(--page-table-scroll-y)' }}
-        pagination={{
-          current: page, pageSize, total, onChange: (next, size) => { setPage(next); setPageSize(size) },
-        }} />}
+      : <OemProvider value={oem}>
+        <ResizableTable<Item> tableId="outsource-items" className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
+          rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : 'outsource-row--normal',
+            item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
+          rowSelection={canManage || canSend || editable.length > 0 ? {
+            type: 'checkbox', selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]),
+          } : undefined}
+          noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}
+          scroll={{ x: 2350, y: 'var(--page-table-scroll-y)' }}
+          pagination={{
+            current: page, pageSize, total, onChange: (next, size) => { setPage(next); setPageSize(size) },
+          }} />
+      </OemProvider>}
     <ItemHistoryDrawer item={history} onClose={() => setHistory(null)} />
     <EditDialog item={editing} vendors={vendors} types={types} fields={editable} onClose={() => setEditing(null)}
       onSaved={async () => { const ids = editing ? [editing.id] : []; setEditing(null); await load(); offerMail(ids) }} />

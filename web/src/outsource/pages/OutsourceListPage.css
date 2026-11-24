@@ -86,3 +86,64 @@
 .outsource-table .outsource-row--closed > .arco-table-td {
   color: var(--color-text-3);
 }
+
+.outsource-files-light {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-inline-end: 6px;
+  border-radius: 50%;
+  background: var(--color-text-3);
+}
+
+.outsource-files-light--available {
+  background: rgb(var(--green-6));
+}
+
+.outsource-files-popover {
+  width: min(440px, calc(100vw - 48px));
+}
+
+.outsource-files-list {
+  max-height: min(360px, 55vh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.outsource-files-row {
+  padding: 8px 0;
+  overflow-wrap: anywhere;
+}
+
+.outsource-files-row + .outsource-files-row {
+  border-top: 1px solid var(--color-border-2);
+}
+
+.outsource-files-summary,
+.outsource-files-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.outsource-files-summary > span:first-child {
+  font-weight: 500;
+  min-width: 0;
+}
+
+.outsource-files-details {
+  margin-top: 4px;
+  color: var(--color-text-2);
+  font-size: 12px;
+}
+
+.outsource-files-name--purged {
+  color: var(--color-text-3);
+}
+
+.outsource-files-actions {
+  margin-inline-start: auto;
+}

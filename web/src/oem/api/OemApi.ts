@@ -79,6 +79,7 @@ export class OemApi {
   outsourceItems = (query: { page: number; pageSize: number; keyword?: string; includeClosed?: boolean }) =>
     this.get<'GET /oem/outsource-items', ApiResponses['GET /oem/outsource-items']>('/oem/outsource-items',
       { ...query, keyword: query.keyword || undefined, includeClosed: query.includeClosed ? 'true' : undefined })
+  itemFiles = (id: number) => this.get<'GET /oem/outsource-items/{id}/files', Api.OutsourceItemFilesResponse>(`/oem/outsource-items/${id}/files`)
   setOutsourceElectricalHandoff = (id: number, body: Api.OutsourceElectricalHandoffRequest) =>
     this.post<'POST /oem/outsource-items/{id}/electrical-handoff', Api.OutsourceVendorRow>(`/oem/outsource-items/${id}/electrical-handoff`, body)
   outsourceExport = async (query: { keyword?: string; includeClosed?: boolean }) =>
