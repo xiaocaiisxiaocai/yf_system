@@ -114,12 +114,12 @@ export default function PortalOutsourcePage() {
       title: column.title, key: column.key, width: WIDTHS[column.key] ?? 110, ellipsis: true,
       fixed: FIXED.has(column.key) ? 'left' as const : undefined,
       align: CENTERED.has(column.key) ? 'center' as const : undefined,
-      render: (_: unknown, row: Row) => row.values[column.key] ?? '',
+      render: (_: unknown, row: Row) => row.values[column.key] ?? (column.key === 'electricalHandoff' ? '—' : ''),
     }),
     {
       title: '操作', width: 112, align: 'center', fixed: 'right',
       render: (_, row) => actionSlots([
-        <Button key="handoff" type="text" size="mini" disabled={row.closed || saving || loading} onClick={() => {
+        row.canElectricalHandoff && <Button key="handoff" type="text" size="mini" disabled={saving || loading} onClick={() => {
           setChanging(row)
           setSignerDraft((draft) => draft.itemId === row.id ? draft : { itemId: row.id, name: '' })
         }}>{handoffLabel(row.electricalHandoff)}</Button>,

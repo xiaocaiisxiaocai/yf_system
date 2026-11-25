@@ -23,7 +23,8 @@ public sealed class MigrationRoundTripTests
     private const string RenameSupervisor = "20261124032519_RenameOutsourceMechanicalSupervisor";
     private const string BeforeOutsourceTransferLink = "20261124075430_RestoreOutsourceSectionLabel";
     private const string BeforeOutsourceFilesField = "20261124083731_AddOutsourceTransferLink";
-    private const string Latest = "20261124093646_AddOutsourceFilesField";
+    private const string BeforeOutsourceTypeElectricalHandoff = "20261124093646_AddOutsourceFilesField";
+    private const string Latest = "20261125015533_AddOutsourceTypeElectricalHandoff";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -176,7 +177,7 @@ public sealed class MigrationRoundTripTests
         }
 
         var before = await KeysAsync();
-        await migrator.MigrateAsync(Latest, ct);
+        await migrator.MigrateAsync(BeforeOutsourceTypeElectricalHandoff, ct);
         var after = await KeysAsync();
         Assert.Equal(before.ToList().IndexOf("workOrderNo") + 1, Array.IndexOf(after, "files"));
         Assert.Equal(before, after.Where(x => x != "files"));
@@ -191,6 +192,35 @@ public sealed class MigrationRoundTripTests
 
         await migrator.MigrateAsync(BeforeOutsourceFilesField, ct);
         Assert.Equal(before, await KeysAsync());
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AddOutsourceTypeElectricalHandoffDefaultsExistingAndNewTypesToAllowed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_type_handoff", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(BeforeOutsourceTypeElectricalHandoff, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO outsource_types(code, name, status) VALUES ('LEGACY-ACTIVE', '启用类型', 'ACTIVE'),
+                ('LEGACY-DISABLED', '停用类型', 'DISABLED')
+            """, ct);
+        var before = await SchemaAsync(database, ct);
+
+        await migrator.MigrateAsync(Latest, ct);
+        await database.ExecuteAsync("INSERT INTO outsource_types(code, name) VALUES ('NEW-TYPE', '新增类型')", ct);
+        await using (var connection = await database.Database.OpenAsync(ct))
+        {
+            var allowed = await connection.QueryAsync<bool>(new CommandDefinition("""
+                SELECT allow_electrical_handoff FROM outsource_types
+                WHERE code IN ('LEGACY-ACTIVE', 'LEGACY-DISABLED', 'NEW-TYPE')
+                """, cancellationToken: ct));
+            Assert.Equal([true, true, true], allowed);
+        }
+
+        await migrator.MigrateAsync(BeforeOutsourceTypeElectricalHandoff, ct);
+        Assert.Equal(before, await SchemaAsync(database, ct));
     }
 
     [Fact(Timeout = 180_000)]

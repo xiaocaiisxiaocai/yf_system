@@ -78,14 +78,19 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, ct);
-        var type = new OutsourceType { Code = input.Code, Name = input.Name, SortNo = input.SortNo, Status = AccountStatuses.Active };
+        var type = new OutsourceType
+        {
+            Code = input.Code, Name = input.Name, SortNo = input.SortNo, Status = AccountStatuses.Active,
+            AllowElectricalHandoff = request.AllowElectricalHandoff ?? true,
+        };
         context.OutsourceTypes.Add(type);
         await SaveUniqueAsync(context, "已有相同代码的外发类型", ct);
         await WriteAuditAsync(context, actor, "OUTSOURCE_TYPE_CREATE", "outsource_type", type.Id, new
         {
             targetName = Label(type.Code, type.Name),
             changes = AuditChange.OnlyChanged(new AuditChange("code", "类型代码", null, type.Code),
-                new AuditChange("name", "中文名称", null, type.Name)),
+                new AuditChange("name", "中文名称", null, type.Name),
+                new AuditChange("allowElectricalHandoff", "允许转迅得电控", null, type.AllowElectricalHandoff)),
         }, ct);
         await transaction.CommitAsync(ct);
         return Json(await context.OutsourceTypes.AsNoTracking().SingleAsync(x => x.Id == type.Id, ct), []);
@@ -98,13 +103,15 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, ct);
         var before = await LockTypeAsync(context, id, ct);
+        var allowElectricalHandoff = request.AllowElectricalHandoff ?? before.AllowElectricalHandoff;
         if (await context.OutsourceTypes.AnyAsync(x => x.Code == input.Code && x.Id != id, ct))
             throw ApiException.Conflict("已有相同代码的外发类型");
         try
         {
             await context.OutsourceTypes.Where(x => x.Id == id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.Code, input.Code).SetProperty(x => x.Name, input.Name)
-                .SetProperty(x => x.SortNo, input.SortNo), ct);
+                .SetProperty(x => x.SortNo, input.SortNo)
+                .SetProperty(x => x.AllowElectricalHandoff, allowElectricalHandoff), ct);
         }
         catch (MySqlException error) when (error.Number == 1062) { throw ApiException.Conflict("已有相同代码的外发类型"); }
         await WriteAuditAsync(context, actor, "OUTSOURCE_TYPE_UPDATE", "outsource_type", id, new
@@ -112,7 +119,8 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
             targetName = Label(input.Code, input.Name),
             changes = AuditChange.OnlyChanged(new AuditChange("code", "类型代码", before.Code, input.Code),
                 new AuditChange("name", "中文名称", before.Name, input.Name),
-                new AuditChange("sortNo", "排序", before.SortNo, input.SortNo)),
+                new AuditChange("sortNo", "排序", before.SortNo, input.SortNo),
+                new AuditChange("allowElectricalHandoff", "允许转迅得电控", before.AllowElectricalHandoff, allowElectricalHandoff)),
         }, ct);
         var result = await TypeJsonAsync(context, id, ct);
         await transaction.CommitAsync(ct);
@@ -523,7 +531,7 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
     }
 
     private static OutsourceTypeResponse Json(OutsourceType type, IEnumerable<ulong> vendorIds) =>
-        new(type.Id, type.Code, type.Name, type.Status, type.SortNo, vendorIds.Order().ToArray());
+        new(type.Id, type.Code, type.Name, type.Status, type.SortNo, type.AllowElectricalHandoff, vendorIds.Order().ToArray());
 
     internal static string Label(string code, string name) => $"{code}【{name}】";
 

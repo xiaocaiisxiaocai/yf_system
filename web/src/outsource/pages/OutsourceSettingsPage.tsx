@@ -122,13 +122,19 @@ function TypesTab({ types, vendors, loading, reload }: {
 
   const startEdit = (type?: OutsourceType) => {
     setEditing(type ?? null); form.resetFields()
-    form.setFieldsValue(type ? { code: type.code, name: type.name, sortNo: type.sortNo } : { code: '', name: '', sortNo: nextSortNo(types) })
+    form.setFieldsValue({
+      code: type?.code ?? '', name: type?.name ?? '', sortNo: type?.sortNo ?? nextSortNo(types),
+      allowElectricalHandoff: type?.allowElectricalHandoff ?? true,
+    })
     setOpen(true)
   }
   const save = () => run(async () => {
     const values = await form.validate().catch(() => null)
     if (!values) return
-    const body = { code: values.code.trim(), name: values.name.trim(), sortNo: values.sortNo ?? 0 }
+    const body = {
+      code: values.code.trim(), name: values.name.trim(), sortNo: values.sortNo ?? 0,
+      allowElectricalHandoff: values.allowElectricalHandoff,
+    }
     if (editing) await http.put<ApiResponses['PUT /outsource/settings/types/{id}']>(`/outsource/settings/types/${editing.id}`, body)
     else await http.post<ApiResponses['POST /outsource/settings/types']>('/outsource/settings/types', body)
     Message.success('外发类型已保存'); setOpen(false); await reload()
@@ -150,6 +156,12 @@ function TypesTab({ types, vendors, loading, reload }: {
         ? <Space wrap size={4}>{type.vendorIds.map((id) => <Tag key={id}>{vendorName.get(id) ?? id}</Tag>)}</Space>
         : <span className="outsource-muted">未设置，任何厂商都无法匹配</span>,
     },
+    {
+      title: '转迅得电控', dataIndex: 'allowElectricalHandoff', width: 120, align: 'center' as const,
+      render: (_: unknown, type: OutsourceType) => <Tag color={type.allowElectricalHandoff ? 'green' : 'gray'}>
+        {type.allowElectricalHandoff ? '是' : '否'}
+      </Tag>,
+    },
     { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, type: OutsourceType) => <StatusTag status={type.status} /> },
     {
       title: '操作', width: 200, align: 'center' as const, render: (_: unknown, type: OutsourceType) => actionSlots([
@@ -168,7 +180,7 @@ function TypesTab({ types, vendors, loading, reload }: {
       <Button type="primary" icon={<IconPlus />} disabled={loading} onClick={() => startEdit()}>新增外发类型</Button>
     </div>
     <ResizableTable<OutsourceType> tableId="outsource-types" className="page-table" rowKey="id" loading={loading} data={types} pagination={false}
-      noDataElement={loading ? <span /> : <Empty description="暂无外发类型" />} scroll={{ x: 910, y: 'var(--page-table-scroll-y)' }}
+      noDataElement={loading ? <span /> : <Empty description="暂无外发类型" />} scroll={{ x: 1030, y: 'var(--page-table-scroll-y)' }}
       columns={columns as TableColumnProps<OutsourceType>[]} />
     <Modal className="form-dialog" title={editing ? '编辑外发类型' : '新增外发类型'} visible={open} onOk={save}
       onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
@@ -180,6 +192,9 @@ function TypesTab({ types, vendors, loading, reload }: {
         </Form.Item>
         <Form.Item field="name" label="中文名称" rules={[lengthRule('中文名称', 64)]}><Input maxLength={64} /></Form.Item>
         <Form.Item field="sortNo" label="排序号"><InputNumber min={0} max={9999} precision={0} style={{ width: '100%' }} /></Form.Item>
+        <Form.Item field="allowElectricalHandoff" label="允许转迅得电控" triggerPropName="checked">
+          <Switch aria-label="允许转迅得电控" />
+        </Form.Item>
         <EnterSubmit />
       </Form>
     </Modal>

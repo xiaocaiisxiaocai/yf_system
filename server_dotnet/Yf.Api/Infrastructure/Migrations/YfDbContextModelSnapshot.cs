@@ -1744,6 +1744,12 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
 
+                    b.Property<bool>("AllowElectricalHandoff")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true)
+                        .HasColumnName("allow_electrical_handoff");
+
                     b.Property<string>("Code")
                         .IsRequired()
                         .HasMaxLength(32)

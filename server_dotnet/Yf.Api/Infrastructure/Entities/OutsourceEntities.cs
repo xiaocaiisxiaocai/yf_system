@@ -46,6 +46,7 @@ public sealed class OutsourceType
     public string Name { get; set; } = null!;
     public string Status { get; set; } = null!;
     public int SortNo { get; set; }
+    public bool AllowElectricalHandoff { get; set; } = true;
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
@@ -288,6 +289,7 @@ public sealed class OutsourceTypeConfig : IEntityTypeConfiguration<OutsourceType
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(64).IsRequired();
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);
         b.Property(x => x.SortNo).HasColumnName("sort_no").HasDefaultValue(0);
+        b.Property(x => x.AllowElectricalHandoff).HasColumnName("allow_electrical_handoff").HasDefaultValue(true);
         b.Property(x => x.CreatedAt).HasColumnName("created_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
         b.Property(x => x.UpdatedAt).HasColumnName("updated_at").HasColumnType("datetime(3)").HasDefaultValueSql("CURRENT_TIMESTAMP(3)").ValueGeneratedOnAddOrUpdate();
         b.HasIndex(x => x.Code).IsUnique().HasDatabaseName("uk_outsource_types_code");

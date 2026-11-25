@@ -87,6 +87,81 @@ public sealed class OemOutsourceViewTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task VendorHandoffUsesTheActiveTypeSettingAndKeepsWithdrawalAvailable()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        var vendor = await host.CreateVendorAsync(admin, "外协厂商", "type_handoff_vendor", ct);
+        var company = await host.CompanyIdOfAsync("type_handoff_vendor", ct);
+        const string typesPath = "/api/v1/outsource/settings/types";
+        const string itemsPath = "/api/v1/oem/outsource-items";
+        var type = new { code = "HANDOFF", name = "电控设定", sortNo = 1 };
+        var typeId = (await admin.PostAsync(typesPath, type, ct).Ok()).Id();
+        var inactiveTypeId = (await admin.PostAsync(typesPath,
+            new { code = "INACTIVE", name = "旧类型", sortNo = 2, allowElectricalHandoff = false }, ct).Ok()).Id();
+        await admin.PutAsync($"{typesPath}/{inactiveTypeId}/status", new { status = "DISABLED" }, ct).Ok();
+
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync("""
+                INSERT INTO outsource_items(work_order_no,serial_no,outsource_date,vendor_id,type_code,status,closed_at,created_by) VALUES
+                  ('BLOCKED',1,'2026-11-04',@company,'handoff','NORMAL',NULL,1),
+                  ('HANDED-OFF',2,'2026-11-04',@company,'HANDOFF','NORMAL',NULL,1),
+                  ('EMPTY-TYPE',3,'2026-11-04',@company,NULL,'NORMAL',NULL,1),
+                  ('UNKNOWN-TYPE',4,'2026-11-04',@company,'UNKNOWN','NORMAL',NULL,1),
+                  ('INACTIVE-TYPE',5,'2026-11-04',@company,'INACTIVE','NORMAL',NULL,1),
+                  ('CLOSED',6,'2026-11-04',@company,'HANDOFF','NORMAL',UTC_TIMESTAMP(3),1);
+                """, new { company });
+        }
+
+        async Task<Dictionary<string, JsonNode>> RowsAsync() => (await vendor.GetAsync(itemsPath + "?includeClosed=true", ct).Ok())["list"]!
+            .AsArray().ToDictionary(row => row!["values"]!["workOrderNo"]!.GetValue<string>(), row => row!);
+        string HandoffPath(JsonNode row) => $"{itemsPath}/{row.Id()}/electrical-handoff";
+        var handoff = new { expected = false, handoff = true, signerName = "转交签名" };
+        var before = await RowsAsync();
+        Assert.Equal(true, before["BLOCKED"]["canElectricalHandoff"]?.GetValue<bool>());
+        Assert.Equal(false, before["CLOSED"]["canElectricalHandoff"]?.GetValue<bool>());
+        Assert.Equal("否", before["CLOSED"]["values"]!["electricalHandoff"]!.GetValue<string>());
+        var handedOff = await vendor.PostAsync(HandoffPath(before["HANDED-OFF"]), handoff, ct).Ok();
+        Assert.True(handedOff["electricalHandoff"]!.GetValue<bool>());
+
+        await admin.PutAsync($"{typesPath}/{typeId}", new { type.code, type.name, type.sortNo, allowElectricalHandoff = false }, ct).Ok();
+        var after = await RowsAsync();
+        var blocked = after["BLOCKED"];
+        Assert.Equal(false, blocked["canElectricalHandoff"]?.GetValue<bool>());
+        Assert.Null(blocked["values"]!["electricalHandoff"]);
+        Assert.Null(after["CLOSED"]["values"]!["electricalHandoff"]);
+        var blockedResult = await vendor.PostAsync(HandoffPath(blocked), handoff, ct).Status(HttpStatusCode.BadRequest);
+        Assert.Equal("该外发类型不支持转迅得电控", blockedResult.Json!["message"]!.GetValue<string>());
+        using (var export = await vendor.Http.GetAsync(itemsPath + "/export?keyword=BLOCKED", ct))
+        {
+            var sheet = await SheetAsync(export, ct);
+            Assert.Contains(Cell("BLOCKED"), sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain(Cell("否"), sheet, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(true, after["HANDED-OFF"]["canElectricalHandoff"]?.GetValue<bool>());
+        Assert.Equal("是", after["HANDED-OFF"]["values"]!["electricalHandoff"]!.GetValue<string>());
+        var withdrawn = await vendor.PostAsync(HandoffPath(after["HANDED-OFF"]),
+            new { expected = true, handoff = false, signerName = "撤回签名" }, ct).Ok();
+        Assert.False(withdrawn["electricalHandoff"]!.GetValue<bool>());
+        Assert.Equal(false, withdrawn["canElectricalHandoff"]?.GetValue<bool>());
+        Assert.Null(withdrawn["values"]!["electricalHandoff"]);
+        var final = await RowsAsync();
+        Assert.False(final["BLOCKED"]["electricalHandoff"]!.GetValue<bool>());
+        Assert.False(final["HANDED-OFF"]["electricalHandoff"]!.GetValue<bool>());
+        Assert.Equal(false, final["HANDED-OFF"]["canElectricalHandoff"]?.GetValue<bool>());
+
+        foreach (var legacy in new[] { "EMPTY-TYPE", "UNKNOWN-TYPE", "INACTIVE-TYPE" })
+        {
+            Assert.Equal(true, after[legacy]["canElectricalHandoff"]?.GetValue<bool>());
+            var turned = await vendor.PostAsync(HandoffPath(after[legacy]), handoff, ct).Ok();
+            Assert.True(turned["electricalHandoff"]!.GetValue<bool>());
+        }
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task VendorHandoffIsScopedAndVersionedAndQueuesOnlyItsOwnModuleMail()
     {
         var ct = TestContext.Current.CancellationToken;

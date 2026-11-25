@@ -1554,6 +1554,7 @@ export interface OutsourceTypeResponse {
   name: string
   status: string
   sortNo: number
+  allowElectricalHandoff: boolean
   vendorIds: Array<number>
 }
 
@@ -1561,6 +1562,7 @@ export interface OutsourceTypeUpsert {
   code?: string | null
   name?: string | null
   sortNo?: number | null
+  allowElectricalHandoff?: boolean | null
 }
 
 export interface OutsourceTypeVendorsRequest {
@@ -1618,6 +1620,7 @@ export interface OutsourceVendorRow {
   status: string
   closed: boolean
   electricalHandoff: boolean
+  canElectricalHandoff: boolean
   values: Record<string, string | null>
   fileCount: number
   purgedFileCount: number

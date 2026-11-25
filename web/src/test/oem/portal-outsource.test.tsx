@@ -13,10 +13,10 @@ const columns = [
   { key: 'electricalHandoff', title: '是否转迅得电控' },
   { key: 'workOrderNo', title: '工令' }, { key: 'files', title: '档案' }, { key: 'customer', title: '客户' }, { key: 'remark', title: '备注' },
 ]
-const row = (id: number, no: string, status: string, label: string, electricalHandoff = false, closed = false) => ({
-  id, status, closed, electricalHandoff, fileCount: 0, purgedFileCount: 0,
+const row = (id: number, no: string, status: string, label: string, electricalHandoff = false, closed = false, canElectricalHandoff = !closed) => ({
+  id, status, closed, electricalHandoff, canElectricalHandoff, fileCount: 0, purgedFileCount: 0,
   values: { serialNo: String(id), outsourceDate: '2026-11-04', status: label, workOrderNo: no, customer: '超穎', remark: null,
-    electricalHandoff: electricalHandoff ? '是' : '否' },
+    electricalHandoff: electricalHandoff ? '是' : closed || canElectricalHandoff ? '否' : null },
 })
 const page = (list: ReturnType<typeof row>[]) => ({ columns, list, total: list.length, page: 1, pageSize: 20 })
 
@@ -78,20 +78,28 @@ describe('ODM/OEMA 门户外协清单', () => {
     expect(fileRow.getByRole('button', { name: `下载 ${file.name}` })).toBeEnabled()
   })
 
-  it('按转交状态提供签名操作，两种状态的已完成记录均禁用操作', async () => {
+  it('仅允许的工令可签名转交，已转交可撤回，已完成隐藏操作', async () => {
     const user = userEvent.setup()
     const ordinary = row(1, 'A1', 'PAUSED', '暂停')
     const handedOff = row(1, 'A1', 'PAUSED', '暂停', true)
-    const closed = [row(2, 'A2', 'NORMAL', '正常', false, true), row(3, 'A3', 'CANCELLED', '取消', true, true)]
-    const outsourceItems = vi.fn().mockResolvedValueOnce(page([ordinary, ...closed]))
-      .mockResolvedValueOnce(page([handedOff, ...closed])).mockResolvedValue(page([ordinary, ...closed]))
-    const setOutsourceElectricalHandoff = vi.fn().mockResolvedValueOnce(handedOff).mockResolvedValueOnce(ordinary)
+    const withdrawn = row(1, 'A1', 'PAUSED', '暂停', false, false, false)
+    const otherRows = [
+      row(2, 'A2', 'NORMAL', '正常', false, true), row(3, 'A3', 'CANCELLED', '取消', true, true),
+      row(4, 'A4', 'NORMAL', '正常', false, false, false),
+    ]
+    const outsourceItems = vi.fn().mockResolvedValueOnce(page([ordinary, ...otherRows]))
+      .mockResolvedValueOnce(page([handedOff, ...otherRows])).mockResolvedValue(page([withdrawn, ...otherRows]))
+    const setOutsourceElectricalHandoff = vi.fn().mockResolvedValueOnce(handedOff).mockResolvedValueOnce(withdrawn)
     renderPortal({ outsourceItems, setOutsourceElectricalHandoff })
 
     const open = within((await screen.findByText('A1')).closest('tr')!)
     expect(open.getByText('否')).toBeInTheDocument()
-    expect(within(screen.getByText('A2').closest('tr')!).getByRole('button', { name: '转迅得电控' })).toBeDisabled()
-    expect(within(screen.getByText('A3').closest('tr')!).getByRole('button', { name: '撤回' })).toBeDisabled()
+    const blocked = within(screen.getByText('A4').closest('tr')!)
+    expect(blocked.getByText('—')).toBeInTheDocument()
+    expect(blocked.queryByText('否')).not.toBeInTheDocument()
+    expect(blocked.queryByRole('button', { name: '转迅得电控' })).not.toBeInTheDocument()
+    expect(within(screen.getByText('A2').closest('tr')!).queryByRole('button', { name: '转迅得电控' })).not.toBeInTheDocument()
+    expect(within(screen.getByText('A3').closest('tr')!).queryByRole('button', { name: '撤回' })).not.toBeInTheDocument()
     await user.click(open.getByRole('button', { name: '转迅得电控' }))
     const dialog = within(await screen.findByRole('dialog'))
     const confirm = dialog.getByRole('button', { name: '确认' })
@@ -115,7 +123,8 @@ describe('ODM/OEMA 门户外协清单', () => {
     await user.type(withdrawDialog.getByRole('textbox', { name: '签名' }), '赵一')
     await user.click(withdrawDialog.getByRole('button', { name: '确认' }))
     expect(setOutsourceElectricalHandoff).toHaveBeenLastCalledWith(1, { handoff: false, expected: true, signerName: '赵一' })
-    await waitFor(() => expect(open.getByText('否')).toBeInTheDocument())
+    await waitFor(() => expect(open.getByText('—')).toBeInTheDocument())
+    expect(open.queryByRole('button', { name: '转迅得电控' })).not.toBeInTheDocument()
   })
 
   it('遇到 40903 刷新列表，保留签名，下一步由厂商确认', async () => {
