@@ -27,7 +27,7 @@ function setInternalSession(permissions: string[]) {
 const vendors = [{
   id: 1, name: '鼎亚', status: 'ACTIVE',
 }]
-const types = [{ id: 5, code: 'OEMA', name: '进料+制造', status: 'ACTIVE', sortNo: 10, vendorIds: [1] }]
+const types = [{ id: 5, code: 'OEMA', name: '进料+制造', status: 'ACTIVE', sortNo: 10, vendorIds: [1], allowElectricalHandoff: true }]
 const aliases = [
   { id: 31, fullName: '庆鼎精密电子(淮安)有限公司', shortName: '庆鼎', manual: false, updatedAt: '2026-11-17T06:00:00.000Z' },
   { id: 32, fullName: '超颖电子电路股份有限公司', shortName: '超穎', manual: true, updatedAt: '2026-11-17T06:00:00.000Z' },
@@ -79,6 +79,53 @@ describe('外协清单入口与设定', () => {
 
     await user.click(screen.getByRole('tab', { name: '默认抄送' }))
     expect(await screen.findByText('生管甲')).toBeInTheDocument()
+  })
+
+  it('外发类型默认允许转迅得电控，可在编辑时关闭，列表显示设定值', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    let savedTypes = [...types]
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/types') ? savedTypes : [],
+    } as never))
+    const post = vi.spyOn(http, 'post').mockImplementation(async () => {
+      const created = { ...types[0], id: 6, code: 'ENG', name: '工程', sortNo: 20 }
+      savedTypes = [...savedTypes, created]
+      return { data: created } as never
+    })
+    const put = vi.spyOn(http, 'put').mockImplementation(async () => {
+      const updated = { ...types[0], allowElectricalHandoff: false }
+      savedTypes = savedTypes.map((type) => type.id === updated.id ? updated : type)
+      return { data: updated } as never
+    })
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+
+    const original = within((await screen.findByText('OEMA【进料+制造】')).closest('tr')!)
+    expect(screen.getByRole('columnheader', { name: /^转迅得电控/ })).toBeInTheDocument()
+    expect(original.getByText('是')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '新增外发类型' }))
+    const create = within(await screen.findByRole('dialog', { name: '新增外发类型' }))
+    expect(create.getByRole('switch', { name: '允许转迅得电控' })).toBeChecked()
+    await user.type(create.getByRole('textbox', { name: '类型代码' }), 'ENG')
+    await user.type(create.getByRole('textbox', { name: '中文名称' }), '工程')
+    await user.click(create.getByRole('button', { name: '创建' }))
+    expect(post).toHaveBeenCalledWith('/outsource/settings/types', { code: 'ENG', name: '工程', sortNo: 20, allowElectricalHandoff: true })
+    expect(within((await screen.findByText('ENG【工程】')).closest('tr')!).getByText('是')).toBeInTheDocument()
+
+    await user.click(original.getByRole('button', { name: '编辑' }))
+    const edit = within(await screen.findByRole('dialog', { name: '编辑外发类型' }))
+    const handoff = edit.getByRole('switch', { name: '允许转迅得电控' })
+    expect(handoff).toBeChecked()
+    await user.click(handoff)
+    expect(handoff).not.toBeChecked()
+    await user.click(edit.getByRole('button', { name: '保存' }))
+    expect(put).toHaveBeenCalledWith('/outsource/settings/types/5', { code: 'OEMA', name: '进料+制造', sortNo: 10, allowElectricalHandoff: false })
+    expect(await original.findByText('否')).toBeInTheDocument()
+
+    await user.click(original.getByRole('button', { name: '编辑' }))
+    expect(within(await screen.findByRole('dialog', { name: '编辑外发类型' }))
+      .getByRole('switch', { name: '允许转迅得电控' })).not.toBeChecked()
   })
 
   it('默认抄送的人员选项列出全部内部账号，可本地搜索，未填邮箱的不可选', async () => {

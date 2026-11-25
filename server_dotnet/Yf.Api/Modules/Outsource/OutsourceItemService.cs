@@ -737,7 +737,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
 /// <summary>Type dictionary, vendor mapping and vendor names, loaded once per request to resolve items.</summary>
 internal sealed class OutsourceReference
 {
-    private readonly Dictionary<string, (ulong Id, string Code, string Name)> types;
+    private readonly Dictionary<string, (ulong Id, string Code, string Name, bool AllowElectricalHandoff)> types;
     private readonly HashSet<(ulong TypeId, ulong VendorId)> mapping;
     public IReadOnlyDictionary<ulong, string> VendorNames { get; }
     public IReadOnlySet<ulong> ActiveVendorIds { get; }
@@ -750,7 +750,7 @@ internal sealed class OutsourceReference
     /// <summary>Directory and custom values for the items loaded in this request.</summary>
     private readonly Dictionary<ulong, (string? Supervisor, Dictionary<string, string?> Custom)> values = [];
 
-    private OutsourceReference(Dictionary<string, (ulong, string, string)> types, HashSet<(ulong, ulong)> mapping,
+    private OutsourceReference(Dictionary<string, (ulong, string, string, bool)> types, HashSet<(ulong, ulong)> mapping,
         Dictionary<ulong, string> vendorNames, HashSet<ulong> activeVendorIds,
         Dictionary<string, (string FullName, string ShortName)> customerShortNames, OutsourceFieldLayout layout)
     {
@@ -772,12 +772,12 @@ internal sealed class OutsourceReference
     {
         // Only active types match; a disabled type behaves like an unknown one until it is re-enabled.
         var types = await context.OutsourceTypes.AsNoTracking().Where(x => x.Status == AccountStatuses.Active)
-            .Select(x => new { x.Id, x.Code, x.Name }).ToArrayAsync(ct);
+            .Select(x => new { x.Id, x.Code, x.Name, x.AllowElectricalHandoff }).ToArrayAsync(ct);
         var mapping = await context.OutsourceTypeVendors.AsNoTracking().Select(x => new { x.TypeId, x.VendorId }).ToArrayAsync(ct);
         var vendors = await context.OemCompanies.AsNoTracking().Select(x => new { x.Id, x.Name, x.Status }).ToArrayAsync(ct);
         var aliases = await context.OutsourceCustomerAliases.AsNoTracking().Select(x => new { x.FullName, x.ShortName }).ToArrayAsync(ct);
         var layout = await OutsourceFieldLayout.LoadAsync(context, ct);
-        return new(types.ToDictionary(x => Normalize(x.Code)!, x => (x.Id, x.Code, x.Name)),
+        return new(types.ToDictionary(x => Normalize(x.Code)!, x => (x.Id, x.Code, x.Name, x.AllowElectricalHandoff)),
             mapping.Select(x => (x.TypeId, x.VendorId)).ToHashSet(),
             vendors.ToDictionary(x => x.Id, x => x.Name),
             vendors.Where(x => x.Status == AccountStatuses.Active).Select(x => x.Id).ToHashSet(),
@@ -838,8 +838,10 @@ internal sealed class OutsourceReference
         return value.ToUpperInvariant();
     }
 
-    public (ulong Id, string Code, string Name)? Find(string? raw) =>
+    public (ulong Id, string Code, string Name, bool AllowElectricalHandoff)? Find(string? raw) =>
         Normalize(raw) is { } key && types.TryGetValue(key, out var type) ? type : null;
+
+    public bool AllowsElectricalHandoff(string? typeCode) => Find(typeCode)?.AllowElectricalHandoff ?? true;
 
     public string Match(string? rawType, ulong vendorId) => Find(rawType) is not { } type
         ? OutsourceMatchStates.UnknownType

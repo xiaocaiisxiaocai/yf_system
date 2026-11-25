@@ -1,9 +1,12 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
 using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Outsource;
 using Yf.Api.Modules.Outsource.Ipms;
 using Yf.Api.Modules.Outsource.Ipms.Mes;
+using Yf.Api.Tests.Oem;
 
 namespace Yf.Api.Tests;
 
@@ -65,6 +68,41 @@ public sealed class OutsourceItemTypeTests
 
     private static OutsourceImportRequest Request(params (string No, string Vendor, string? Type)[] rows) =>
         new(rows.Select((row, index) => new OutsourceImportRow(index + 2, "2026-11-04", row.No, row.Vendor, row.Type)).ToArray());
+
+    [Fact(Timeout = 180_000)]
+    public async Task ElectricalHandoffTypeSettingDefaultsToAllowedAndAuditsChanges()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        const string path = "/api/v1/outsource/settings/types";
+        var input = new { code = "HANDOFF", name = "电控设定", sortNo = 1 };
+        var created = await admin.PostAsync(path, input, ct).Ok();
+        var id = created.Id();
+        Assert.Equal(true, created["allowElectricalHandoff"]?.GetValue<bool>());
+
+        var disabledAtCreation = await admin.PostAsync(path,
+            new { code = "NO-HANDOFF", name = "无电控", sortNo = 2, allowElectricalHandoff = false }, ct).Ok();
+        Assert.Equal(false, disabledAtCreation["allowElectricalHandoff"]?.GetValue<bool>());
+
+        var updated = await admin.PutAsync($"{path}/{id}",
+            new { input.code, input.name, input.sortNo, allowElectricalHandoff = false }, ct).Ok();
+        Assert.Equal(false, updated["allowElectricalHandoff"]?.GetValue<bool>());
+        var renamed = await admin.PutAsync($"{path}/{id}",
+            new { input.code, name = "改名后的电控设定", input.sortNo, allowElectricalHandoff = (bool?)null }, ct).Ok();
+        Assert.Equal(false, renamed["allowElectricalHandoff"]?.GetValue<bool>());
+        var listed = Assert.Single((await admin.GetAsync(path, ct).Ok()).AsArray(), row => row!.Id() == id)!;
+        Assert.Equal(false, listed["allowElectricalHandoff"]?.GetValue<bool>());
+
+        await using var connection = await host.OpenAsync(ct);
+        var audits = await connection.QueryAsync<(string Action, string Detail)>("""
+            SELECT action,detail FROM audit_logs WHERE target_type='outsource_type' AND target_id=@targetId ORDER BY id
+            """, new { targetId = id.ToString(CultureInfo.InvariantCulture) });
+        var changes = audits.SelectMany(audit => JsonNode.Parse(audit.Detail)!["changes"]!.AsArray()
+            .Where(change => change!["field"]!.GetValue<string>() == "allowElectricalHandoff")
+            .Select(change => (audit.Action, change!["before"]?.GetValue<bool>(), change["after"]?.GetValue<bool>())));
+        Assert.Equal([("OUTSOURCE_TYPE_CREATE", (bool?)null, (bool?)true), ("OUTSOURCE_TYPE_UPDATE", (bool?)true, (bool?)false)], changes);
+    }
 
     [Fact(Timeout = 180_000)]
     public async Task ImportRequiresAKnownTypeThatMatchesTheVendor()

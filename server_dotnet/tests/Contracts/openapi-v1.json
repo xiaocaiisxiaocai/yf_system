@@ -16814,6 +16814,7 @@
       },
       "OutsourceTypeResponse": {
         "required": [
+          "allowElectricalHandoff",
           "code",
           "id",
           "name",
@@ -16839,6 +16840,9 @@
           "sortNo": {
             "type": "integer",
             "format": "int32"
+          },
+          "allowElectricalHandoff": {
+            "type": "boolean"
           },
           "vendorIds": {
             "type": "array",
@@ -16869,6 +16873,10 @@
           "sortNo": {
             "type": "integer",
             "format": "int32",
+            "nullable": true
+          },
+          "allowElectricalHandoff": {
+            "type": "boolean",
             "nullable": true
           }
         },
@@ -17069,6 +17077,7 @@
       },
       "OutsourceVendorRow": {
         "required": [
+          "canElectricalHandoff",
           "closed",
           "electricalHandoff",
           "fileCount",
@@ -17090,6 +17099,9 @@
             "type": "boolean"
           },
           "electricalHandoff": {
+            "type": "boolean"
+          },
+          "canElectricalHandoff": {
             "type": "boolean"
           },
           "values": {

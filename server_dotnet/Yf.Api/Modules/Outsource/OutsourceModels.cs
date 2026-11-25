@@ -1,8 +1,11 @@
+using System.Text.Json.Serialization;
+
 namespace Yf.Api.Modules.Outsource;
 
 
 
-public sealed record OutsourceTypeUpsert(string? Code, string? Name, int? SortNo);
+public sealed record OutsourceTypeUpsert(string? Code, string? Name, int? SortNo,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? AllowElectricalHandoff = null);
 
 public sealed record OutsourceTypeVendorsRequest(ulong[]? VendorIds);
 
@@ -32,7 +35,7 @@ public sealed record OutsourceCustomerSyncResponse(int Rows, int Customers, int 
 /// <summary>An ODM/OEMA company used as an outsourcing vendor (its contacts are maintained and read in the ODM/OEMA directory).</summary>
 public sealed record OutsourceVendorResponse(ulong Id, string Name, string Status);
 
-public sealed record OutsourceTypeResponse(ulong Id, string Code, string Name, string Status, int SortNo, ulong[] VendorIds);
+public sealed record OutsourceTypeResponse(ulong Id, string Code, string Name, string Status, int SortNo, bool AllowElectricalHandoff, ulong[] VendorIds);
 
 public sealed record OutsourceCcUserResponse(ulong UserId, string EmployeeNo, string RealName, string Email, string Status);
 public sealed record OutsourceDefaultCcResponse(ulong UserId, string EmployeeNo, string RealName, string Email, string Status,

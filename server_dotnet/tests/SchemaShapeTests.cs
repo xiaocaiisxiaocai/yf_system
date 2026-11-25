@@ -90,6 +90,7 @@ public sealed class SchemaShapeTests
         "20261124075430_RestoreOutsourceSectionLabel",
         "20261124083731_AddOutsourceTransferLink",
         "20261124093646_AddOutsourceFilesField",
+        "20261125015533_AddOutsourceTypeElectricalHandoff",
     ];
 
     [Fact]
