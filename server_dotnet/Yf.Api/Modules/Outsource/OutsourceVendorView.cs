@@ -64,7 +64,9 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).ToArrayAsync(ct);
         await reference.LoadValuesAsync(db, rows, ct);
         var content = OutsourceWorkbook.Build(rows.Select(reference.Json).ToArray(), null,
-            reference.Layout.WorkbookFields(vendor: true), forVendor: true);
+            reference.Layout.WorkbookFields(vendor: true).Select(field => field.Key == OutsourceBuiltInFields.ElectricalHandoffKey
+                ? field with { Value = item => HandoffAvailable(reference, item) ? field.Value(item) : null }
+                : field).ToArray(), forVendor: true);
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         return new(content, $"外协清单_{today}.xlsx");
     }
@@ -142,9 +144,13 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         return (db, reference, items, account.CompanyId);
     }
 
+    /// <summary>Handing off is offered (and its state shown) unless the type forbids it and the item is not already handed off.</summary>
+    private static bool HandoffAvailable(OutsourceReference reference, OutsourceItemResponse item) =>
+        item.ElectricalHandoff || reference.AllowsElectricalHandoff(item.TypeCode);
+
     private static OutsourceVendorRow Row(OutsourceReference reference, OutsourceItemResponse item, (int FileCount, int PurgedFileCount) counts)
     {
-        var handoffAvailable = item.ElectricalHandoff || reference.AllowsElectricalHandoff(item.TypeCode);
+        var handoffAvailable = HandoffAvailable(reference, item);
         var values = new Dictionary<string, string?>(StringComparer.Ordinal)
             { [SerialKey] = item.SerialNo.ToString(CultureInfo.InvariantCulture) };
         foreach (var column in reference.Layout.VendorColumns)

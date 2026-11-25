@@ -134,6 +134,12 @@ public sealed class OemOutsourceViewTests
         Assert.Null(after["CLOSED"]["values"]!["electricalHandoff"]);
         var blockedResult = await vendor.PostAsync(HandoffPath(blocked), handoff, ct).Status(HttpStatusCode.BadRequest);
         Assert.Equal("该外发类型不支持转迅得电控", blockedResult.Json!["message"]!.GetValue<string>());
+        using (var export = await vendor.Http.GetAsync(itemsPath + "/export?keyword=BLOCKED", ct))
+        {
+            var sheet = await SheetAsync(export, ct);
+            Assert.Contains(Cell("BLOCKED"), sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain(Cell("否"), sheet, StringComparison.Ordinal);
+        }
 
         Assert.Equal(true, after["HANDED-OFF"]["canElectricalHandoff"]?.GetValue<bool>());
         Assert.Equal("是", after["HANDED-OFF"]["values"]!["electricalHandoff"]!.GetValue<string>());
