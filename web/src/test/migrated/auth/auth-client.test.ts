@@ -17,6 +17,7 @@ function deferred<T>() {
 
 function createAxiosHarness() {
   const requestHandlers: Array<(config: RequestConfig) => RequestConfig> = []
+  const responseSuccesses: Array<(response: any) => any> = []
   const responseFailures: Array<(error: any) => Promise<unknown>> = []
   const replays: RequestConfig[] = []
   const errors: string[] = []
@@ -30,7 +31,10 @@ function createAxiosHarness() {
       interceptors: {
         request: { use: (fulfilled: (config: RequestConfig) => RequestConfig) => { requestHandlers.push(fulfilled) } },
         response: {
-          use: (_fulfilled: unknown, rejected: (error: any) => Promise<unknown>) => { responseFailures.push(rejected) },
+          use: (fulfilled: (response: any) => any, rejected: (error: any) => Promise<unknown>) => {
+            responseSuccesses.push(fulfilled)
+            responseFailures.push(rejected)
+          },
         },
       },
     },
@@ -41,7 +45,7 @@ function createAxiosHarness() {
     get: vi.fn(),
     isAxiosError: vi.fn((error: any) => error?.isAxiosError === true),
   }
-  return { axios, http, requestHandlers, responseFailures, replays, errors }
+  return { axios, http, requestHandlers, responseSuccesses, responseFailures, replays, errors }
 }
 
 function completeRefreshPayload(token = 'refreshed-token', id = 7) {
@@ -656,5 +660,136 @@ describe('auth client migration', () => {
     expect(loaded.client.isOemPortalPath('/oem-portal')).toBe(true)
     expect(loaded.client.isOemPortalPath('/oem-portal/transfers/1')).toBe(true)
     expect(loaded.client.isOemPortalPath('/oem')).toBe(false)
+  })
+
+  it('SessionChangedError from request or response success interceptor never triggers a network error toast', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'token-A', 7, 2)
+
+    let requestErr: unknown
+    try {
+      loaded.harness.requestHandlers[0]({ url: '/projects', headers: {}, authGeneration: 1 })
+    } catch (error) {
+      requestErr = error
+    }
+    expect(requestErr).toBeInstanceOf(loaded.client.SessionChangedError)
+    await expect(loaded.harness.responseFailures[0](requestErr)).rejects.toBe(requestErr)
+
+    let responseErr: unknown
+    try {
+      loaded.harness.responseSuccesses[0]({ data: {}, config: { url: '/projects', headers: {}, authGeneration: 1 } })
+    } catch (error) {
+      responseErr = error
+    }
+    expect(responseErr).toBeInstanceOf(loaded.client.SessionChangedError)
+    await expect(loaded.harness.responseFailures[0](responseErr)).rejects.toBe(responseErr)
+    expect(loaded.harness.errors).toEqual([])
+  })
+
+  it('boot unavailable marks bootUnavailable and retryBootAuth single-flights recovery or clears on rejection', async () => {
+    const loaded = await loadClient()
+    seedBoot(loaded.auth)
+    loaded.harness.axios.post.mockRejectedValueOnce({ isAxiosError: true, message: 'Network Error', code: 'ERR_NETWORK' })
+
+    await loaded.client.bootAuth()
+    expect(loaded.auth.useAuth.getState()).toMatchObject({
+      token: null, user: { id: 7 }, booted: true, bootUnavailable: true, generation: 4,
+    })
+
+    await settle()
+    const retryDeferred = deferred<{ data: ReturnType<typeof completeRefreshPayload> }>()
+    loaded.harness.axios.post.mockReturnValueOnce(retryDeferred.promise)
+    const firstRetry = loaded.client.retryBootAuth()
+    const secondRetry = loaded.client.retryBootAuth()
+    await vi.waitFor(() => expect(loaded.harness.axios.post).toHaveBeenCalledTimes(2))
+    retryDeferred.resolve({ data: completeRefreshPayload('recovered-token', 7) })
+    await Promise.all([firstRetry, secondRetry])
+
+    expect(loaded.auth.useAuth.getState()).toMatchObject({
+      token: 'recovered-token', user: { id: 7 }, booted: true, bootUnavailable: false, generation: 4,
+    })
+
+    // A rejected retry clears persisted session and bootUnavailable.
+    await settle()
+    loaded.auth.useAuth.setState({ token: null, user: { id: 7 } as any, booted: true, bootUnavailable: true, generation: 4 })
+    loaded.harness.axios.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: 401 } })
+    await loaded.client.retryBootAuth()
+    expect(loaded.auth.useAuth.getState()).toMatchObject({
+      token: null, user: null, bootUnavailable: false, generation: 5,
+    })
+  })
+
+  it('403 profile refresh ignores malformed payloads and throttles bursts within the cooldown window', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'token-A', 7, 1)
+
+    // Malformed payload does not overwrite store state.
+    loaded.harness.axios.get.mockResolvedValueOnce({ data: '<html>proxy error</html>' })
+    await forbidden(loaded).catch(rejected)
+    await settle()
+    expect(loaded.harness.axios.get).toHaveBeenCalledTimes(1)
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-A', user: { id: 7 } })
+
+    // Second 403 for the same (generation, token) within 5000ms is suppressed by cooldown.
+    loaded.harness.axios.get.mockResolvedValueOnce(profileResponse(9))
+    await forbidden(loaded).catch(rejected)
+    await settle()
+    expect(loaded.harness.axios.get).toHaveBeenCalledTimes(1)
+
+    // Advancing clock beyond cooldown allows a fresh profile refresh.
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6_000)
+    await forbidden(loaded).catch(rejected)
+    await settle()
+    expect(loaded.harness.axios.get).toHaveBeenCalledTimes(2)
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-A', user: { id: 9 } })
+    nowSpy.mockRestore()
+  })
+
+  it('401 replays immediately without rotating cookie when store already has a newer token, and auto-refreshes PUT /auth/profile', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'token-1', 7, 3)
+    const staleConfig = loaded.harness.requestHandlers[0]({ url: '/projects', method: 'GET', headers: {} })
+    // Another request already rotated the token within the same generation.
+    loaded.auth.useAuth.getState().setToken('token-2')
+
+    await loaded.harness.responseFailures[0]({
+      config: staleConfig, response: { status: 401, data: { message: 'expired' } }, message: 'expired',
+    })
+    expect(loaded.harness.axios.post).not.toHaveBeenCalled()
+    expect(loaded.harness.replays).toHaveLength(1)
+    expect(loaded.harness.replays[0]).toMatchObject({
+      url: '/projects', _retried: true, headers: { Authorization: 'Bearer token-2' },
+    })
+
+    // PUT /auth/profile is NOT excluded from 401 auto-refresh.
+    loaded.harness.axios.post.mockResolvedValueOnce({ data: completeRefreshPayload('token-3', 7) })
+    const profileConfig = loaded.harness.requestHandlers[0]({ url: '/auth/profile', method: 'PUT', headers: {} })
+    await loaded.harness.responseFailures[0]({
+      config: profileConfig, response: { status: 401, data: { message: 'expired' } }, message: 'expired',
+    })
+    expect(loaded.harness.axios.post).toHaveBeenCalledTimes(1)
+    expect(loaded.harness.replays).toHaveLength(2)
+    expect(loaded.harness.replays[1]).toMatchObject({
+      url: '/auth/profile', _retried: true, headers: { Authorization: 'Bearer token-3' },
+    })
+
+    // PUT /auth/password remains excluded from 401 auto-refresh.
+    window.history.replaceState({}, '', '/login')
+    const passwordConfig = loaded.harness.requestHandlers[0]({ url: '/auth/password', method: 'PUT', headers: {} })
+    const pwErr = { config: passwordConfig, response: { status: 401, data: { message: 'wrong password' } }, message: '401' }
+    await expect(loaded.harness.responseFailures[0](pwErr)).rejects.toBe(pwErr)
+    expect(loaded.harness.axios.post).toHaveBeenCalledTimes(1)
+  })
+
+  it('40303 marks mustChangePassword without error toast or hard reload', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'token-A', 7, 2)
+    window.history.replaceState({}, '', '/projects')
+    const config = loaded.harness.requestHandlers[0]({ url: '/projects', method: 'GET', headers: {} })
+    const error = { config, response: { status: 403, data: { code: 40303, message: '请先修改密码' } }, message: '403' }
+
+    await expect(loaded.harness.responseFailures[0](error)).rejects.toBe(error)
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'token-A', mustChangePassword: true })
+    expect(loaded.harness.errors).toEqual([])
   })
 })

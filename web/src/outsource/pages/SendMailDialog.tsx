@@ -34,6 +34,7 @@ export default function SendMailDialog({ itemIds, onClose, onSent }: {
   const [error, setError] = useState<string | null>(null)
   const [extra, setExtra] = useState<Record<string, Extra>>({})
   const [sending, setSending] = useState(false)
+  const inFlight = useRef(false)
   const requestKey = useRef(newRequestKey())
 
   const load = useCallback(async (ids: number[]) => {
@@ -55,33 +56,38 @@ export default function SendMailDialog({ itemIds, onClose, onSent }: {
   }, [itemIds, load])
 
   const send = async () => {
-    if (!preview || !itemIds || sending) return
-    const risky = preview.mails.filter((mail) => mail.customerCount > 1 && (extra[mail.key]?.emails.length ?? 0) > 0)
-    if (risky.length > 0) {
-      const confirmed = await new Promise<boolean>((resolve) => Modal.confirm({
-        title: '确认抄送外部地址？',
-        content: risky.map((mail) => `${mail.vendorName}：本封含 ${mail.customerCount} 个客户的工令`).join('；'),
-        okText: '仍要发送', cancelText: '返回修改',
-        onOk: () => resolve(true), onCancel: () => resolve(false),
-      }))
-      if (!confirmed) return
-    }
-    setSending(true)
+    if (!preview || !itemIds || sending || inFlight.current) return
+    inFlight.current = true
     try {
-      await http.post<ApiResponses['POST /outsource/mails/send']>('/outsource/mails/send', {
-        itemIds, fingerprint: preview.fingerprint, requestKey: requestKey.current,
-        extraCc: Object.entries(extra).map(([key, value]) => ({ key, userIds: value.users.map((user) => user.userId), emails: value.emails })),
-      })
-      Message.success(`已排入发送 ${preview.mails.length} 封邮件`)
-      onSent()
-    } catch (failure) {
-      // 资料在预览后变动：重新预览，保留另加的抄送。
-      if ((failure as { response?: { data?: { code?: number } } })?.response?.data?.code === 40903) {
-        requestKey.current = newRequestKey()
-        await load(itemIds)
+      const risky = preview.mails.filter((mail) => mail.customerCount > 1 && (extra[mail.key]?.emails.length ?? 0) > 0)
+      if (risky.length > 0) {
+        const confirmed = await new Promise<boolean>((resolve) => Modal.confirm({
+          title: '确认抄送外部地址？',
+          content: risky.map((mail) => `${mail.vendorName}：本封含 ${mail.customerCount} 个客户的工令`).join('；'),
+          okText: '仍要发送', cancelText: '返回修改',
+          onOk: () => resolve(true), onCancel: () => resolve(false),
+        }))
+        if (!confirmed) return
+      }
+      setSending(true)
+      try {
+        await http.post<ApiResponses['POST /outsource/mails/send']>('/outsource/mails/send', {
+          itemIds, fingerprint: preview.fingerprint, requestKey: requestKey.current,
+          extraCc: Object.entries(extra).map(([key, value]) => ({ key, userIds: value.users.map((user) => user.userId), emails: value.emails })),
+        })
+        Message.success(`已排入发送 ${preview.mails.length} 封邮件`)
+        onSent()
+      } catch (failure) {
+        // 资料在预览后变动：重新预览，保留另加的抄送。
+        if ((failure as { response?: { data?: { code?: number } } })?.response?.data?.code === 40903) {
+          requestKey.current = newRequestKey()
+          await load(itemIds)
+        }
+      } finally {
+        setSending(false)
       }
     } finally {
-      setSending(false)
+      inFlight.current = false
     }
   }
 
@@ -158,10 +164,18 @@ function DraftCard({ draft, extra, onChange, disabled }: {
           onFocus={() => { if (!options.length) void search('') }}
           onChange={(value: number | undefined) => {
             const user = options.find((option) => option.userId === value)
-            if (user && !taken.has(user.email.toLowerCase()) && !extra.users.some((item) => item.userId === user.userId))
+            const userEmail = user?.email?.trim()
+            if (user && userEmail && !taken.has(userEmail.toLowerCase()) && !extra.users.some((item) => item.userId === user.userId))
               onChange({ ...extra, users: [...extra.users, user] })
           }}
-          options={options.map((option) => ({ label: `${option.realName}（${option.email}）`, value: option.userId }))} />
+          options={options.map((option) => {
+            const optionEmail = option.email?.trim() ?? ''
+            return {
+              label: `${option.realName}（${optionEmail || '未填写邮箱'}）`,
+              value: option.userId,
+              disabled: !optionEmail,
+            }
+          })} />
         <Input aria-label={`${draft.vendorName} 另加外部抄送`} placeholder="外部邮箱，例如客户" disabled={disabled} style={{ width: 220 }}
           value={email} status={emailError ? 'error' : undefined} onChange={(value) => { setEmail(value); setEmailError(false) }}
           onPressEnter={addEmail} />

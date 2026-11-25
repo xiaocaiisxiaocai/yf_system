@@ -424,6 +424,56 @@ public sealed class OemNotificationTests
             new { version = Version(second) + 1, signerName = "张三" }, ct).Status(HttpStatusCode.BadRequest);
     }
 
+    [Fact(Timeout = 240_000)]
+    public async Task DisablingAnchorVendorAccountStillDeliversContactMailWhileAnotherAccountIsActive()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var secondAccountId = (await world.Admin.PostAsync($"/api/v1/oem/companies/{world.CompanyId}/accounts",
+            new { employeeNo = "vendor_out2", password = "Vendor#2026" }, ct).Ok()).Id();
+
+        var draft = await CreateOutboundAsync(world, "冗余账号通知", ct);
+        var transferId = TransferId(draft);
+        await host.UploadAsync(world.Sender, transferId, "redundant.pdf", OemTestHost.Pdf("redundant"), ct);
+        await world.Sender.PostAsync($"/api/v1/oem/transfers/{transferId}/send", new { version = Version(draft) + 1 }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
+        var task = (await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok())["list"]!.AsArray().Single()!;
+        await world.Leader.PostAsync($"/api/v1/oem/approvals/{task.Id("taskId")}/approve",
+            new { version = task["version"]!.GetValue<ulong>() }, ct).Ok();
+        await host.RunOemJobsAsync(ct);
+
+        PolicyMail vendorMail;
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            vendorMail = await conn.QuerySingleAsync<PolicyMail>(
+                "SELECT id, event_type AS EventType, dedupe_key AS DedupeKey, recipient_email AS RecipientEmail, recipient_realm AS RecipientRealm, " +
+                "recipient_account_id AS AccountId, oem_transfer_id AS TransferId FROM email_outbox " +
+                "WHERE event_type='OEM_TRANSFER_RELEASED' AND oem_transfer_id=@transferId", new { transferId });
+        }
+        Assert.NotEqual(secondAccountId, vendorMail.AccountId);
+
+        // Disabling the anchor account leaves the company and its second account active, so queued contact mail still sends.
+        await world.Admin.PutAsync($"/api/v1/oem/accounts/{vendorMail.AccountId}/status", new { status = "DISABLED" }, ct).Ok();
+
+        var policy = new OemOutboxPolicy();
+        await using (var conn = await host.OpenAsync(ct))
+        await using (var tx = await conn.BeginTransactionAsync(ct))
+        {
+            Assert.True((await policy.EvaluateAsync(conn, tx, Info(vendorMail), ct)).Allowed);
+
+            // Disabling the last remaining active account cancels queued contact mail as stale.
+            await conn.ExecuteAsync("UPDATE oem_accounts SET status='DISABLED' WHERE id=@secondAccountId", new { secondAccountId }, tx);
+            Assert.False((await policy.EvaluateAsync(conn, tx, Info(vendorMail), ct)).Allowed);
+
+            // Re-enabling the second account restores delivery, while disabling the company still cancels it.
+            await conn.ExecuteAsync("UPDATE oem_accounts SET status='ACTIVE' WHERE id=@secondAccountId", new { secondAccountId }, tx);
+            Assert.True((await policy.EvaluateAsync(conn, tx, Info(vendorMail), ct)).Allowed);
+            await conn.ExecuteAsync("UPDATE oem_companies SET status='DISABLED' WHERE id=@CompanyId", new { world.CompanyId }, tx);
+            Assert.False((await policy.EvaluateAsync(conn, tx, Info(vendorMail), ct)).Allowed);
+        }
+    }
+
     private static OutboxMailInfo Info(PolicyMail row) =>
         new(row.Id, row.EventType, row.DedupeKey, null, row.RecipientEmail,
             row.RecipientRealm, row.AccountId, row.TransferId);

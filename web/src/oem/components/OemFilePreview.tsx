@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { Button, Modal, Result, Spin } from '@arco-design/web-react'
 import { IconClose } from '@arco-design/web-react/icon'
 import { PreviewWatermark } from '../../components/PreviewWatermark'
+import { createPreviewDeadline } from '../../components/previewDeadline'
 import { useAuth } from '../../store/auth'
 import { usePortalAuth } from '../api/portalSession'
 import type { TransferFile } from '../api/types'
@@ -30,27 +31,41 @@ function OemImage({ file, toolbarContainer }: { file: OemPreviewFile; toolbarCon
   const { api } = useOem()
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<{ url?: string; failed?: boolean }>({})
+  const retry = useCallback(() => {
+    setState({})
+    setAttempt((value) => value + 1)
+  }, [])
   useEffect(() => {
+    let active = true
     const controller = new AbortController()
     let url = ''
-    api.previewBlob(file.id, controller.signal).then((blob) => {
-      if (controller.signal.aborted) return
+    const deadline = createPreviewDeadline(() => {
+      active = false
+      controller.abort()
+      setState({ failed: true })
+    })
+    api.previewBlob(file.id, controller.signal, (loaded) => deadline.progress(loaded)).then((blob) => {
+      if (!active || controller.signal.aborted) return
+      deadline.clear()
       url = URL.createObjectURL(blob)
       setState({ url })
     }).catch(() => {
-      if (!controller.signal.aborted) setState({ failed: true })
+      deadline.clear()
+      if (active && !controller.signal.aborted) setState({ failed: true })
     })
     return () => {
+      active = false
+      deadline.clear()
       controller.abort()
       if (url) URL.revokeObjectURL(url)
     }
   }, [api, file.id, attempt])
   if (state.failed) {
     return <Result status="error" title="图片预览失败" subTitle="读取失败，请重试。"
-      extra={<Button onClick={() => { setState({}); setAttempt((value) => value + 1) }}>重试图片预览</Button>} />
+      extra={<Button onClick={retry}>重试图片预览</Button>} />
   }
   if (!state.url) return <div role="status" style={{ textAlign: 'center', padding: 60 }}><Spin /> 正在加载图片…</div>
-  return <ImagePreview sourceUrl={state.url} name={file.originalName} toolbarContainer={toolbarContainer} />
+  return <ImagePreview sourceUrl={state.url} name={file.originalName} toolbarContainer={toolbarContainer} onRetry={retry} />
 }
 
 /**
@@ -64,7 +79,8 @@ export default function OemFilePreview({ file, onClose }: { file: OemPreviewFile
   const kind = file ? oemPreviewKind(file.ext) : null
   const fileId = file?.id
   const loadContent = useCallback(
-    async (signal: AbortSignal) => (await api.previewBlob(fileId!, signal)).arrayBuffer(),
+    async (signal: AbortSignal, onProgress?: (loaded: number) => void) =>
+      (await (onProgress ? api.previewBlob(fileId!, signal, onProgress) : api.previewBlob(fileId!, signal))).arrayBuffer(),
     [api, fileId],
   )
   return (

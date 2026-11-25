@@ -27,6 +27,7 @@ export default function AccountMenu() {
         const config: QuietRequestConfig = {
           headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
           authGeneration: generationAfterLogout,
+          quietNetworkError: true,
         }
         await http.post<ApiResponses['POST /auth/logout']>('/auth/logout', null, config)
       } catch {

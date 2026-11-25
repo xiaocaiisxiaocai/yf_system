@@ -170,6 +170,7 @@ public sealed class OutsourceMailTests
         Assert.All((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List.Where(x => x.VendorId == duopu.Id), x => Assert.Equal("PENDING_NOTICE", x.SendStatus));
         Assert.Equal("QUEUED", (await mails.RetryAsync(buyer, failed.Id, ct)).Status);
         list = (await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
+        Assert.All(list.Where(x => x.VendorId == duopu.Id), x => Assert.Equal("SENT", x.SendStatus));
 
         // Changes after sending: the changed cell is yellow next time; moving an item adds a withdrawal for the old vendor.
         var a = list.Single(x => x.WorkOrderNo == "A1");
@@ -194,6 +195,145 @@ public sealed class OutsourceMailTests
         await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);
         var blocked = await Assert.ThrowsAsync<ApiException>(() => mails.PreviewAsync(buyer, new([Id("C1")]), ct));
         Assert.Contains("外发类型与厂商不符", blocked.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AttachmentNameTruncatesLongVendorNameWithinColumnLimit()
+    {
+        var day = new DateOnly(2026, 11, 25);
+        Assert.Equal("外发清单_鼎亚_20261125.xlsx", OutsourceMailContent.AttachmentName("鼎亚", day));
+
+        var longName = new string('厂', 128);
+        var truncated = OutsourceMailContent.AttachmentName(longName, day);
+        Assert.Equal(OutsourceMailContent.MaximumAttachmentNameLength, truncated.Length);
+        Assert.StartsWith("外发清单_", truncated, StringComparison.Ordinal);
+        Assert.EndsWith("_20261125.xlsx", truncated, StringComparison.Ordinal);
+
+        var emojiName = string.Concat(Enumerable.Repeat("😀", 128));
+        var emojiResult = OutsourceMailContent.AttachmentName(emojiName, day);
+        Assert.True(emojiResult.Length <= OutsourceMailContent.MaximumAttachmentNameLength);
+        Assert.EndsWith("_20261125.xlsx", emojiResult, StringComparison.Ordinal);
+        Assert.DoesNotContain('\uFFFD', emojiResult);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task RetryingStaleSendingNoticeRestoresLinkedItemsToSent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_mail_stale_retry", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await database.ExecuteAsync("""
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
+              (90,'外协采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 90,id FROM permissions WHERE code LIKE 'outsource%';
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9921,'om_stale_buyer','unused','采购','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9921,90);
+            """, ct);
+        var buyer = new CurrentUser(9921, "om_stale_buyer", "INTERNAL", null);
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var audit = new AuditService([]);
+        var settings = new OutsourceSettingsService(factory, audit);
+        var ipms = new StubIpms();
+        var items = new OutsourceItemService(factory, audit, ipms);
+        var signal = new OutsourceMailSignal();
+        var mails = new OutsourceMailService(factory, audit, signal);
+
+        var vendor = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
+        await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendor.Id, "d1@vendor.invalid", ct);
+        var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
+        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([vendor.Id]), ct);
+        ipms.Orders["S1"] = new("S1", "客户甲", "ST-201L", null, null, null, 1, new DateOnly(2026, 12, 31), false);
+        await items.ImportAsync(buyer, new([new(2, "2026-11-04", "S1", "鼎亚", "OEMA")]), ct);
+        var item = Assert.Single((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List);
+
+        var preview = await mails.PreviewAsync(buyer, new([item.Id]), ct);
+        var sent = await mails.SendAsync(buyer, new([item.Id], preview.Fingerprint, "key-stale-retry-01", null), ct);
+        var mailId = Assert.Single(sent.Mails).Id;
+
+        await using (var connection = await database.Database.OpenAsync(ct))
+            await connection.ExecuteAsync("UPDATE outsource_mails SET status='SENDING', updated_at=UTC_TIMESTAMP(3) - INTERVAL 20 MINUTE WHERE id=@mailId", new { mailId });
+
+        var smtpOptions = new AppOptions { Smtp = new() { Host = "smtp.example.invalid", Port = 465, Username = "u", Password = "p", From = "noreply@example.invalid" } };
+        var worker = new OutsourceMailWorker(factory, new SmtpSettingsService(database.Database, smtpOptions, audit), new FakeTransport(), signal,
+            smtpOptions, audit, NullLogger<OutsourceMailWorker>.Instance);
+        await worker.RunOnceAsync(ct);
+
+        var failed = Assert.Single((await mails.ListAsync(buyer, vendor.Id, null, 1, 20, 0, ct)).List);
+        Assert.Equal("FAILED", failed.Status);
+        Assert.Contains("发送中断", failed.LastError, StringComparison.Ordinal);
+        Assert.Equal("PENDING_NOTICE", Assert.Single((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List).SendStatus);
+        await using (var connection = await database.Database.OpenAsync(ct))
+        {
+            var timestamps = await connection.QuerySingleAsync<(DateTime ItemUpdatedAt, DateTime MailUpdatedAt)>(
+                "SELECT (SELECT updated_at FROM outsource_items WHERE id=@itemId) AS ItemUpdatedAt, " +
+                "(SELECT updated_at FROM outsource_mails WHERE id=@mailId) AS MailUpdatedAt",
+                new { itemId = item.Id, mailId });
+            Assert.True(timestamps.ItemUpdatedAt <= timestamps.MailUpdatedAt);
+        }
+
+        var retried = await mails.RetryAsync(buyer, mailId, ct);
+        Assert.Equal("QUEUED", retried.Status);
+        Assert.Equal("SENT", Assert.Single((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List).SendStatus);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task SkipNoticeAfterVendorReassignmentUpdatesNotifiedVendorAndSuppressesOldWithdrawal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_skip_notice_vendor", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await database.ExecuteAsync("""
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
+              (90,'外协采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 90,id FROM permissions WHERE code LIKE 'outsource%';
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9931,'om_skip_buyer','unused','采购','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO user_roles(user_id,role_id) VALUES(9931,90);
+            """, ct);
+        var buyer = new CurrentUser(9931, "om_skip_buyer", "INTERNAL", null);
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var audit = new AuditService([]);
+        var settings = new OutsourceSettingsService(factory, audit);
+        var ipms = new StubIpms();
+        var items = new OutsourceItemService(factory, audit, ipms);
+        var mails = new OutsourceMailService(factory, audit, new OutsourceMailSignal());
+
+        var vendorA = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
+        var vendorB = await OutsourceTestVendors.CreateAsync(factory, "多普", ct);
+        await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendorA.Id, "a@vendor.invalid", ct);
+        await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendorB.Id, "b@vendor.invalid", ct);
+        var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
+        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([vendorA.Id, vendorB.Id]), ct);
+        ipms.Orders["R1"] = new("R1", "客户甲", "ST-201L", null, null, null, 1, new DateOnly(2026, 12, 31), false);
+        await items.ImportAsync(buyer, new([new(2, "2026-11-04", "R1", "鼎亚", "OEMA")]), ct);
+        var imported = Assert.Single((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List);
+
+        // Send initial notice to vendor A.
+        var initialPreview = await mails.PreviewAsync(buyer, new([imported.Id]), ct);
+        await mails.SendAsync(buyer, new([imported.Id], initialPreview.Fingerprint, "key-skip-vendor-01", null), ct);
+        var sent = Assert.Single((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List);
+        Assert.Equal("SENT", sent.SendStatus);
+
+        // Reassign to vendor B -> item becomes PENDING_NOTICE.
+        var moved = await items.UpdateAsync(buyer, sent.Id, new("2026-11-04", vendorB.Id, null, null, "NORMAL", sent.UpdatedAt), ct);
+        Assert.Equal("PENDING_NOTICE", moved.SendStatus);
+
+        // Skip notice: clears marks, sets SENT, and aligns notified_vendor_id to vendor B.
+        var skipped = Assert.Single((await items.SkipNoticeAsync(buyer, new([new OutsourceItemVersion(moved.Id, moved.UpdatedAt)]), ct)).Items);
+        Assert.Equal("SENT", skipped.SendStatus);
+        Assert.Empty(skipped.ChangedFields ?? []);
+        await using (var connection = await database.Database.OpenAsync(ct))
+        {
+            var row = await connection.QuerySingleAsync<(ulong? NotifiedVendorId, string SendStatus)>(
+                "SELECT notified_vendor_id AS NotifiedVendorId, send_status AS SendStatus FROM outsource_items WHERE id=@id",
+                new { id = moved.Id });
+            Assert.Equal(((ulong?)vendorB.Id, "SENT"), (row.NotifiedVendorId, row.SendStatus));
+        }
+
+        // Subsequent mail preview must target vendor B only and emit no surprise withdrawal to vendor A.
+        var nextPreview = await mails.PreviewAsync(buyer, new([moved.Id]), ct);
+        Assert.Equal(["NOTICE:" + vendorB.Id], nextPreview.Mails.Select(x => x.Key));
     }
 
     private static OutsourceItemQuery Query() => new(null, null, null, null, null, null, null, false);

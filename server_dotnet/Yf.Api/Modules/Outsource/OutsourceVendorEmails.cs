@@ -112,11 +112,45 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
-        var vendors = (await context.OemCompanies.AsNoTracking().Select(x => new { x.Id, x.Name, x.Status }).ToArrayAsync(ct))
-            .GroupBy(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
-        var existing = (await context.OutsourceVendorEmails.AsNoTracking().Select(x => new { x.VendorId, x.Email }).ToArrayAsync(ct))
-            .ToLookup(x => x.VendorId, x => x.Email, EqualityComparer<ulong>.Default);
-        var held = existing.ToDictionary(x => x.Key, x => x.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        var requestedNames = request.Rows
+            .Select(row => row.VendorName?.Trim() ?? "")
+            .Where(name => name.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidateIds = (await context.OemCompanies.AsNoTracking().Select(x => new { x.Id, x.Name }).ToArrayAsync(ct))
+            .Where(x => requestedNames.Contains(x.Name.Trim()))
+            .Select(x => x.Id)
+            .Distinct()
+            .Order()
+            .ToArray();
+        // Lock every touched vendor in ascending id order before reading live status and existing addresses.
+        var vendors = new Dictionary<string, OemCompany>(StringComparer.OrdinalIgnoreCase);
+        var lockedVendorIds = new List<ulong>(candidateIds.Length);
+        foreach (var vendorId in candidateIds)
+        {
+            var locked = await TryLockVendorAsync(context, vendorId, ct);
+            if (locked is null) continue;
+            var name = locked.Name.Trim();
+            if (requestedNames.Contains(name) && !vendors.ContainsKey(name))
+            {
+                vendors[name] = locked;
+                lockedVendorIds.Add(locked.Id);
+            }
+        }
+        var held = new Dictionary<ulong, HashSet<string>>();
+        if (lockedVendorIds.Count > 0)
+        {
+            var lockedIds = lockedVendorIds.ToArray();
+            var existing = await context.OutsourceVendorEmails.AsNoTracking()
+                .Where(x => lockedIds.Contains(x.VendorId))
+                .Select(x => new { x.VendorId, x.Email })
+                .ToArrayAsync(ct);
+            foreach (var row in existing)
+            {
+                if (!held.TryGetValue(row.VendorId, out var set))
+                    held[row.VendorId] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                set.Add(row.Email);
+            }
+        }
         int Held(ulong vendorId) => held.TryGetValue(vendorId, out var set) ? set.Count : 0;
 
         var repeated = request.Rows.Select((row, index) => (key: $"{row.VendorName?.Trim()}\u0000{row.Email?.Trim()}", index, ok: !string.IsNullOrWhiteSpace(row.Email)))
@@ -151,8 +185,6 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
         }
         if (ready.Count > 0)
         {
-            // Lock the touched vendors in id order, like every other writer, then store the rows.
-            foreach (var vendorId in ready.Select(x => x.VendorId).Distinct().Order()) await LockVendorAsync(context, vendorId, ct);
             var now = await DbClock.UtcNowAsync(context, ct, 3);
             context.OutsourceVendorEmails.AddRange(ready.Select(x => new OutsourceVendorEmail
             { VendorId = x.VendorId, Email = x.Email, CreatedBy = actor.Id, CreatedAt = now, UpdatedAt = now }));
@@ -172,9 +204,11 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
             results.Count(x => x.Status == "FAILED"), results);
     }
 
+    private static Task<OemCompany?> TryLockVendorAsync(YfDbContext context, ulong id, CancellationToken ct) =>
+        context.OemCompanies.FromSqlInterpolated($"SELECT * FROM oem_companies WHERE id={id} FOR UPDATE").SingleOrDefaultAsync(ct);
+
     private static async Task<OemCompany> LockVendorAsync(YfDbContext context, ulong id, CancellationToken ct) =>
-        await context.OemCompanies.FromSqlInterpolated($"SELECT * FROM oem_companies WHERE id={id} FOR UPDATE").SingleOrDefaultAsync(ct)
-        ?? throw ApiException.BadRequest("厂商不存在");
+        await TryLockVendorAsync(context, id, ct) ?? throw ApiException.BadRequest("厂商不存在");
 
     private static async Task<OutsourceVendorEmail> LockAsync(YfDbContext context, ulong id, CancellationToken ct) =>
         await context.OutsourceVendorEmails.FromSqlInterpolated($"SELECT * FROM outsource_vendor_emails WHERE id={id} FOR UPDATE")

@@ -112,8 +112,12 @@ export class OemApi {
   // Uploads
   /** The extensions this side may upload; checked in the browser so an unsupported file never creates a draft. */
   uploadRules = () => this.get<'GET /oem/upload-rules', { allowedExtensions: string[] }>('/oem/upload-rules')
-  initUpload = (transferId: number, body: UploadInitRequest) =>
-    this.post<'POST /oem/transfers/{id}/uploads/init', UploadInit>(`/oem/transfers/${transferId}/uploads/init`, body)
+  initUpload = (transferId: number, body: UploadInitRequest, signal?: AbortSignal) =>
+    this.post<'POST /oem/transfers/{id}/uploads/init', UploadInit>(
+      `/oem/transfers/${transferId}/uploads/init`,
+      body,
+      signal ? { signal } : undefined,
+    )
   /**
    * `sha256` is the chunk's lowercase hex SHA-256, sent as `X-Chunk-SHA256` for the server to verify.
    * `quiet` uses the shared `QuietRequestConfig` flags so automatic retries do not raise global toasts.
@@ -127,13 +131,22 @@ export class OemApi {
       headers: { 'Content-Type': 'application/octet-stream', 'X-Chunk-SHA256': sha256 }, signal, timeout: 0,
     } as QuietRequestConfig)
   }
-  merge = (sessionId: string) =>
-    this.post<'POST /oem/uploads/{sessionId}/merge', UploadedFile>(`/oem/uploads/${sessionId}/merge`, {}, { timeout: 0 })
+  merge = (sessionId: string, signal?: AbortSignal) =>
+    this.post<'POST /oem/uploads/{sessionId}/merge', UploadedFile>(
+      `/oem/uploads/${sessionId}/merge`,
+      {},
+      signal ? { timeout: 0, signal } : { timeout: 0 },
+    )
   abortUpload = (sessionId: string) => this.delete<'DELETE /oem/uploads/{sessionId}'>(`/oem/uploads/${sessionId}`)
 
   // Content
-  previewBlob = async (fileId: number, signal?: AbortSignal) =>
-    (await this.http.get<ApiResponses['GET /oem/files/{id}/content']>(`/oem/files/${fileId}/content`, { responseType: 'blob', timeout: 0, signal })).data as Blob
+  previewBlob = async (fileId: number, signal?: AbortSignal, onProgress?: (loaded: number) => void) =>
+    (await this.http.get<ApiResponses['GET /oem/files/{id}/content']>(`/oem/files/${fileId}/content`, {
+      responseType: 'blob',
+      timeout: 0,
+      signal,
+      ...(onProgress ? { onDownloadProgress: (event) => onProgress(event.loaded) } : {}),
+    })).data as Blob
   startDownload = (fileId: number) =>
     this.post<'POST /oem/files/{id}/download-sessions', DownloadSession>(`/oem/files/${fileId}/download-sessions`)
 

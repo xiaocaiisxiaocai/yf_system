@@ -97,6 +97,7 @@ function updateFeedData(
   const current = query?.state.data
   if (!query || !current) return
   const data = update(current)
+  if (data === current) return
   // setQueryData dispatches success and would erase a failed next-page request and its retry control.
   if (query.state.status === 'error') {
     query.setState({
@@ -113,13 +114,21 @@ function mapFeedMessages(
   key: MessageFeedKey,
   update: (message: Message) => Message,
 ) {
-  updateFeedData(key, data => ({
-    ...data,
-    pages: data.pages.map(page => ({
-      ...page,
-      messages: page.messages.map(update),
-    })),
-  }))
+  updateFeedData(key, data => {
+    let dataChanged = false
+    const pages = data.pages.map(page => {
+      let pageChanged = false
+      const messages = page.messages.map(message => {
+        const next = update(message)
+        if (next !== message) pageChanged = true
+        return next
+      })
+      if (!pageChanged) return page
+      dataChanged = true
+      return { ...page, messages }
+    })
+    return dataChanged ? { ...data, pages } : data
+  })
 }
 
 export function useMessageFeed({
@@ -212,6 +221,7 @@ export function useMessageFeed({
   const targetLocateExhausted = query.data?.pages[0]?.targetLocateExhausted ?? false
 
   const applyReadCounts = useCallback((counts: ReadCounts[]) => {
+    if (!counts.length) return
     const byId = new Map(counts.map(item => [item.id, item]))
     mapFeedMessages(key, message => {
       const count = byId.get(message.id)
@@ -222,8 +232,9 @@ export function useMessageFeed({
   }, [key])
 
   const markReadLocally = useCallback((ids: readonly number[]) => {
+    if (!ids.length) return
     const selected = new Set(ids)
-    mapFeedMessages(key, message => selected.has(message.id) ? { ...message, readByMe: true } : message)
+    mapFeedMessages(key, message => selected.has(message.id) && !message.readByMe ? { ...message, readByMe: true } : message)
   }, [key])
 
   const addConfirmedMessage = useCallback((message: Message) => {
@@ -429,7 +440,11 @@ export function useMessageReceiptPolling({
     () => [scopeUserId, scopeGeneration, scopeGrantSignature],
     [scopeUserId, scopeGeneration, scopeGrantSignature],
   )
-  const availableIds = useMemo(() => new Set(list.map(message => message.id)), [list])
+  const listIdsKey = useMemo(() => list.map(message => message.id).join(','), [list])
+  const availableIds = useMemo(
+    () => new Set(listIdsKey ? listIdsKey.split(',').map(Number) : []),
+    [listIdsKey],
+  )
   const effectiveIds = useMemo(
     () => active ? ids.filter(id => availableIds.has(id)) : [],
     [active, ids, availableIds],
@@ -494,7 +509,7 @@ export function useMessageReceiptPolling({
   }, [query.data, query.dataUpdatedAt, onCounts])
 
   useEffect(() => {
-    if (!active || typeof IntersectionObserver === 'undefined') return
+    if (!active || !listIdsKey || typeof IntersectionObserver === 'undefined') return
     const root = listRef.current
     if (!root) return
     const visible = new Set<number>()
@@ -513,11 +528,11 @@ export function useMessageReceiptPolling({
     }, { root, threshold: 0.01 })
     root.querySelectorAll<HTMLElement>('[data-message-id]').forEach(element => observer.observe(element))
     return () => observer.disconnect()
-  }, [active, list, listRef, updateIds])
+  }, [active, listIdsKey, listRef, updateIds])
 
   useEffect(() => {
     if (active && typeof IntersectionObserver === 'undefined') scanVisible(false)
-  }, [active, list, scanVisible])
+  }, [active, listIdsKey, scanVisible])
 
   useEffect(() => {
     if (!active || typeof document === 'undefined' || typeof window === 'undefined') return

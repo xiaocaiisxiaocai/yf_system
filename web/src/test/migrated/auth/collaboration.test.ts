@@ -260,4 +260,62 @@ describe('collaboration migration', () => {
     expect(mocks.get).toHaveBeenCalledTimes(baseline + 1)
     stop()
   })
+
+  it('SignalR disconnected/connecting retry cycles preserve poller exponential backoff', async () => {
+    vi.useFakeTimers()
+    mocks.get.mockRejectedValue(new Error('backend unavailable'))
+    const stop = startCollaborationPolling()
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(1)
+
+    const live = mocks.realtimeOptions!
+    // Repeated SignalR reconnect attempts while already non-connected must NOT call poller.refresh()
+    // or cut short the 5s -> 10s exponential backoff.
+    await vi.advanceTimersByTimeAsync(1_000)
+    live.onStatus('disconnected')
+    live.onStatus('connecting')
+    await settle()
+    await vi.advanceTimersByTimeAsync(2_000)
+    live.onStatus('disconnected')
+    live.onStatus('connecting')
+    live.onStatus('disconnected')
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(1)
+
+    // First failure backoff is 5s (already advanced 3s, 2s remaining).
+    await vi.advanceTimersByTimeAsync(1_999)
+    expect(mocks.get).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(2)
+
+    // Second failure backoff is 10s; retry churn in the middle must not trigger early polls.
+    await vi.advanceTimersByTimeAsync(4_000)
+    live.onStatus('connecting')
+    live.onStatus('disconnected')
+    await settle()
+    await vi.advanceTimersByTimeAsync(5_999)
+    expect(mocks.get).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(3)
+
+    // Once connected, dropping back to disconnected DOES trigger an immediate fallback refresh.
+    mocks.get.mockResolvedValue({ data: { unreadCount: 0, latestId: 2, revision: 'server-2' } })
+    live.onStatus('connected')
+    live.onReady()
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(4)
+
+    live.onStatus('disconnected')
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(5)
+
+    // Subsequent disconnected -> connecting churn stays quiet again.
+    live.onStatus('connecting')
+    live.onStatus('disconnected')
+    await settle()
+    expect(mocks.get).toHaveBeenCalledTimes(5)
+    stop()
+  })
 })

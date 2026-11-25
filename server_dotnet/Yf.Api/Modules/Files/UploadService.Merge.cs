@@ -298,15 +298,19 @@ public sealed partial class UploadService
         return new DateTime(next.Ticks - next.Ticks % TimeSpan.TicksPerSecond, next.Kind);
     }
 
-    private async Task<DateTime?> RenewMergeLeaseAsync(string id, DateTime expectedLease, CancellationToken ct)
+    private async Task<DateTime?> RenewMergeLeaseAsync(string id, DateTime expectedLease, CancellationToken openToken)
     {
-        await using var conn = await db.OpenAsync(ct);
+        // Only opening a pooled connection honors stop cancellation (preventing a single-connection
+        // pool deadlock if finalization holds the connection); once the renewal starts talking to
+        // MySQL it runs with CancellationToken.None so a committed UPDATE always updates leaseTicks.
+        await using var conn = await db.OpenAsync(openToken);
+        openToken.ThrowIfCancellationRequested();
         await using var context = EfDb.Use(conn);
-        var dbNow = await DbNowAsync(context, ct);
+        var dbNow = await DbNowAsync(context, CancellationToken.None);
         var next = NextMergeLease(expectedLease, dbNow);
         var changed = await context.UploadSessions
             .Where(session => session.Id == id && session.Status == "MERGING" && session.UpdatedAt == expectedLease)
-            .ExecuteUpdateAsync(setters => setters.SetProperty(session => session.UpdatedAt, next), ct);
+            .ExecuteUpdateAsync(setters => setters.SetProperty(session => session.UpdatedAt, next), CancellationToken.None);
         return changed == 1 ? next : null;
     }
 

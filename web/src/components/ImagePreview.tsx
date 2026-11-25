@@ -6,8 +6,8 @@ import './ImagePreview.css'
 import { createPreviewDeadline, type PreviewDeadline } from './previewDeadline'
 import { wheelZoomFactor } from '../../vendor/preview-wheel.js'
 
-function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }: {
-  fileId?: number; contentUrl?: string; sourceUrl?: string; name: string; toolbarContainer?: HTMLElement | null
+function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer, onRetry }: {
+  fileId?: number; contentUrl?: string; sourceUrl?: string; name: string; toolbarContainer?: HTMLElement | null; onRetry?: () => void
 }) {
   const viewport = useRef<HTMLDivElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
@@ -127,7 +127,7 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }
       {source && <div className="image-preview-stage" style={{
         width: Math.max(size.width, natural.width * scale + 32), height: Math.max(size.height, natural.height * scale + 32),
       }}>
-        <img ref={imageRef} src={source} alt={name} draggable={false} onContextMenu={event => event.preventDefault()}
+        <img key={attempt} ref={imageRef} src={source} alt={name} draggable={false} onContextMenu={event => event.preventDefault()}
           style={{ width: natural.width ? natural.width * scale : undefined, height: natural.height ? natural.height * scale : undefined, visibility: status === 'ready' ? 'visible' : 'hidden' }}
           onLoad={event => {
             const image = event.currentTarget
@@ -140,6 +140,7 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }
     {status === 'loading' && <div className="image-preview-status" role="status"><Spin />正在加载图片…</div>}
     {status === 'error' && <div className="image-preview-status" role="alert"><Result status="error" title="图片预览失败"
       subTitle="图片可能损坏或读取失败，请重试。" extra={<Button onClick={() => {
+        if (onRetry) { onRetry(); return }
         setSource(sourceUrl ?? ''); setNatural({ width: 0, height: 0 }); setZoom('fit'); setStatus('loading'); setAttempt(value => value + 1)
       }}>重试图片预览</Button>} /></div>}
   </section>
@@ -148,6 +149,7 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer }
 type ImagePreviewProps = {
   name: string
   toolbarContainer?: HTMLElement | null
+  onRetry?: () => void
 } & (
   | { fileId: number; contentUrl?: never }
   | { fileId?: never; contentUrl: string }

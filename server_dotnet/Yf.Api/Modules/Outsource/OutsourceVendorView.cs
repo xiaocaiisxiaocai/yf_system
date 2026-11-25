@@ -33,7 +33,7 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var (db, reference, items, companyId) = await FilteredAsync(uow, actor, request, ct);
         var total = (ulong)await items.LongCountAsync(ct);
-        var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).Skip((int)offset).Take((int)size).ToArrayAsync(ct);
+        var rows = await items.OrderBy(x => x.SerialNo).ThenBy(x => x.Id).Page(offset, size).ToArrayAsync(ct);
         await reference.LoadValuesAsync(db, rows, ct);
         var counts = await OutsourceFiles.CountsAsync(db, rows.Select(x => x.Id).ToArray(), companyId, ct);
         OutsourceVendorColumn[] columns =

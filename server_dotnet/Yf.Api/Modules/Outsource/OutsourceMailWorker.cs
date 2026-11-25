@@ -1,3 +1,4 @@
+using System.Data;
 using System.Net.Sockets;
 using MailKit;
 using MailKit.Net.Smtp;
@@ -111,16 +112,29 @@ public sealed class OutsourceMailWorker(
         // again by itself: it fails with that explanation and purchasing resends after checking.
         var stale = await context.OutsourceMails.AsNoTracking()
             .Where(x => x.Status == OutsourceMailStatuses.Sending && x.UpdatedAt < now - StaleSending)
-            .Select(x => new { x.Id, x.Kind, x.VendorId }).ToArrayAsync(ct);
-        foreach (var lost in stale)
+            .Select(x => x.Id).ToArrayAsync(ct);
+        foreach (var lostId in stale)
         {
-            var message = OutsourceMailKinds.IsElectricalHandoff(lost.Kind)
+            await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
+            var locked = await context.OutsourceMails
+                .FromSqlInterpolated($"SELECT * FROM outsource_mails WHERE id={lostId} FOR UPDATE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct);
+            if (locked is null || locked.Status != OutsourceMailStatuses.Sending || locked.UpdatedAt >= now - StaleSending)
+            {
+                await transaction.RollbackAsync(ct);
+                continue;
+            }
+            var message = OutsourceMailKinds.IsElectricalHandoff(locked.Kind)
                 ? "发送中断，不确定收件人是否已收到；请确认后再重新发送"
                 : "发送中断，不确定厂商是否已收到；请确认后再重新发送";
-            var failed = await context.OutsourceMails.Where(x => x.Id == lost.Id && x.Status == OutsourceMailStatuses.Sending)
+            // Reopen items before updating outsource_mails so item.UpdatedAt <= mail.UpdatedAt holds for RetryAsync.
+            if (locked.Kind == OutsourceMailKinds.Notice)
+                await ReopenItemsAsync(context, locked.Id, locked.VendorId, ct);
+            await context.OutsourceMails.Where(x => x.Id == locked.Id && x.Status == OutsourceMailStatuses.Sending)
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, OutsourceMailStatuses.Failed)
                     .SetProperty(x => x.LastError, message), ct);
-            if (failed > 0 && lost.Kind == OutsourceMailKinds.Notice) await ReopenItemsAsync(context, lost.Id, lost.VendorId, ct);
+            await transaction.CommitAsync(ct);
         }
         var due = await context.OutsourceMails.AsNoTracking()
             .Where(x => x.Status == OutsourceMailStatuses.Queued && (x.NextAttemptAt == null || x.NextAttemptAt <= now))

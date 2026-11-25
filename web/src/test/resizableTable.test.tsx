@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import ResizableTable from '../components/ResizableTable'
+import { usePortalAuth, type PortalAccount } from '../oem/api/portalSession'
 import { useAuth, type UserBrief } from '../store/auth'
 
 type Row = { id: number; name: string; size: string }
@@ -31,7 +33,10 @@ describe('ResizableTable', () => {
     localStorage.clear()
     useAuth.setState({ user: { id: 42, employeeNo: 'E42', realName: '测试', userType: 'INTERNAL' } as UserBrief })
   })
-  afterEach(() => useAuth.setState({ user: null }))
+  afterEach(() => {
+    useAuth.setState({ user: null })
+    usePortalAuth.setState({ token: null, account: null, mustChangePassword: false, booted: false, generation: 0 })
+  })
 
   it('every column gets a resize handle and the original rich title stays', () => {
     renderTable()
@@ -169,5 +174,48 @@ describe('ResizableTable', () => {
     } finally {
       Range.prototype.getBoundingClientRect = original
     }
+  })
+
+  it('OEM 门户路由按厂商账号独立保存列布局，不与内部账号串用', () => {
+    useAuth.setState({ user: { id: 42, employeeNo: 'E42', realName: '内部测试', userType: 'INTERNAL' } as UserBrief })
+    usePortalAuth.setState({
+      token: 'portal-token',
+      account: { id: 42, employeeNo: 'OEM42', companyId: 9, companyName: '测试厂' } as PortalAccount,
+    })
+
+    const portalView = render(
+      <MemoryRouter initialEntries={['/oem-portal/outsource']}>
+        <ResizableTable<Row>
+          tableId="shared-table"
+          rowKey="id"
+          data={rows}
+          pagination={false}
+          columns={[
+            { title: '文件名', dataIndex: 'name', width: 200 },
+            { title: '大小', dataIndex: 'size', width: 100 },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    fireEvent.keyDown(screen.getByRole('separator', { name: '调整文件名列宽' }), { key: 'ArrowRight' })
+    expect(JSON.parse(localStorage.getItem('yf:table-columns:shared-table:oem:42') ?? 'null')?.widths).toEqual({ name: 216 })
+    expect(localStorage.getItem('yf:table-columns:shared-table:42')).toBeNull()
+    portalView.unmount()
+
+    render(
+      <MemoryRouter initialEntries={['/outsource/items']}>
+        <ResizableTable<Row>
+          tableId="shared-table"
+          rowKey="id"
+          data={rows}
+          pagination={false}
+          columns={[
+            { title: '文件名', dataIndex: 'name', width: 200 },
+            { title: '大小', dataIndex: 'size', width: 100 },
+          ]}
+        />
+      </MemoryRouter>,
+    )
+    expect(screen.getByRole('separator', { name: '调整文件名列宽' })).toHaveAttribute('aria-valuenow', '200')
   })
 })

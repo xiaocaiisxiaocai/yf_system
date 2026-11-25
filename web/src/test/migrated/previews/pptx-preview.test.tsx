@@ -130,6 +130,24 @@ describe('PPTX preview', () => {
     expect(second.channel).not.toBe(first.channel)
   })
 
+  it('PPTX preview passes progress callback and times out a stalled external loadContent', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let signal: AbortSignal | undefined
+      const loadContent = vi.fn((abortSignal: AbortSignal) => {
+        signal = abortSignal
+        return new Promise<ArrayBuffer>(() => undefined)
+      })
+      render(<PptxPreview fileId={12} loadContent={loadContent} />)
+      expect(loadContent).toHaveBeenCalledWith(expect.any(AbortSignal), expect.any(Function))
+      await vi.advanceTimersByTimeAsync(60_001)
+      expect(signal?.aborted).toBe(true)
+      expect(screen.getByRole('alert')).toHaveTextContent('PPTX 加载或渲染超时')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('PPTX viewer build is network isolated and embeds the local renderer protocol', async () => {
     const file = resolve(process.cwd(), 'generated/pptx-viewer.html')
     const html = await readFile(file, 'utf8')

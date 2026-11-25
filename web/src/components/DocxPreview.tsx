@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Result, Select, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/docx-viewer.html?raw'
 import './PptxPreview.css'
-import { createPreviewDeadline, createRenderDeadline, type PreviewContentLoader } from './previewDeadline'
+import { createPreviewDeadline } from './previewDeadline'
+
+export type DocxContentLoader = (signal: AbortSignal, onProgress?: (loaded: number) => void) => Promise<ArrayBuffer>
 
 type PreviewState = 'loading' | 'ready' | 'error'
 
@@ -19,7 +21,7 @@ function validScale(value: unknown) {
 
 function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
   fileId: number
-  loadContent?: PreviewContentLoader
+  loadContent?: DocxContentLoader
   toolbarContainer?: HTMLElement | null
   onRetry: () => void
 }) {
@@ -31,7 +33,7 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
   const [message, setMessage] = useState('')
   const [zoom, setZoom] = useState('fit')
   const [scale, setScale] = useState(1)
-  const html = viewerHtml.replaceAll('YF_VIEWER_NONCE', channel)
+  const html = useMemo(() => viewerHtml.replaceAll('YF_VIEWER_NONCE', channel), [channel])
 
   useEffect(() => {
     let active = true
@@ -47,7 +49,7 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
       controller.abort()
       if (active) fail('Word 文档加载或渲染超时，请重试。')
     }
-    const deadline = loadContent ? createRenderDeadline(timedOut) : createPreviewDeadline(timedOut)
+    const deadline = createPreviewDeadline(timedOut)
     const receive = (event: MessageEvent) => {
       if (!active || event.source !== frameRef.current?.contentWindow || event.data?.channel !== channel) return
       if (event.data.type === 'docx:rendered' || event.data.type === 'docx:scale-changed') {
@@ -75,7 +77,7 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
       frameRef.current?.contentWindow?.postMessage({ type: 'docx:load', channel, buffer }, '*', [buffer])
       buffer = undefined
     }
-    void (loadContent ? loadContent(controller.signal) : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
+    void (loadContent ? loadContent(controller.signal, (loaded) => deadline.progress(loaded)) : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
       responseType: 'arraybuffer',
       signal: controller.signal,
       quietNetworkError: true,
@@ -128,7 +130,7 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
 
 export default function DocxPreview({ fileId, loadContent, toolbarContainer }: {
   fileId: number
-  loadContent?: PreviewContentLoader
+  loadContent?: DocxContentLoader
   toolbarContainer?: HTMLElement | null
 }) {
   const [attempt, setAttempt] = useState(0)

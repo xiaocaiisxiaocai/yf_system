@@ -16,11 +16,14 @@ interface AuthState {
   mustChangePassword: boolean
   /** 启动时静默刷新是否已完成（无持久化用户则立即完成） */
   booted: boolean
+  /** 启动静默刷新因网络/服务暂时不可用而未拿到明确答复，保留本地持久化会话供重试 */
+  bootUnavailable: boolean
   generation: number
   setToken: (t: string) => void
   setBooted: (v: boolean) => void
+  setBootUnavailable: (v: boolean) => void
   setUser: (user: UserBrief) => void
-  setLogin: (payload: AuthLoginResponse, replaceSession?: boolean) => void
+  setLogin: (payload: AuthLoginResponse | (AuthProfileResponse & { accessToken: string }), replaceSession?: boolean) => void
   clearMustChange: () => void
   logout: () => void
   hasPerm: (code: string) => boolean
@@ -35,9 +38,11 @@ export const useAuth = create<AuthState>()(
       menus: [],
       mustChangePassword: false,
       booted: false,
+      bootUnavailable: false,
       generation: 0,
-      setToken: (t) => set({ token: t }),
+      setToken: (t) => set({ token: t, bootUnavailable: false }),
       setBooted: (v) => set({ booted: v }),
+      setBootUnavailable: (v) => set({ bootUnavailable: v }),
       setUser: (user) => set({ user }),
       setLogin: (p, replaceSession = true) =>
         set({
@@ -47,10 +52,19 @@ export const useAuth = create<AuthState>()(
           menus: p.menus,
           mustChangePassword: p.mustChangePassword,
           booted: true,
+          bootUnavailable: false,
           generation: get().generation + (replaceSession ? 1 : 0),
         }),
       clearMustChange: () => set({ mustChangePassword: false }),
-      logout: () => set({ token: null, user: null, permissions: [], menus: [], mustChangePassword: false, generation: get().generation + 1 }),
+      logout: () => set({
+        token: null,
+        user: null,
+        permissions: [],
+        menus: [],
+        mustChangePassword: false,
+        bootUnavailable: false,
+        generation: get().generation + 1,
+      }),
       hasPerm: (code) => get().permissions.includes(code),
     }),
     {

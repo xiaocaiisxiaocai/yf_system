@@ -45,7 +45,7 @@ const syncStatus = {
 }
 
 const FIELD_ORDER: [string, string, string, boolean][] = [
-  ['outsourceDate', '外发日期', 'PROCESS', true], ['status', '状态', 'PROCESS', true], ['electricalHandoff', '是否转迅得电控', 'FIXED', false],
+  ['outsourceDate', '外发日期', 'PROCESS', true], ['status', '状态', 'PROCESS', true], ['electricalHandoff', '转迅得研发电控设计', 'FIXED', false],
   ['workOrderNo', '工令', 'FIXED', false],
   ['customer', '客户', 'IPMS', false], ['machineModel', '机型', 'IPMS', false], ['type', '外发类型', 'PROCESS', true],
   ['vendor', '外发厂商', 'PROCESS', true], ['supervisor', '机构课别', 'IPMS', false], ['mechanicalOwner', '机构执行人', 'IPMS', false],
@@ -146,7 +146,7 @@ describe('外协清单页面', () => {
     mockApi()
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
-    const handoff = await screen.findByRole('columnheader', { name: /是否转迅得电控/ })
+    const handoff = await screen.findByRole('columnheader', { name: /转迅得研发电控设计/ })
     expect(handoff.previousElementSibling).toHaveTextContent('状态')
     expect(handoff.nextElementSibling).toHaveTextContent('工令')
     const first = within(screen.getByText('21089901').closest('tr')!)
@@ -159,12 +159,12 @@ describe('外协清单页面', () => {
 
     await user.click(first.getByRole('button', { name: '编辑工令 21089901' }))
     const dialog = await screen.findByRole('dialog', { name: /编辑工令/ })
-    expect(within(dialog).queryByText('是否转迅得电控')).not.toBeInTheDocument()
+    expect(within(dialog).queryByText('转迅得研发电控设计')).not.toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '取消' }))
     await user.click(first.getByRole('checkbox'))
     await user.click(screen.getByRole('button', { name: /批量修改/ }))
     const batch = await screen.findByRole('dialog', { name: /批量修改/ })
-    expect(within(batch).queryByText('是否转迅得电控')).not.toBeInTheDocument()
+    expect(within(batch).queryByText('转迅得研发电控设计')).not.toBeInTheDocument()
   })
 
   it('编辑时可改外发类型，厂商下拉随所选类型过滤，原厂商不适用时要重新选择', async () => {

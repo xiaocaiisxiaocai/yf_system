@@ -91,6 +91,8 @@ public sealed class SchemaShapeTests
         "20261124083731_AddOutsourceTransferLink",
         "20261124093646_AddOutsourceFilesField",
         "20261125015533_AddOutsourceTypeElectricalHandoff",
+        "20261125030000_RenameOutsourceHandoffLabel",
+        "20261125140406_WidenOutsourceMailRecipientEmail",
     ];
 
     [Fact]

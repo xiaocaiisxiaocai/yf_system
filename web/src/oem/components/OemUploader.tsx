@@ -7,6 +7,7 @@ import { oemRequestError } from '../api/requestError'
 import { isQuietRequestError } from '../../api/quietRequest'
 import { useOem } from '../OemContext'
 import { acceptAttribute, splitSupported, unsupportedMessage } from '../../utils/uploadExtensions'
+import { retainActiveUpload } from '../../components/uploadActivity'
 
 type Phase = 'queued' | 'hashing' | 'uploading' | 'merging' | 'cancelling' | 'done' | 'failed'
 
@@ -130,17 +131,18 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   useEffect(() => { entriesRef.current = entries }, [entries])
   useEffect(() => { onBusyChange?.(busy) }, [busy, onBusyChange])
   useEffect(() => { onQueueChange?.(entries.length) }, [entries.length, onQueueChange])
+  useEffect(() => (busy ? retainActiveUpload() : undefined), [busy])
 
-  // One controller per mounted uploader: unmounting aborts in-flight chunk uploads and backoff waits.
+  // One controller per active file: cancelling a single file or unmounting aborts in-flight work.
   const unmounted = useRef(false)
-  const abort = useRef<AbortController>(new AbortController())
+  const controllers = useRef<Map<number, AbortController>>(new Map())
   useEffect(() => {
     unmounted.current = false
-    const controller = new AbortController()
-    abort.current = controller
+    const activeControllers = controllers.current
     return () => {
       unmounted.current = true
-      controller.abort()
+      for (const controller of activeControllers.values()) controller.abort()
+      activeControllers.clear()
     }
   }, [])
 
@@ -184,7 +186,9 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
   }
 
   const uploadOne = async (file: File, key: number, draftId: number): Promise<boolean> => {
-    const signal = abort.current.signal
+    const controller = new AbortController()
+    controllers.current.set(key, controller)
+    const { signal } = controller
     const saved = entriesRef.current.find((entry) => entry.key === key)
     let md5 = saved?.md5
     let session = saved?.session
@@ -192,19 +196,27 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     // Merged-ready sessions are never re-created: their merge may already have produced the file.
     let mayRecreateSession = Boolean(session && !session.mergeReady)
     let hasher: ChunkHasher | undefined
+    const onAbort = () => { hasher?.dispose() }
+    signal.addEventListener('abort', onAbort, { once: true })
     try {
       for (;;) {
         try {
           if (!md5) {
             patch(key, { phase: 'hashing', error: undefined, percent: 0 })
-            // Closing the dialog (unmount) aborts the signal, which also terminates the hashing worker.
-            md5 = await fileMd5(file, () => signal.aborted)
+            // Cancelling the item or unmounting aborts the signal, which also terminates the hashing worker.
+            md5 = await fileMd5(file, () => signal.aborted, (fraction) => {
+              if (!signal.aborted) patch(key, { percent: Math.round(fraction * 100) })
+            })
             if (signal.aborted) return false
             patch(key, { md5 })
           }
           if (!session) {
-            patch(key, { phase: 'uploading', error: undefined })
-            const init = await api.initUpload(draftId, { fileName: file.name, fileSize: file.size, fileMd5: md5 })
+            patch(key, { phase: 'uploading', error: undefined, percent: 0 })
+            const init = await api.initUpload(draftId, { fileName: file.name, fileSize: file.size, fileMd5: md5 }, signal)
+            if (signal.aborted) {
+              void api.abortUpload(init.sessionId).catch(() => undefined)
+              return false
+            }
             session = {
               id: init.sessionId,
               chunkSize: init.chunkSize,
@@ -216,12 +228,14 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
           }
           const done = new Set(session.uploadedChunks)
           if (!session.mergeReady) {
-            patch(key, { phase: 'uploading', error: undefined })
+            const initialPercent = session.totalChunks === 0 ? 100 : Math.round((done.size / session.totalChunks) * 100)
+            patch(key, { phase: 'uploading', error: undefined, percent: initialPercent })
             for (let index = 0; index < session.totalChunks; index++) {
               if (!done.has(index)) {
                 hasher ??= createChunkHasher()
                 await putChunkWithRetry(session.id, index, file, index * session.chunkSize,
                   Math.min(file.size, (index + 1) * session.chunkSize), hasher, signal)
+                if (signal.aborted) return false
                 done.add(index)
                 session = { ...session, uploadedChunks: [...done] }
                 patch(key, { session })
@@ -233,7 +247,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
           }
           patch(key, { phase: 'merging' })
           // Merge is idempotent for a session. Reusing this id is essential when its response is lost.
-          await api.merge(session.id)
+          await api.merge(session.id, signal)
           if (signal.aborted) return false
           patch(key, { phase: 'done', percent: 100 })
           onUploaded?.()
@@ -254,12 +268,17 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
         }
       }
     } finally {
+      signal.removeEventListener('abort', onAbort)
       hasher?.dispose()
+      if (controllers.current.get(key) === controller) controllers.current.delete(key)
     }
   }
 
   const uploadSelected = async (selected: Entry[], draftId: number) => {
-    for (const entry of selected) await uploadOne(entry.file, entry.key, draftId)
+    for (const entry of selected) {
+      if (!entriesRef.current.some((item) => item.key === entry.key)) continue
+      await uploadOne(entry.file, entry.key, draftId)
+    }
   }
 
   const uploadAll = async (draftId = transferId): Promise<boolean> => {
@@ -268,6 +287,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     const pending = entriesRef.current.filter((entry) => entry.phase === 'queued' || entry.phase === 'failed')
     let ok = true
     for (const entry of pending) {
+      if (!entriesRef.current.some((item) => item.key === entry.key)) { ok = false; continue }
       if (!await uploadOne(entry.file, entry.key, draftId)) ok = false
     }
     return ok
@@ -334,13 +354,33 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
     removeLocal(entry.key)
   }
 
+  const cancelActive = async (entry: Entry) => {
+    controllers.current.get(entry.key)?.abort()
+    const latest = entriesRef.current.find((item) => item.key === entry.key)
+    if (!latest) return
+    if (latest.session && !latest.session.mergeReady) {
+      patch(latest.key, { phase: 'cancelling', error: undefined })
+      try {
+        await api.abortUpload(latest.session.id)
+      } catch (error) {
+        if (!isSessionGone(error)) {
+          patch(latest.key, { phase: 'failed', error: `取消上传失败：${errorMessage(error)}` })
+          return
+        }
+      }
+    } else if (latest.session?.mergeReady) {
+      void api.abortUpload(latest.session.id).catch(() => undefined)
+    }
+    removeLocal(latest.key)
+  }
+
   const retry = (entry: Entry) => {
     if (transferId && !busy && !disabled) void uploadSelected([entry], transferId)
   }
 
   const label = (entry: Entry) => ({
     queued: '等待提交',
-    hashing: '正在校验文件…',
+    hashing: entry.percent > 0 ? `正在校验文件 ${entry.percent}%` : '正在校验文件…',
     uploading: `上传中 ${entry.percent}%`,
     merging: '服务端合并中…',
     cancelling: '正在取消上传…',
@@ -394,6 +434,10 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
                 <Typography.Text>{entry.file.name}</Typography.Text>
                 <Typography.Text type="secondary" style={{ marginLeft: 8 }}>{fmtSize(entry.file.size)}</Typography.Text>
               </span>
+              {(entry.phase === 'hashing' || entry.phase === 'uploading' || entry.phase === 'merging') && (
+                <Button type="text" size="mini" status="danger" icon={<IconClose />}
+                  aria-label={`取消「${entry.file.name}」`} onClick={(event) => { event.stopPropagation(); void cancelActive(entry) }}>取消</Button>
+              )}
               {(entry.phase === 'queued' || entry.phase === 'failed') && !busy && !disabled && (
                 <Space size={4}>
                   {entry.phase === 'failed' && !deferred && transferId && (

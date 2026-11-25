@@ -78,7 +78,7 @@ public sealed class OemOutsourceViewTests
         Assert.DoesNotContain("内部也可见的备注", sheet, StringComparison.Ordinal);
         Assert.DoesNotContain("发送状态", sheet, StringComparison.Ordinal);
         Assert.Contains(Cell("超穎"), sheet, StringComparison.Ordinal);
-        Assert.Contains(Cell("是否转迅得电控"), sheet, StringComparison.Ordinal);
+        Assert.Contains(Cell("转迅得研发电控设计"), sheet, StringComparison.Ordinal);
         await admin.GetAsync("/api/v1/oem/outsource-items/export", ct).Status(HttpStatusCode.Forbidden);
 
         // A disabled vendor loses access at once.
@@ -265,7 +265,7 @@ public sealed class OemOutsourceViewTests
         using (var export = await admin.Http.GetAsync(itemsPath + "/export?keyword=HANDOFF-1", ct))
         {
             var sheet = await SheetAsync(export, ct);
-            Assert.Contains(Cell("是否转迅得电控"), sheet, StringComparison.Ordinal);
+            Assert.Contains(Cell("转迅得研发电控设计"), sheet, StringComparison.Ordinal);
             Assert.Contains(Cell("是"), sheet, StringComparison.Ordinal);
         }
 
@@ -294,7 +294,7 @@ public sealed class OemOutsourceViewTests
 
         // The mail and sent snapshot still exclude the portal-visible field while its value is yes.
         var unchangedPreview = await admin.PostAsync(mailsPath + "/preview", new { itemIds }, ct).Ok();
-        Assert.DoesNotContain("是否转迅得电控", unchangedPreview["mails"]![0]!["htmlBody"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.DoesNotContain("转迅得研发电控设计", unchangedPreview["mails"]![0]!["htmlBody"]!.GetValue<string>(), StringComparison.Ordinal);
         var noticeId = (await admin.PostAsync(mailsPath + "/send", new
         {
             itemIds, fingerprint = unchangedPreview["fingerprint"]!.GetValue<string>(), requestKey = "handoff-second-notice",
@@ -302,7 +302,7 @@ public sealed class OemOutsourceViewTests
         using (var attachment = await admin.Http.GetAsync($"{mailsPath}/{noticeId}/attachment", ct))
         {
             var sheet = await SheetAsync(attachment, ct);
-            Assert.DoesNotContain("是否转迅得电控", sheet, StringComparison.Ordinal);
+            Assert.DoesNotContain("转迅得研发电控设计", sheet, StringComparison.Ordinal);
         }
 
         var transport = new CaptureTransport { RefusedAddress = "handoff_to@example.invalid" };

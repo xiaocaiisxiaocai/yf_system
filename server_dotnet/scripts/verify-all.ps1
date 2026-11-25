@@ -82,6 +82,8 @@ $script:PlanNames = @(
     'dotnet-test',
     'ef-model-check',
     'http-isolated',
+    'http-audit-contracts',
+    'http-signalr-contracts',
     'maintenance',
     'python-script-self-tests',
     'npm-ci-native-binding-preflight',
@@ -724,8 +726,12 @@ try {
         # Reported by Mark-PendingStepsSkipped below.
     } elseif ($SkipHttp) {
         [void](Add-SkippedResult -Name 'http-isolated' -Reason 'HTTP contract validation was disabled with -SkipHttp.')
+        [void](Add-SkippedResult -Name 'http-audit-contracts' -Reason 'HTTP contract validation was disabled with -SkipHttp.')
+        [void](Add-SkippedResult -Name 'http-signalr-contracts' -Reason 'HTTP contract validation was disabled with -SkipHttp.')
     } elseif ([string]::IsNullOrWhiteSpace($testDatabaseUrl)) {
         [void](Add-SkippedResult -Name 'http-isolated' -Reason 'YF_TEST_DATABASE_URL is not set; HTTP contract validation requires an explicit local test database.')
+        [void](Add-SkippedResult -Name 'http-audit-contracts' -Reason 'YF_TEST_DATABASE_URL is not set; HTTP contract validation requires an explicit local test database.')
+        [void](Add-SkippedResult -Name 'http-signalr-contracts' -Reason 'YF_TEST_DATABASE_URL is not set; HTTP contract validation requires an explicit local test database.')
     } else {
         $previousResultsPath = [Environment]::GetEnvironmentVariable('YF_TEST_RESULTS_PATH', 'Process')
         [Environment]::SetEnvironmentVariable('YF_TEST_RESULTS_PATH', (Join-Path $runRoot 'http-results.json'), 'Process')
@@ -735,6 +741,26 @@ try {
             Set-ProcessEnvironmentValue -Name 'YF_TEST_RESULTS_PATH' -Value $previousResultsPath
         }
         Assert-Passed $step
+
+        $apiOutputDir = Join-Path $serverRoot 'Yf.Api/bin/Debug/net8.0'
+        $previousApiDir = [Environment]::GetEnvironmentVariable('YF_TEST_API_DIR', 'Process')
+        [Environment]::SetEnvironmentVariable('YF_TEST_API_DIR', $apiOutputDir, 'Process')
+        try {
+            $step = Invoke-VerificationStep -Name 'http-audit-contracts' -FilePath 'python' -Arguments @((Join-Path $serverRoot 'scripts/test_audit_contracts.py')) -WorkingDirectory $repositoryRoot
+            Assert-Passed $step
+
+            $signalrPackage = Join-Path $webRoot 'node_modules/@microsoft/signalr/package.json'
+            if ($null -eq (Get-Command 'node' -ErrorAction SilentlyContinue)) {
+                [void](Add-SkippedResult -Name 'http-signalr-contracts' -Reason 'Node.js is not installed on PATH; SignalR contract checks require node and web/node_modules/@microsoft/signalr.')
+            } elseif (-not (Test-Path -LiteralPath $signalrPackage -PathType Leaf)) {
+                [void](Add-SkippedResult -Name 'http-signalr-contracts' -Reason 'web/node_modules/@microsoft/signalr is not installed; run npm ci in web/ to enable SignalR contract checks.')
+            } else {
+                $step = Invoke-VerificationStep -Name 'http-signalr-contracts' -FilePath 'python' -Arguments @((Join-Path $serverRoot 'scripts/test_signalr_contracts.py')) -WorkingDirectory $repositoryRoot
+                Assert-Passed $step
+            }
+        } finally {
+            Set-ProcessEnvironmentValue -Name 'YF_TEST_API_DIR' -Value $previousApiDir
+        }
     }
 
     if (-not (Test-Part @('http'))) {
@@ -818,9 +844,9 @@ try {
     }
     $coverageRequiredSteps = switch ($Part) {
         'dotnet' { @('database-configuration', 'dotnet-test') }
-        'http' { @('database-configuration', 'http-isolated') }
+        'http' { @('database-configuration', 'http-isolated', 'http-audit-contracts') }
         'web' { @('python-script-self-tests', 'npm-test') }
-        default { @('database-configuration', 'http-isolated') }
+        default { @('database-configuration', 'http-isolated', 'http-audit-contracts') }
     }
     $coverageSkips = @($skipped | Where-Object { $_.name -in $coverageRequiredSteps })
     $fullCoverage = ($failed.Count -eq 0 -and $coverageSkips.Count -eq 0 -and

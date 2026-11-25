@@ -253,6 +253,7 @@ export default function MessagePanel({
   }, [selectedReceiptId, receiptDetail.data, receiptDetail.dataUpdatedAt, applyReadCounts])
 
   const commands = useMessageCommands()
+  const markReadMutateAsync = commands.markRead.mutateAsync
 
   useEffect(() => {
     const root = listRef.current
@@ -268,7 +269,7 @@ export default function MessagePanel({
         const requestFeedKey = feedKey
         const requestIdentity = feedIdentity
         ids.forEach(id => markingRead.current.add(id))
-        void commands.markRead.mutateAsync(ids).then(async () => {
+        void markReadMutateAsync(ids).then(async () => {
           markReadLocally(ids)
           if (currentFeedIdentity.current === requestIdentity) onRead?.()
           const counts = await refreshReadCounts(requestFeedKey, ids)
@@ -281,7 +282,7 @@ export default function MessagePanel({
     )
     root.querySelectorAll<HTMLElement>('[data-unread="true"] .message-read-marker').forEach(node => observer.observe(node))
     return () => observer.disconnect()
-  }, [active, visibleMessages, feedIdentity, feedKey, markReadLocally, applyReadCounts, commands.markRead, onRead])
+  }, [active, visibleMessages, feedIdentity, feedKey, markReadLocally, applyReadCounts, markReadMutateAsync, onRead])
 
   const send = async () => {
     const draft = content

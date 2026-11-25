@@ -7,10 +7,10 @@
     "dotnet-test.trx"
   ],
   "estimatedSeconds": [
-    411,
-    410,
-    412,
-    411
+    422,
+    422,
+    424,
+    420
   ],
   "classes": [
     [
@@ -27,6 +27,7 @@
       "Yf.Api.Tests.Oem.OemIdentitySessionTests",
       "Yf.Api.Tests.Oem.OemRecipientAccountTests",
       "Yf.Api.Tests.Oem.OemReconcileRelocationTests",
+      "Yf.Api.Tests.Oem.OemReferenceAccessTests",
       "Yf.Api.Tests.Oem.OemStorageReconcileGateTests",
       "Yf.Api.Tests.Oem.OemTransferFlowTests",
       "Yf.Api.Tests.Oem.OemWorkerResilienceTests",
@@ -35,6 +36,7 @@
       "Yf.Api.Tests.OemApprovalActivatedAtMigrationTests",
       "Yf.Api.Tests.OemDirectoryPermissionMigrationTests",
       "Yf.Api.Tests.OemLeaderSourceMergeMigrationTests",
+      "Yf.Api.Tests.OutsourceFieldTests",
       "Yf.Api.Tests.OutsourceMailTests",
       "Yf.Api.Tests.ProjectActivityAuditContractTests",
       "Yf.Api.Tests.ProjectMetadataTests",
@@ -77,6 +79,7 @@
       "Yf.Api.Tests.MaintenanceWorkerTests",
       "Yf.Api.Tests.MediaPreviewSecurityTests",
       "Yf.Api.Tests.MesHttpSourceTests",
+      "Yf.Api.Tests.MesMirrorImportTests",
       "Yf.Api.Tests.MesMirrorOptionsTests",
       "Yf.Api.Tests.MigrationRoundTripTests",
       "Yf.Api.Tests.Oem.OemApprovalInboxTests",
@@ -96,6 +99,7 @@
       "Yf.Api.Tests.OemIdentityRouteSecurityTests",
       "Yf.Api.Tests.OemReadinessTests",
       "Yf.Api.Tests.OpenApiContractTests",
+      "Yf.Api.Tests.OutsourceVendorEmailTests",
       "Yf.Api.Tests.PasswordHashingCapacityTests",
       "Yf.Api.Tests.PerformanceBenchmarks",
       "Yf.Api.Tests.PermissionCatalogSecurityTests",
@@ -133,6 +137,8 @@
       "Yf.Api.Tests.Oem.OemNotificationTests",
       "Yf.Api.Tests.Oem.OemOrganisationFilterTests",
       "Yf.Api.Tests.OemValidationMigrationTests",
+      "Yf.Api.Tests.OutsourceDateImportTests",
+      "Yf.Api.Tests.OutsourceFilesTests",
       "Yf.Api.Tests.OutsourceSettingsTests",
       "Yf.Api.Tests.OwnerAccessTests",
       "Yf.Api.Tests.ProjectCopyTests",
@@ -151,6 +157,8 @@
       "Yf.Api.Tests.Oem.OemPrimaryContactRemovalTests",
       "Yf.Api.Tests.Oem.OemRecipientPrecedenceTests",
       "Yf.Api.Tests.Oem.OemStorageSafetyTests",
+      "Yf.Api.Tests.Oem.OemTransferOutsourceLinkTests",
+      "Yf.Api.Tests.Oem.OemTransferRecipientFilterTests",
       "Yf.Api.Tests.Oem.OemVendorViewTests",
       "Yf.Api.Tests.OutsourceItemTests",
       "Yf.Api.Tests.OutsourceItemTypeTests",
@@ -158,6 +166,7 @@
       "Yf.Api.Tests.SmtpTestServiceTests",
       "Yf.Api.Tests.StorageLocationTests",
       "Yf.Api.Tests.SupplierContactTests",
+      "Yf.Api.Tests.TestSchemaTemplateTests",
       "Yf.Api.Tests.UploadExcelAllowlistMigrationTests",
       "Yf.Api.Tests.UserScopeCeilingTests",
       "Yf.Api.Tests.UtcDatabaseSessionTests"

@@ -98,7 +98,7 @@ public sealed class OutsourceFieldTests
         Assert.All(settings.Fields.Where(x => x.BuiltIn), x => Assert.True(x.VendorVisible));
         Assert.Equal("NONE", settings.Fields.Single(x => x.Key == "customer").EditorScope);
         var handoff = settings.Fields.Single(x => x.Key == "electricalHandoff");
-        Assert.Equal(("是否转迅得电控", "BOOLEAN", true, true, true, "NONE", false),
+        Assert.Equal(("转迅得研发电控设计", "BOOLEAN", true, true, true, "NONE", false),
             (handoff.Label, handoff.DataType, handoff.BuiltIn, handoff.VendorVisibleLocked, handoff.Pinned, handoff.EditorScope, handoff.EditorScopeAllowed));
         Assert.All(settings.Fields.Where(x => x.Key is "bomOn" or "drawingReleasedOn"),
             x => Assert.Equal(("IMPORTED", "NONE", false), (x.Category, x.EditorScope, x.EditorScopeAllowed)));

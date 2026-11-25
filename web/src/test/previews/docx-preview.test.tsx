@@ -73,8 +73,25 @@ describe('Word preview', () => {
     const loadContent = vi.fn(gated(zipBytes))
     render(<DocxPreview fileId={42} loadContent={loadContent} />)
     await loadedFrame()
-    expect(loadContent).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(loadContent).toHaveBeenCalledWith(expect.any(AbortSignal), expect.any(Function))
     expect(mocks.get).not.toHaveBeenCalled()
+  })
+
+  it('times out a stalled external loadContent', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let signal: AbortSignal | undefined
+      const loadContent = vi.fn((abortSignal: AbortSignal) => {
+        signal = abortSignal
+        return new Promise<ArrayBuffer>(() => undefined)
+      })
+      render(<DocxPreview fileId={45} loadContent={loadContent} />)
+      await vi.advanceTimersByTimeAsync(60_001)
+      expect(signal?.aborted).toBe(true)
+      expect(screen.getByRole('alert')).toHaveTextContent('Word 文档加载或渲染超时')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('refuses a legacy .doc renamed to .docx without posting it to the renderer', async () => {

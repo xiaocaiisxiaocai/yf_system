@@ -37,7 +37,11 @@ class Client:
     def __init__(self, base):
         self.base = base
         self.cookies = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookies))
+        # Test targets are always loopback; never let host proxy env vars hijack requests.
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(self.cookies),
+        )
         self.token = None
 
     def call(self, method, path, body=None, expected=200):
@@ -196,6 +200,20 @@ def run_audit_checks(client, conn, check):
     supplier = client.call("POST", "/api/v1/admin/suppliers", {
         "name": supplier_name,
         "remark": "owned audit regression fixture",
+    })
+    # Creating a project starts it, which requires an active supplier account holding file:upload.
+    perm_by_code = {item["code"]: item["id"] for item in permissions}
+    supplier_role = client.call("POST", "/api/v1/admin/roles", {
+        "name": "审计供应商角色-" + secrets.token_hex(4),
+        "description": "owned audit regression fixture",
+    })
+    client.call("PUT", f"/api/v1/admin/roles/{supplier_role['id']}/permissions", {
+        "permissionIds": [perm_by_code["project:list"], perm_by_code["file:upload"]],
+    })
+    client.call("POST", f"/api/v1/admin/suppliers/{supplier['id']}/accounts", {
+        "employeeNo": "aud_sup_" + secrets.token_hex(4),
+        "password": "Yf9!" + secrets.token_urlsafe(9),
+        "roleId": supplier_role["id"],
     })
     project_old_name = "审计旧项目-" + secrets.token_hex(4)
     project_new_name = "审计新项目-" + secrets.token_hex(4)
@@ -363,7 +381,10 @@ def main():
             env = {
                 key: value for key, value in os.environ.items()
                 if not key.lower().startswith(("app__", "app:"))
-                and key.upper() not in {"YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD"}
+                and key.upper() not in {
+                    "YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD", "ASPNETCORE_CONTENTROOT", "ASPNETCORE_WEBROOT",
+                    "DOTNET_CONTENTROOT", "ASPNETCORE_URLS", "DOTNET_URLS", "URLS",
+                }
             }
             env.update({
                 "App__ConnectionString": (
@@ -382,7 +403,6 @@ def main():
                 "App__Smtp__Password": "",
                 "App__Smtp__From": "",
                 "ASPNETCORE_URLS": base,
-                "URLS": base,
                 "YF_BOOTSTRAP_PASSWORD": initial_password,
                 "Logging__LogLevel__Default": "Warning",
             })
@@ -392,7 +412,7 @@ def main():
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                timeout=60,
+                timeout=300,
             )
             if initialized.returncode != 0:
                 diagnostic = initialized.stdout.decode(errors="replace")[-6000:]
@@ -405,7 +425,7 @@ def main():
             log_path = Path(temp) / "api.log"
             log = stack.enter_context(open(log_path, "wb"))
             process = subprocess.Popen(
-                ["dotnet", str(dll)],
+                ["dotnet", str(dll), "--urls", base],
                 cwd=api_dir,
                 env=env,
                 stdout=log,

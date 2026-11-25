@@ -50,11 +50,18 @@ public sealed class IdentityMiddleware(RequestDelegate next, IEnumerable<IRealmI
         if (row is null || !row.SessionActive) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         if (row.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被停用");
         if (row.UserType == UserTypes.Supplier && !row.SupplierActive) throw ApiException.Unauthorized("所属供应商已被停用");
-        if (row.MustChangePassword && path is not ("/api/v1/auth/profile" or "/api/v1/auth/password" or "/api/v1/auth/logout"))
+        if (row.MustChangePassword && !IsAllowedDuringPasswordChange(context.Request))
             throw new ApiException(403, 40303, "请先修改初始密码");
         context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId, claims.SessionId);
         context.Items[typeof(AccessClaims)] = claims;
         await next(context);
+    }
+
+    internal static bool IsAllowedDuringPasswordChange(HttpRequest request)
+    {
+        var path = request.Path.Value ?? "";
+        return path is "/api/v1/auth/password" or "/api/v1/auth/logout"
+            || (path == "/api/v1/auth/profile" && HttpMethods.IsGet(request.Method));
     }
 
     internal static bool IsAnonymousPath(IRealmIdentityExtension realm, HttpRequest request) =>

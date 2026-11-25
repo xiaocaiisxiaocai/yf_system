@@ -6,8 +6,6 @@ using Yf.Api.Modules.Files;
 
 namespace Yf.Api.Tests;
 
-// MigratedTestDatabase changes process-wide bootstrap state, so it must not run beside other DB tests.
-[Collection(ConnectionLifecycleCollectionDefinition.Name)]
 public sealed class FileBlobStoreTests
 {
     [Fact(Timeout = 60_000)]

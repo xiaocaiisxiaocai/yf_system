@@ -76,7 +76,8 @@ public static class PasswordService
         if (IsSimpleSequence(stem) || IsSimpleSequence(sequenceCandidate))
             return false;
         var runes = password.EnumerateRunes().ToArray();
-        return !Enumerable.Range(1, 4).Any(period => runes.Select((r, i) => (r, i)).All(x => x.r == runes[x.i % period]));
+        return !Enumerable.Range(1, 4).Any(period => period * 2 <= runes.Length
+            && runes.Select((r, i) => (r, i)).All(x => x.r == runes[x.i % period]));
     }
 
     public static Task<string> HashAsync(string password, CancellationToken cancellationToken = default)

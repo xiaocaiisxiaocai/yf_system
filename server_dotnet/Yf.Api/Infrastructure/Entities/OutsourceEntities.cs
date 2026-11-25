@@ -528,7 +528,7 @@ public sealed class OutsourceMailRecipientConfig : IEntityTypeConfiguration<Outs
         b.HasKey(x => x.Id);
         b.Property(x => x.MailId).HasColumnName("mail_id");
         b.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(8).IsRequired();
-        b.Property(x => x.Email).HasColumnName("email").HasMaxLength(128).IsRequired();
+        b.Property(x => x.Email).HasColumnName("email").HasMaxLength(254).IsRequired();
         b.Property(x => x.Name).HasColumnName("name").HasMaxLength(64);
         b.Property(x => x.Source).HasColumnName("source").HasMaxLength(16).IsRequired();
         b.Property(x => x.Rejected).HasColumnName("rejected").HasDefaultValue(false);

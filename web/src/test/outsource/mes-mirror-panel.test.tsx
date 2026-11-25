@@ -1,10 +1,17 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import http from '../../api/client'
 import MesMirrorPanel from '../../outsource/pages/MesMirrorPanel'
 import { useAuth } from '../../store/auth'
 import type { ApiResponses } from '../../api/types'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail })
+  return { promise, resolve, reject }
+}
 
 type Status = ApiResponses['GET /outsource/mes-mirror/status']
 type Settings = ApiResponses['GET /outsource/mes-mirror/settings']
@@ -36,8 +43,16 @@ function mock(status: Status, current: Settings = settings) {
 }
 
 describe('IPMS 连接与手动抓取', () => {
+  const originalHidden = Object.getOwnPropertyDescriptor(document, 'hidden')
+  const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+
   afterEach(() => {
+    vi.useRealTimers()
     vi.restoreAllMocks()
+    if (originalHidden) Object.defineProperty(document, 'hidden', originalHidden)
+    else delete (document as unknown as Record<string, unknown>).hidden
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
+    else delete (document as unknown as Record<string, unknown>).visibilityState
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
   })
 
@@ -231,5 +246,60 @@ describe('IPMS 连接与手动抓取', () => {
     render(<MesMirrorPanel />)
     expect(await screen.findByText('未设定')).toBeInTheDocument()
     expect(screen.getByLabelText('IPMS 密码')).toHaveAttribute('placeholder', '请输入密码')
+  })
+
+  it('运行中后台轮询静默错误、串行防重叠、切后台暂停并在卸载后忽略迟到响应', async () => {
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const slowPoll = deferred<{ data: Status }>()
+    const latePoll = deferred<{ data: Status }>()
+    let statusCalls = 0
+    const get = vi.spyOn(http, 'get').mockImplementation((url: string) => {
+      if (url.endsWith('/settings')) return Promise.resolve({ data: settings } as never)
+      statusCalls += 1
+      if (statusCalls === 1) return Promise.resolve({ data: running } as never)
+      if (statusCalls === 2) return slowPoll.promise as never
+      return latePoll.promise as never
+    })
+
+    const view = render(<MesMirrorPanel />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(screen.getByText(/已抓取 200 \/ 1778 笔/)).toBeInTheDocument()
+    expect(statusCalls).toBe(1)
+
+    // Poll fires at 3s with quietNetworkError: true and does NOT overlap while pending (>9s).
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(statusCalls).toBe(2)
+    expect(get).toHaveBeenLastCalledWith('/outsource/mes-mirror/status', expect.objectContaining({ quietNetworkError: true }))
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
+    expect(statusCalls).toBe(2)
+
+    await act(async () => {
+      slowPoll.resolve({ data: { ...running, fetched: 300, pages: 3 } })
+      await Promise.resolve()
+    })
+    expect(screen.getByText(/已抓取 300 \/ 1778 笔/)).toBeInTheDocument()
+
+    // Pause while hidden.
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    fireEvent(document, new Event('visibilitychange'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
+    expect(statusCalls).toBe(2)
+
+    // Resume on visibilitychange triggers next poll; unmounting before it settles ignores late response.
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    fireEvent(document, new Event('visibilitychange'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(statusCalls).toBe(3)
+
+    view.unmount()
+    await act(async () => {
+      latePoll.resolve({ data: { ...running, fetched: 400, pages: 4 } })
+      await Promise.resolve()
+    })
   })
 })

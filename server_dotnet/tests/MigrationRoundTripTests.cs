@@ -24,7 +24,8 @@ public sealed class MigrationRoundTripTests
     private const string BeforeOutsourceTransferLink = "20261124075430_RestoreOutsourceSectionLabel";
     private const string BeforeOutsourceFilesField = "20261124083731_AddOutsourceTransferLink";
     private const string BeforeOutsourceTypeElectricalHandoff = "20261124093646_AddOutsourceFilesField";
-    private const string Latest = "20261125015533_AddOutsourceTypeElectricalHandoff";
+    private const string RenameHandoffLabel = "20261125030000_RenameOutsourceHandoffLabel";
+    private const string Latest = "20261125140406_WidenOutsourceMailRecipientEmail";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -221,6 +222,50 @@ public sealed class MigrationRoundTripTests
 
         await migrator.MigrateAsync(BeforeOutsourceTypeElectricalHandoff, ct);
         Assert.Equal(before, await SchemaAsync(database, ct));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task RenameOutsourceHandoffLabelUpdatesTheBuiltInFieldAndRollsBack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_handoff_label", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        const string before = "20261125015533_AddOutsourceTypeElectricalHandoff";
+        await migrator.MigrateAsync(before, ct);
+        Assert.Equal("是否转迅得电控", await HandoffLabelAsync(database, ct));
+
+        await migrator.MigrateAsync(Latest, ct);
+        Assert.Equal("转迅得研发电控设计", await HandoffLabelAsync(database, ct));
+
+        await migrator.MigrateAsync(before, ct);
+        Assert.Equal("是否转迅得电控", await HandoffLabelAsync(database, ct));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task WidenOutsourceMailRecipientEmailUpgradesAndRollsBack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("widen_recipient_email", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(RenameHandoffLabel, ct);
+        var before = await SchemaAsync(database, ct);
+        Assert.Contains(before, line => line.StartsWith("column|outsource_mail_recipients|email|varchar(128)|", StringComparison.Ordinal));
+
+        await migrator.MigrateAsync(Latest, ct);
+        var after = await SchemaAsync(database, ct);
+        Assert.Contains(after, line => line.StartsWith("column|outsource_mail_recipients|email|varchar(254)|", StringComparison.Ordinal));
+
+        await migrator.MigrateAsync(RenameHandoffLabel, ct);
+        Assert.Equal(before, await SchemaAsync(database, ct));
+    }
+
+    private static async Task<string?> HandoffLabelAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct)
+    {
+        await using var connection = await database.Database.OpenAsync(ct);
+        return await connection.ExecuteScalarAsync<string>(new CommandDefinition(
+            "SELECT label FROM outsource_fields WHERE field_key='electricalHandoff'", cancellationToken: ct));
     }
 
     [Fact(Timeout = 180_000)]

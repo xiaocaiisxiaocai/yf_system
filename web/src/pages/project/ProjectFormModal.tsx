@@ -221,7 +221,10 @@ export default function ProjectFormModal({ visible, project, onCancel, onSaved, 
   const createOptionsNeedRefresh = supplierOptionsError || missingCreateOptions.length > 0
   const refreshCreateOptions = () => {
     loadSupplierOptions(); loadMetadataOptions()
-    if (selectedSupplierId) loadRobotParts(selectedSupplierId)
+    if (selectedSupplierId) {
+      loadRobotParts(selectedSupplierId)
+      loadContacts(selectedSupplierId)
+    }
   }
 
   const submit = async () => {
@@ -278,7 +281,7 @@ export default function ProjectFormModal({ visible, project, onCancel, onSaved, 
               : ' 请联系具有维护权限的管理员。'}</li>)}</ul>
             <span>可先填写项目资料，补齐后点击“刷新基础数据”继续。</span>
           </>} />}
-          {createOptionsNeedRefresh && <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotPartsLoading}>刷新基础数据</Button></div>}
+          {createOptionsNeedRefresh && <div><Button size="small" onClick={refreshCreateOptions} disabled={saving || supplierOptionsLoading || metadataOptionsLoading || robotPartsLoading || contactsLoading}>刷新基础数据</Button></div>}
         </div>}
         {editing && editConflict && (
           <Alert className="form-grid-full" type="warning" content={`项目已被他人修改，已刷新为最新数据（当前名称：${editing.name}）。请核对后再次保存，保存将覆盖为本弹窗中的内容。`} />

@@ -200,7 +200,8 @@ public sealed class MesHttpSource(HttpClient http, IpmsOptions options, IMesSett
     {
         try
         {
-            root = JsonDocument.Parse(text).RootElement.Clone();
+            using var doc = JsonDocument.Parse(text);
+            root = doc.RootElement.Clone();
             return root.ValueKind == JsonValueKind.Object;
         }
         catch (JsonException)

@@ -4,7 +4,9 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { Message } from '@arco-design/web-react'
 import { useEffect } from 'react'
-import { REFRESH_TIMEOUT_MS, type QuietRequestConfig } from '../../api/client'
+import {
+  extractBearerToken, isOemPortalPath, REFRESH_TIMEOUT_MS, SessionChangedError, type QuietRequestConfig,
+} from '../../api/client'
 import { withPortalAuthLock } from './portalAuthLock'
 import { isQuietRequestError } from '../../api/quietRequest'
 import { oemRequestError } from './requestError'
@@ -20,10 +22,12 @@ export interface PortalAuthState {
   account: PortalAccount | null
   mustChangePassword: boolean
   booted: boolean
+  bootUnavailable: boolean
   generation: number
   setLogin: (token: string, account: PortalAccount, mustChangePassword: boolean, replaceSession?: boolean) => void
   setToken: (token: string) => void
   setBooted: (booted: boolean) => void
+  setBootUnavailable: (bootUnavailable: boolean) => void
   logout: () => void
 }
 
@@ -36,20 +40,24 @@ export const usePortalAuth = create<PortalAuthState>()(
       account: null,
       mustChangePassword: false,
       booted: false,
+      bootUnavailable: false,
       generation: 0,
       setLogin: (token, account, mustChangePassword, replaceSession = true) => set({
         token,
         account,
         mustChangePassword,
         booted: true,
+        bootUnavailable: false,
         generation: get().generation + (replaceSession ? 1 : 0),
       }),
-      setToken: (token) => set({ token }),
+      setToken: (token) => set({ token, bootUnavailable: false }),
       setBooted: (booted) => set({ booted }),
+      setBootUnavailable: (bootUnavailable) => set({ bootUnavailable }),
       logout: () => set({
         token: null,
         account: null,
         mustChangePassword: false,
+        bootUnavailable: false,
         generation: get().generation + 1,
       }),
     }),
@@ -121,11 +129,12 @@ function classifyRefreshFailure(error: unknown): RefreshOutcome {
 }
 
 async function refreshSession(generation = usePortalAuth.getState().generation): Promise<RefreshOutcome> {
-  if (usePortalAuth.getState().generation !== generation) return 'denied'
+  if (usePortalAuth.getState().generation !== generation) return 'unavailable'
   if (!refreshing || refreshingGeneration !== generation) {
     refreshingGeneration = generation
+    const accountIdAtStart = usePortalAuth.getState().account?.id
     const pending = withPortalAuthLock(async (): Promise<RefreshOutcome> => {
-      if (usePortalAuth.getState().generation !== generation) return 'denied'
+      if (usePortalAuth.getState().generation !== generation) return 'unavailable'
       const response = await axios.post<ApiResponses['POST /oem/auth/refresh']>('/api/v1/oem/auth/refresh', null, { withCredentials: true, timeout: REFRESH_TIMEOUT_MS })
       const token = response.data?.accessToken
       if (typeof token !== 'string' || token.length === 0) return 'denied'
@@ -133,18 +142,25 @@ async function refreshSession(generation = usePortalAuth.getState().generation):
       try {
         me = await axios.get<ApiResponses['GET /oem/auth/me']>('/api/v1/oem/auth/me', { headers: { Authorization: `Bearer ${token}` }, timeout: REFRESH_TIMEOUT_MS })
       } catch (error) {
-        if (isAuthFailure(error) || usePortalAuth.getState().generation !== generation) return 'denied'
+        if (usePortalAuth.getState().generation !== generation) return 'unavailable'
+        if (isAuthFailure(error)) return 'denied'
         // A signed-in tab already holds the full account: the new token alone restores the session.
         // A booting tab only has the persisted id and cannot render without the account.
-        if (isPortalAccount(usePortalAuth.getState().account)) {
+        const currentAccount = usePortalAuth.getState().account
+        if (isPortalAccount(currentAccount) && (accountIdAtStart === undefined || currentAccount.id === accountIdAtStart)) {
           usePortalAuth.getState().setToken(token)
           return 'ok'
         }
         return 'unavailable'
       }
-      if (usePortalAuth.getState().generation !== generation
-        || !isPortalAccount(me.data?.account)
+      if (usePortalAuth.getState().generation !== generation) return 'unavailable'
+      if (!isPortalAccount(me.data?.account)
         || typeof me.data?.mustChangePassword !== 'boolean') return 'denied'
+      if (accountIdAtStart !== undefined && accountIdAtStart !== me.data.account.id) {
+        // 刷新结果换成了另一个厂商账号：按新登录处理并递增代际，不重放旧账号的请求。
+        usePortalAuth.getState().setLogin(token, me.data.account, me.data.mustChangePassword, true)
+        return 'unavailable'
+      }
       usePortalAuth.getState().setLogin(token, me.data.account, me.data.mustChangePassword, false)
       return 'ok'
     })
@@ -165,10 +181,46 @@ export async function bootPortalSession(): Promise<void> {
     const outcome = await refreshSession(generation)
     if (usePortalAuth.getState().generation === generation) {
       if (outcome === 'denied') usePortalAuth.getState().logout()
-      else if (outcome === 'unavailable') Message.error(UNAVAILABLE_MESSAGE)
+      else if (outcome === 'unavailable') {
+        usePortalAuth.getState().setBootUnavailable(true)
+        Message.error(UNAVAILABLE_MESSAGE)
+      }
     }
   }
   usePortalAuth.getState().setBooted(true)
+}
+
+let retryingPortalBoot: Promise<void> | null = null
+
+/** 门户启动恢复暂时不可用时的手动重试入口，带单飞防重入保护。 */
+export async function retryBootPortalSession(): Promise<void> {
+  if (retryingPortalBoot) return retryingPortalBoot
+  const task = (async () => {
+    const state = usePortalAuth.getState()
+    if (state.token) {
+      if (state.bootUnavailable) state.setBootUnavailable(false)
+      return
+    }
+    if (!state.account) {
+      state.setBootUnavailable(false)
+      return
+    }
+    const generation = state.generation
+    const outcome = await refreshSession(generation)
+    if (usePortalAuth.getState().generation !== generation) return
+    if (outcome === 'ok') {
+      usePortalAuth.getState().setBootUnavailable(false)
+    } else if (outcome === 'denied') {
+      usePortalAuth.getState().logout()
+    } else {
+      usePortalAuth.getState().setBootUnavailable(true)
+      Message.error(UNAVAILABLE_MESSAGE)
+    }
+  })().finally(() => {
+    if (retryingPortalBoot === task) retryingPortalBoot = null
+  })
+  retryingPortalBoot = task
+  return task
 }
 
 /** Keep OEM portal tabs aligned without sharing any state with the internal realm. */
@@ -193,7 +245,7 @@ export function usePortalSessionSync(): void {
 portalHttp.interceptors.request.use((config) => {
   const sessionConfig = config as PortalSessionConfig
   sessionConfig.authGeneration ??= usePortalAuth.getState().generation
-  if (!isCurrentSession(sessionConfig)) throw new Error('ODM/OEMA 登录状态已变化，请重新操作')
+  if (!isCurrentSession(sessionConfig)) throw new SessionChangedError('ODM/OEMA 登录状态已变化，请重新操作')
   const token = usePortalAuth.getState().token
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
@@ -201,31 +253,44 @@ portalHttp.interceptors.request.use((config) => {
 
 portalHttp.interceptors.response.use(
   (response) => {
-    if (!isCurrentSession(response.config as PortalSessionConfig)) throw new Error('ODM/OEMA 登录状态已变化，请重新操作')
+    if (!isCurrentSession(response.config as PortalSessionConfig)) throw new SessionChangedError('ODM/OEMA 登录状态已变化，请重新操作')
     return response
   },
-  async (error: AxiosError<{ code?: number; message?: string }>) => {
+  async (error: SessionChangedError | AxiosError<{ code?: number; message?: string }>) => {
+    if (error instanceof SessionChangedError) return Promise.reject(error)
     if (error.code === 'ERR_CANCELED') return Promise.reject(error)
     const config = error.config as PortalSessionConfig | undefined
     if (!isCurrentSession(config)) return Promise.reject(error)
     const status = error.response?.status
     const code = error.response?.data?.code
+    if (status === 401 && !isOemPortalPath(location.pathname)) return Promise.reject(error)
     if (status === 401 && config && !config._retried && !config.url?.includes('/oem/auth/')) {
       config._retried = true
+      const sentToken = extractBearerToken(config.headers)
+      const currentToken = usePortalAuth.getState().token
+      if (sentToken !== null && currentToken && currentToken !== sentToken) {
+        return portalHttp(config)
+      }
       const outcome = await refreshSession(config.authGeneration)
-      if (outcome === 'ok' && isCurrentSession(config)) return portalHttp(config)
+      if (!isCurrentSession(config)) return Promise.reject(error)
+      if (!isOemPortalPath(location.pathname)) return Promise.reject(error)
+      if (outcome === 'ok') return portalHttp(config)
       if (outcome === 'unavailable') {
         Message.error(UNAVAILABLE_MESSAGE)
         return Promise.reject(error)
       }
     }
-    if (status === 401 && isCurrentSession(config)) {
+    if (status === 401 && isCurrentSession(config) && isOemPortalPath(location.pathname)) {
       usePortalAuth.getState().logout()
-      if (location.pathname !== `${PORTAL_BASE}/login`) location.href = `${PORTAL_BASE}/login`
+      if (location.pathname !== `${PORTAL_BASE}/login`) {
+        location.href = `${PORTAL_BASE}/login`
+        return Promise.reject(error)
+      }
     }
     if (code === 40303) {
-      usePortalAuth.setState({ mustChangePassword: true })
-      if (location.pathname !== `${PORTAL_BASE}/change-password`) location.href = `${PORTAL_BASE}/change-password`
+      if (isOemPortalPath(location.pathname) && location.pathname !== `${PORTAL_BASE}/change-password`) {
+        usePortalAuth.setState({ mustChangePassword: true })
+      }
       return Promise.reject(error)
     }
     if (!isQuietRequestError(error)) {
@@ -254,7 +319,8 @@ export async function portalLogin(employeeNo: string, password: string): Promise
 export async function portalLogout(): Promise<void> {
   try {
     await withPortalAuthLock(async () => {
-      try { await portalHttp.post<ApiResponses['POST /oem/auth/logout']>('/oem/auth/logout', null, { withCredentials: true }) } catch { /* 忽略 */ }
+      const config: QuietRequestConfig = { withCredentials: true, quietNetworkError: true }
+      try { await portalHttp.post<ApiResponses['POST /oem/auth/logout']>('/oem/auth/logout', null, config) } catch { /* 忽略 */ }
     })
   } catch {
     /* 锁失败也要完成本地退出 */

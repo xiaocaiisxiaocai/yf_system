@@ -33,6 +33,19 @@ describe('外协清单变更履历', () => {
     expect(get).toHaveBeenCalledWith('/outsource/items/9/changes')
   })
 
+  it('交期变过时键盘聚焦也可打开气泡并显示变更历史', async () => {
+    const user = userEvent.setup()
+    const get = vi.spyOn(http, 'get').mockResolvedValue({ data: changes } as never)
+    render(<LatestDueCell item={{ id: 9, originalDueDate: '2026-12-31', latestDueDate: '2027-01-20' }} />)
+    const cell = screen.getByText('2027-01-20')
+    await user.tab()
+    expect(cell).toHaveFocus()
+    const list = await screen.findByRole('list')
+    expect(within(list).getAllByRole('listitem').map((item) => item.firstChild?.textContent))
+      .toEqual(['2026-12-31', '2027-01-15', '2027-01-20'])
+    expect(get).toHaveBeenCalledWith('/outsource/items/9/changes')
+  })
+
   it('履历抽屉列出所有字段变动、来源与操作人', async () => {
     vi.spyOn(http, 'get').mockResolvedValue({ data: changes } as never)
     render(<ItemHistoryDrawer item={{ id: 9, workOrderNo: '21089901' }} onClose={() => undefined} />)

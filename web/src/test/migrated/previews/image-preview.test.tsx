@@ -120,4 +120,21 @@ describe('image preview', () => {
     view.unmount()
     expect(mocks.revokeObjectURL).not.toHaveBeenCalledWith('blob:thumbnail')
   })
+
+  it('delegates retry to onRetry when provided and remounts img on local retry', async () => {
+    const user = userEvent.setup()
+    const onRetry = vi.fn()
+    const first = render(<ImagePreview sourceUrl="blob:external" name="external.png" onRetry={onRetry} />)
+    fireEvent.error(await screen.findByAltText('external.png'))
+    await user.click(screen.getByRole('button', { name: '重试图片预览' }))
+    expect(onRetry).toHaveBeenCalledOnce()
+    first.unmount()
+
+    render(<ImagePreview sourceUrl="blob:local" name="local.png" />)
+    const imgBefore = await screen.findByAltText('local.png')
+    fireEvent.error(imgBefore)
+    await user.click(screen.getByRole('button', { name: '重试图片预览' }))
+    const imgAfter = await screen.findByAltText('local.png')
+    expect(imgAfter).not.toBe(imgBefore)
+  })
 })

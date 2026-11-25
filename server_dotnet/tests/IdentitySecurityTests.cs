@@ -75,11 +75,39 @@ public sealed class IdentitySecurityTests
     [Theory]
     [InlineData("River")]
     [InlineData("Crane")]
+    [InlineData("K9#mK")]
+    [InlineData("river")]
+    [InlineData("A1!bA1")]
     [InlineData("海风7#🙂")]
     public void PasswordPolicyKeepsReasonableFiveScalarPasswordsWithoutCompositionRules(string password)
     {
-        Assert.Equal(5, password.EnumerateRunes().Count());
+        Assert.InRange(password.EnumerateRunes().Count(), 5, 6);
         Assert.True(PasswordService.StrongEnough(password));
+    }
+
+    [Theory]
+    [InlineData("aaaaa")]
+    [InlineData("ababa")]
+    [InlineData("abcabc")]
+    [InlineData("abcdabcd")]
+    public void PasswordPolicyRejectsActualPeriodicRepeats(string password)
+    {
+        Assert.False(PasswordService.StrongEnough(password));
+    }
+
+    [Theory]
+    [InlineData("GET", "/api/v1/auth/profile", true)]
+    [InlineData("PUT", "/api/v1/auth/profile", false)]
+    [InlineData("POST", "/api/v1/auth/profile", false)]
+    [InlineData("PUT", "/api/v1/auth/password", true)]
+    [InlineData("POST", "/api/v1/auth/logout", true)]
+    [InlineData("GET", "/api/v1/projects", false)]
+    public void MustChangePasswordAllowsReadingProfileButBlocksUpdatingIt(string method, string path, bool expected)
+    {
+        var request = new DefaultHttpContext().Request;
+        request.Method = method;
+        request.Path = path;
+        Assert.Equal(expected, IdentityMiddleware.IsAllowedDuringPasswordChange(request));
     }
 
     [Fact]

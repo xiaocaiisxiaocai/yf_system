@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using Dapper;
 using MySqlConnector;
@@ -18,7 +19,8 @@ internal static partial class TestSchemaTemplate
     internal const string TemplatePrefix = "yf_tpl_";
     private const string TemplateCollation = "utf8mb4_unicode_ci";
     private static readonly SemaphoreSlim Gate = new(1, 1);
-    private static string? templateName;
+    private static readonly ConcurrentDictionary<string, Lazy<Task<string>>> PasswordHashes = new(StringComparer.Ordinal);
+    private static TemplateSnapshot? templateSnapshot;
     // Holds GET_LOCK(templateName) for the life of the process so other test runs can tell a live template from an
     // abandoned one.
     private static MySqlConnection? owner;
@@ -44,7 +46,7 @@ internal static partial class TestSchemaTemplate
                 "Initialization refused: target database is not empty. Recreate an empty development database before initialization.");
 
         var template = await EnsureTemplateAsync(ct);
-        var passwordHash = await PasswordService.HashAsync(bootstrapPassword, ct);
+        var passwordHash = await HashBootstrapPasswordAsync(bootstrapPassword, ct);
         var sqlMode = await connection.ExecuteScalarAsync<string>(new CommandDefinition(
             "SELECT @@SESSION.sql_mode", cancellationToken: ct));
         await connection.ExecuteAsync(new CommandDefinition("SET SESSION FOREIGN_KEY_CHECKS = 0", cancellationToken: ct));
@@ -56,7 +58,7 @@ internal static partial class TestSchemaTemplate
             await connection.ExecuteAsync(new CommandDefinition(
                 "UPDATE users SET password_hash = @passwordHash WHERE employee_no = 'admin'",
                 new { passwordHash }, cancellationToken: ct));
-            await CopyTriggersAsync(connection, template, ct);
+            await CopyTriggersAsync(connection, template, sqlMode, ct);
         }
         finally
         {
@@ -66,7 +68,60 @@ internal static partial class TestSchemaTemplate
         }
     }
 
-    private static async Task CopyTablesAsync(MySqlConnection connection, string template, CancellationToken ct)
+    private static async Task<string> HashBootstrapPasswordAsync(string bootstrapPassword, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        // Validate before caching so invalid passwords never enter the cache.
+        PasswordService.Validate(bootstrapPassword);
+        var lazy = PasswordHashes.GetOrAdd(
+            bootstrapPassword,
+            static password => new Lazy<Task<string>>(
+                () => PasswordService.HashAsync(password, CancellationToken.None),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        var task = lazy.Value;
+        try
+        {
+            return await task.WaitAsync(ct);
+        }
+        catch when (!ct.IsCancellationRequested || task.IsFaulted || task.IsCanceled)
+        {
+            PasswordHashes.TryRemove(new KeyValuePair<string, Lazy<Task<string>>>(bootstrapPassword, lazy));
+            throw;
+        }
+    }
+
+    private static async Task CopyTablesAsync(MySqlConnection connection, TemplateSnapshot template, CancellationToken ct)
+    {
+        foreach (var table in template.Tables)
+        {
+            await connection.ExecuteAsync(new CommandDefinition(table.CreateSql, cancellationToken: ct));
+            if (table.InsertColumns is { } list)
+            {
+                await connection.ExecuteAsync(new CommandDefinition(
+                    $"INSERT INTO {Quote(table.Name)} ({list}) SELECT {list} FROM {Quote(template.Name)}.{Quote(table.Name)}",
+                    cancellationToken: ct));
+            }
+        }
+    }
+
+    private static async Task CopyTriggersAsync(
+        MySqlConnection connection, TemplateSnapshot template, string? initialSqlMode, CancellationToken ct)
+    {
+        var currentSqlMode = initialSqlMode;
+        foreach (var trigger in template.Triggers)
+        {
+            if (!string.Equals(trigger.SqlMode, currentSqlMode, StringComparison.Ordinal))
+            {
+                await connection.ExecuteAsync(new CommandDefinition(
+                    "SET SESSION sql_mode = @sqlMode", new { sqlMode = trigger.SqlMode }, cancellationToken: ct));
+                currentSqlMode = trigger.SqlMode;
+            }
+            await connection.ExecuteAsync(new CommandDefinition(trigger.CreateSql, cancellationToken: ct));
+        }
+    }
+
+    private static async Task<TemplateSnapshot> LoadTemplateSnapshotAsync(
+        MySqlConnection connection, string template, CancellationToken ct)
     {
         var unsupported = await connection.ExecuteScalarAsync<long>(new CommandDefinition("""
             SELECT (SELECT COUNT(*) FROM information_schema.VIEWS WHERE TABLE_SCHEMA = @template)
@@ -77,7 +132,7 @@ internal static partial class TestSchemaTemplate
             throw new NotSupportedException(
                 "The migrated schema now has views, routines or events; teach TestSchemaTemplate to copy them.");
 
-        var tables = (await connection.QueryAsync<string>(new CommandDefinition("""
+        var tableNames = (await connection.QueryAsync<string>(new CommandDefinition("""
             SELECT TABLE_NAME FROM information_schema.TABLES
             WHERE TABLE_SCHEMA = @template AND TABLE_TYPE = 'BASE TABLE'
             ORDER BY TABLE_NAME
@@ -92,54 +147,49 @@ internal static partial class TestSchemaTemplate
             .ToDictionary(group => group.Key, group => string.Join(", ", group.Select(row => Quote(row.Column))),
                 StringComparer.Ordinal);
 
-        foreach (var table in tables)
+        var tables = new List<TemplateTable>(tableNames.Count);
+        foreach (var table in tableNames)
         {
             var create = await ReadColumnAsync(connection, $"SHOW CREATE TABLE {Quote(template)}.{Quote(table)}", 1, ct);
-            await connection.ExecuteAsync(new CommandDefinition(create, cancellationToken: ct));
-            var list = columns[table];
-            await connection.ExecuteAsync(new CommandDefinition(
-                $"INSERT INTO {Quote(table)} ({list}) SELECT {list} FROM {Quote(template)}.{Quote(table)}",
-                cancellationToken: ct));
+            // Query exact presence once (InnoDB TABLE_ROWS is an estimate and may report 0 on small seeded tables).
+            var hasRows = await connection.ExecuteScalarAsync<int?>(new CommandDefinition(
+                $"SELECT 1 FROM {Quote(template)}.{Quote(table)} LIMIT 1", cancellationToken: ct)) is not null;
+            tables.Add(new TemplateTable(table, create, hasRows ? columns[table] : null));
         }
-    }
 
-    private static async Task CopyTriggersAsync(MySqlConnection connection, string template, CancellationToken ct)
-    {
-        var triggers = await connection.QueryAsync<string>(new CommandDefinition("""
+        var triggerNames = await connection.QueryAsync<string>(new CommandDefinition("""
             SELECT TRIGGER_NAME FROM information_schema.TRIGGERS
             WHERE TRIGGER_SCHEMA = @template
             ORDER BY EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION, ACTION_ORDER
             """, new { template }, cancellationToken: ct));
-        foreach (var trigger in triggers)
+        var triggers = new List<TemplateTrigger>();
+        foreach (var trigger in triggerNames)
         {
             await using var command = new MySqlCommand(
                 $"SHOW CREATE TRIGGER {Quote(template)}.{Quote(trigger)}", connection);
-            string sqlMode, statement;
-            await using (var reader = await command.ExecuteReaderAsync(ct))
-            {
-                if (!await reader.ReadAsync(ct)) throw new InvalidOperationException($"Trigger {trigger} vanished");
-                sqlMode = reader.GetString(reader.GetOrdinal("sql_mode"));
-                statement = reader.GetString(reader.GetOrdinal("SQL Original Statement"));
-            }
-            await connection.ExecuteAsync(new CommandDefinition(
-                "SET SESSION sql_mode = @sqlMode", new { sqlMode }, cancellationToken: ct));
-            await connection.ExecuteAsync(new CommandDefinition(
-                Definer().Replace(statement, "CREATE ", 1), cancellationToken: ct));
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct)) throw new InvalidOperationException($"Trigger {trigger} vanished");
+            var sqlMode = reader.GetString(reader.GetOrdinal("sql_mode"));
+            var statement = reader.GetString(reader.GetOrdinal("SQL Original Statement"));
+            triggers.Add(new TemplateTrigger(sqlMode, Definer().Replace(statement, "CREATE ", 1)));
         }
+
+        return new TemplateSnapshot(template, tables, triggers);
     }
 
-    private static async Task<string> EnsureTemplateAsync(CancellationToken ct)
+    private static async Task<TemplateSnapshot> EnsureTemplateAsync(CancellationToken ct)
     {
-        if (Volatile.Read(ref templateName) is { } ready) return ready;
+        if (Volatile.Read(ref templateSnapshot) is { } ready) return ready;
         await Gate.WaitAsync(ct);
         try
         {
-            if (templateName is { } existing) return existing;
+            if (templateSnapshot is { } existing) return existing;
             var adminOptions = LocalMySqlTestServer.AdministrationOrSkip("Database tests");
             adminOptions.Pooling = false;
             var connection = new MySqlConnection(adminOptions.ConnectionString);
             await connection.OpenAsync(ct);
             var name = TemplatePrefix + Guid.NewGuid().ToString("N")[..16];
+            TemplateSnapshot snapshot;
             try
             {
                 if (await connection.ExecuteScalarAsync<long?>(new CommandDefinition(
@@ -161,6 +211,7 @@ internal static partial class TestSchemaTemplate
                 };
                 await SchemaBootstrap.InitializeEmptyAsync(
                     new AppDb(options), "Template#" + Guid.NewGuid().ToString("N")[..8] + "!", ct);
+                snapshot = await LoadTemplateSnapshotAsync(connection, name, ct);
             }
             catch
             {
@@ -169,9 +220,9 @@ internal static partial class TestSchemaTemplate
                 throw;
             }
             owner = connection;
-            Volatile.Write(ref templateName, name);
+            Volatile.Write(ref templateSnapshot, snapshot);
             AppDomain.CurrentDomain.ProcessExit += (_, _) => DropOwnTemplate();
-            return name;
+            return snapshot;
         }
         finally { Gate.Release(); }
     }
@@ -194,9 +245,9 @@ internal static partial class TestSchemaTemplate
     private static void DropOwnTemplate()
     {
         var connection = Interlocked.Exchange(ref owner, null);
-        if (connection is null || templateName is not { } name) return;
+        if (connection is null || Volatile.Read(ref templateSnapshot) is not { } snapshot) return;
         // A failure here leaves the template behind with a free lock; the next run drops it.
-        try { connection.Execute($"DROP DATABASE IF EXISTS {Quote(name)}"); }
+        try { connection.Execute($"DROP DATABASE IF EXISTS {Quote(snapshot.Name)}"); }
         catch (MySqlException) { }
         finally { connection.Dispose(); }
     }
@@ -210,6 +261,13 @@ internal static partial class TestSchemaTemplate
     }
 
     private static string Quote(string identifier) => "`" + identifier.Replace("`", "``") + "`";
+
+    private sealed record TemplateTable(string Name, string CreateSql, string? InsertColumns);
+    private sealed record TemplateTrigger(string SqlMode, string CreateSql);
+    private sealed record TemplateSnapshot(
+        string Name,
+        IReadOnlyList<TemplateTable> Tables,
+        IReadOnlyList<TemplateTrigger> Triggers);
 
     [GeneratedRegex(@"^\s*CREATE\s+DEFINER\s*=\s*(`[^`]*`|'[^']*'|[^@\s]+)@(`[^`]*`|'[^']*'|\S+)\s+",
         RegexOptions.IgnoreCase)]

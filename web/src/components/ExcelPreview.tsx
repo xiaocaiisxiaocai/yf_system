@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Result, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/excel-viewer.html?raw'
-import { createPreviewDeadline, createRenderDeadline, type PreviewContentLoader } from './previewDeadline'
+import { createPreviewDeadline } from './previewDeadline'
 
-function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: PreviewContentLoader }) {
+export type ExcelContentLoader = (signal: AbortSignal, onProgress?: (loaded: number) => void) => Promise<ArrayBuffer>
+
+function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: ExcelContentLoader }) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [channel] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join(''))
   const [attempt, setAttempt] = useState(0)
@@ -19,9 +21,9 @@ function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: str
     let sent = false
     const controller = new AbortController()
     const timedOut = () => { controller.abort(); if (active) setState('error') }
-    // 外部取数没有下载进度，只对渲染阶段计时；协作域下载按“无进度”计时。
+    // 下载按“无进度”计时、渲染另计时。
     const external = loadContent
-    const deadline = external ? createRenderDeadline(timedOut) : createPreviewDeadline(timedOut)
+    const deadline = createPreviewDeadline(timedOut)
     const receive = (event: MessageEvent) => {
       if (!active || event.source !== frame.current?.contentWindow || event.data?.channel !== channel) return
       if (event.data.type === 'excel:rendered') { deadline.clear(); setState('ready') }
@@ -42,7 +44,7 @@ function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: str
       buffer = undefined
     }
     void (external
-      ? external(controller.signal)
+      ? external(controller.signal, (loaded) => deadline.progress(loaded))
       : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
         responseType: 'arraybuffer', signal: controller.signal, quietNetworkError: true,
         timeout: 0, onDownloadProgress: (event) => deadline.progress(event.loaded),
@@ -64,6 +66,6 @@ function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: str
   </div>
 }
 
-export default function ExcelPreview({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: PreviewContentLoader }) {
+export default function ExcelPreview({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: ExcelContentLoader }) {
   return <ExcelDocument key={fileId} fileId={fileId} ext={ext} loadContent={loadContent} />
 }

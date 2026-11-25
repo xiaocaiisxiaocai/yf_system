@@ -24,7 +24,7 @@ const EMPTY_LAYOUT: ColumnLayout = { hidden: [], widths: {} }
 
 const isDefaultArrangement = (layout: ColumnLayout) => !layout.order?.length && layout.pinned === undefined
 
-export function columnLayoutStorageKey(tableId: string, userId: number | undefined) {
+export function columnLayoutStorageKey(tableId: string, userId: number | string | undefined) {
   return `yf:table-columns:${tableId}:${userId ?? 0}`
 }
 
@@ -65,25 +65,88 @@ function storage(): Storage | undefined {
   try { return globalThis.localStorage ?? undefined } catch { return undefined }
 }
 
-export function readColumnLayout(storageKey: string, specs: readonly ColumnLayoutSpec[]): ColumnLayout {
+type RawColumnLayout = { hidden?: unknown; widths?: unknown; order?: unknown; pinned?: unknown }
+
+function readRawColumnLayout(storageKey: string): RawColumnLayout | null {
   try {
     const raw = storage()?.getItem(storageKey)
-    if (!raw) return EMPTY_LAYOUT
-    return normalizeColumnLayout(JSON.parse(raw) as unknown, specs)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as RawColumnLayout
   } catch {
-    return EMPTY_LAYOUT
+    return null
   }
 }
 
-export function writeColumnLayout(storageKey: string, layout: ColumnLayout) {
+export function hasStoredColumnLayout(storageKey: string): boolean {
+  return readRawColumnLayout(storageKey) !== null
+}
+
+export function readColumnLayout(storageKey: string, specs: readonly ColumnLayoutSpec[]): ColumnLayout {
+  const raw = readRawColumnLayout(storageKey)
+  return raw ? normalizeColumnLayout(raw, specs) : EMPTY_LAYOUT
+}
+
+function mergeWithStoredUnknowns(layout: ColumnLayout, stored: RawColumnLayout | null, knownKeys: ReadonlySet<string>): ColumnLayout {
+  if (!stored) return layout
+  const widths: Record<string, number> = {}
+  if (stored.widths && typeof stored.widths === 'object' && !Array.isArray(stored.widths)) {
+    for (const [key, value] of Object.entries(stored.widths as Record<string, unknown>)) {
+      if (!knownKeys.has(key) && typeof value === 'number' && Number.isFinite(value)) widths[key] = value
+    }
+  }
+  Object.assign(widths, layout.widths)
+
+  const unknownHidden = Array.isArray(stored.hidden)
+    ? stored.hidden.filter((key): key is string => typeof key === 'string' && !knownKeys.has(key))
+    : []
+  const hidden = [...new Set([...layout.hidden, ...unknownHidden])]
+
+  const storedOrder = Array.isArray(stored.order)
+    ? [...new Set(stored.order.filter((key): key is string => typeof key === 'string'))]
+    : []
+  let order: string[] | undefined
+  if (layout.order?.length) {
+    const remaining = [...layout.order]
+    const merged: string[] = []
+    for (const key of storedOrder) {
+      if (!knownKeys.has(key)) merged.push(key)
+      else if (remaining.length) merged.push(remaining.shift()!)
+    }
+    merged.push(...remaining)
+    order = [...new Set(merged)]
+  } else {
+    const unknownOrder = storedOrder.filter((key) => !knownKeys.has(key))
+    if (unknownOrder.length) order = unknownOrder
+  }
+
+  const storedPinned = Array.isArray(stored.pinned)
+    ? [...new Set(stored.pinned.filter((key): key is string => typeof key === 'string'))]
+    : undefined
+  const unknownPinned = storedPinned?.filter((key) => !knownKeys.has(key)) ?? []
+  const pinned = layout.pinned !== undefined
+    ? [...new Set([...layout.pinned, ...unknownPinned])]
+    : (unknownPinned.length ? unknownPinned : undefined)
+
+  return {
+    hidden,
+    widths,
+    ...(order?.length ? { order } : {}),
+    ...(pinned !== undefined ? { pinned } : {}),
+  }
+}
+
+export function writeColumnLayout(storageKey: string, layout: ColumnLayout, knownKeys?: ReadonlySet<string>) {
   const store = storage()
   if (!store) return
   try {
-    if (!layout.hidden.length && !Object.keys(layout.widths).length && isDefaultArrangement(layout)) store.removeItem(storageKey)
+    const next = knownKeys ? mergeWithStoredUnknowns(layout, readRawColumnLayout(storageKey), knownKeys) : layout
+    if (!next.hidden.length && !Object.keys(next.widths).length && isDefaultArrangement(next)) store.removeItem(storageKey)
     else store.setItem(storageKey, JSON.stringify({
-      hidden: layout.hidden, widths: layout.widths,
-      ...(layout.order?.length ? { order: layout.order } : {}),
-      ...(layout.pinned !== undefined ? { pinned: layout.pinned } : {}),
+      hidden: next.hidden, widths: next.widths,
+      ...(next.order?.length ? { order: next.order } : {}),
+      ...(next.pinned !== undefined ? { pinned: next.pinned } : {}),
     }))
   } catch { /* 隐私模式或配额不足时只保留当前页的调整。 */ }
 }

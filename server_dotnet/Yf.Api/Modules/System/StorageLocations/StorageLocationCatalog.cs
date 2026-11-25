@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
@@ -142,7 +143,64 @@ internal static class StorageLocationBootstrap
 /// <summary>Applies one storage location row to the in-memory options every storage call site reads.</summary>
 internal static class StorageLocationState
 {
-    internal static void Apply(AppOptions options, StorageLocation row)
+    private static readonly ConditionalWeakTable<AppOptions, StateGate> Gates = new();
+
+    private static StateGate GateFor(AppOptions options) => Gates.GetValue(options, _ => new StateGate());
+
+    /// <summary>
+    /// Serializes transaction commit and in-memory root updates per <see cref="AppOptions"/> instance so a
+    /// finishing migration applying IDLE can never overwrite a newer migration's roots even when both commits
+    /// share the same millisecond timestamp.
+    /// </summary>
+    internal static async Task CommitAndApplyAsync(
+        AppOptions options,
+        MySqlTransaction transaction,
+        StorageLocation row,
+        CancellationToken ct,
+        Action? onCommitted = null,
+        Action<StorageLocation>? afterApply = null,
+        Func<Task>? beforeApply = null)
+    {
+        var gate = GateFor(options);
+        await gate.CommitGate.WaitAsync(ct);
+        try
+        {
+            await transaction.CommitAsync(ct);
+            onCommitted?.Invoke();
+            if (beforeApply is not null) await beforeApply();
+            lock (gate.Sync)
+            {
+                ApplyUnchecked(options, row);
+                if (row.UpdatedAt != default)
+                    gate.LastAppliedAt[row.Kind] = row.UpdatedAt;
+            }
+            afterApply?.Invoke(row);
+        }
+        finally
+        {
+            gate.CommitGate.Release();
+        }
+    }
+
+    internal static bool Apply(AppOptions options, StorageLocation row)
+    {
+        var gate = GateFor(options);
+        lock (gate.Sync)
+        {
+            // Direct callers (startup/tests) cannot regress to a strictly older snapshot; synthetic
+            // rows without a database timestamp (UpdatedAt == default) are always applied.
+            if (row.UpdatedAt != default
+                && gate.LastAppliedAt.TryGetValue(row.Kind, out var last)
+                && row.UpdatedAt < last)
+                return false;
+            ApplyUnchecked(options, row);
+            if (row.UpdatedAt != default)
+                gate.LastAppliedAt[row.Kind] = row.UpdatedAt;
+            return true;
+        }
+    }
+
+    private static void ApplyUnchecked(AppOptions options, StorageLocation row)
     {
         var fallback = row.PreviousPath is { Length: > 0 } previous ? previous : null;
         // Readers look in the primary root, then the fallback. Root and fallback are replaced as one pair: assigning
@@ -160,5 +218,12 @@ internal static class StorageLocationState
                 options.LogDirectory = row.Path;
                 break;
         }
+    }
+
+    private sealed class StateGate
+    {
+        public SemaphoreSlim CommitGate { get; } = new(1, 1);
+        public object Sync { get; } = new();
+        public Dictionary<string, DateTime> LastAppliedAt { get; } = new(StringComparer.Ordinal);
     }
 }

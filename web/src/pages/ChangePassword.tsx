@@ -2,7 +2,9 @@ import { useRef, useState } from 'react'
 import { Button, Form, Message } from '@arco-design/web-react'
 import { IconLock } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
-import http, { withAuthLock } from '../api/client'
+import axios from 'axios'
+import http, { withAuthLock, type QuietRequestConfig } from '../api/client'
+import { requestErrorMessage } from '../api/requestError'
 import { useAuth } from '../store/auth'
 import AuthShell from '../components/AuthShell'
 import PasswordInput from '../components/PasswordInput'
@@ -21,15 +23,23 @@ export default function ChangePassword() {
     if (submitting.current) return
     submitting.current = true
     setLoading(true)
+    let loggedOut = false
     try {
-      await withAuthLock(async () => {
-        try {
-          await http.post<ApiResponses['POST /auth/logout']>('/auth/logout')
-        } catch {
-          /* 即使服务端会话已失效，也要清空本地登录态 */
-        }
-        logout()
-      })
+      try {
+        await withAuthLock(async () => {
+          try {
+            const config: QuietRequestConfig = { quietNetworkError: true }
+            await http.post<ApiResponses['POST /auth/logout']>('/auth/logout', null, config)
+          } catch {
+            /* 即使服务端会话已失效，也要清空本地登录态 */
+          }
+          logout()
+          loggedOut = true
+        })
+      } catch {
+        /* 锁协调失败也不应把用户困在强制改密页 */
+        if (!loggedOut) logout()
+      }
       nav('/login')
     } finally {
       submitting.current = false
@@ -52,8 +62,10 @@ export default function ChangePassword() {
       })
       Message.success('密码已修改，请重新登录')
       nav('/login')
-    } catch {
-      /* 拦截器已提示 */
+    } catch (e) {
+      if (!axios.isAxiosError(e)) {
+        Message.error(requestErrorMessage(e, '修改密码失败，请稍后重试'))
+      }
     } finally {
       submitting.current = false
       setLoading(false)

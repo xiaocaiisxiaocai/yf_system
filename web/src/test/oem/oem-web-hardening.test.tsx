@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AxiosError, type AxiosAdapter, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -91,6 +91,24 @@ describe('A. ODM/OEMA 分片 SHA-256 摘要', () => {
     expect(put.mock.calls[0][0]).toBe('/oem/uploads/s1/chunks/3')
     expect(config.headers['X-Chunk-SHA256']).toBe(ABC_SHA256)
     expect(config.quietNetworkError).toBe(true)
+  })
+
+  it('OemApi.initUpload / merge 透传 AbortSignal，previewBlob 透传 onDownloadProgress', async () => {
+    const post = vi.fn().mockResolvedValue({ data: {} })
+    const get = vi.fn().mockResolvedValue({ data: new Blob(['ok']) })
+    const api = new OemApi({ post, get } as unknown as AxiosInstance)
+    const controller = new AbortController()
+    await api.initUpload(41, { fileName: 'a.pdf', fileSize: 3, fileMd5: 'md5' }, controller.signal)
+    expect(post).toHaveBeenNthCalledWith(1, '/oem/transfers/41/uploads/init', { fileName: 'a.pdf', fileSize: 3, fileMd5: 'md5' }, { signal: controller.signal })
+    await api.merge('s1', controller.signal)
+    expect(post).toHaveBeenNthCalledWith(2, '/oem/uploads/s1/merge', {}, { timeout: 0, signal: controller.signal })
+
+    const onProgress = vi.fn()
+    await api.previewBlob(88, controller.signal, onProgress)
+    const getConfig = get.mock.calls[0][1] as { signal?: AbortSignal; onDownloadProgress?: (event: { loaded: number }) => void }
+    expect(getConfig.signal).toBe(controller.signal)
+    getConfig.onDownloadProgress?.({ loaded: 512 })
+    expect(onProgress).toHaveBeenCalledWith(512)
   })
 
   it('上传队列用共享分片哈希工具计算摘要并随分片发送', async () => {
@@ -258,11 +276,50 @@ describe('D. ODM/OEMA 预览带水印', () => {
     const view = render(<OemProvider value={context({ previewBlob }, 'oem')}><OemFilePreview file={file('png')} onClose={() => undefined} /></OemProvider>)
 
     await waitFor(() => expect(document.querySelector('img[src="blob:oem-image"]')).not.toBeNull())
-    expect(previewBlob).toHaveBeenCalledWith(88, expect.any(AbortSignal))
+    expect(previewBlob).toHaveBeenCalledWith(88, expect.any(AbortSignal), expect.any(Function))
     const watermark = document.querySelector('.preview-watermark')
     expect(watermark?.textContent).toContain('OEM31')
     expect(watermark?.textContent).not.toContain('厂商用户')
     view.unmount()
+  })
+
+  it('门户图片解码失败点击重试会重新拉取图片 Blob，下载停滞时会超时中止', async () => {
+    usePortalAuth.setState({ account, token: 't' })
+    let count = 0
+    const createUrl = vi.fn(() => `blob:oem-retry-${++count}`)
+    const revokeUrl = vi.fn()
+    Object.assign(URL, { createObjectURL: createUrl, revokeObjectURL: revokeUrl })
+    const previewBlob = vi.fn().mockResolvedValue(new Blob(['png']))
+    const user = userEvent.setup()
+    const view = render(<OemProvider value={context({ previewBlob }, 'oem')}><OemFilePreview file={file('png')} onClose={() => undefined} /></OemProvider>)
+
+    const img = await waitFor(() => {
+      const node = document.querySelector('img[src="blob:oem-retry-1"]')
+      expect(node).not.toBeNull()
+      return node!
+    })
+    fireEvent.error(img)
+    await user.click(await screen.findByRole('button', { name: '重试图片预览' }))
+    await waitFor(() => expect(previewBlob).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(document.querySelector('img[src="blob:oem-retry-2"]')).not.toBeNull())
+    expect(revokeUrl).toHaveBeenCalledWith('blob:oem-retry-1')
+    view.unmount()
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let stalledSignal: AbortSignal | undefined
+      const stalled = vi.fn().mockImplementation((_id: number, signal: AbortSignal) => {
+        stalledSignal = signal
+        return new Promise<Blob>(() => undefined)
+      })
+      const stalledView = render(<OemProvider value={context({ previewBlob: stalled }, 'oem')}><OemFilePreview file={file('png')} onClose={() => undefined} /></OemProvider>)
+      await vi.advanceTimersByTimeAsync(60_001)
+      expect(stalledSignal?.aborted).toBe(true)
+      expect(screen.getByText('图片预览失败')).toBeInTheDocument()
+      stalledView.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('PDF 预览通过 ODM/OEMA 内容接口取数并叠加水印', async () => {

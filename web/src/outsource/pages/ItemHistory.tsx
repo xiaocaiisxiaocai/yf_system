@@ -81,7 +81,7 @@ function DueHistory({ itemId, originalDueDate }: { itemId: number; originalDueDa
 export function LatestDueCell({ item }: { item: { id: number; originalDueDate?: string | null; latestDueDate?: string | null } }) {
   const changed = (item.originalDueDate ?? null) !== (item.latestDueDate ?? null)
   if (!changed) return <span>{item.latestDueDate ?? ''}</span>
-  return <Popover title="交期变更" trigger="hover" content={<DueHistory itemId={item.id} originalDueDate={item.originalDueDate} />}>
+  return <Popover title="交期变更" trigger={['hover', 'focus']} content={<DueHistory itemId={item.id} originalDueDate={item.originalDueDate} />}>
     <span className="outsource-due-changed" tabIndex={0}>{item.latestDueDate ?? '—'}</span>
   </Popover>
 }

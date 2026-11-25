@@ -24,10 +24,17 @@ internal static class ApiRequestPolicy
     {
         if (!HttpMethods.IsGet(request.Method) && !HttpMethods.IsHead(request.Method)) return false;
         var segments = request.Path.Value?.TrimEnd('/').Split('/', StringSplitOptions.None);
-        if (segments is ["", var oemApi, var oemVersion, var oem, var oemResource, var oemId, var oemAction])
-            return RoutePart(oemApi, "api") && RoutePart(oemVersion, "v1") && RoutePart(oem, "oem")
-                && RoutePart(oemResource, "files") && (RoutePart(oemAction, "content") || RoutePart(oemAction, "download"))
-                && ulong.TryParse(oemId, NumberStyles.None, CultureInfo.InvariantCulture, out _);
+        if (segments is ["", var api7, var version7, var segment3, var segment4, var segment5, var segment6])
+        {
+            if (RoutePart(api7, "api") && RoutePart(version7, "v1") && RoutePart(segment3, "oem")
+                && RoutePart(segment4, "files") && (RoutePart(segment6, "content") || RoutePart(segment6, "download"))
+                && ulong.TryParse(segment5, NumberStyles.None, CultureInfo.InvariantCulture, out _))
+                return true;
+            return RoutePart(api7, "api") && RoutePart(version7, "v1") && RoutePart(segment3, "messages")
+                && RoutePart(segment5, "images")
+                && ulong.TryParse(segment4, NumberStyles.None, CultureInfo.InvariantCulture, out _)
+                && ulong.TryParse(segment6, NumberStyles.None, CultureInfo.InvariantCulture, out _);
+        }
         return segments is ["", var api, var version, var resource, var id, var action]
             && RoutePart(api, "api") && RoutePart(version, "v1") && RoutePart(resource, "files")
             && (RoutePart(action, "content") || RoutePart(action, "media"))

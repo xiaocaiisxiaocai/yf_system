@@ -370,8 +370,9 @@ export function startCollaborationPolling(): () => void {
     getAccessToken: getRealtimeAccessToken,
     subscribeSession: subscribeAuthSession,
     onStatus: (realtimeStatus) => {
+      const prevStatus = useCollaboration.getState().realtimeStatus
       useCollaboration.setState({ realtimeStatus })
-      if (realtimeStatus !== 'connected') void poller.refresh()
+      if (prevStatus === 'connected' && realtimeStatus !== 'connected') void poller.refresh()
     },
     onReady: () => {
       // 会话的首次连上也要递增：页面首次 REST 加载到连上之间的推送（例如厂商上传）从未收到，需重拉一次。

@@ -147,6 +147,10 @@ public sealed class MesMirrorManualTests
         Assert.Equal("M-A1", all.List[0].Values["deviceModels"]);
         Assert.Empty(all.List[2].Values); // A3 and B9 were not part of the partial fetch and keep what they had
         Assert.Equal(["A2"], (await f.Service.OrdersAsync(f.Admin, 2, 1, 1, null, ct)).List.Select(x => x.WorkOrderNo));
+        const ulong hugePage = ulong.MaxValue / 20;
+        var emptyFar = await f.Service.OrdersAsync(f.Admin, hugePage, 20, (hugePage - 1) * 20, null, ct);
+        Assert.Equal(4UL, emptyFar.Total);
+        Assert.Empty(emptyFar.List);
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => f.Service.OrdersAsync(f.Viewer, 1, 20, 0, null, ct))).Status);
 
         // A column filter is "contains", counts only the matches, and % _ in the text are not wildcards.

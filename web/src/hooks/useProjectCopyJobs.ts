@@ -179,7 +179,7 @@ export function useProjectCopyJobs(
 
   return {
     jobs,
-    loading: enabled && (!scopeMatches || snapshot.loading || (!snapshot.ready && !snapshot.error)),
+    loading: enabled && (!scopeMatches || snapshot.loading),
     error: scopeMatches ? snapshot.error : false,
     unavailable: scopeMatches && snapshot.unavailable,
     ready,

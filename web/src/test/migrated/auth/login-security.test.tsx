@@ -5,17 +5,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
+  httpPost: vi.fn(),
+  httpPut: vi.fn(),
   isAxiosError: vi.fn((error: any) => error?.isAxiosError === true),
   withAuthLock: vi.fn((operation: () => Promise<unknown>) => operation()),
+  retryBootAuth: vi.fn(),
   error: vi.fn(),
   success: vi.fn(),
 }))
 
 vi.mock('axios', () => ({
-  default: { post: mocks.post, isAxiosError: mocks.isAxiosError },
+  default: { post: mocks.post, isAxiosError: mocks.isAxiosError, create: vi.fn(() => ({ interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } } })) },
 }))
 
-vi.mock('../../../api/client', () => ({ withAuthLock: mocks.withAuthLock }))
+vi.mock('../../../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/client')>()
+  return {
+    ...actual,
+    default: { post: mocks.httpPost, put: mocks.httpPut },
+    withAuthLock: mocks.withAuthLock,
+    retryBootAuth: mocks.retryBootAuth,
+  }
+})
 
 vi.mock('@arco-design/web-react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@arco-design/web-react')>()
@@ -26,6 +37,8 @@ vi.mock('../../../components/AuthShell', () => ({
   default: ({ children }: { children: React.ReactNode }) => <main>{children}</main>,
 }))
 
+import { Guard } from '../../../App'
+import ChangePassword from '../../../pages/ChangePassword'
 import Login from '../../../pages/Login'
 import { useAuth } from '../../../store/auth'
 
@@ -74,8 +87,11 @@ function loginPayload(token = 'fixture-token') {
 describe('login security migration', () => {
   beforeEach(() => {
     mocks.post.mockReset()
+    mocks.httpPost.mockReset()
+    mocks.httpPut.mockReset()
     mocks.isAxiosError.mockClear()
     mocks.withAuthLock.mockReset().mockImplementation((operation) => operation())
+    mocks.retryBootAuth.mockReset().mockResolvedValue(undefined)
     mocks.error.mockReset()
     mocks.success.mockReset()
     useAuth.setState({
@@ -85,6 +101,7 @@ describe('login security migration', () => {
       menus: [],
       mustChangePassword: false,
       booted: true,
+      bootUnavailable: false,
       generation: 0,
     })
   })
@@ -109,10 +126,93 @@ describe('login security migration', () => {
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(2))
     expect(mocks.post).toHaveBeenLastCalledWith('/api/v1/auth/login', {
       employeeNo: 'tester', password: 'old',
-    }, { withCredentials: true })
+    }, { withCredentials: true, timeout: 30_000 })
     expect(mocks.withAuthLock).toHaveBeenCalledTimes(2)
     await waitFor(() => expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/'))
     expect(useAuth.getState().token).toBe('fixture-token')
+  })
+
+  it('login rejects malformed response payloads with a friendly error instead of persisting corrupt session', async () => {
+    mocks.post.mockResolvedValueOnce({ data: { accessToken: 'partial-only' } })
+    const user = userEvent.setup()
+    renderLogin('/projects')
+
+    await user.type(screen.getByLabelText('账号'), 'tester')
+    await user.type(screen.getByLabelText('密码'), 'secret')
+    await user.click(screen.getByRole('button', { name: '登录' }))
+
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('登录响应格式无效，请稍后重试'))
+    expect(useAuth.getState().token).toBeNull()
+    expect(useAuth.getState().user).toBeNull()
+  })
+
+  it('ChangePassword exitLogin logs out locally even if auth lock fails and passes quietNetworkError', async () => {
+    const user = userEvent.setup()
+    useAuth.setState({ ...loginPayload('cp-token'), token: 'cp-token', mustChangePassword: true, booted: true })
+    mocks.withAuthLock.mockRejectedValueOnce(new Error('登录状态协调超时，请稍后重试'))
+
+    const firstView = render(
+      <MemoryRouter initialEntries={['/change-password']}>
+        <Routes>
+          <Route path="/change-password" element={<ChangePassword />} />
+          <Route path="/login" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await user.click(screen.getByRole('button', { name: '退出登录' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login'))
+    expect(useAuth.getState().token).toBeNull()
+    firstView.unmount()
+
+    // Normal exit sends quietNetworkError: true on logout request.
+    useAuth.setState({ ...loginPayload('cp-token-2'), token: 'cp-token-2', mustChangePassword: true, booted: true })
+    mocks.withAuthLock.mockImplementation((operation) => operation())
+    mocks.httpPost.mockResolvedValueOnce({ data: {} })
+    render(
+      <MemoryRouter initialEntries={['/change-password']}>
+        <Routes>
+          <Route path="/change-password" element={<ChangePassword />} />
+          <Route path="/login" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByRole('button', { name: '退出登录' }))
+    await waitFor(() => expect(mocks.httpPost).toHaveBeenCalledWith('/auth/logout', null, { quietNetworkError: true }))
+  })
+
+  it('Guard renders session recovery screen when bootUnavailable is true and lets user retry or re-login', async () => {
+    const user = userEvent.setup()
+    useAuth.setState({
+      token: null,
+      user: { id: 7 } as any,
+      permissions: [],
+      menus: [],
+      mustChangePassword: false,
+      booted: true,
+      bootUnavailable: true,
+      generation: 4,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/projects?page=2']}>
+        <Routes>
+          <Route path="/projects" element={<Guard><div>受保护内容</div></Guard>} />
+          <Route path="/login" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('暂时无法恢复登录状态')).toBeInTheDocument()
+    expect(screen.queryByText('受保护内容')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '重试恢复会话' }))
+    expect(mocks.retryBootAuth).toHaveBeenCalledOnce()
+
+    await user.click(screen.getByRole('button', { name: '重新登录' }))
+    await waitFor(() => expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/login'))
+    expect(useAuth.getState().bootUnavailable).toBe(false)
+    expect(useAuth.getState().user).toBeNull()
   })
 
   it('login rejects duplicate submissions even before the browser lock runs and allows retry after failure', async () => {

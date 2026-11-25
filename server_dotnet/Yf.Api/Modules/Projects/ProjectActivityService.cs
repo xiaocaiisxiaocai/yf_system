@@ -308,18 +308,24 @@ internal sealed class ProjectActivityService(
         {
             if (!files.TryGetValue(captured.TargetId, out var file)) return null;
             var upload = mapping.Action == "UPLOAD";
+            var sourceKey = mapping.Action is "WITHDRAW" or "RESTORE"
+                ? $"file:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}:{audit.Id}"
+                : $"file:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}";
             return new(file.ProjectId, mapping.ActivityType, mapping.Action, mapping.Title,
                 Truncate(file.OriginalName), upload ? file.CreatedAt : file.DeletedAt ?? audit.CreatedAt,
-                captured.TargetId, $"file:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}");
+                captured.TargetId, sourceKey);
         }
         if (!messages.TryGetValue(captured.TargetId, out var message)) return null;
         var create = mapping.Action == "CREATE";
         var messageSummary = create
             ? Truncate(message.Content.Length == 0 && message.HasImages ? "[图片]" : message.Content)
             : null;
+        var messageSourceKey = mapping.Action is "WITHDRAW" or "RESTORE"
+            ? $"message:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}:{audit.Id}"
+            : $"message:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}";
         return new(message.ProjectId, mapping.ActivityType, mapping.Action, mapping.Title, messageSummary,
             create ? message.CreatedAt : message.DeletedAt ?? audit.CreatedAt,
-            captured.TargetId, $"message:{captured.TargetId}:{mapping.Action.ToLowerInvariant()}");
+            captured.TargetId, messageSourceKey);
     }
 
     private static async Task<string> ResolveActorNameAsync(

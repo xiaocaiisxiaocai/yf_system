@@ -143,4 +143,22 @@ describe('Dictionaries migrated behavior', () => {
     expect(model).toBeDisabled()
     expect(model).toHaveAttribute('maxlength', '512')
   })
+
+  it('keeps separate column layout storage per dictionary tab so switching tabs never overwrites ROBOT_PART widths', async () => {
+    localStorage.clear()
+    const user = userEvent.setup()
+    render(<Dictionaries />)
+
+    await waitFor(() => expect(document.querySelector<HTMLButtonElement>('.dictionary-add')).toBeEnabled())
+    await user.click(screen.getByText('Robot 料号', { selector: '.arco-tabs-header-title-text' }))
+    const partHandle = await screen.findByRole('separator', { name: '调整Robot 料号列宽' })
+    fireEvent.keyDown(partHandle, { key: 'ArrowRight' })
+    expect(JSON.parse(localStorage.getItem('yf:table-columns:dictionaries-ROBOT_PART:0') ?? 'null')?.widths).toEqual({ partNumber: 186 })
+
+    await user.click(screen.getByText('Robot 类型', { selector: '.arco-tabs-header-title-text' }))
+    const nameHandle = await screen.findByRole('separator', { name: '调整名称列宽' })
+    fireEvent.keyDown(nameHandle, { key: 'ArrowRight' })
+    expect(JSON.parse(localStorage.getItem('yf:table-columns:dictionaries-ROBOT_TYPE:0') ?? 'null')?.widths).toEqual({ name: 296 })
+    expect(JSON.parse(localStorage.getItem('yf:table-columns:dictionaries-ROBOT_PART:0') ?? 'null')?.widths).toEqual({ partNumber: 186 })
+  })
 })

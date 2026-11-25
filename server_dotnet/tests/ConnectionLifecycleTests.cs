@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Tests;
@@ -195,6 +196,140 @@ public sealed class ConnectionLifecycleTests
             Assert.Equal(6, repeated.Counts["suppliers"]);
             Assert.Equal(40, repeated.Counts["robot_parts"]);
             await SchemaBootstrap.ValidateAsync(database.Database, ct);
+        }
+        finally
+        {
+            Yf.Api.Modules.Files.FileStorage.DeleteDirectoryTree(Path.GetTempPath(), root, CancellationToken.None);
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ResetClearsOemContactsOutsourceDataAndDataScopesWithoutForeignKeyConflicts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("reset_fk_all", ct);
+        var root = Path.Combine(Path.GetTempPath(), "yf_reset_fk_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        database.Options.StorageRoot = root;
+        database.Options.JwtSecret = new string('z', 48);
+        await SchemaBootstrap.InitializeEmptyAsync(database.Database, "Reset#" + Guid.NewGuid().ToString("N")[..12], ct);
+        try
+        {
+            int seededOutsourceFieldCount;
+            await using (var conn = await database.Database.OpenAsync(ct))
+            {
+                seededOutsourceFieldCount = await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_fields");
+                Assert.True(seededOutsourceFieldCount > 0);
+                await conn.ExecuteAsync("""
+                    INSERT INTO roles(name,is_built_in,status) VALUES('重置角色',0,'ACTIVE');
+                    INSERT INTO role_data_scopes(role_id,`domain`,`scope`)
+                    SELECT id,'project','ORG' FROM roles WHERE name='重置角色';
+                    INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status)
+                    SELECT 'reset-user',password_hash,'重置用户','reset@example.invalid','INTERNAL','ACTIVE'
+                    FROM users WHERE employee_no='admin';
+                    INSERT INTO user_roles(user_id,role_id)
+                    SELECT u.id,r.id FROM users u JOIN roles r ON r.name='重置角色' WHERE u.employee_no='reset-user';
+                    INSERT INTO user_data_scopes(user_id,`domain`,`scope`)
+                    SELECT id,'project','ALL' FROM users WHERE employee_no='reset-user';
+
+                    INSERT INTO suppliers(name) VALUES('重置供应商');
+                    INSERT INTO projects(name,supplier_id,created_by)
+                    SELECT '重置项目',s.id,u.id FROM suppliers s JOIN users u ON u.employee_no='reset-user' WHERE s.name='重置供应商';
+                    INSERT INTO project_work_orders(project_id,work_order_no,sort_no)
+                    SELECT id,'WO-RESET-001',0 FROM projects WHERE name='重置项目';
+
+                    INSERT INTO oem_companies(name,status,created_at,updated_at)
+                    VALUES('重置外协厂商','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+                    INSERT INTO oem_company_contacts(oem_company_id,name,email,status,created_at,updated_at)
+                    SELECT id,'外协联络人','contact@oem.invalid','ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
+                    FROM oem_companies WHERE name='重置外协厂商';
+                    INSERT INTO oem_accounts(employee_no,password_hash,real_name,email,oem_company_id,status,must_change_password,failed_login_attempts,created_at,updated_at)
+                    SELECT 'oem-reset','unused','重置OEM账号','oem-reset@oem.invalid',id,'ACTIVE',1,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
+                    FROM oem_companies WHERE name='重置外协厂商';
+                    INSERT INTO oem_internal_recipient_exclusions(user_id,created_at)
+                    SELECT id,UTC_TIMESTAMP(3) FROM users WHERE employee_no='reset-user';
+
+                    INSERT INTO outsource_types(code,name,status,sort_no) VALUES('RESET_TYPE','重置外发类型','ACTIVE',1);
+                    INSERT INTO outsource_type_vendors(type_id,vendor_id)
+                    SELECT t.id,c.id FROM outsource_types t JOIN oem_companies c ON c.name='重置外协厂商' WHERE t.code='RESET_TYPE';
+                    INSERT INTO outsource_vendor_emails(vendor_id,email,created_at,updated_at)
+                    SELECT id,'outsource@oem.invalid',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
+                    FROM oem_companies WHERE name='重置外协厂商';
+                    INSERT INTO outsource_default_cc(user_id,sort_no)
+                    SELECT id,1 FROM users WHERE employee_no='reset-user';
+                    INSERT INTO outsource_default_cc_modules(user_id,module)
+                    SELECT id,'LIST' FROM users WHERE employee_no='reset-user';
+                    INSERT INTO outsource_customer_aliases(full_name,short_name,manual,updated_at)
+                    VALUES('重置客户全称','重置客户',1,UTC_TIMESTAMP(3));
+                    INSERT INTO outsource_items(work_order_no,serial_no,outsource_date,vendor_id,status,send_status)
+                    SELECT 'OS-WO-001',1,'2026-11-25',id,'NORMAL','UNSENT'
+                    FROM oem_companies WHERE name='重置外协厂商';
+                    INSERT INTO outsource_item_changes(item_id,field,old_value,new_value,source)
+                    SELECT id,'remark','','测试','EDIT' FROM outsource_items WHERE work_order_no='OS-WO-001';
+                    INSERT INTO outsource_item_values(item_id,field_id,value)
+                    SELECT i.id,f.id,'true' FROM outsource_items i JOIN outsource_fields f ON f.field_key='hasRobotV'
+                    WHERE i.work_order_no='OS-WO-001';
+                    INSERT INTO outsource_mail_batches(request_key,created_by)
+                    SELECT 'reset-mail-batch-1',id FROM users WHERE employee_no='reset-user';
+                    INSERT INTO outsource_mails(batch_key,kind,vendor_id,subject,body_html,body_text,status)
+                    SELECT 'reset-mail-batch-1','NOTICE',id,'外协通知','<p>ok</p>','ok','SENT'
+                    FROM oem_companies WHERE name='重置外协厂商';
+                    INSERT INTO outsource_mail_recipients(mail_id,kind,email,source)
+                    SELECT id,'TO','outsource@oem.invalid','VENDOR' FROM outsource_mails WHERE batch_key='reset-mail-batch-1';
+                    INSERT INTO outsource_mail_items(mail_id,item_id,work_order_no)
+                    SELECT m.id,i.id,i.work_order_no FROM outsource_mails m JOIN outsource_items i ON i.work_order_no='OS-WO-001'
+                    WHERE m.batch_key='reset-mail-batch-1';
+                    INSERT INTO outsource_field_editor_roles(field_id,role_id)
+                    SELECT f.id,r.id FROM outsource_fields f JOIN roles r ON r.name='重置角色' WHERE f.field_key='hasRobotV';
+                    INSERT INTO outsource_field_editor_users(field_id,user_id)
+                    SELECT f.id,u.id FROM outsource_fields f JOIN users u ON u.employee_no='reset-user' WHERE f.field_key='hasRobotV';
+                    INSERT INTO mes_work_orders(work_order_no,batch_id,fetched_at,raw_json)
+                    VALUES('MES-WO-001','batch-1',UTC_TIMESTAMP(3),'{"planEndDate":"2026-12-01"}');
+                    INSERT INTO mes_work_orders_staging(work_order_no,batch_id,fetched_at,raw_json,seq)
+                    VALUES('MES-WO-001','batch-1',UTC_TIMESTAMP(3),'{"planEndDate":"2026-12-01"}',1);
+
+                    INSERT INTO oem_transfers(direction,oem_company_id,outsource_item_id,title,lifecycle_status,retention_template_id,created_at,updated_at)
+                    SELECT 'INTERNAL_TO_OEM',c.id,i.id,'关联外协传递单','DRAFT',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)
+                    FROM oem_companies c JOIN outsource_items i ON i.work_order_no='OS-WO-001' WHERE c.name='重置外协厂商';
+                    INSERT INTO oem_transfer_internal_recipients(transfer_id,user_id)
+                    SELECT t.id,u.id FROM oem_transfers t JOIN users u ON u.employee_no='reset-user' WHERE t.title='关联外协传递单';
+                    """);
+            }
+
+            var plan = await DevelopmentDataReset.InspectAsync(database.Options, ct);
+            Assert.Equal(1, plan.Counts["oem_company_contacts"]);
+            Assert.Equal(1, plan.Counts["oem_transfers"]);
+            Assert.Equal(1, plan.Counts["oem_transfer_internal_recipients"]);
+            Assert.Equal(1, plan.Counts["oem_internal_recipient_exclusions"]);
+            Assert.Equal(1, plan.Counts["outsource_items"]);
+            Assert.Equal(1, plan.Counts["outsource_mails"]);
+            Assert.Equal(1, plan.Counts["outsource_type_vendors"]);
+            Assert.Equal(1, plan.Counts["outsource_vendor_emails"]);
+            Assert.Equal(1, plan.Counts["user_data_scopes"]);
+            Assert.Equal(1, plan.Counts["project_work_orders"]);
+
+            var result = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
+            Assert.True(result.ResetCompleted);
+            foreach (var table in new[]
+            {
+                "oem_companies", "oem_company_contacts", "oem_transfers", "oem_transfer_internal_recipients",
+                "oem_internal_recipient_exclusions", "outsource_mail_items", "outsource_mail_recipients",
+                "outsource_mails", "outsource_mail_batches", "outsource_item_changes", "outsource_item_values",
+                "outsource_items", "outsource_type_vendors", "outsource_vendor_emails",
+                "outsource_default_cc_modules", "outsource_default_cc", "outsource_customer_aliases",
+                "outsource_field_editor_roles", "outsource_field_editor_users",
+                "mes_work_orders_staging", "mes_work_orders", "project_work_orders", "user_data_scopes"
+            })
+            {
+                Assert.Equal(0, result.Counts[table]);
+            }
+            Assert.Equal(DataScopeDomains.All.Length, result.Counts["role_data_scopes"]);
+
+            await using var verify = await database.Database.OpenAsync(ct);
+            Assert.Equal(seededOutsourceFieldCount, await verify.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_fields"));
+            Assert.Equal(1, await verify.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_types WHERE code='RESET_TYPE'"));
+            Assert.Equal(DataScopeDomains.All.Length, await verify.ExecuteScalarAsync<int>(
+                "SELECT COUNT(*) FROM role_data_scopes WHERE role_id=1 AND `scope`='ALL'"));
         }
         finally
         {

@@ -40,6 +40,9 @@ public sealed class StorageMigrationWorker(
     internal static readonly TimeSpan SessionWaitInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(2);
 
+    /// <summary>Test seam: runs after CompleteAsync commits and before the completed row is applied to in-memory options.</summary>
+    internal Func<Task>? BeforeApplyingCompletion { get; set; }
+
     /// <summary>How long the loop sleeps after the last <see cref="RunOnceAsync"/> (longer while only waiting for uploads).</summary>
     internal TimeSpan NextWait { get; private set; } = IdleInterval;
 
@@ -403,8 +406,7 @@ public sealed class StorageMigrationWorker(
             kept = kept.Count,
         }, null, ct);
         var row = await context.StorageLocations.AsNoTracking().SingleAsync(item => item.Kind == migration.Kind, ct);
-        await tx.CommitAsync(ct);
-        StorageLocationState.Apply(options, row);
+        await StorageLocationState.CommitAndApplyAsync(options, tx, row, ct, beforeApply: BeforeApplyingCompletion);
     }
 
     private async Task FailAsync(Migration migration, Exception error, CancellationToken ct)

@@ -40,7 +40,11 @@ class Client:
     def __init__(self, base):
         self.base = base
         self.cookies = http.cookiejar.CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookies))
+        # Test targets are always loopback; never let host proxy env vars hijack requests.
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(self.cookies),
+        )
         self.token = None
 
     def call(self, method, path, body=None, expected=200, use_auth=True, origin=None):
@@ -71,9 +75,14 @@ class Client:
 
 class SignalRProbe:
     def __init__(self, script):
+        probe_env = {
+            key: value for key, value in os.environ.items()
+            if key.upper() not in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY"}
+        }
         self.process = subprocess.Popen(
             ["node", str(script)],
             cwd=script.parent,
+            env=probe_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -239,7 +248,7 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
     admin_id = profile["user"]["id"]
     _assign_admin_section(admin, conn, secrets.token_hex(4), admin_id)
     permissions = {item["code"]: item["id"] for item in admin.call("GET", "/api/v1/permissions")}
-    supplier_role = _create_role(admin, permissions, ["project:list", "message:create"], "SignalR供应商角色")
+    supplier_role = _create_role(admin, permissions, ["project:list", "message:create", "file:upload"], "SignalR供应商角色")
     # Every internal account with project:list sees every project; the outsider lacks it.
     outsider_role = _create_role(admin, permissions, ["dashboard"], "SignalR外部项目角色")
     check("fixtures use explicit custom roles and permission codes",
@@ -345,6 +354,7 @@ def run_signalr_checks(admin, supplier, outsider, conn, probe, check, shared_pas
     supplier_mark = probe.command("mark", name="supplier")["index"]
     supplier.call("POST", f"/api/v1/projects/{project_id}/messages", {
         "content": "SignalR会话撤销验证-" + secrets.token_hex(5),
+        "signerName": "SignalR测试签名",
     })
     supplier_after_logout = _wait_event(
         probe, "supplier", supplier_mark, project_id, "messages")
@@ -417,7 +427,10 @@ def main():
             env = {
                 key: value for key, value in os.environ.items()
                 if not key.lower().startswith(("app__", "app:"))
-                and key.upper() not in {"YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD"}
+                and key.upper() not in {
+                    "YF_CONFIG_PATH", "YF_BOOTSTRAP_PASSWORD", "ASPNETCORE_CONTENTROOT", "ASPNETCORE_WEBROOT",
+                    "DOTNET_CONTENTROOT", "ASPNETCORE_URLS", "DOTNET_URLS", "URLS",
+                }
             }
             env.update({
                 "App__ConnectionString": (
@@ -442,7 +455,6 @@ def main():
                 "App__Smtp__From": "",
                 "App__Smtp__Security": "Auto",
                 "ASPNETCORE_URLS": base,
-                "URLS": base,
                 "YF_BOOTSTRAP_PASSWORD": initial_password,
                 "Logging__LogLevel__Default": "Warning",
             })
@@ -452,7 +464,7 @@ def main():
                 env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                timeout=60,
+                timeout=300,
             )
             if initialized.returncode != 0:
                 diagnostic = initialized.stdout.decode(errors="replace")[-6000:]
@@ -464,7 +476,7 @@ def main():
 
             log = stack.enter_context(open(Path(temp) / "api.log", "wb"))
             process = subprocess.Popen(
-                ["dotnet", str(dll)], cwd=api_dir, env=env, stdout=log, stderr=log,
+                ["dotnet", str(dll), "--urls", base], cwd=api_dir, env=env, stdout=log, stderr=log,
             )
             stack.callback(_stop_process, process)
             admin = Client(base)
