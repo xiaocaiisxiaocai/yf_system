@@ -44,8 +44,15 @@ class TestShardPlan(unittest.TestCase):
     def test_listed_classes_are_unique_and_valid(self):
         listed = [name for names in self.plan["classes"] for name in names]
         self.assertEqual(len(listed), len(set(listed)))
+        for names in self.plan["classes"]:
+            self.assertEqual(names, sorted(names))
         for name in listed:
             self.assertRegex(name, shards.CLASS_NAME)
+        stale = sorted(set(listed) - source_classes())
+        self.assertEqual([], stale, f"stale class names in test-shards.json: {stale}")
+
+    def test_file_blob_store_tests_are_not_serialized(self):
+        self.assertNotIn("Yf.Api.Tests.FileBlobStoreTests", shards.serial_classes())
 
     def test_every_source_class_runs_in_exactly_one_shard(self):
         filters = [shards.shard_filter(index, self.count) for index in range(1, self.count + 1)]

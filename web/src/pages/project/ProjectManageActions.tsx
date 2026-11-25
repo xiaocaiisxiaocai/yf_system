@@ -33,6 +33,7 @@ interface Props {
 export default function ProjectManageActions({ project, onChanged }: Props) {
   const navigate = useNavigate()
   const { user, hasPerm } = useAuth()
+  const generation = useAuth((state) => state.generation) ?? 0
   const isInternal = user?.userType === 'INTERNAL'
   const canEdit = project.canManage && hasPerm('project:update') && project.status === 'IN_PROGRESS'
   const canTransfer = project.canTransfer && hasPerm('project:transfer')
@@ -56,7 +57,11 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
   const copyIdempotencyKey = useRef<string | null>(null)
   const knownFinishedJobs = useRef<Set<number> | null>(null)
   const [copyForm] = Form.useForm()
-  const copyJobs = useProjectCopyJobs(canCopy, 0)
+  const copyJobs = useProjectCopyJobs(canCopy, generation)
+
+  useEffect(() => {
+    knownFinishedJobs.current = null
+  }, [generation])
 
   // 只提示本页打开后才结束的复制任务；成功的副本可从任务面板进入。
   useEffect(() => {
@@ -160,6 +165,7 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
   const responsible = project.responsibleUserName
     ? `${project.responsibleUserName}${project.responsibleUserEmployeeNo ? `（${project.responsibleUserEmployeeNo}）` : ''}`
     : '-'
+  const copyJobsLoadFailed = canCopy && !copyJobs.ready && copyJobs.error && !copyJobs.unavailable
   const showCopyJobs = canCopy && !copyJobs.unavailable && copyJobs.jobs.length > 0
 
   return (
@@ -167,6 +173,11 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
       {canEdit && <Button size="small" onClick={() => setEditOpen(true)}>编辑</Button>}
       {canTransfer && <Button size="small" onClick={openTransfer}>变更负责人</Button>}
       {canCopy && <Button size="small" disabled={!copyJobs.ready && !copyOutcomeUnknown} onClick={openCopy}>复制</Button>}
+      {copyJobsLoadFailed && (
+        <Button size="small" loading={copyJobs.loading} onClick={() => void copyJobs.refresh()}>
+          重试加载复制状态
+        </Button>
+      )}
       {showCopyJobs && <Button size="small" onClick={() => setCopyJobsOpen(true)}>复制任务</Button>}
       {project.canDelete && (
         <Popconfirm title={`确认删除项目“${project.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={remove}>

@@ -387,6 +387,16 @@ public sealed class OemReconcileService(
                         _ => PurgeReasons.Blocked,
                     };
                 }
+                else if (transfer.LifecycleStatus == TransferLifecycle.Abandoned)
+                {
+                    file.PurgeDueAt = transfer.ClosedAt ?? uow.Now;
+                    file.PurgeReason ??= transfer.ClosedReason == "草稿超过保留期限"
+                        ? PurgeReasons.DraftExpired : PurgeReasons.DraftDeleted;
+                }
+                else if (file.PurgeReason == PurgeReasons.FileRemoved)
+                {
+                    file.PurgeDueAt = uow.Now;
+                }
             }
             file.ConcurrencyVersion++;
             file.UpdatedAt = uow.Now;

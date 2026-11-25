@@ -1,16 +1,26 @@
 import axios from 'axios'
 import type { AxiosError, AxiosRequestConfig } from 'axios'
 import { Message } from '@arco-design/web-react'
-import { useAuth, type AuthLoginResponse } from '../store/auth'
+import { useAuth, type AuthLoginResponse, type AuthProfileResponse } from '../store/auth'
 import type { ApiErrorResponse } from './generated/api-types'
 import { isQuietRequestError } from './quietRequest'
 
 export const http = axios.create({ baseURL: '/api/v1', timeout: 60000 })
 
+export class SessionChangedError extends Error {
+  constructor(message = '登录状态已变化，请重新操作') {
+    super(message)
+    this.name = 'SessionChangedError'
+  }
+}
+
 let refreshing: Promise<RefreshOutcome> | null = null
 let refreshingGeneration: number | undefined
+let retryingBoot: Promise<void> | null = null
+const PROFILE_REFRESH_COOLDOWN_MS = 5_000
 type ProfileRefresh = { generation: number; token: string; promise: Promise<void> }
 let refreshingProfile: ProfileRefresh | null = null
+let lastProfileRefresh: { key: string; at: number } | null = null
 export type QuietRequestConfig = AxiosRequestConfig & {
   /** 仅抑制可重试的网络、超时、限流和服务端错误提示；鉴权与权限错误仍正常处理。 */
   quietNetworkError?: boolean
@@ -22,6 +32,24 @@ export type QuietRequestConfig = AxiosRequestConfig & {
 type SessionConfig = QuietRequestConfig & { _retried?: boolean }
 const isCurrentSession = (config?: SessionConfig) => !config || config.authGeneration === useAuth.getState().generation
 
+const NON_REFRESHABLE_AUTH_PATHS = ['/auth/login', '/auth/refresh', '/auth/logout', '/auth/password']
+function isNonRefreshableAuthRequest(url?: string): boolean {
+  if (!url) return false
+  const path = url.split('?')[0].replace(/\/+$/, '')
+  return NON_REFRESHABLE_AUTH_PATHS.some((excluded) => path === excluded || path.endsWith(excluded))
+}
+
+export function extractBearerToken(headers: unknown): string | null {
+  if (!headers || typeof headers !== 'object') return null
+  const headerObj = headers as { get?: (name: string) => unknown; Authorization?: unknown; authorization?: unknown }
+  const raw = typeof headerObj.get === 'function'
+    ? headerObj.get('Authorization')
+    : (headerObj.Authorization ?? headerObj.authorization)
+  if (typeof raw !== 'string') return null
+  const match = /^Bearer\s+(.+)$/i.exec(raw.trim())
+  return match ? match[1] : null
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
@@ -31,7 +59,7 @@ const hasTokenEnvelope = (value: Record<string, unknown>): boolean =>
   isNonEmptyString(value.accessToken) && typeof value.expiresAt === 'number'
   && Number.isSafeInteger(value.expiresAt) && value.expiresAt > 0
 
-function isAuthLoginResponse(value: unknown): value is AuthLoginResponse {
+function isAuthProfileResponse(value: unknown): value is AuthProfileResponse {
   if (!isRecord(value) || !isRecord(value.user)) return false
   const user = value.user
   return typeof user.id === 'number' && Number.isFinite(user.id) && user.id > 0
@@ -42,7 +70,11 @@ function isAuthLoginResponse(value: unknown): value is AuthLoginResponse {
     && typeof user.isSystemAdmin === 'boolean'
     && typeof value.mustChangePassword === 'boolean'
     && isStringArray(value.permissions) && isStringArray(value.menus)
-    && hasTokenEnvelope(value)
+}
+
+export function isAuthLoginResponse(value: unknown): value is AuthLoginResponse {
+  if (!isRecord(value)) return false
+  return isAuthProfileResponse(value) && hasTokenEnvelope(value)
 }
 
 /**
@@ -141,20 +173,28 @@ function tokenExpiresSoon(token: string, minimumValiditySeconds = 60): boolean {
 async function refreshProfileAfterForbidden(): Promise<void> {
   const { token, generation } = useAuth.getState()
   if (!token) return
+  const key = `${generation}:${token}`
   const pending = refreshingProfile
   let promise: Promise<void>
   if (pending && pending.generation === generation && pending.token === token) {
     promise = pending.promise
   } else {
+    if (lastProfileRefresh && lastProfileRefresh.key === key && Date.now() - lastProfileRefresh.at < PROFILE_REFRESH_COOLDOWN_MS) {
+      return
+    }
     promise = axios
-      .get('/api/v1/auth/profile', { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
+      .get<unknown>('/api/v1/auth/profile', { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 })
       .then((response) => {
-        if (useAuth.getState().generation === generation && useAuth.getState().token === token) {
+        if (useAuth.getState().generation === generation && useAuth.getState().token === token
+          && isAuthProfileResponse(response.data)) {
           useAuth.getState().setLogin({ ...response.data, accessToken: token }, false)
         }
       })
       .catch(() => undefined)
       .finally(() => {
+        if (useAuth.getState().generation === generation && useAuth.getState().token === token) {
+          lastProfileRefresh = { key, at: Date.now() }
+        }
         setTimeout(() => {
           if (refreshingProfile?.promise === promise) refreshingProfile = null
         }, 0)
@@ -256,20 +296,54 @@ export async function bootAuth(): Promise<void> {
   const generation = s.generation
   if (s.booted) return
   if (s.user && !s.token) {
-    const outcome = await tryRefresh()
+    const outcome = await tryRefresh(generation)
     if (useAuth.getState().generation === generation) {
-      // 只有服务端明确拒绝才清空持久化用户态；网络或服务暂时不可用时保留，恢复后重新打开即可静默登录。
-      if (outcome === 'rejected') s.logout()
-      else if (outcome === 'unavailable') Message.error(REFRESH_UNAVAILABLE_MESSAGE)
+      // 只有服务端明确拒绝才清空持久化用户态；网络或服务暂时不可用时保留，允许手动重试恢复。
+      if (outcome === 'rejected') useAuth.getState().logout()
+      else if (outcome === 'unavailable') {
+        useAuth.getState().setBootUnavailable(true)
+        Message.error(REFRESH_UNAVAILABLE_MESSAGE)
+      }
     }
   }
   useAuth.getState().setBooted(true)
 }
 
+/** 启动恢复暂时不可用时的手动重试入口，带单飞防重入保护。 */
+export async function retryBootAuth(): Promise<void> {
+  if (retryingBoot) return retryingBoot
+  const task = (async () => {
+    const state = useAuth.getState()
+    if (state.token) {
+      if (state.bootUnavailable) state.setBootUnavailable(false)
+      return
+    }
+    if (!state.user) {
+      state.setBootUnavailable(false)
+      return
+    }
+    const generation = state.generation
+    const outcome = await tryRefresh(generation)
+    if (useAuth.getState().generation !== generation) return
+    if (outcome === 'ok') {
+      useAuth.getState().setBootUnavailable(false)
+    } else if (outcome === 'rejected') {
+      useAuth.getState().logout()
+    } else {
+      useAuth.getState().setBootUnavailable(true)
+      Message.error(REFRESH_UNAVAILABLE_MESSAGE)
+    }
+  })().finally(() => {
+    if (retryingBoot === task) retryingBoot = null
+  })
+  retryingBoot = task
+  return task
+}
+
 http.interceptors.request.use((config) => {
   const sessionConfig = config as typeof config & SessionConfig
   sessionConfig.authGeneration ??= useAuth.getState().generation
-  if (!isCurrentSession(sessionConfig)) throw new Error('登录状态已变化，请重新操作')
+  if (!isCurrentSession(sessionConfig)) throw new SessionChangedError()
   const token = useAuth.getState().token
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
@@ -277,10 +351,11 @@ http.interceptors.request.use((config) => {
 
 http.interceptors.response.use(
   (resp) => {
-    if (!isCurrentSession(resp.config)) throw new Error('登录状态已变化，请重新操作')
+    if (!isCurrentSession(resp.config)) throw new SessionChangedError()
     return resp
   },
-  async (error: AxiosError<{ code?: number; message?: string; requestId?: string }>) => {
+  async (error: SessionChangedError | AxiosError<{ code?: number; message?: string; requestId?: string }>) => {
+    if (error instanceof SessionChangedError) return Promise.reject(error)
     if (error.code === 'ERR_CANCELED') return Promise.reject(error)
     const cfg = error.config as SessionConfig
     if (!isCurrentSession(cfg)) return Promise.reject(error)
@@ -288,8 +363,13 @@ http.interceptors.response.use(
     const biz = error.response?.data?.code
     // A late collaboration request must not refresh, clear or redirect the independent OEM realm.
     // Re-read the pathname after every await because the user may enter the portal while refresh is pending.
-    if (status === 401 && !isOemPortalPath(location.pathname) && cfg && !cfg._retried && !cfg.url?.includes('/auth/')) {
+    if (status === 401 && !isOemPortalPath(location.pathname) && cfg && !cfg._retried && !isNonRefreshableAuthRequest(cfg.url)) {
       cfg._retried = true
+      const sentToken = extractBearerToken(cfg.headers)
+      const currentToken = useAuth.getState().token
+      if (sentToken !== null && currentToken && currentToken !== sentToken) {
+        return http(cfg)
+      }
       const outcome = await tryRefresh(cfg.authGeneration)
       if (!isCurrentSession(cfg)) return Promise.reject(error)
       if (isOemPortalPath(location.pathname)) return Promise.reject(error)
@@ -307,10 +387,9 @@ http.interceptors.response.use(
         return Promise.reject(error)
       }
     }
-    // 40303 需先改密：跳强制改密页
+    // 40303 需先改密：写入状态由 Guard 跳转至强制改密页，避免整页刷新丢失内存令牌
     if (biz === 40303 && !isOemPortalPath(location.pathname) && location.pathname !== '/change-password') {
       useAuth.setState({ mustChangePassword: true })
-      location.href = '/change-password'
     }
     if (status === 403 && biz !== 40303 && !cfg?.url?.includes('/auth/profile')) {
       // 资料刷新放到后台（内部已去重并吞掉失败）：调用方立即拿到原始 403，不被最长 60 秒的资料请求拖住。

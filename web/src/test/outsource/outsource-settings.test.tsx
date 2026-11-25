@@ -330,7 +330,7 @@ describe('外协清单入口与设定', () => {
     })
     const settings = {
       fields: [
-        field(19, 'electricalHandoff', '是否转迅得电控', { category: 'FIXED', dataType: 'BOOLEAN', pinned: true, vendorVisibleLocked: true,
+        field(19, 'electricalHandoff', '转迅得研发电控设计', { category: 'FIXED', dataType: 'BOOLEAN', pinned: true, vendorVisibleLocked: true,
           editorScope: 'NONE', editorScopeAllowed: false }),
         field(3, 'workOrderNo', '工令', { category: 'FIXED', pinned: true, vendorVisibleLocked: true, editorScope: 'NONE', editorScopeAllowed: false }),
         field(6, 'hasRobotV', '是否有RobotV', { builtIn: false, dataType: 'BOOLEAN', category: 'CUSTOM', vendorVisible: false }),
@@ -346,7 +346,7 @@ describe('外协清单入口与设定', () => {
 
     await user.click(await screen.findByRole('tab', { name: '栏位设定' }))
     expect(await screen.findByRole('switch', { name: '工令 厂商可见' })).toBeDisabled()
-    const handoff = within(screen.getByText('是否转迅得电控').closest('tr')!)
+    const handoff = within(screen.getByText('转迅得研发电控设计').closest('tr')!)
     expect(handoff.getByRole('button', { name: '编辑' })).toBeDisabled()
     expect(handoff.getByRole('switch')).toBeDisabled()
     expect(handoff.getByRole('switch')).toBeChecked()

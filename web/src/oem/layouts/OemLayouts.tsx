@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from 'react'
-import { Button, Dropdown, Menu, Result, Spin } from '@arco-design/web-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Button, Dropdown, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
   IconCheckCircle, IconDown, IconFile, IconHistory, IconList, IconPoweroff, IconSettings, IconUserGroup,
 } from '@arco-design/web-react/icon'
@@ -8,14 +8,15 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { useAuth } from '../../store/auth'
 import { OemApi } from '../api/OemApi'
 import {
-  bootPortalSession, createPortalQueryScope, portalHttp, portalLogout, portalQueryClient, PORTAL_BASE, usePortalAuth,
-  usePortalSessionSync,
+  bootPortalSession, createPortalQueryScope, portalHttp, portalLogout, portalQueryClient, PORTAL_BASE,
+  retryBootPortalSession, usePortalAuth, usePortalSessionSync,
 } from '../api/portalSession'
 import { OEM_SETTINGS_PERMISSIONS, oemHome } from '../oemNavigation'
 import { OemProvider } from '../OemContext'
 import { useInternalOem } from '../useInternalOem'
 import Shell, { type MenuEntry } from '../../layouts/SectionShell'
 import AccountMenu from '../../components/AccountMenu'
+import { confirmUploadLeave } from '../../components/uploadLeave'
 import './OemLayouts.css'
 
 export function OemLanding() {
@@ -54,10 +55,11 @@ const portalApi = new OemApi(portalHttp)
 
 /** Vendor portal: OEM accounts only; never loads collaboration routes or menus. */
 export function PortalLayout() {
-  const { booted, token, account, mustChangePassword, generation } = usePortalAuth()
+  const { booted, bootUnavailable, token, account, mustChangePassword, generation, logout } = usePortalAuth()
   usePortalSessionSync()
   const navigate = useNavigate()
   const location = useLocation()
+  const [retryingBoot, setRetryingBoot] = useState(false)
   useEffect(() => { void bootPortalSession() }, [])
   const permissions = useMemo(() => new Set<string>(), [])
   const queryScope = useMemo(
@@ -73,7 +75,39 @@ export function PortalLayout() {
     queryScope,
   }), [permissions, account?.id, queryScope])
   if (!booted) return <Spin style={{ display: 'block', marginTop: 120 }} tip="正在恢复登录状态…" />
-  if (!token) return <Navigate to={`${PORTAL_BASE}/login`} state={{ from: location.pathname }} replace />
+  if (!token && bootUnavailable) {
+    return (
+      <div className="app-boot">
+        <img src="/saa-logo.svg" alt="SAA" />
+        <Result
+          status="warning"
+          title="暂时无法恢复登录状态"
+          subTitle="当前网络连接异常或服务暂时不可用，已保留本地会话。您可以重试恢复，或重新登录。"
+          extra={(
+            <Space>
+              <Button
+                type="primary"
+                loading={retryingBoot}
+                onClick={async () => {
+                  if (retryingBoot) return
+                  setRetryingBoot(true)
+                  try {
+                    await retryBootPortalSession()
+                  } finally {
+                    setRetryingBoot(false)
+                  }
+                }}
+              >
+                重试恢复会话
+              </Button>
+              <Button disabled={retryingBoot} onClick={() => logout()}>重新登录</Button>
+            </Space>
+          )}
+        />
+      </div>
+    )
+  }
+  if (!token) return <Navigate to={`${PORTAL_BASE}/login`} state={{ from: `${location.pathname}${location.search}` }} replace />
   if (mustChangePassword) return <Navigate to={`${PORTAL_BASE}/change-password`} replace />
   return (
     <QueryClientProvider client={portalQueryClient}>
@@ -83,9 +117,9 @@ export function PortalLayout() {
           { path: `${PORTAL_BASE}/outsource`, label: '外协清单', icon: <IconList />, visible: true },
         ]} account={
           <Dropdown trigger="click" droplist={
-            <Menu onClickMenuItem={async (key) => {
+            <Menu onClickMenuItem={(key) => {
               if (key === 'password') navigate(`${PORTAL_BASE}/change-password`)
-              if (key === 'logout') { await portalLogout(); navigate(`${PORTAL_BASE}/login`) }
+              if (key === 'logout') confirmUploadLeave(() => void portalLogout())
             }}>
               <Menu.Item key="password">修改密码</Menu.Item>
               <Menu.Item key="logout"><IconPoweroff style={{ marginRight: 8 }} />退出登录</Menu.Item>

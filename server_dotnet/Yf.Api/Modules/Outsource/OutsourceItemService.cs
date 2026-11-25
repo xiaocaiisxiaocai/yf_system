@@ -505,7 +505,9 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 // What the vendor columns show now becomes the comparison for the next mail.
                 var snapshot = System.Text.Json.JsonSerializer.Serialize(OutsourceWorkbook.Snapshot(baseline.Json(before), vendorFields));
                 await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
-                    .SetProperty(x => x.SendStatus, after).SetProperty(x => x.LastSentSnapshot, snapshot), ct);
+                    .SetProperty(x => x.SendStatus, after)
+                    .SetProperty(x => x.NotifiedVendorId, before.VendorId)
+                    .SetProperty(x => x.LastSentSnapshot, snapshot), ct);
             }
             else await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.SendStatus, after), ct);
             AuditChange[] changes = [new("sendStatus", "发送状态", OutsourceSendStatuses.Label(before.SendStatus), SkipNoticeLabel)];

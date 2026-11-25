@@ -8,9 +8,57 @@ configure({ asyncUtilTimeout: 5_000 })
 afterEach(async () => {
   cleanup()
   if (typeof window !== 'undefined') {
-    const { queryClient } = await import('../api/queryClient')
-    await queryClient.cancelQueries()
-    queryClient.clear()
+    try {
+      const { queryClient } = await import('../api/queryClient')
+      await queryClient.cancelQueries()
+      queryClient.clear()
+    } catch { /* mocked */ }
+    try {
+      const portal = await import('../oem/api/portalSession')
+      if (portal.portalQueryClient) {
+        await portal.portalQueryClient.cancelQueries()
+        portal.portalQueryClient.clear()
+      }
+      if (typeof portal.usePortalAuth?.setState === 'function') {
+        portal.usePortalAuth.setState({
+          token: null,
+          account: null,
+          mustChangePassword: false,
+          booted: false,
+          bootUnavailable: false,
+          generation: 0,
+        })
+      }
+    } catch { /* mocked */ }
+    try {
+      const auth = await import('../store/auth')
+      if (typeof auth.useAuth?.setState === 'function') {
+        auth.useAuth.setState({
+          token: null,
+          user: null,
+          permissions: [],
+          menus: [],
+          mustChangePassword: false,
+          booted: false,
+          bootUnavailable: false,
+          generation: 0,
+        })
+      }
+    } catch { /* mocked */ }
+    try {
+      const collab = await import('../store/collaboration')
+      if (typeof collab.useCollaboration?.getState === 'function') {
+        collab.useCollaboration.getState().reset?.()
+      }
+    } catch { /* mocked */ }
+    try {
+      const queue = await import('../outsource/sendQueue')
+      queue.resetSendQueueForTests?.()
+    } catch { /* mocked */ }
+    try {
+      const upload = await import('../components/uploadActivity')
+      upload.resetUploadActivityForTests?.()
+    } catch { /* mocked */ }
   }
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()

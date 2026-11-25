@@ -7,11 +7,14 @@ import {
   bootPortalSession,
   createPortalQueryScope,
   portalHttp,
+  portalLogout,
   portalQueryClient,
+  retryBootPortalSession,
   usePortalAuth,
   usePortalSessionSync,
   type PortalAccount,
 } from '../../oem/api/portalSession'
+import { SessionChangedError } from '../../api/client'
 
 const account: PortalAccount = {
   id: 31,
@@ -246,7 +249,7 @@ describe('ODM/OEMA 门户 HTTP 拦截器', () => {
     expect(usePortalAuth.getState()).toMatchObject({ token: null, account: null, booted: true, generation: 5 })
   })
 
-  it('40303 进入修改密码且不弹出错误', async () => {
+  it('40303 更新 mustChangePassword 且不触发整页跳转或弹出错误', async () => {
     const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
     // location.href 是不可配置的实例属性；jsdom 也不实现跨文档导航。拦截真正执行赋值的 Location 实现。
     const require = createRequire(import.meta.url)
@@ -270,10 +273,137 @@ describe('ODM/OEMA 门户 HTTP 拦截器', () => {
       await expect(portalHttp.get('/oem/transfers', { adapter })).rejects.toBeTruthy()
 
       expect(usePortalAuth.getState().mustChangePassword).toBe(true)
-      expect(assigned).toContain('/oem-portal/change-password')
+      expect(assigned).toEqual([])
       expect(toast).not.toHaveBeenCalled()
     } finally {
       Object.defineProperty(implementation.prototype, 'href', desc)
+    }
+  })
+
+  it('刷新返回另一个厂商账号时递增代际且不重放旧账号请求', async () => {
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const switchedAccount: PortalAccount = { id: 99, employeeNo: 'OEM99', companyId: 12, companyName: '另一家代工厂' }
+    vi.spyOn(axios, 'post').mockResolvedValue({ data: { accessToken: 'switched-token' } } as never)
+    vi.spyOn(axios, 'get').mockResolvedValue({ data: { account: switchedAccount, mustChangePassword: false } } as never)
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => {
+      throw httpError(config, 401, { message: '登录已过期' })
+    })
+
+    await expect(portalHttp.get('/oem/transfers', { adapter })).rejects.toBeTruthy()
+
+    expect(adapter).toHaveBeenCalledTimes(1)
+    expect(usePortalAuth.getState()).toMatchObject({
+      token: 'switched-token',
+      account: switchedAccount,
+      generation: 5,
+    })
+    expect(toast).not.toHaveBeenCalled()
+  })
+
+  it('代际过期抛出 SessionChangedError 且不弹出网络错误提示', async () => {
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => responseOf(config, { ok: true }))
+
+    await expect(
+      portalHttp.get('/oem/transfers', { adapter, authGeneration: 3 } as never),
+    ).rejects.toBeInstanceOf(SessionChangedError)
+    expect(adapter).not.toHaveBeenCalled()
+
+    const slow = deferred<ReturnType<typeof responseOf>>()
+    const responsePending = portalHttp.get('/oem/transfers', {
+      adapter: async (config) => {
+        const result = await slow.promise
+        return { ...result, config }
+      },
+    })
+    await Promise.resolve()
+    usePortalAuth.getState().logout()
+    slow.resolve(responseOf({} as InternalAxiosRequestConfig, { ok: true }))
+    await expect(responsePending).rejects.toBeInstanceOf(SessionChangedError)
+    expect(toast).not.toHaveBeenCalled()
+  })
+
+  it('离开门户路径后迟到的 401 与 40303 不登出、不改状态也不跳转', async () => {
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const refresh = deferred<{ data: { accessToken: string } }>()
+    const post = vi.spyOn(axios, 'post').mockReturnValue(refresh.promise as never)
+    const adapter = vi.fn(async (config: InternalAxiosRequestConfig) => {
+      throw httpError(config, 401, { message: '登录已过期' })
+    })
+
+    const pending = portalHttp.get('/oem/transfers', { adapter })
+    await vi.waitFor(() => expect(post).toHaveBeenCalledOnce())
+    window.history.replaceState({}, '', '/projects/1')
+    refresh.resolve({ data: { accessToken: '' } })
+    await expect(pending).rejects.toBeTruthy()
+
+    expect(usePortalAuth.getState()).toMatchObject({ token: 'old-token', account: { id: 31 }, generation: 4 })
+    expect(window.location.pathname).toBe('/projects/1')
+
+    await expect(portalHttp.get('/oem/transfers', {
+      adapter: async (config) => { throw httpError(config, 403, { code: 40303, message: '请先修改密码' }) },
+    })).rejects.toBeTruthy()
+    expect(usePortalAuth.getState().mustChangePassword).toBe(false)
+    expect(toast).not.toHaveBeenCalled()
+  })
+
+  it('同代际已有更新令牌时 401 直接用新令牌重放而不再次旋转 cookie', async () => {
+    const post = vi.spyOn(axios, 'post')
+    const seenAuth: unknown[] = []
+    const adapter: AxiosAdapter = async (config) => {
+      seenAuth.push(config.headers.Authorization)
+      if ((config as { _retried?: boolean })._retried) return responseOf(config, { ok: true })
+      // 模拟并行请求已把 store 里的令牌更新为 newer-token
+      usePortalAuth.getState().setToken('newer-token')
+      throw httpError(config, 401, { message: '登录已过期' })
+    }
+
+    const response = await portalHttp.get('/oem/transfers', { adapter })
+    expect(response.data).toEqual({ ok: true })
+    expect(post).not.toHaveBeenCalled()
+    expect(seenAuth).toEqual(['Bearer old-token', 'Bearer newer-token'])
+  })
+
+  it('启动失败标记 bootUnavailable，retryBootPortalSession 单飞恢复并在被拒时登出', async () => {
+    vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const post = vi.spyOn(axios, 'post').mockRejectedValueOnce(new AxiosError('Network Error', 'ERR_NETWORK'))
+    usePortalAuth.setState({ token: null, account: { id: 31 } as PortalAccount, booted: false, bootUnavailable: false, generation: 4 })
+
+    await bootPortalSession()
+    expect(usePortalAuth.getState()).toMatchObject({ token: null, booted: true, bootUnavailable: true, generation: 4 })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const retryRefresh = deferred<{ data: { accessToken: string } }>()
+    post.mockReturnValueOnce(retryRefresh.promise as never)
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({ data: { account, mustChangePassword: false } } as never)
+
+    const p1 = retryBootPortalSession()
+    const p2 = retryBootPortalSession()
+    await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(2))
+    retryRefresh.resolve({ data: { accessToken: 'restored-token' } })
+    await Promise.all([p1, p2])
+
+    expect(usePortalAuth.getState()).toMatchObject({ token: 'restored-token', bootUnavailable: false, generation: 4 })
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    usePortalAuth.setState({ token: null, account: { id: 31 } as PortalAccount, booted: true, bootUnavailable: true, generation: 4 })
+    post.mockRejectedValueOnce(httpError({ url: '/api/v1/oem/auth/refresh', headers: {} } as InternalAxiosRequestConfig, 401, {}))
+    await retryBootPortalSession()
+    expect(usePortalAuth.getState()).toMatchObject({ token: null, account: null, bootUnavailable: false, generation: 5 })
+  })
+
+  it('portalLogout 对登出接口使用 quietNetworkError，网络故障时不弹错误提示', async () => {
+    const toast = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const previousAdapter = portalHttp.defaults.adapter
+    portalHttp.defaults.adapter = async (config) => {
+      throw httpError(config, 503, { message: '服务暂不可用' })
+    }
+    try {
+      await portalLogout()
+      expect(usePortalAuth.getState().token).toBeNull()
+      expect(toast).not.toHaveBeenCalled()
+    } finally {
+      portalHttp.defaults.adapter = previousAdapter
     }
   })
 

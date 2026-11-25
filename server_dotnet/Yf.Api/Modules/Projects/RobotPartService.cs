@@ -60,6 +60,8 @@ internal sealed class RobotPartService(AuditService audit)
         };
         db.RobotParts.Add(entity);
         try { await db.SaveChangesAsync(ct); }
+        catch (MySqlException error) when (error.Number == 1062)
+        { throw ApiException.Conflict("该供应商下的 Robot 料号已存在"); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("该供应商下的 Robot 料号已存在"); }
         await audit.WriteAsync(conn, tx, current.Id, "ROBOT_PART_CREATE", "robot_part", entity.Id,
@@ -91,6 +93,8 @@ internal sealed class RobotPartService(AuditService audit)
                 .SetProperty(part => part.SortNo, input.SortNo)
                 .SetProperty(part => part.Status, input.Status), ct);
         }
+        catch (MySqlException error) when (error.Number == 1062)
+        { throw ApiException.Conflict("该供应商下的 Robot 料号已存在"); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("该供应商下的 Robot 料号已存在"); }
         await audit.WriteAsync(conn, tx, current.Id, "ROBOT_PART_UPDATE", "robot_part", id,

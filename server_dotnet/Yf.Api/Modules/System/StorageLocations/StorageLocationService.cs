@@ -161,9 +161,10 @@ public sealed class StorageLocationService(
         await context.SaveChangesAsync(ct);
         await audit.WriteAsync(conn, tx, current.Id, action, "storage_location", null,
             new { kind, label = StorageKinds.Label(kind), from, to = target, pending = row.PendingPath is not null }, ip, ct);
-        await tx.CommitAsync(ct);
-        committed = true;
-        ApplyRuntime(row);
+        await StorageLocationState.CommitAndApplyAsync(
+            options, tx, row, ct,
+            onCommitted: () => committed = true,
+            afterApply: SwitchLogSink);
         signal.Wake();
         return ToResponse(row);
         }
@@ -200,8 +201,7 @@ public sealed class StorageLocationService(
         await context.SaveChangesAsync(ct);
         await audit.WriteAsync(conn, tx, current.Id, "STORAGE_MIGRATION_CANCEL", "storage_location", null,
             new { kind, label = StorageKinds.Label(kind), restoredPath = row.Path, abandonedPath = row.PreviousPath }, ip, ct);
-        await tx.CommitAsync(ct);
-        ApplyRuntime(row);
+        await StorageLocationState.CommitAndApplyAsync(options, tx, row, ct, afterApply: SwitchLogSink);
         signal.Interrupt();
         return ToResponse(row);
     }
@@ -265,7 +265,12 @@ public sealed class StorageLocationService(
     /// <summary>Applies a committed row to the running process: storage roots, and the log sink for the log directory.</summary>
     internal void ApplyRuntime(StorageLocation row)
     {
-        StorageLocationState.Apply(options, row);
+        if (StorageLocationState.Apply(options, row))
+            SwitchLogSink(row);
+    }
+
+    private void SwitchLogSink(StorageLocation row)
+    {
         if (row.Kind == StorageKinds.Log && logSink is not null
             && !StorageLocationBootstrap.SamePath(logSink.Directory, row.Path))
             logSink.SwitchTo(row.Path);

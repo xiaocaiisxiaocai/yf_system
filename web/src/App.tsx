@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
-import { Result, Spin } from '@arco-design/web-react'
+import { Button, Result, Space, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
-import { bootAuth, isOemPortalPath, isSafeLoginReturnPath } from './api/client'
+import { bootAuth, isOemPortalPath, isSafeLoginReturnPath, retryBootAuth } from './api/client'
 import { OEM_SETTINGS_PERMISSIONS } from './oem/oemNavigation'
 import { OEM_UI_ENABLED } from './features'
 import { decideAuthStorageSync } from './store/authStorageSync'
@@ -55,9 +55,41 @@ function PageLoader() {
   )
 }
 
+function SessionRecoveryScreen({ onRetry, onRelogin }: { onRetry: () => Promise<void>; onRelogin: () => void }) {
+  const [retrying, setRetrying] = useState(false)
+  const handleRetry = async () => {
+    if (retrying) return
+    setRetrying(true)
+    try {
+      await onRetry()
+    } finally {
+      setRetrying(false)
+    }
+  }
+  return (
+    <div className="app-boot">
+      <img src="/saa-logo.svg" alt="SAA" />
+      <Result
+        status="warning"
+        title="暂时无法恢复登录状态"
+        subTitle="当前网络连接异常或服务暂时不可用，已保留本地会话。您可以重试恢复，或重新登录。"
+        extra={(
+          <Space>
+            <Button type="primary" loading={retrying} onClick={() => void handleRetry()}>重试恢复会话</Button>
+            <Button disabled={retrying} onClick={onRelogin}>重新登录</Button>
+          </Space>
+        )}
+      />
+    </div>
+  )
+}
+
 function Authenticated({ children }: { children: JSX.Element }) {
   const token = useAuth((state) => state.token)
+  const bootUnavailable = useAuth((state) => state.bootUnavailable)
+  const logout = useAuth((state) => state.logout)
   const loc = useLocation()
+  if (!token && bootUnavailable) return <SessionRecoveryScreen onRetry={retryBootAuth} onRelogin={logout} />
   return token ? children : <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
 }
 
@@ -72,10 +104,13 @@ function LoginRoute() {
 
 export function Guard({ children, menu, permission, anyPermission }: { children: JSX.Element; menu?: string; permission?: string; anyPermission?: string[] }) {
   const token = useAuth((state) => state.token)
+  const bootUnavailable = useAuth((state) => state.bootUnavailable)
+  const logout = useAuth((state) => state.logout)
   const mustChangePassword = useAuth((state) => state.mustChangePassword)
   const menus = useAuth((state) => state.menus)
   const permissions = useAuth((state) => state.permissions)
   const loc = useLocation()
+  if (!token && bootUnavailable) return <SessionRecoveryScreen onRetry={retryBootAuth} onRelogin={logout} />
   if (!token) return <Navigate to="/login" state={{ from: `${loc.pathname}${loc.search}` }} replace />
   if (mustChangePassword) return <Navigate to="/change-password" replace />
   if (menu && !menus.includes(menu)) return <Navigate to="/" replace />

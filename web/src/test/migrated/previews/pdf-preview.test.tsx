@@ -199,6 +199,34 @@ describe('PDF preview component', () => {
     }
   })
 
+  it('external PDF loadContent also uses stall deadline and renews on progress', async () => {
+    configureViewer()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let signal: AbortSignal | undefined
+      let onProgress: ((loaded: number) => void) | undefined
+      const loadContent = vi.fn((abortSignal: AbortSignal, progress?: (loaded: number) => void) => {
+        signal = abortSignal
+        onProgress = progress
+        return new Promise<ArrayBuffer>(() => undefined)
+      })
+      render(<PdfPreview fileId={32} loadContent={loadContent} />)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(loadContent).toHaveBeenCalledWith(expect.any(AbortSignal), expect.any(Function))
+
+      await vi.advanceTimersByTimeAsync(50_000)
+      onProgress?.(2048)
+      await vi.advanceTimersByTimeAsync(50_000)
+      expect(signal?.aborted).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(10_001)
+      expect(signal?.aborted).toBe(true)
+      expect(screen.getByRole('alert')).toHaveTextContent('PDF 加载失败')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('load and page errors stay visible and retry creates a fresh owned viewer', async () => {
     const loadingViewers = configureViewer({ failPreview: true })
     const user = userEvent.setup()

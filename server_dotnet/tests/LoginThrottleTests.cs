@@ -429,6 +429,7 @@ public sealed class LoginThrottleTests
         }
 
         private readonly AppDb _db = new(options);
+        private readonly string _initialApplicationConnectionString = AppDb.BuildConnectionString(options);
         private readonly Lazy<IDbContextFactory<YfDbContext>> _dbContextFactory = new(() => EfTestSupport.DbContextFactory(options));
         public string Password { get; } = password;
         public string LegacyPassword { get; } = legacyPassword;
@@ -532,26 +533,33 @@ public sealed class LoginThrottleTests
 
         public static async Task<LoginDatabase> CreateAsync(CancellationToken ct)
         {
-            var builder = LocalMySqlTestServer.AdministrationOrSkip("Login throttle tests");
-            var admin = new MySqlConnection(builder.ConnectionString);
+            var adminBuilder = LocalMySqlTestServer.AdministrationOrSkip("Login throttle tests");
+            adminBuilder.Pooling = false;
+            var admin = new MySqlConnection(adminBuilder.ConnectionString);
             await admin.OpenAsync(ct);
             var name = "yf_t_" + Guid.NewGuid().ToString("N");
             var created = false;
+            string? applicationConnectionString = null;
             try
             {
                 await admin.ExecuteAsync(new CommandDefinition(
                     $"CREATE DATABASE `{name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci", cancellationToken: ct));
                 created = true;
-                builder.Database = name;
-                var options = new AppOptions { ConnectionString = builder.ConnectionString, JwtSecret = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N") };
+                var appBuilder = new MySqlConnectionStringBuilder(adminBuilder.ConnectionString)
+                {
+                    Database = name,
+                    Pooling = true,
+                };
+                var options = new AppOptions { ConnectionString = appBuilder.ConnectionString, JwtSecret = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N") };
+                applicationConnectionString = AppDb.BuildConnectionString(options);
                 var password = "T#" + Guid.NewGuid().ToString("N")[..12] + "a!";
                 const string legacyPassword = "HistoricalPassword#2025!";
                 var scope = new LoginDatabase(admin, name, options, password, legacyPassword);
+                await TestSchemaTemplate.InitializeEmptyAsync(scope._db, "SchemaTest#2026", ct);
                 await using var conn = await scope._db.OpenAsync(ct);
-                await using (var context = EfDb.Use(conn))
-                    await context.Database.MigrateAsync(ct);
                 await conn.ExecuteAsync(new CommandDefinition("""
-                    INSERT INTO system_configs(cfg_key,cfg_value) VALUES('security.management_lock','');
+                    DELETE FROM user_roles;
+                    DELETE FROM users;
                     INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,must_change_password)
                     VALUES(1,'target',@hash,'Throttle target','','INTERNAL','ACTIVE',0),
                           (2,'unaffected',@hash,'Other account','','INTERNAL','ACTIVE',0),
@@ -565,15 +573,23 @@ public sealed class LoginThrottleTests
             }
             catch
             {
-                if (created) await admin.ExecuteAsync(new CommandDefinition($"DROP DATABASE `{name}`", cancellationToken: CancellationToken.None));
-                await admin.DisposeAsync();
+                try
+                {
+                    TestDatabasePoolCleanup.Clear(applicationConnectionString);
+                    if (created) await admin.ExecuteAsync(new CommandDefinition($"DROP DATABASE IF EXISTS `{name}`", cancellationToken: CancellationToken.None));
+                }
+                finally { await admin.DisposeAsync(); }
                 throw;
             }
         }
 
         public async ValueTask DisposeAsync()
         {
-            try { await admin.ExecuteAsync(new CommandDefinition($"DROP DATABASE `{name}`", cancellationToken: CancellationToken.None)); }
+            try
+            {
+                TestDatabasePoolCleanup.Clear(_initialApplicationConnectionString, AppDb.BuildConnectionString(options));
+                await admin.ExecuteAsync(new CommandDefinition($"DROP DATABASE IF EXISTS `{name}`", cancellationToken: CancellationToken.None));
+            }
             finally { await admin.DisposeAsync(); }
         }
 

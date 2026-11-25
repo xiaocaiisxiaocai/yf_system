@@ -181,6 +181,16 @@ public sealed class OemTransferService(
             throw current is OemAccountActor ? ApiException.Forbidden() : ApiException.BadRequest("目标厂商已停用");
         if (current is InternalOemActor)
             await OemRecipientPolicy.RequireEnabledAccountAsync(uow.Db, transfer.OemCompanyId, ct);
+        if (transfer.OutsourceItemId is ulong outsourceItemId)
+        {
+            var item = await uow.Db.OutsourceItems
+                .FromSqlInterpolated($"SELECT * FROM outsource_items WHERE id={outsourceItemId} LOCK IN SHARE MODE")
+                .AsNoTracking()
+                .SingleOrDefaultAsync(ct)
+                ?? throw ApiException.BadRequest("所选工令不存在或不可选");
+            if (item.ClosedAt is not null) throw ApiException.BadRequest("所选工令已完成，不能发送传递单");
+            if (item.VendorId != transfer.OemCompanyId) throw ApiException.BadRequest("所选工令的外发厂商已变更，不能发送传递单");
+        }
         var activeUploads = await uow.Db.OemUploadSessions.AnyAsync(session => session.TransferId == id
             && ((session.Status == UploadStatuses.Uploading && session.ExpiresAt > uow.Now) || session.Status == UploadStatuses.Merging), ct);
         if (activeUploads) throw ApiException.Conflict("仍有附件正在上传，请等待上传完成或取消后再发送");

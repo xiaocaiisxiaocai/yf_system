@@ -18,10 +18,12 @@ function VideoDocument({ fileId }: { fileId: number }) {
   const [source, setSource] = useState('')
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const loadTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const renewalTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const failedPlayback = useRef(false)
 
   useEffect(() => {
     let active = true
-    let renewal: ReturnType<typeof setTimeout> | undefined
+    failedPlayback.current = false
     const controller = new AbortController()
     const video = player.current
     let expiresAt = 0
@@ -29,7 +31,7 @@ function VideoDocument({ fileId }: { fileId: number }) {
     const fail = () => {
       if (!active) return
       clearTimeout(loadTimer.current)
-      clearTimeout(renewal)
+      clearTimeout(renewalTimer.current)
       video?.pause()
       setSource('')
       setState('error')
@@ -38,7 +40,7 @@ function VideoDocument({ fileId }: { fileId: number }) {
       try {
         const { data } = await http.post<MediaSession>(`/files/${fileId}/media-session`, null,
           { signal: controller.signal, quietNetworkError: true } as QuietRequestConfig)
-        if (!active) return
+        if (!active || failedPlayback.current) return
         // Only the same-origin, file-scoped endpoint may receive the media cookie.
         const url = new URL(data.url, window.location.origin)
         if (url.origin !== window.location.origin || url.pathname !== `/api/v1/files/${fileId}/media`
@@ -48,9 +50,10 @@ function VideoDocument({ fileId }: { fileId: number }) {
         expiresAt = Date.now() + data.expiresInSeconds * 1000
         retryDelay = RENEW_RETRY_BASE_MS
         setSource(url.pathname)
-        renewal = setTimeout(() => { void authorize() }, Math.min(data.expiresInSeconds * 500, 240000))
+        clearTimeout(renewalTimer.current)
+        renewalTimer.current = setTimeout(() => { void authorize() }, Math.min(data.expiresInSeconds * 500, 240000))
       } catch (error) {
-        if (!active) return
+        if (!active || failedPlayback.current) return
         // 首次授权失败或服务端返回了不可信的地址：立即失败。
         if (!expiresAt || error instanceof InvalidMediaSessionError) {
           fail()
@@ -63,7 +66,8 @@ function VideoDocument({ fileId }: { fileId: number }) {
         }
         const delay = Math.min(retryDelay, remaining)
         retryDelay = Math.min(retryDelay * 2, RENEW_RETRY_MAX_MS)
-        renewal = setTimeout(() => { void authorize() }, delay)
+        clearTimeout(renewalTimer.current)
+        renewalTimer.current = setTimeout(() => { void authorize() }, delay)
       }
     }
     loadTimer.current = setTimeout(fail, 60000)
@@ -71,7 +75,7 @@ function VideoDocument({ fileId }: { fileId: number }) {
     return () => {
       active = false
       controller.abort()
-      clearTimeout(renewal)
+      clearTimeout(renewalTimer.current)
       clearTimeout(loadTimer.current)
       video?.pause()
       video?.removeAttribute('src')
@@ -84,7 +88,14 @@ function VideoDocument({ fileId }: { fileId: number }) {
       controlsList="nodownload noremoteplayback" disablePictureInPicture
       aria-label="视频预览" onContextMenu={event => event.preventDefault()}
       onLoadedMetadata={() => { clearTimeout(loadTimer.current); setState('ready') }}
-      onError={() => { if (source) { clearTimeout(loadTimer.current); setState('error') } }}
+      onError={() => {
+        if (source) {
+          failedPlayback.current = true
+          clearTimeout(loadTimer.current)
+          clearTimeout(renewalTimer.current)
+          setState('error')
+        }
+      }}
       style={{ visibility: state === 'error' ? 'hidden' : 'visible' }} />
     {state === 'loading' && <div className="video-preview-status" role="status"><Spin />正在加载视频…</div>}
     {state === 'error' && <div className="video-preview-status" role="alert"><Result status="error" title="视频无法播放"

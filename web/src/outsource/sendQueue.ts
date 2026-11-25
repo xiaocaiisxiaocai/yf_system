@@ -52,5 +52,16 @@ export function useSendQueuePolling(enabled: boolean) {
   }, [enabled])
 }
 
+/** Resets module-level send-queue polling state between Vitest runs. */
+export function resetSendQueueForTests() {
+  subscribers = 0
+  if (timer !== undefined) {
+    clearInterval(timer)
+    timer = undefined
+  }
+  if (typeof window !== 'undefined') window.removeEventListener('focus', refresh)
+  useSendQueue.setState({ count: 0 })
+}
+
 /** The list filtered to what waits for a sender, opened from a badge. */
 export const SEND_QUEUE_PATH = '/outsource/items?sendQueue=1'

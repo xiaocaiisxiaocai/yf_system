@@ -68,12 +68,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var user = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块维护");
         await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
-        // The OEM transfer query always treats a system administrator as ALL, so a narrower value would be a
-        // configuration that silently does nothing.
-        if (await AccessService.IsSystemAdminAsync(connection, dbTransaction, id, ct)
-            && request.Scopes.Any(entry => entry.Domain == DataScopeDomains.OemTransfer
-                && entry.Scope is not null && entry.Scope != DataScopeValues.All))
-            throw ApiException.BadRequest("系统管理员的 ODM/OEMA 传递单范围固定为全部");
+        await EnsureAdminOemTransferScopeAsync(context, id, request.Scopes, ct);
         var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, [id], ct);
         await ApplyUserScopeAssignmentAsync(context, actor, user, id, request.Scopes, ct);
         await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, [id], DomainsOf(request.Scopes), ct);
@@ -124,6 +119,18 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             changes = AuditChange.OnlyChanged(new AuditChange(
                 "dataScopes", "数据范围", OrderedScopes(before), OrderedScopes(after))),
         }, null, ct);
+    }
+
+    private static async Task EnsureAdminOemTransferScopeAsync(
+        YfDbContext context, ulong userId, IReadOnlyList<DataScopeEntry> scopes, CancellationToken ct)
+    {
+        // The OEM transfer query always treats a system administrator as ALL, so a narrower value would be a
+        // configuration that silently does nothing.
+        if (await AccessService.IsSystemAdminAsync(
+                context.Database.Connection(), context.Database.RequireTransaction(), userId, ct)
+            && scopes.Any(entry => entry.Domain == DataScopeDomains.OemTransfer
+                && entry.Scope is not null && entry.Scope != DataScopeValues.All))
+            throw ApiException.BadRequest("系统管理员的 ODM/OEMA 传递单范围固定为全部");
     }
 
     private static void ValidateScopeEntries(IReadOnlyList<DataScopeEntry>? entries)
@@ -227,6 +234,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (request.Scopes is { Count: > 0 })
         {
             ValidateScopeEntries(request.Scopes);
+            await EnsureAdminOemTransferScopeAsync(context, user.Id, request.Scopes, ct);
             await ApplyUserScopeAssignmentAsync(context, actor, user, user.Id, request.Scopes, ct);
         }
         // The new account's range comes from its role, its organisation and any range given here; all must stay
@@ -271,13 +279,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, [id], ct);
         // 资料与范围在同一事务提交：范围校验失败时资料保持原样，不会只生效一半。
         if (request.Scopes is { Count: > 0 })
-        {
             ValidateScopeEntries(request.Scopes);
-            if (await AccessService.IsSystemAdminAsync(connection, dbTransaction, id, ct)
-                && request.Scopes.Any(entry => entry.Domain == DataScopeDomains.OemTransfer
-                    && entry.Scope is not null && entry.Scope != DataScopeValues.All))
-                throw ApiException.BadRequest("系统管理员的 ODM/OEMA 传递单范围固定为全部");
-        }
         if (departmentSpecified && departmentId is null || !departmentSpecified && user.DepartmentId is null) throw ApiException.BadRequest("请选择所属组织");
         var effectiveDepartmentId = departmentSpecified ? departmentId : user.DepartmentId;
         if (effectiveDepartmentId is not ulong department) throw ApiException.BadRequest("请选择所属组织");
@@ -303,8 +305,6 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         if (request.Email is not null) user.Email = request.Email.Trim();
         if (departmentSpecified) user.DepartmentId = departmentId;
         await context.SaveChangesAsync(ct);
-        if (request.Scopes is { Count: > 0 })
-            await ApplyUserScopeAssignmentAsync(context, actor, user, id, request.Scopes, ct);
         if (departmentChanged) await DepartmentService.EnsureLeaderRulesAsync(context, leaderBaseline!, ct);
         // Every save re-aligns the user's projects, so a section left stale by older data is fixed by saving the user.
         await SyncProjectSectionsAsync(context, id, ct);
@@ -312,6 +312,11 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         {
             await context.UserRoles.Where(x => x.UserId == id).ExecuteDeleteAsync(ct);
             context.UserRoles.Add(new UserRole { UserId = id, RoleId = roleId }); await context.SaveChangesAsync(ct);
+        }
+        if (request.Scopes is { Count: > 0 })
+        {
+            await EnsureAdminOemTransferScopeAsync(context, id, request.Scopes, ct);
+            await ApplyUserScopeAssignmentAsync(context, actor, user, id, request.Scopes, ct);
         }
         await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, [id], DomainsOf(request.Scopes), ct);
         var updated = await FindAsync(context, id, ct) ?? throw ApiException.NotFound(); var newRoleId = roleChanged ? roleId : oldRoleId;

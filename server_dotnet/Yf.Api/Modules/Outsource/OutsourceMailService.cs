@@ -295,21 +295,21 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Send, ct);
-        var failed = await context.OutsourceMails.AsNoTracking().Where(x => x.Id == id && x.Status == OutsourceMailStatuses.Failed)
-            .Select(x => new { x.Kind, x.VendorId, x.UpdatedAt }).SingleOrDefaultAsync(ct);
-        var updated = await context.OutsourceMails.Where(x => x.Id == id && x.Status == OutsourceMailStatuses.Failed)
-            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, OutsourceMailStatuses.Queued).SetProperty(x => x.Attempts, 0)
-                .SetProperty(x => x.NextAttemptAt, DateTime.UtcNow).SetProperty(x => x.LastError, (string?)null), ct);
-        if (updated == 0)
-        {
-            if (!await context.OutsourceMails.AnyAsync(x => x.Id == id, ct)) throw ApiException.NotFound();
+        var mail = await context.OutsourceMails
+            .FromSqlInterpolated($"SELECT * FROM outsource_mails WHERE id={id} FOR UPDATE")
+            .AsNoTracking()
+            .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound();
+        if (mail.Status != OutsourceMailStatuses.Failed)
             throw ApiException.Conflict("只有发送失败的邮件可以重新发送");
-        }
+        var now = await DbClock.UtcNowAsync(context, ct, 3);
+        await context.OutsourceMails.Where(x => x.Id == id)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, OutsourceMailStatuses.Queued).SetProperty(x => x.Attempts, 0)
+                .SetProperty(x => x.NextAttemptAt, now).SetProperty(x => x.LastError, (string?)null), ct);
         await context.OutsourceMailRecipients.Where(x => x.MailId == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Rejected, false), ct);
         // The resend is the notice again: items that went back to "待通知" because of this failure (and were not edited since) are sent again.
-        if (failed is { Kind: OutsourceMailKinds.Notice } notice)
-            await context.OutsourceItems.Where(item => item.SendStatus == OutsourceSendStatuses.PendingNotice && item.NotifiedVendorId == notice.VendorId
-                    && item.UpdatedAt <= notice.UpdatedAt
+        if (mail.Kind == OutsourceMailKinds.Notice)
+            await context.OutsourceItems.Where(item => item.SendStatus == OutsourceSendStatuses.PendingNotice && item.NotifiedVendorId == mail.VendorId
+                    && item.UpdatedAt <= mail.UpdatedAt
                     && context.OutsourceMailItems.Any(link => link.MailId == id && link.ItemId == item.Id))
                 .ExecuteUpdateAsync(s => s.SetProperty(x => x.SendStatus, OutsourceSendStatuses.Sent), ct);
         await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,

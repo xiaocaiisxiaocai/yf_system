@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Files;
+using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Infrastructure;
@@ -12,13 +13,21 @@ internal static class DevelopmentDataReset
 {
     private static readonly string[] ClearedTables = [
         "oem_download_ranges", "oem_download_leases", "oem_download_sessions", "oem_file_promotions", "oem_file_scan_jobs",
-        "oem_flow_tasks", "oem_flow_instance_nodes", "oem_flow_instances", "oem_upload_sessions", "oem_transfer_files",
-        "oem_transfers", "oem_refresh_tokens", "oem_accounts", "oem_companies", "oem_flow_template_node_users", "oem_flow_template_scopes",
+        "oem_flow_tasks", "oem_flow_instance_nodes", "oem_flow_instances", "oem_upload_sessions",
+        "oem_transfer_internal_recipients", "oem_transfer_files", "oem_transfers",
+        "outsource_mail_items", "outsource_mail_recipients", "outsource_mails", "outsource_mail_batches",
+        "outsource_item_changes", "outsource_item_values", "outsource_items",
+        "outsource_type_vendors", "outsource_vendor_emails", "outsource_default_cc_modules", "outsource_default_cc",
+        "outsource_customer_aliases", "outsource_field_editor_roles", "outsource_field_editor_users",
+        "mes_work_orders_staging", "mes_work_orders",
+        "oem_refresh_tokens", "oem_accounts", "oem_company_contacts", "oem_internal_recipient_exclusions",
+        "oem_companies", "oem_flow_template_node_users", "oem_flow_template_scopes",
         "collaboration_reads", "message_reads", "message_images", "email_outbox", "project_activities",
         "file_copy_refs", "project_copy_jobs", "project_copies",
-        "project_status_logs", "upload_sessions", "files", "file_blobs", "messages", "project_robot_owners", "projects",
+        "project_status_logs", "upload_sessions", "files", "file_blobs", "messages",
+        "project_robot_owners", "project_work_orders", "projects",
         "robot_parts", "supplier_contacts", "refresh_tokens",
-        "user_roles", "role_permissions", "departments", "audit_logs"
+        "user_data_scopes", "role_data_scopes", "user_roles", "role_permissions", "departments", "audit_logs"
     ];
 
     private static readonly IReadOnlyDictionary<string, Func<YfDbContext, CancellationToken, Task<long>>> TableCounts =
@@ -33,10 +42,29 @@ internal static class DevelopmentDataReset
             ["oem_flow_instance_nodes"] = (db, ct) => db.OemFlowInstanceNodes.LongCountAsync(ct),
             ["oem_flow_instances"] = (db, ct) => db.OemFlowInstances.LongCountAsync(ct),
             ["oem_upload_sessions"] = (db, ct) => db.OemUploadSessions.LongCountAsync(ct),
+            ["oem_transfer_internal_recipients"] = (db, ct) => db.OemTransferInternalRecipients.LongCountAsync(ct),
             ["oem_transfer_files"] = (db, ct) => db.OemTransferFiles.LongCountAsync(ct),
             ["oem_transfers"] = (db, ct) => db.OemTransfers.LongCountAsync(ct),
+            ["outsource_mail_items"] = (db, ct) => db.OutsourceMailItems.LongCountAsync(ct),
+            ["outsource_mail_recipients"] = (db, ct) => db.OutsourceMailRecipients.LongCountAsync(ct),
+            ["outsource_mails"] = (db, ct) => db.OutsourceMails.LongCountAsync(ct),
+            ["outsource_mail_batches"] = (db, ct) => db.OutsourceMailBatches.LongCountAsync(ct),
+            ["outsource_item_changes"] = (db, ct) => db.OutsourceItemChanges.LongCountAsync(ct),
+            ["outsource_item_values"] = (db, ct) => db.OutsourceItemValues.LongCountAsync(ct),
+            ["outsource_items"] = (db, ct) => db.OutsourceItems.LongCountAsync(ct),
+            ["outsource_type_vendors"] = (db, ct) => db.OutsourceTypeVendors.LongCountAsync(ct),
+            ["outsource_vendor_emails"] = (db, ct) => db.OutsourceVendorEmails.LongCountAsync(ct),
+            ["outsource_default_cc_modules"] = (db, ct) => db.OutsourceDefaultCcModules.LongCountAsync(ct),
+            ["outsource_default_cc"] = (db, ct) => db.OutsourceDefaultCc.LongCountAsync(ct),
+            ["outsource_customer_aliases"] = (db, ct) => db.OutsourceCustomerAliases.LongCountAsync(ct),
+            ["outsource_field_editor_roles"] = (db, ct) => db.OutsourceFieldEditorRoles.LongCountAsync(ct),
+            ["outsource_field_editor_users"] = (db, ct) => db.OutsourceFieldEditorUsers.LongCountAsync(ct),
+            ["mes_work_orders_staging"] = (db, ct) => db.MesWorkOrdersStaging.LongCountAsync(ct),
+            ["mes_work_orders"] = (db, ct) => db.MesWorkOrders.LongCountAsync(ct),
             ["oem_refresh_tokens"] = (db, ct) => db.OemRefreshTokens.LongCountAsync(ct),
             ["oem_accounts"] = (db, ct) => db.OemAccounts.LongCountAsync(ct),
+            ["oem_company_contacts"] = (db, ct) => db.OemCompanyContacts.LongCountAsync(ct),
+            ["oem_internal_recipient_exclusions"] = (db, ct) => db.OemInternalRecipientExclusions.LongCountAsync(ct),
             ["oem_companies"] = (db, ct) => db.OemCompanies.LongCountAsync(ct),
             ["oem_flow_template_node_users"] = (db, ct) => db.OemFlowTemplateNodeUsers.LongCountAsync(ct),
             ["oem_flow_template_scopes"] = (db, ct) => db.OemFlowTemplateScopes.LongCountAsync(ct),
@@ -53,11 +81,14 @@ internal static class DevelopmentDataReset
             ["files"] = (db, ct) => db.Files.LongCountAsync(ct),
             ["file_blobs"] = (db, ct) => db.FileBlobs.LongCountAsync(ct),
             ["messages"] = (db, ct) => db.Messages.LongCountAsync(ct),
+            ["project_robot_owners"] = (db, ct) => db.ProjectRobotOwners.LongCountAsync(ct),
+            ["project_work_orders"] = (db, ct) => db.ProjectWorkOrders.LongCountAsync(ct),
             ["projects"] = (db, ct) => db.Projects.LongCountAsync(ct),
             ["robot_parts"] = (db, ct) => db.RobotParts.LongCountAsync(ct),
             ["supplier_contacts"] = (db, ct) => db.SupplierContacts.LongCountAsync(ct),
-            ["project_robot_owners"] = (db, ct) => db.ProjectRobotOwners.LongCountAsync(ct),
             ["refresh_tokens"] = (db, ct) => db.RefreshTokens.LongCountAsync(ct),
+            ["user_data_scopes"] = (db, ct) => db.UserDataScopes.LongCountAsync(ct),
+            ["role_data_scopes"] = (db, ct) => db.RoleDataScopes.LongCountAsync(ct),
             ["user_roles"] = (db, ct) => db.UserRoles.LongCountAsync(ct),
             ["role_permissions"] = (db, ct) => db.RolePermissions.LongCountAsync(ct),
             ["departments"] = (db, ct) => db.Departments.LongCountAsync(ct),
@@ -229,6 +260,12 @@ internal static class DevelopmentDataReset
                 RoleId = role.Id,
                 PermissionId = permissionId,
             }));
+            db.RoleDataScopes.AddRange(DataScopeDomains.All.Select(domain => new RoleDataScope
+            {
+                RoleId = role.Id,
+                Domain = domain,
+                Scope = DataScopeValues.All,
+            }));
             await db.SaveChangesAsync(ct);
 
             // OEM files live outside StorageRoot. Mark the independent OEM storage
@@ -261,8 +298,9 @@ internal static class DevelopmentDataReset
     {
         // Preserve the existing FK-safe order. ExecuteDelete bypasses tracking and
         // executes immediately inside the caller-owned transaction.
-        // OEM business data first (children before parents). Approval and retention
-        // templates are settings and survive; their people/organisation references do not.
+        // OEM transfer data first (oem_transfers references both oem_companies and outsource_items).
+        // Approval/retention templates, outsource fields/types and sync/mirror settings survive;
+        // their people/organisation/vendor references do not.
         await db.OemDownloadRanges.ExecuteDeleteAsync(ct);
         await db.OemDownloadLeases.ExecuteDeleteAsync(ct);
         await db.OemDownloadSessions.ExecuteDeleteAsync(ct);
@@ -272,10 +310,29 @@ internal static class DevelopmentDataReset
         await db.OemFlowInstanceNodes.ExecuteDeleteAsync(ct);
         await db.OemFlowInstances.ExecuteDeleteAsync(ct);
         await db.OemUploadSessions.ExecuteDeleteAsync(ct);
+        await db.OemTransferInternalRecipients.ExecuteDeleteAsync(ct);
         await db.OemTransferFiles.ExecuteDeleteAsync(ct);
         await db.OemTransfers.ExecuteDeleteAsync(ct);
+        await db.OutsourceMailItems.ExecuteDeleteAsync(ct);
+        await db.OutsourceMailRecipients.ExecuteDeleteAsync(ct);
+        await db.OutsourceMails.ExecuteDeleteAsync(ct);
+        await db.OutsourceMailBatches.ExecuteDeleteAsync(ct);
+        await db.OutsourceItemChanges.ExecuteDeleteAsync(ct);
+        await db.OutsourceItemValues.ExecuteDeleteAsync(ct);
+        await db.OutsourceItems.ExecuteDeleteAsync(ct);
+        await db.OutsourceTypeVendors.ExecuteDeleteAsync(ct);
+        await db.OutsourceVendorEmails.ExecuteDeleteAsync(ct);
+        await db.OutsourceDefaultCcModules.ExecuteDeleteAsync(ct);
+        await db.OutsourceDefaultCc.ExecuteDeleteAsync(ct);
+        await db.OutsourceCustomerAliases.ExecuteDeleteAsync(ct);
+        await db.OutsourceFieldEditorRoles.ExecuteDeleteAsync(ct);
+        await db.OutsourceFieldEditorUsers.ExecuteDeleteAsync(ct);
+        await db.MesWorkOrdersStaging.ExecuteDeleteAsync(ct);
+        await db.MesWorkOrders.ExecuteDeleteAsync(ct);
         await db.OemRefreshTokens.ExecuteDeleteAsync(ct);
         await db.OemAccounts.ExecuteDeleteAsync(ct);
+        await db.OemCompanyContacts.ExecuteDeleteAsync(ct);
+        await db.OemInternalRecipientExclusions.ExecuteDeleteAsync(ct);
         await db.OemCompanies.ExecuteDeleteAsync(ct);
         await db.OemFlowTemplateNodeUsers.ExecuteDeleteAsync(ct);
         await db.OemFlowTemplateScopes.ExecuteDeleteAsync(ct);
@@ -293,10 +350,13 @@ internal static class DevelopmentDataReset
         await db.FileBlobs.ExecuteDeleteAsync(ct);
         await db.Messages.ExecuteDeleteAsync(ct);
         await db.ProjectRobotOwners.ExecuteDeleteAsync(ct);
+        await db.ProjectWorkOrders.ExecuteDeleteAsync(ct);
         await db.Projects.ExecuteDeleteAsync(ct);
         await db.RobotParts.ExecuteDeleteAsync(ct);
         await db.SupplierContacts.ExecuteDeleteAsync(ct);
         await db.RefreshTokens.ExecuteDeleteAsync(ct);
+        await db.UserDataScopes.ExecuteDeleteAsync(ct);
+        await db.RoleDataScopes.ExecuteDeleteAsync(ct);
         await db.UserRoles.ExecuteDeleteAsync(ct);
         await db.RolePermissions.ExecuteDeleteAsync(ct);
         await db.Departments.ExecuteDeleteAsync(ct);

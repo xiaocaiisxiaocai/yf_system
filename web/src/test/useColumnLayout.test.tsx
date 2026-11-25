@@ -59,6 +59,50 @@ describe('useColumnLayout', () => {
     act(() => { result.current.reset() })
     expect(localStorage.getItem(key)).toBeNull()
   })
+
+  it('preserves and restores dynamic column layout across partial-to-full specs updates without clobbering storage', () => {
+    const key = columnLayoutStorageKey('outsource', 1)
+    const fullSpecs: readonly ColumnLayoutSpec[] = [
+      ...SPECS,
+      { key: 'dynA', title: '动态甲', defaultWidth: 110 },
+      { key: 'dynB', title: '动态乙', defaultWidth: 110 },
+    ]
+    const saved = {
+      hidden: ['dynB'],
+      widths: { owner: 180, dynA: 260 },
+      order: ['name', 'dynA', 'owner', 'due', 'dynB'],
+      pinned: ['name', 'dynA'],
+    }
+    localStorage.setItem(key, JSON.stringify(saved))
+
+    // Initial mount with only static specs must not strip dynamic keys from localStorage.
+    const { result, rerender } = renderHook(({ specs }) => useColumnLayout(key, specs), {
+      initialProps: { specs: SPECS },
+    })
+    expect(result.current.widths).toEqual({ owner: 180 })
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(saved)
+
+    // Mutating a static column while dynamic specs are absent must preserve dynamic keys,
+    // even when all known columns return to default widths.
+    act(() => { result.current.actions.setWidth('owner', null) })
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual({
+      hidden: ['dynB'],
+      widths: { dynA: 260 },
+      order: ['name', 'dynA', 'owner', 'due', 'dynB'],
+      pinned: ['name', 'dynA'],
+    })
+
+    // Once dynamic specs arrive, previously saved settings for them are immediately restored.
+    rerender({ specs: fullSpecs })
+    expect(result.current.widths).toEqual({ dynA: 260 })
+    expect(result.current.hidden).toEqual(['dynB'])
+    expect(result.current.layout.order).toEqual(['name', 'dynA', 'owner', 'due', 'dynB'])
+    expect(result.current.layout.pinned).toEqual(['name', 'dynA'])
+
+    // Explicit reset clears the entire stored layout.
+    act(() => { result.current.reset() })
+    expect(localStorage.getItem(key)).toBeNull()
+  })
 })
 
 describe('useProjectAccessLost', () => {

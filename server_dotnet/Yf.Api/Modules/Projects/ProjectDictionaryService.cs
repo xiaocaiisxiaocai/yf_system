@@ -54,6 +54,8 @@ internal sealed class ProjectDictionaryService(AuditService audit)
         };
         db.ProjectDictionaries.Add(entity);
         try { await db.SaveChangesAsync(ct); }
+        catch (MySqlException error) when (error.Number == 1062)
+        { throw ApiException.Conflict("同类型字典名称已存在"); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("同类型字典名称已存在"); }
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_CREATE", "project_dictionary", entity.Id,
@@ -80,6 +82,8 @@ internal sealed class ProjectDictionaryService(AuditService audit)
                 .SetProperty(item => item.SortNo, input.SortNo)
                 .SetProperty(item => item.Status, input.Status), ct);
         }
+        catch (MySqlException error) when (error.Number == 1062)
+        { throw ApiException.Conflict("同类型字典名称已存在"); }
         catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 })
         { throw ApiException.Conflict("同类型字典名称已存在"); }
         await audit.WriteAsync(conn, tx, current.Id, "PROJECT_DICTIONARY_UPDATE", "project_dictionary", id,

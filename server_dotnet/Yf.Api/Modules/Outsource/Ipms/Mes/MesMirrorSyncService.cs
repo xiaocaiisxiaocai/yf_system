@@ -497,18 +497,25 @@ public sealed partial class MesMirrorSyncService(
         if (conditions.Count == 0)
         {
             total = (ulong)(await context.Database.SqlQueryRaw<long>("SELECT COUNT(*) AS Value FROM mes_work_orders").ToArrayAsync(ct)).Single();
-            // IPMS lists by planned delivery date (empty first), then work order number.
-            var rows = await context.Database.SqlQueryRaw<OrderRecord>($"""
-                SELECT work_order_no AS WorkOrderNo, fetched_at AS FetchedAt, raw_json AS RawJson
-                FROM mes_work_orders
-                ORDER BY plan_end_sort, work_order_no
-                LIMIT {(long)size} OFFSET {(long)offset}
-                """).ToArrayAsync(ct);
-            list = rows.Select(row =>
+            if (offset >= total || offset > int.MaxValue)
             {
-                using var json = JsonDocument.Parse(row.RawJson);
-                return new MesOrderRow(row.WorkOrderNo, DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc), OrderValues(json.RootElement));
-            }).ToArray();
+                list = [];
+            }
+            else
+            {
+                // IPMS lists by planned delivery date (empty first), then work order number.
+                var rows = await context.Database.SqlQueryRaw<OrderRecord>($"""
+                    SELECT work_order_no AS WorkOrderNo, fetched_at AS FetchedAt, raw_json AS RawJson
+                    FROM mes_work_orders
+                    ORDER BY plan_end_sort, work_order_no
+                    LIMIT {(long)size} OFFSET {(long)offset}
+                    """).ToArrayAsync(ct);
+                list = rows.Select(row =>
+                {
+                    using var json = JsonDocument.Parse(row.RawJson);
+                    return new MesOrderRow(row.WorkOrderNo, DateTime.SpecifyKind(row.FetchedAt, DateTimeKind.Utc), OrderValues(json.RootElement));
+                }).ToArray();
+            }
         }
         else
         {

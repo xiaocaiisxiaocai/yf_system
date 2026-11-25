@@ -129,21 +129,45 @@ describe('video preview', () => {
 
     await act(async () => { await Promise.resolve() })
     expect(screen.getByRole('alert')).toHaveTextContent('视频无法播放')
-    const timerSpy = vi.spyOn(window, 'setTimeout')
-    fireEvent.click(screen.getByRole('button', { name: '重试播放' }))
-    expect(mocks.post).toHaveBeenCalledTimes(2)
-    expect(screen.getByRole('status')).toHaveTextContent('正在加载视频')
-    view.unmount()
-    await act(async () => {
-      lateGrant.resolve({ data: { url: '/api/v1/files/7/media', expiresInSeconds: 300 } })
-      await lateGrant.promise
-      await Promise.resolve()
-    })
-    expect(screen.queryByLabelText('视频预览')).not.toBeInTheDocument()
-    expect(timerSpy.mock.calls.filter(([, delay]) => delay === 150_000)).toHaveLength(0)
+    const scheduledDelays: unknown[] = []
+    const fakeSetTimeout = window.setTimeout
+    window.setTimeout = ((...args: Parameters<typeof window.setTimeout>) => {
+      scheduledDelays.push(args[1])
+      return fakeSetTimeout(...args)
+    }) as typeof window.setTimeout
+    try {
+      fireEvent.click(screen.getByRole('button', { name: '重试播放' }))
+      expect(mocks.post).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('status')).toHaveTextContent('正在加载视频')
+      view.unmount()
+      await act(async () => {
+        lateGrant.resolve({ data: { url: '/api/v1/files/7/media', expiresInSeconds: 300 } })
+        await lateGrant.promise
+        await Promise.resolve()
+      })
+      expect(screen.queryByLabelText('视频预览')).not.toBeInTheDocument()
+      expect(scheduledDelays.filter((delay) => delay === 150_000)).toHaveLength(0)
+    } finally {
+      window.setTimeout = fakeSetTimeout
+    }
 
     const requestsAfterClose = mocks.post.mock.calls.length
     await vi.advanceTimersByTimeAsync(300_000)
     expect(mocks.post).toHaveBeenCalledTimes(requestsAfterClose)
+  })
+
+  it('stops renewing media session after video element playback error', async () => {
+    vi.useFakeTimers()
+    mocks.post.mockReset()
+    mocks.post.mockResolvedValue({ data: { url: '/api/v1/files/7/media', expiresInSeconds: 300 } })
+    render(<VideoPreview fileId={7} />)
+    const player = screen.getByLabelText('视频预览') as HTMLVideoElement
+    await vi.waitFor(() => expect(player).toHaveAttribute('src', '/api/v1/files/7/media'))
+
+    fireEvent.error(player)
+    expect(screen.getByRole('alert')).toHaveTextContent('视频无法播放')
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(300_000) })
+    expect(mocks.post).toHaveBeenCalledTimes(1)
   })
 })

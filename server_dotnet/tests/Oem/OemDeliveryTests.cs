@@ -59,6 +59,65 @@ public sealed class OemDeliveryTests
     public void OnlyFormatsTheBrowserCanShowAreOfferedForPreview(string extension, ulong size, bool expected) =>
         Assert.Equal(expected, OemPreviewFormats.IsPreviewable(extension, size));
 
+    [Theory]
+    [InlineData("pdf", "application/pdf")]
+    [InlineData(".PDF", "application/pdf")]
+    [InlineData("png", "image/png")]
+    [InlineData("jpg", "image/jpeg")]
+    [InlineData("jpeg", "image/jpeg")]
+    [InlineData("xls", "application/vnd.ms-excel")]
+    [InlineData("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")]
+    [InlineData("xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12")]
+    [InlineData("xlsb", "application/vnd.ms-excel.sheet.binary.macroEnabled.12")]
+    [InlineData("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation")]
+    [InlineData("docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]
+    [InlineData("step", "application/octet-stream")]
+    [InlineData("html", "application/octet-stream")]
+    [InlineData(null, "application/octet-stream")]
+    public void PreviewContentTypeUsesNormalizedExtensionMapping(string? extension, string expected) =>
+        Assert.Equal(expected, OemPreviewFormats.ContentTypeFor(extension));
+
+    [Fact(Timeout = 240_000)]
+    public async Task PreviewRejectsNonPreviewableExtensionsUsesNormalizedContentTypeAndReturnsGoneWhenFileIsMissingOnDisk()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+
+        var draft = await world.Vendor.PostAsync("/api/v1/oem/transfers", new { title = "预览校验", outsourceItemId = world.OutsourceItemId }, ct).Ok();
+        var transferId = TransferId(draft);
+        var stepFile = await host.UploadAsync(world.Vendor, transferId, "part.step",
+            System.Text.Encoding.ASCII.GetBytes("ISO-10303-21;\nEND-ISO-10303-21;\n"), ct);
+        var pdfFile = await host.UploadAsync(world.Vendor, transferId, "drawing.pdf", OemTestHost.Pdf("preview-regression"), ct);
+        draft = await world.Vendor.GetAsync($"/api/v1/oem/transfers/{transferId}", ct).Ok();
+        await world.Vendor.VendorSendAsync(transferId, Version(draft), ct).Ok();
+        await host.RunOemJobsAsync(ct);
+
+        var stepId = stepFile.Id();
+        var pdfId = pdfFile.Id();
+
+        // Non-previewable formats are rejected with 400 and never audited as previews.
+        var rejected = await world.Viewer.GetAsync($"/api/v1/oem/files/{stepId}/content", ct).Status(HttpStatusCode.BadRequest);
+        Assert.Equal("该文件格式不支持在线预览，请下载后查看", rejected.Json!["message"]!.GetValue<string>());
+
+        // Preview uses the normalized extension MIME mapping rather than raw stored mime_type.
+        string storagePath;
+        await using (var conn = await host.OpenAsync(ct))
+        {
+            await conn.ExecuteAsync("UPDATE oem_transfer_files SET mime_type='text/html' WHERE id=@pdfId", new { pdfId });
+            storagePath = (await conn.ExecuteScalarAsync<string>("SELECT storage_path FROM oem_transfer_files WHERE id=@pdfId", new { pdfId }))!;
+        }
+        using (var ok = await world.Viewer.Http.GetAsync($"/api/v1/oem/files/{pdfId}/content", ct))
+        {
+            Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+            Assert.Equal("application/pdf", ok.Content.Headers.ContentType?.MediaType);
+        }
+
+        // If the physical file vanishes on disk, preview returns 410 instead of 500.
+        File.Delete(Path.Combine(host.StorageRoot, "oem", storagePath));
+        await world.Viewer.GetAsync($"/api/v1/oem/files/{pdfId}/content", ct).Status(HttpStatusCode.Gone, 41003);
+    }
+
     [Fact]
     public void RangesMergeWithoutDoubleCountingAndParseStrictly()
     {

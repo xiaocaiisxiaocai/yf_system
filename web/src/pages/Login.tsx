@@ -4,7 +4,8 @@ import { IconLock, IconUser } from '@arco-design/web-react/icon'
 import { useLocation, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { useAuth } from '../store/auth'
-import { withAuthLock } from '../api/client'
+import { isAuthLoginResponse, isSafeLoginReturnPath, withAuthLock } from '../api/client'
+import { requestErrorMessage } from '../api/requestError'
 import AuthShell from '../components/AuthShell'
 import PasswordInput from '../components/PasswordInput'
 
@@ -25,7 +26,10 @@ export default function Login() {
         const response = await axios.post('/api/v1/auth/login', {
           employeeNo: v.employeeNo.trim(),
           password: v.password,
-        }, { withCredentials: true })
+        }, { withCredentials: true, timeout: 30_000 })
+        if (!isAuthLoginResponse(response.data)) {
+          throw new Error('登录响应格式无效，请稍后重试')
+        }
         setLogin(response.data)
         return response
       })
@@ -34,17 +38,11 @@ export default function Login() {
         nav('/change-password')
       } else {
         const target = loc.state?.from
-        const safeTarget = typeof target === 'string' && target.startsWith('/') && !target.startsWith('//')
-          && !target.includes('\\') && ![...target].some(character => character.charCodeAt(0) <= 32) ? target : '/'
+        const safeTarget = isSafeLoginReturnPath(target) ? target : '/'
         nav(safeTarget, { replace: true })
       }
     } catch (e) {
-      if (axios.isAxiosError(e)) {
-        const msg = e.response?.data?.message
-        Message.error(msg || '登录失败')
-      } else {
-        Message.error('网络错误')
-      }
+      Message.error(requestErrorMessage(e, '登录失败'))
     } finally {
       submitting.current = false
       setLoading(false)

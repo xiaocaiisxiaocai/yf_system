@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, InputNumber, Result, Select, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import viewerHtml from '../../generated/pptx-viewer.html?raw'
 import './PptxPreview.css'
-import { createPreviewDeadline, createRenderDeadline, type PreviewContentLoader } from './previewDeadline'
+import { createPreviewDeadline } from './previewDeadline'
+
+export type PptxContentLoader = (signal: AbortSignal, onProgress?: (loaded: number) => void) => Promise<ArrayBuffer>
 
 type PreviewState = 'loading' | 'ready' | 'error'
 type ZoomValue = 'page' | 'fit' | string
@@ -20,7 +22,7 @@ function finiteNumber(value: unknown, minimum: number, maximum: number) {
 
 function PptxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
   fileId: number
-  loadContent?: PreviewContentLoader
+  loadContent?: PptxContentLoader
   toolbarContainer?: HTMLElement | null
   onRetry: () => void
 }) {
@@ -35,7 +37,7 @@ function PptxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
   const [pageCount, setPageCount] = useState(0)
   const [zoom, setZoom] = useState<ZoomValue>('page')
   const [scale, setScale] = useState(1)
-  const html = viewerHtml.replaceAll('YF_VIEWER_NONCE', channel)
+  const html = useMemo(() => viewerHtml.replaceAll('YF_VIEWER_NONCE', channel), [channel])
 
   useEffect(() => {
     let active = true
@@ -50,7 +52,7 @@ function PptxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
       }
     }
     const external = loadContent
-    const deadline = external ? createRenderDeadline(timedOut) : createPreviewDeadline(timedOut)
+    const deadline = createPreviewDeadline(timedOut)
     const fail = (text: string) => {
       deadline.clear()
       setMessage(text)
@@ -97,7 +99,7 @@ function PptxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
       frameRef.current?.contentWindow?.postMessage({ type: 'pptx:load', channel, buffer }, '*', [buffer])
       buffer = undefined
     }
-    void (external ? external(controller.signal) : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
+    void (external ? external(controller.signal, (loaded) => deadline.progress(loaded)) : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
       responseType: 'arraybuffer',
       signal: controller.signal,
       quietNetworkError: true,
@@ -160,7 +162,7 @@ function PptxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
 
 export default function PptxPreview({ fileId, loadContent, toolbarContainer }: {
   fileId: number
-  loadContent?: PreviewContentLoader
+  loadContent?: PptxContentLoader
   toolbarContainer?: HTMLElement | null
 }) {
   const [attempt, setAttempt] = useState(0)

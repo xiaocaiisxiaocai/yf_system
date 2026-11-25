@@ -246,6 +246,43 @@ public sealed class ProjectMetadataTests
             Enabled = true,
         }, null, ct));
         Assert.Equal(400, parentedPriority.Status);
+
+        // Updating a dictionary or Robot part to a duplicate key must return its specific Chinese 409 message.
+        var secondRobotTypeId = Id(await dictionaries.CreateAsync(conn, actor, new()
+        {
+            Type = "ROBOT_TYPE",
+            Name = "待改名类型",
+            SortNo = 20,
+            Enabled = true,
+        }, null, ct));
+        var dupDictUpdate = await Assert.ThrowsAsync<ApiException>(() => dictionaries.UpdateAsync(conn, actor, secondRobotTypeId, new()
+        {
+            Type = "ROBOT_TYPE",
+            Name = "测试类型",
+            SortNo = 20,
+            Enabled = true,
+        }, null, ct));
+        Assert.Equal(409, dupDictUpdate.Status);
+        Assert.Equal("同类型字典名称已存在", dupDictUpdate.Message);
+
+        var secondPartId = Id(await robotParts.CreateAsync(conn, actor, new()
+        {
+            SupplierId = 8001,
+            PartNumber = "RP-002",
+            Model = "Robot Model B",
+            SortNo = 20,
+            Enabled = true,
+        }, null, ct));
+        var dupPartUpdate = await Assert.ThrowsAsync<ApiException>(() => robotParts.UpdateAsync(conn, actor, secondPartId, new()
+        {
+            SupplierId = 8001,
+            PartNumber = "RP-001",
+            Model = "Robot Model B",
+            SortNo = 20,
+            Enabled = true,
+        }, null, ct));
+        Assert.Equal(409, dupPartUpdate.Status);
+        Assert.Equal("该供应商下的 Robot 料号已存在", dupPartUpdate.Message);
     }
 
     private static ProjectUpsertRequest CopyRequest(

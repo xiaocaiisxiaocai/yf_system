@@ -20,7 +20,7 @@ function parseZoom(value: string): PdfZoom {
 }
 
 /** Loads the PDF bytes for a non-collaboration source (e.g. OEM files); defaults to `/files/{id}/content`. */
-export type PdfContentLoader = (signal: AbortSignal) => Promise<ArrayBuffer>
+export type PdfContentLoader = (signal: AbortSignal, onProgress?: (loaded: number) => void) => Promise<ArrayBuffer>
 
 function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
   fileId: number
@@ -45,27 +45,25 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
     let active = true
     let viewer: PdfPreviewInstance | null = null
     const controller = new AbortController()
-    // 协作域 PDF：下载按“无进度”计时、渲染另计时，并关掉 HTTP 客户端 60 秒整体超时，大文件慢网也能加载完。
-    const deadline = loadContent
-      ? undefined
-      : createPreviewDeadline(() => { controller.abort(); if (active) setError(LOAD_FAILED_MESSAGE) })
+    // 下载按“无进度”计时、渲染另计时，并关掉 HTTP 客户端 60 秒整体超时，大文件慢网也能加载完。
+    const deadline = createPreviewDeadline(() => { controller.abort(); if (active) setError(LOAD_FAILED_MESSAGE) })
 
     async function load() {
       try {
         const [data, engine] = await Promise.all([
           loadContent
-            ? loadContent(controller.signal)
+            ? loadContent(controller.signal, (loaded) => deadline.progress(loaded))
             : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
               responseType: 'arraybuffer',
               signal: controller.signal,
               quietNetworkError: true,
               timeout: 0,
-              onDownloadProgress: event => deadline?.progress(event.loaded),
+              onDownloadProgress: event => deadline.progress(event.loaded),
             } as QuietRequestConfig).then(response => response.data),
           import('./pdfEngine'),
         ])
         if (!active) return
-        deadline?.downloaded()
+        deadline.downloaded()
         viewer = init(previewContainer, {
           openPdf: engine.openPdf,
           onDocumentLoaded: total => {
@@ -88,9 +86,9 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
         })
         viewerRef.current = viewer
         await viewer.preview(new Uint8Array(data))
-        deadline?.clear()
+        deadline.clear()
       } catch (cause) {
-        deadline?.clear()
+        deadline.clear()
         if (active) {
           setError(cause instanceof Error && cause.name === 'PasswordException'
             ? '此 PDF 受密码保护，暂不支持在线预览。'
@@ -102,7 +100,7 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
     void load()
     return () => {
       active = false
-      deadline?.clear()
+      deadline.clear()
       controller.abort()
       if (viewerRef.current === viewer) viewerRef.current = null
       void viewer?.destroy()

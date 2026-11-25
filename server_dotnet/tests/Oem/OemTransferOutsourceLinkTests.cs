@@ -268,6 +268,77 @@ public sealed class OemTransferOutsourceLinkTests
         }
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task SendRejectsWorkOrderCompletedAfterDraftCreation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var itemId = await host.CreateOutsourceItemAsync(world.CompanyId, "WO-CLOSE-BEFORE-SEND", ct);
+
+        var internalDraft = await world.Sender.PostAsync(Transfers, new { title = "内发草稿", outsourceItemId = itemId }, ct).Ok();
+        var internalId = TransferId(internalDraft);
+        await host.UploadAsync(world.Sender, internalId, "drawing.pdf", OemTestHost.Pdf("completed check"), ct);
+        internalDraft = await world.Sender.GetAsync($"{Transfers}/{internalId}", ct).Ok();
+
+        var vendorDraft = await world.Vendor.PostAsync(Transfers, new { title = "厂商草稿", outsourceItemId = itemId }, ct).Ok();
+        var vendorId = TransferId(vendorDraft);
+        await host.UploadAsync(world.Vendor, vendorId, "return.pdf", OemTestHost.Pdf("vendor completed check"), ct);
+        vendorDraft = await world.Vendor.GetAsync($"{Transfers}/{vendorId}", ct).Ok();
+
+        await using (var connection = await host.OpenAsync(ct))
+            await connection.ExecuteAsync("UPDATE outsource_items SET closed_at=UTC_TIMESTAMP(3) WHERE id=@itemId", new { itemId });
+
+        var internalRejected = await world.Sender.PostAsync($"{Transfers}/{internalId}/send", new { version = Version(internalDraft) }, ct)
+            .Status(HttpStatusCode.BadRequest);
+        Assert.Equal("所选工令已完成，不能发送传递单", internalRejected.Json!["message"]!.GetValue<string>());
+        var internalAfter = await world.Sender.GetAsync($"{Transfers}/{internalId}", ct).Ok();
+        Assert.Equal("DRAFT", internalAfter["summary"]!["lifecycleStatus"]!.GetValue<string>());
+        Assert.Equal(Version(internalDraft), Version(internalAfter));
+
+        var vendorRejected = await world.Vendor.VendorSendAsync(vendorId, Version(vendorDraft), ct)
+            .Status(HttpStatusCode.BadRequest);
+        Assert.Equal("所选工令已完成，不能发送传递单", vendorRejected.Json!["message"]!.GetValue<string>());
+        var vendorAfter = await world.Vendor.GetAsync($"{Transfers}/{vendorId}", ct).Ok();
+        Assert.Equal("DRAFT", vendorAfter["summary"]!["lifecycleStatus"]!.GetValue<string>());
+        Assert.Equal(Version(vendorDraft), Version(vendorAfter));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task SendRejectsWorkOrderReassignedToAnotherVendorAfterDraftCreation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var otherCompanyId = await CreateCompanyAsync(world.Admin, "改派厂商", ct);
+        var itemId = await host.CreateOutsourceItemAsync(world.CompanyId, "WO-REASSIGN-BEFORE-SEND", ct);
+
+        var internalDraft = await world.Sender.PostAsync(Transfers, new { title = "内发改派", outsourceItemId = itemId }, ct).Ok();
+        var internalId = TransferId(internalDraft);
+        await host.UploadAsync(world.Sender, internalId, "drawing.pdf", OemTestHost.Pdf("reassigned check"), ct);
+        internalDraft = await world.Sender.GetAsync($"{Transfers}/{internalId}", ct).Ok();
+
+        var vendorDraft = await world.Vendor.PostAsync(Transfers, new { title = "厂商改派", outsourceItemId = itemId }, ct).Ok();
+        var vendorId = TransferId(vendorDraft);
+        await host.UploadAsync(world.Vendor, vendorId, "return.pdf", OemTestHost.Pdf("vendor reassigned check"), ct);
+        vendorDraft = await world.Vendor.GetAsync($"{Transfers}/{vendorId}", ct).Ok();
+
+        await using (var connection = await host.OpenAsync(ct))
+            await connection.ExecuteAsync("UPDATE outsource_items SET vendor_id=@otherCompanyId WHERE id=@itemId", new { otherCompanyId, itemId });
+
+        var internalRejected = await world.Sender.PostAsync($"{Transfers}/{internalId}/send", new { version = Version(internalDraft) }, ct)
+            .Status(HttpStatusCode.BadRequest);
+        Assert.Equal("所选工令的外发厂商已变更，不能发送传递单", internalRejected.Json!["message"]!.GetValue<string>());
+        var internalAfter = await world.Sender.GetAsync($"{Transfers}/{internalId}", ct).Ok();
+        Assert.Equal("DRAFT", internalAfter["summary"]!["lifecycleStatus"]!.GetValue<string>());
+
+        var vendorRejected = await world.Vendor.VendorSendAsync(vendorId, Version(vendorDraft), ct)
+            .Status(HttpStatusCode.BadRequest);
+        Assert.Equal("所选工令的外发厂商已变更，不能发送传递单", vendorRejected.Json!["message"]!.GetValue<string>());
+        var vendorAfter = await world.Vendor.GetAsync($"{Transfers}/{vendorId}", ct).Ok();
+        Assert.Equal("DRAFT", vendorAfter["summary"]!["lifecycleStatus"]!.GetValue<string>());
+    }
+
     private static string SendableLookup(string text) => $"{SendableItems}?workOrderNo={Uri.EscapeDataString(text)}";
 
     private static string[] WorkOrderNumbers(JsonArray rows) =>

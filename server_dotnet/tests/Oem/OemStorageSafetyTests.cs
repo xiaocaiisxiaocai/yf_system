@@ -2,6 +2,7 @@ using Dapper;
 using System.Text.Json;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Oem.Maintenance;
+using Yf.Api.Modules.Oem.Transfers;
 using static Yf.Api.Tests.Oem.OemTransferFlowTests;
 
 namespace Yf.Api.Tests.Oem;
@@ -135,6 +136,52 @@ public sealed class OemStorageSafetyTests
         }
         Assert.Equal(0, await reconcile.RoutineCheckAsync(ct));
         Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM audit_logs WHERE action='OEM_FILE_STORAGE_RESTORED'"));
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ReappearingFileOnAbandonedDraftIsScheduledForPurge()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var world = await OutboundWorldAsync(host, ct);
+        var draft = await CreateOutboundAsync(world, "废弃草稿找回", ct);
+        var transferId = TransferId(draft);
+        await host.UploadAsync(world.Sender, transferId, "abandoned.pdf", OemTestHost.Pdf("abandoned"), ct);
+        await host.RunOemJobsAsync(ct);
+
+        await using var conn = await host.OpenAsync(ct);
+        var (fileId, relative) = await conn.QuerySingleAsync<(ulong FileId, string Path)>(
+            "SELECT id AS FileId, storage_path AS Path FROM oem_transfer_files WHERE transfer_id=@transferId", new { transferId });
+        var absolute = Path.Combine(host.StorageRoot, "oem", relative.Replace('/', Path.DirectorySeparatorChar));
+        var original = await File.ReadAllBytesAsync(absolute, ct);
+        File.Delete(absolute);
+
+        var reconcile = host.Service<OemReconcileService>();
+        Assert.Equal(1, await reconcile.RoutineCheckAsync(ct));
+        Assert.Equal("STORAGE_LOST", await conn.ExecuteScalarAsync<string>(
+            "SELECT payload_status FROM oem_transfer_files WHERE id=@fileId", new { fileId }));
+
+        // Abandon the draft while its file is STORAGE_LOST: SchedulePurgeAsync skips non-on-disk files, leaving purge_due_at null.
+        await conn.ExecuteAsync("UPDATE oem_transfers SET updated_at=UTC_TIMESTAMP(3) - INTERVAL 40 DAY WHERE id=@transferId", new { transferId });
+        Assert.Equal(1, await host.Service<OemPurgeService>().ExpireDraftsAsync(host.Service<OemTransferService>(), ct));
+        Assert.Equal("ABANDONED", await conn.ExecuteScalarAsync<string>(
+            "SELECT lifecycle_status FROM oem_transfers WHERE id=@transferId", new { transferId }));
+        Assert.Null(await conn.ExecuteScalarAsync<DateTime?>(
+            "SELECT purge_due_at FROM oem_transfer_files WHERE id=@fileId", new { fileId }));
+
+        // When the file reappears on disk, reconcile restores it AND schedules immediate purge on the abandoned draft.
+        await File.WriteAllBytesAsync(absolute, original, ct);
+        Assert.Equal(1, await reconcile.RoutineCheckAsync(ct));
+        var recovered = await conn.QuerySingleAsync<(string Status, DateTime? Due, string? Reason)>(
+            "SELECT payload_status AS Status, purge_due_at AS Due, purge_reason AS Reason FROM oem_transfer_files WHERE id=@fileId", new { fileId });
+        Assert.Equal("AVAILABLE", recovered.Status);
+        Assert.NotNull(recovered.Due);
+        Assert.Equal(PurgeReasons.DraftExpired, recovered.Reason);
+
+        Assert.Equal(1, await host.Service<OemPurgeService>().RunOnceAsync(ct));
+        Assert.False(File.Exists(absolute));
+        Assert.Equal("PURGED", await conn.ExecuteScalarAsync<string>(
+            "SELECT payload_status FROM oem_transfer_files WHERE id=@fileId", new { fileId }));
     }
 
     [Fact(Timeout = 240_000)]

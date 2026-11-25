@@ -10,7 +10,7 @@ import PortalOutsourcePage from '../../oem/pages/PortalOutsourcePage'
 
 const columns = [
   { key: 'serialNo', title: '序号' }, { key: 'outsourceDate', title: '外发日期' }, { key: 'status', title: '状态' },
-  { key: 'electricalHandoff', title: '是否转迅得电控' },
+  { key: 'electricalHandoff', title: '转迅得研发电控设计' },
   { key: 'workOrderNo', title: '工令' }, { key: 'files', title: '档案' }, { key: 'customer', title: '客户' }, { key: 'remark', title: '备注' },
 ]
 const row = (id: number, no: string, status: string, label: string, electricalHandoff = false, closed = false, canElectricalHandoff = !closed) => ({
@@ -42,7 +42,7 @@ describe('ODM/OEMA 门户外协清单', () => {
     expect(within(paused).getByText('暂停')).toBeInTheDocument()
     expect(screen.getByText('A1').closest('tr')).toHaveClass('outsource-row--normal')
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual(
-      expect.arrayContaining(['序号', '外发日期', '状态', '是否转迅得电控', '工令', '档案', '客户', '备注', '操作']))
+      expect.arrayContaining(['序号', '外发日期', '状态', '转迅得研发电控设计', '工令', '档案', '客户', '备注', '操作']))
     expect(screen.queryByRole('button', { name: /编辑|删除|发送/ })).not.toBeInTheDocument()
     expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, keyword: '', includeClosed: false })
 

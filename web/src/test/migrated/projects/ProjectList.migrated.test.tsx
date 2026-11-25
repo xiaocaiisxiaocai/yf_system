@@ -413,6 +413,30 @@ describe('ProjectList migrated behavior', () => {
     expect(name).toHaveValue('已填写项目')
   })
 
+  it('refreshing prerequisites reloads contacts for the selected supplier and unlocks project creation', async () => {
+    let contactReady = false
+    mocks.get.mockImplementation((url: string, config?: GetConfig) => {
+      if (url === '/supplier-contacts') {
+        return Promise.resolve({ data: contactReady ? [{ id: 51, name: '新联络人', enabled: true }] : [] })
+      }
+      return successfulGet(url, config)
+    })
+    const user = userEvent.setup()
+    renderList()
+    await user.click(await screen.findByRole('button', { name: '新建项目' }))
+    const dialog = await screen.findByRole('dialog')
+
+    await selectById('supplierId_input', '厂商甲')
+    expect(await within(dialog).findByText(/所选 Robot 厂商暂无启用的联络人，请先在供应商管理中维护联络人。/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '创建并开始' })).toBeDisabled()
+
+    contactReady = true
+    await user.click(within(dialog).getByRole('button', { name: '刷新基础数据' }))
+    await waitFor(() => expect(within(dialog).queryByText(/所选 Robot 厂商暂无启用的联络人/)).not.toBeInTheDocument())
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: '创建并开始' })).toBeEnabled())
+    await selectOwner('新联络人')
+  })
+
   it('required option sources expose loading and retry states and block submits until ready', async () => {
     const firstSupplier = deferred<{ data: unknown[] }>()
     let supplierAttempts = 0

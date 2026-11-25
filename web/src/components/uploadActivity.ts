@@ -28,3 +28,9 @@ export function subscribeUploadActivity(listener: Listener): () => void {
   listeners.add(listener)
   return () => { listeners.delete(listener) }
 }
+
+/** Resets active-upload reference count and listeners between Vitest runs. */
+export function resetUploadActivityForTests() {
+  activeUploaders = 0
+  listeners.clear()
+}

@@ -92,6 +92,30 @@ describe('useProjectCopyJobs', () => {
     await act(async () => { await rendered.result.current.refresh() })
     await waitFor(() => expect(rendered.result.current.unavailable).toBe(true))
     expect(rendered.result.current.jobs).toEqual([])
+    expect(rendered.result.current.loading).toBe(false)
+  })
+
+  it('clears loading when initial load fails with access denied or transient error and allows retry', async () => {
+    mocks.list.mockRejectedValueOnce({ response: { status: 403 } })
+    const denied = renderHook(() => useProjectCopyJobs(true, 0))
+    await waitFor(() => expect(denied.result.current.unavailable).toBe(true))
+    expect(denied.result.current.loading).toBe(false)
+    expect(denied.result.current.ready).toBe(false)
+    denied.unmount()
+
+    mocks.list
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ data: { jobs: [finishedJob] } })
+    const transient = renderHook(() => useProjectCopyJobs(true, 0))
+    await waitFor(() => expect(transient.result.current.error).toBe(true))
+    expect(transient.result.current.loading).toBe(false)
+    expect(transient.result.current.ready).toBe(false)
+
+    await act(async () => { await transient.result.current.refresh() })
+    await waitFor(() => expect(transient.result.current.ready).toBe(true))
+    expect(transient.result.current.loading).toBe(false)
+    expect(transient.result.current.error).toBe(false)
+    expect(transient.result.current.jobs).toEqual([finishedJob])
   })
 
   it('keeps the last snapshot and exposes a usable retry after a transient refresh failure', async () => {

@@ -35,7 +35,7 @@ function Recipients({ list, kind }: { list: Recipient[]; kind: 'TO' | 'CC' }) {
   const rows = list.filter((recipient) => recipient.kind === kind)
   if (rows.length === 0) return <span className="outsource-muted">—</span>
   const rejected = rows.filter((recipient) => recipient.rejected).length
-  return <Popover trigger="hover" content={<ul className="outsource-mail-recipients">
+  return <Popover trigger={['hover', 'focus']} content={<ul className="outsource-mail-recipients">
     {rows.map((recipient) => <li key={recipient.email} className={recipient.rejected ? 'outsource-mail-rejected' : undefined}>
       {recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email}{recipient.rejected ? '（被拒收）' : ''}
     </li>)}
@@ -59,9 +59,12 @@ export default function OutsourceMailsPage() {
   const [busy, setBusy] = useState<number | null>(null)
   const [viewing, setViewing] = useState<Mail | null>(null)
   const sequence = useRef(0)
+  const inFlight = useRef(0)
 
   const load = useCallback(async (quiet = false) => {
+    if (quiet && inFlight.current > 0) return
     const seq = ++sequence.current
+    inFlight.current += 1
     if (!quiet) { setLoading(true); setError(false) }
     try {
       const response = await http.get<ApiResponses['GET /outsource/mails']>('/outsource/mails', {
@@ -72,6 +75,7 @@ export default function OutsourceMailsPage() {
     } catch {
       if (seq === sequence.current && !quiet) setError(true)
     } finally {
+      inFlight.current = Math.max(0, inFlight.current - 1)
       if (seq === sequence.current && !quiet) setLoading(false)
     }
   }, [page, pageSize, vendorId, status])
@@ -98,8 +102,51 @@ export default function OutsourceMailsPage() {
   const pending = mails.some((mail) => mail.status === 'QUEUED' || mail.status === 'SENDING')
   useEffect(() => {
     if (!pending) return
-    const timer = window.setInterval(() => void load(true), POLL_MS)
-    return () => window.clearInterval(timer)
+    let active = true
+    let polling = false
+    let timer: number | undefined
+    const isHidden = () => document.hidden || document.visibilityState === 'hidden'
+    const clearTimer = () => {
+      if (timer !== undefined) {
+        window.clearTimeout(timer)
+        timer = undefined
+      }
+    }
+    const schedule = () => {
+      clearTimer()
+      if (!active || isHidden() || polling) return
+      timer = window.setTimeout(() => {
+        timer = undefined
+        void tick()
+      }, POLL_MS)
+    }
+    const tick = async () => {
+      if (!active || isHidden() || polling) return
+      polling = true
+      try {
+        await load(true)
+      } finally {
+        polling = false
+        if (active && !isHidden()) schedule()
+      }
+    }
+    const onVisibility = () => {
+      if (isHidden()) {
+        clearTimer()
+        return
+      }
+      if (!polling) {
+        clearTimer()
+        void tick()
+      }
+    }
+    schedule()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      active = false
+      clearTimer()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [pending, load])
 
   const retry = async (mail: Mail) => {

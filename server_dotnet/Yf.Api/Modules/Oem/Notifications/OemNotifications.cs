@@ -340,14 +340,17 @@ public sealed class OemOutboxPolicy : IOutboxRecipientPolicy
 
         if (mail.RecipientRealm == OemRealms.Oem)
         {
-            var companyId = await db.OemAccounts.AsNoTracking()
-                .Where(account => account.Id == recipientId && account.Status == OemStatus.Active
-                    && db.OemCompanies.Any(company => company.Id == account.OemCompanyId && company.Status == OemStatus.Active)
-                    && account.OemCompanyId == transfer.OemCompanyId)
-                .Select(account => (ulong?)account.OemCompanyId).SingleOrDefaultAsync(ct);
-            if (companyId is null || !System.Net.Mail.MailAddress.TryCreate(mail.RecipientEmail.Trim(), out _)) return Stale();
-            var emailIsCurrentContact = await db.OemCompanyContacts.AnyAsync(contact => contact.OemCompanyId == companyId
-                    && contact.Status == OemStatus.Active && contact.Email == mail.RecipientEmail.Trim(), ct);
+            var email = mail.RecipientEmail.Trim();
+            var anchorBelongsToCompany = await db.OemAccounts.AsNoTracking()
+                .AnyAsync(account => account.Id == recipientId && account.OemCompanyId == transfer.OemCompanyId, ct);
+            var companyCanReceive = anchorBelongsToCompany
+                && await db.OemCompanies.AsNoTracking()
+                    .AnyAsync(company => company.Id == transfer.OemCompanyId && company.Status == OemStatus.Active, ct)
+                && await db.OemAccounts.AsNoTracking()
+                    .AnyAsync(account => account.OemCompanyId == transfer.OemCompanyId && account.Status == OemStatus.Active, ct);
+            if (!companyCanReceive || !System.Net.Mail.MailAddress.TryCreate(email, out _)) return Stale();
+            var emailIsCurrentContact = await db.OemCompanyContacts.AsNoTracking().AnyAsync(contact => contact.OemCompanyId == transfer.OemCompanyId
+                    && contact.Status == OemStatus.Active && contact.Email == email, ct);
             if (!emailIsCurrentContact) return Stale();
             if (mail.EventType == OemMailEvents.TransferReleased
                 && (transfer.Direction != TransferDirections.InternalToOem || transfer.LifecycleStatus != TransferLifecycle.Released))

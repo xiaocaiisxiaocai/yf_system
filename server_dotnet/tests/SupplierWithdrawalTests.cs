@@ -113,7 +113,16 @@ public sealed class SupplierWithdrawalTests
         Assert.True(supplierView.GetProperty("canRestore").GetBoolean());
         Assert.Equal(JsonValueKind.Null, supplierView.GetProperty("withdrawableUntil").ValueKind);
         await AssertRefused(404, null, () => files.StreamAsync(Context(Supplier), 3001, inline: false, ct));
-        await AssertRefused(400, "不可用", () => files.BatchDownloadAsync(Context(Supplier), new BatchDownloadRequest([3001]), ct));
+        var withdrawnBatchError = await Assert.ThrowsAsync<ApiException>(
+            () => files.BatchDownloadAsync(Context(Supplier), new BatchDownloadRequest([3001]), ct));
+        Assert.Equal(400, withdrawnBatchError.Status);
+        Assert.Contains("不可用", withdrawnBatchError.Message);
+        Assert.DoesNotContain("in-time.step", withdrawnBatchError.Message, StringComparison.Ordinal);
+        var peerBatchError = await Assert.ThrowsAsync<ApiException>(
+            () => files.BatchDownloadAsync(Context(SupplierPeer), new BatchDownloadRequest([3001]), ct));
+        Assert.Equal(400, peerBatchError.Status);
+        Assert.Contains("不可用", peerBatchError.Message);
+        Assert.DoesNotContain("in-time.step", peerBatchError.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(3001UL, (await ListedAsync(files, SupplierPeer, 1001, ct)).Keys);
 
         await using (var conn = await database.Database.OpenAsync(ct))
@@ -147,6 +156,11 @@ public sealed class SupplierWithdrawalTests
         // Internal deletion also covers a withdrawn file.
         await database.SeedAsync("UPDATE files SET status='WITHDRAWN' WHERE id=3001", ct);
         await files.DeleteAsync(Context(Admin), 3001, ct);
+        var deletedBatchError = await Assert.ThrowsAsync<ApiException>(
+            () => files.BatchDownloadAsync(Context(Supplier), new BatchDownloadRequest([3001]), ct));
+        Assert.Equal(400, deletedBatchError.Status);
+        Assert.Contains("不可用", deletedBatchError.Message);
+        Assert.DoesNotContain("in-time.step", deletedBatchError.Message, StringComparison.Ordinal);
         await using (var conn = await database.Database.OpenAsync(ct))
         {
             Assert.Equal("DELETED", await conn.ExecuteScalarAsync<string>("SELECT status FROM files WHERE id=3001"));
@@ -303,6 +317,44 @@ public sealed class SupplierWithdrawalTests
             VALUES(4006,1001,201,'刚发的留言','NORMAL',UTC_TIMESTAMP(6));
             """);
         await AssertRefused(409, "当前不允许撤回留言", () => service.WithdrawAsync(conn, Supplier, 4006, null, ct));
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task RepeatedWithdrawAndRestoreRecordsEveryProjectActivity()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await LocalDatabaseScope.CreateOrSkipAsync("supplier_repeat_withdraw", ct);
+        await database.InitializeAsync(ct);
+        await database.SeedAsync(Fixture + """
+            INSERT INTO file_blobs(id,sha256,size_bytes,storage_path,state,created_at)
+            VALUES(900,REPEAT('b',64),4,'blobs/sha256/bb/fixture','READY',UTC_TIMESTAMP(6));
+            INSERT INTO files(id,project_id,uploader_id,blob_id,direction,original_name,stored_name,ext,size_bytes,storage_path,status,created_at)
+            VALUES(3201,1001,201,900,'S2C','repeat.step','s3201','step',4,'blobs/sha256/bb/fixture','AVAILABLE',UTC_TIMESTAMP(6));
+            INSERT INTO messages(id,project_id,sender_id,content,status,created_at)
+            VALUES(4201,1001,201,'反复撤回的留言','NORMAL',UTC_TIMESTAMP(6));
+            """, ct);
+        var files = Files(database.Options);
+        var messages = new MessageService(new AuditService([new ProjectActivityService()]), database.Options);
+
+        await files.WithdrawAsync(Context(Supplier), 3201, ct);
+        await files.RestoreAsync(Context(Supplier), 3201, ct);
+        await files.WithdrawAsync(Context(Supplier), 3201, ct);
+        await files.RestoreAsync(Context(Supplier), 3201, ct);
+
+        await using var conn = await database.Database.OpenAsync(ct);
+        await messages.WithdrawAsync(conn, Supplier, 4201, null, ct);
+        await messages.RestoreAsync(conn, Supplier, 4201, null, ct);
+        await messages.WithdrawAsync(conn, Supplier, 4201, null, ct);
+        await messages.RestoreAsync(conn, Supplier, 4201, null, ct);
+
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_activities WHERE project_id=1001 AND activity_type='FILE' AND target_id=3201 AND action='WITHDRAW'"));
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_activities WHERE project_id=1001 AND activity_type='FILE' AND target_id=3201 AND action='RESTORE'"));
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_activities WHERE project_id=1001 AND activity_type='MESSAGE' AND target_id=4201 AND action='WITHDRAW'"));
+        Assert.Equal(2, await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM project_activities WHERE project_id=1001 AND activity_type='MESSAGE' AND target_id=4201 AND action='RESTORE'"));
     }
 
     private static async Task<Dictionary<ulong, JsonElement>> ListedAsync(FileService files, CurrentUser viewer, ulong projectId, CancellationToken ct) =>

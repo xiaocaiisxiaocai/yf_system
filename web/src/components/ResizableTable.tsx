@@ -1,5 +1,7 @@
 import { useMemo, useRef, type ReactNode } from 'react'
 import { Table, type TableColumnProps, type TableProps } from '@arco-design/web-react'
+import { useInRouterContext, useLocation } from 'react-router-dom'
+import { PORTAL_BASE, usePortalAuth } from '../oem/api/portalSession'
 import { useAuth } from '../store/auth'
 import { ColumnResizeProvider } from './columnResize'
 import { TABLE_PAGINATION } from './tablePagination'
@@ -9,6 +11,16 @@ import { useColumnTextSelection } from './useColumnTextSelection'
 
 /** 列没写宽度时的初始宽度；拖动后按用户记在浏览器。 */
 const RESIZABLE_DEFAULT_WIDTH = 120
+
+const isPortalRoute = (pathname: string) => pathname === PORTAL_BASE || pathname.startsWith(`${PORTAL_BASE}/`)
+
+function useTableOwner(tableId: string, pathname: string) {
+  const internalUserId = useAuth((state) => state.user?.id)
+  const portalAccountId = usePortalAuth((state) => state.account?.id)
+  return isPortalRoute(pathname)
+    ? { storageTableId: `${tableId}:oem`, userId: portalAccountId }
+    : { storageTableId: tableId, userId: internalUserId }
+}
 
 
 /** Marks header cells as column headers for screen readers (Arco renders the `th` itself). */
@@ -49,8 +61,8 @@ function lockedByDefault<T>(column: TableColumnProps<T>, index: number) {
  * Arco 表格加上可拖动的列宽，宽度按表格和用户记在浏览器里（与项目列表等页面同一套机制）。
  * 列宽规格直接取自各列已写的 `width`；双击表头分隔线恢复该列默认宽度。
  */
-function FlatResizableTable<T extends object>({ tableId, columns, growKey, lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
-  const userId = useAuth((state) => state.user?.id)
+function FlatResizableTable<T extends object>({ tableId, columns, growKey, lockedKeys, className, scroll, pagination, pathname, ...rest }: ResizableTableProps<T> & { pathname: string }) {
+  const { storageTableId, userId } = useTableOwner(tableId, pathname)
   const hostRef = useRef<HTMLDivElement>(null)
   useColumnTextSelection(hostRef)
   const keyed: (KeyedColumn<T> & { locked: boolean })[] = columns.map((column, index) => ({
@@ -76,7 +88,7 @@ function FlatResizableTable<T extends object>({ tableId, columns, growKey, locke
   // Arco adds its own 40px checkbox / expand columns; leave room for them so the table never overflows its card.
   const selection = rest.rowSelection ? (typeof rest.rowSelection.columnWidth === 'number' ? rest.rowSelection.columnWidth : 40) : 0
   const reservedWidth = selection + (rest.expandedRowRender ? 40 : 0)
-  const table = useAdjustableColumns(tableId, userId, specs, keyed, growKey ?? '', hostRef, true, Boolean(growKey), reservedWidth)
+  const table = useAdjustableColumns(storageTableId, userId, specs, keyed, growKey ?? '', hostRef, true, Boolean(growKey), reservedWidth)
   const sized = table.columns.map(({ originalTitle, locked: _locked, ...column }) => ({ ...column, title: originalTitle }))
   return (
     <ColumnResizeProvider actions={table.actions} picker={table.picker}>
@@ -108,8 +120,8 @@ const flattenColumns = <T,>(columns: TableColumnProps<T>[]): Leaf<T>[] => column
  * 带分组表头（`children`）的表格：叶子列和其他表格一样可拖动列宽、在「显示列」里隐藏、排序和固定；
  * 表头分组按当前显示的相邻同组列重新合并（同组的列被拆开后，各段各有一个分组表头）。
  */
-function GroupedTable<T extends object>({ tableId, columns, lockedKeys, className, scroll, pagination, ...rest }: ResizableTableProps<T>) {
-  const userId = useAuth((state) => state.user?.id)
+function GroupedTable<T extends object>({ tableId, columns, lockedKeys, className, scroll, pagination, pathname, ...rest }: ResizableTableProps<T> & { pathname: string }) {
+  const { storageTableId, userId } = useTableOwner(tableId, pathname)
   const hostRef = useRef<HTMLDivElement>(null)
   useColumnTextSelection(hostRef)
   const leaves = flattenColumns(columns)
@@ -128,7 +140,7 @@ function GroupedTable<T extends object>({ tableId, columns, lockedKeys, classNam
     typeof column.width === 'number' && column.width > 0 ? column.width : RESIZABLE_DEFAULT_WIDTH, column.locked]))
   const specs = useMemo<ColumnLayoutSpec[]>(() => (JSON.parse(signature) as Array<[string, string, number, boolean]>)
     .map(([key, title, defaultWidth, locked]) => ({ key, title, defaultWidth, minWidth: Math.min(72, defaultWidth), locked })), [signature])
-  const table = useAdjustableColumns(tableId, userId, specs, keyed, '', hostRef, true, false, 0)
+  const table = useAdjustableColumns(storageTableId, userId, specs, keyed, '', hostRef, true, false, 0)
   const tree: TableColumnProps<T>[] = []
   for (const { originalTitle, locked: _locked, groupKey, group, ...column } of table.columns) {
     const leaf = { ...column, title: originalTitle } as TableColumnProps<T>
@@ -154,6 +166,17 @@ function GroupedTable<T extends object>({ tableId, columns, lockedKeys, classNam
   )
 }
 
+function RoutedResizableTable<T extends object>(props: ResizableTableProps<T>) {
+  const { pathname } = useLocation()
+  return props.columns.some((column) => column.children?.length)
+    ? <GroupedTable<T> {...props} pathname={pathname} />
+    : <FlatResizableTable<T> {...props} pathname={pathname} />
+}
+
 export default function ResizableTable<T extends object>(props: ResizableTableProps<T>) {
-  return props.columns.some((column) => column.children?.length) ? <GroupedTable<T> {...props} /> : <FlatResizableTable<T> {...props} />
+  if (useInRouterContext()) return <RoutedResizableTable<T> {...props} />
+  const pathname = typeof window === 'undefined' ? '' : window.location.pathname
+  return props.columns.some((column) => column.children?.length)
+    ? <GroupedTable<T> {...props} pathname={pathname} />
+    : <FlatResizableTable<T> {...props} pathname={pathname} />
 }

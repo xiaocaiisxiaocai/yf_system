@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Descriptions, Input, InputNumber, Message, Modal, Space, Switch, Tag, TimePicker } from '@arco-design/web-react'
-import http from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import ResizableTable from '../../components/ResizableTable'
 import LoadError from '../../components/LoadError'
@@ -38,11 +38,28 @@ export default function MesMirrorPanel() {
   const [working, setWorking] = useState(false)
   const [testing, setTesting] = useState(false)
   const lock = useRef(false)
+  const mounted = useRef(true)
+  const refreshInFlight = useRef(false)
 
-  const refresh = useCallback(async () => {
-    const response = await http.get<ApiResponses['GET /outsource/mes-mirror/status']>('/outsource/mes-mirror/status')
-    setStatus(response.data)
-    setPageSize((current) => current ?? response.data.pageSize)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
+  const refresh = useCallback(async (quiet = false) => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true
+    try {
+      const response = await http.get<ApiResponses['GET /outsource/mes-mirror/status']>(
+        '/outsource/mes-mirror/status',
+        quiet ? ({ quietNetworkError: true } as QuietRequestConfig) : undefined,
+      )
+      if (!mounted.current) return
+      setStatus(response.data)
+      setPageSize((current) => current ?? response.data.pageSize)
+    } finally {
+      refreshInFlight.current = false
+    }
   }, [])
 
   const applySettings = (next: Settings) => {
@@ -56,10 +73,11 @@ export default function MesMirrorPanel() {
         http.get<ApiResponses['GET /outsource/mes-mirror/status']>('/outsource/mes-mirror/status'),
         http.get<ApiResponses['GET /outsource/mes-mirror/settings']>('/outsource/mes-mirror/settings'),
       ])
+      if (!mounted.current) return
       setStatus(statusResponse.data)
       setPageSize((current) => current ?? statusResponse.data.pageSize)
       applySettings(settingsResponse.data)
-    } catch { setError(true) }
+    } catch { if (mounted.current) setError(true) }
   }, [])
 
   useEffect(() => {
@@ -72,44 +90,95 @@ export default function MesMirrorPanel() {
   const busy = BUSY.has(phase)
   useEffect(() => {
     if (!busy) return
-    const timer = setInterval(() => { void refresh().catch(() => undefined) }, POLL_MS)
-    return () => clearInterval(timer)
+    let active = true
+    let polling = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const isHidden = () => document.hidden || document.visibilityState === 'hidden'
+    const clearTimer = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+    }
+    const schedule = () => {
+      clearTimer()
+      if (!active || isHidden() || polling) return
+      timer = setTimeout(() => {
+        timer = undefined
+        void tick()
+      }, POLL_MS)
+    }
+    const tick = async () => {
+      if (!active || isHidden() || polling) return
+      polling = true
+      try {
+        await refresh(true)
+      } catch {
+        // 后台轮询静默忽略单次失败，等待下一轮重试。
+      } finally {
+        polling = false
+        if (active && !isHidden()) schedule()
+      }
+    }
+    const onVisibility = () => {
+      if (isHidden()) {
+        clearTimer()
+        return
+      }
+      if (!polling) {
+        clearTimer()
+        void tick()
+      }
+    }
+    schedule()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      active = false
+      clearTimer()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [busy, refresh])
 
   /** One action at a time; the request layer shows errors, so the form keeps what was typed. */
   const run = async (action: () => Promise<void>) => {
     if (lock.current) return
     lock.current = true; setWorking(true)
-    try { await action() } catch { /* 统一请求层提示 */ } finally { lock.current = false; setWorking(false) }
+    try { await action() } catch { /* 统一请求层提示 */ } finally {
+      lock.current = false
+      if (mounted.current) setWorking(false)
+    }
   }
 
   const start = (body: { mode: 'ALL' } | { mode: 'PAGE'; page: number }) => run(async () => {
     try {
       const response = await http.post<ApiResponses['POST /outsource/mes-mirror/run']>('/outsource/mes-mirror/run', { ...body, pageSize })
-      setStatus(response.data)
+      if (mounted.current) setStatus(response.data)
     } catch (failure) {
       // A refusal usually means another fetch (the daily one) is under way: show it instead of the stale idle state.
-      void refresh().catch(() => undefined)
+      void refresh(true).catch(() => undefined)
       throw failure
     }
   })
   const stop = () => run(async () => {
     const response = await http.post<ApiResponses['POST /outsource/mes-mirror/stop']>('/outsource/mes-mirror/stop')
-    setStatus(response.data)
+    if (mounted.current) setStatus(response.data)
   })
   const confirm = (apply: boolean) => run(async () => {
     const response = await http.post<ApiResponses['POST /outsource/mes-mirror/confirm']>('/outsource/mes-mirror/confirm', { apply })
+    if (!mounted.current) return
     setStatus(response.data)
     Message.success(apply ? '已合并' : '已放弃，资料未改动')
   })
   const setSchedule = (enabled: boolean) => run(async () => {
     const response = await http.put<ApiResponses['PUT /outsource/mes-mirror/schedule']>('/outsource/mes-mirror/schedule', { enabled })
+    if (!mounted.current) return
     setSettings(response.data)
     Message.success(enabled ? '定时抓取已开启' : '定时抓取已停止')
   })
   const save = () => run(async () => {
     const response = await http.put<ApiResponses['PUT /outsource/mes-mirror/settings']>('/outsource/mes-mirror/settings',
       { baseUrl: address.trim(), account: account.trim(), password: password || null, syncTime: fetchTime })
+    if (!mounted.current) return
     applySettings(response.data); setTestResult(null)
     Message.success('IPMS 设定已保存')
   })
@@ -118,8 +187,8 @@ export default function MesMirrorPanel() {
     try {
       const response = await http.post<ApiResponses['POST /outsource/mes-mirror/test']>('/outsource/mes-mirror/test',
         { baseUrl: address.trim(), account: account.trim(), password: password || null }, { timeout: TEST_TIMEOUT_MS })
-      setTestResult(response.data)
-    } finally { setTesting(false) }
+      if (mounted.current) setTestResult(response.data)
+    } finally { if (mounted.current) setTesting(false) }
   })
 
   if (error) return <LoadError message="IPMS 设定加载失败" onRetry={load} />

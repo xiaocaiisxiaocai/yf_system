@@ -405,4 +405,84 @@ describe('留言回执刷新与详情', () => {
     await act(async () => pending[2].reject(new Error('failure after close')))
     expect(screen.queryByText('回执加载失败')).not.toBeInTheDocument()
   })
+
+  it('failed load-more with unchanged receipt counts does not enter a polling loop or rebuild the observer', async () => {
+    vi.useFakeTimers()
+    let receiptObserverConstructions = 0
+    class AutoIntersectingObserver implements IntersectionObserver {
+      readonly root = null
+      readonly rootMargin = '0px'
+      readonly scrollMargin = '0px'
+      readonly thresholds: readonly number[]
+      private readonly callback: IntersectionObserverCallback
+      private disconnected = false
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        this.callback = callback
+        const t = options?.threshold
+        this.thresholds = Array.isArray(t) ? t : [t ?? 0]
+        if (this.thresholds.includes(0.01)) receiptObserverConstructions += 1
+      }
+      observe(target: Element) {
+        if (!this.disconnected && this.thresholds.includes(0.01)) {
+          queueMicrotask(() => {
+            if (this.disconnected) return
+            this.callback([{
+              target,
+              isIntersecting: true,
+              intersectionRatio: 1,
+            } as IntersectionObserverEntry], this)
+          })
+        }
+      }
+      unobserve() {}
+      disconnect() { this.disconnected = true }
+      takeRecords() { return [] }
+    }
+    vi.stubGlobal('IntersectionObserver', AutoIntersectingObserver)
+
+    const rows = Array.from({ length: 25 }, (_, index) => messageRow(25 - index))
+    let receiptCalls = 0
+    let currentReadCount = 0
+    messageMocks.get.mockImplementation(async (url: string, config?: { params?: { beforeId?: number; ids?: string } }) => {
+      if (url === '/projects/1/messages') {
+        if (config?.params?.beforeId) throw new Error('load more failed')
+        return messagePage(rows.slice(0, 20), rows.length)
+      }
+      if (url === '/projects/1/message-receipts') {
+        receiptCalls += 1
+        const ids = (config?.params?.ids ?? '').split(',').filter(Boolean).map(Number)
+        return { data: ids.map(id => ({ id, readCount: currentReadCount, totalCount: 1 })) }
+      }
+      throw new Error(`unexpected GET ${url}`)
+    })
+
+    const view = renderMessagePanel({ active: true, receiptRevision: 'r1', realtimeConnected: true })
+    await flush()
+    expect(receiptCalls).toBe(1)
+    expect(receiptObserverConstructions).toBe(1)
+
+    // Trigger load-more failure so the feed query enters error state with existing pages retained.
+    fireEvent.click(screen.getByRole('button', { name: /加载更多/ }))
+    await flush()
+    expect(screen.getByRole('button', { name: '重试' })).toBeVisible()
+
+    // Trigger a receipt revision returning unchanged counts: must NOT loop or rebuild the observer.
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" active receiptRevision="r2" realtimeConnected />)
+    await flush()
+    await advance(15000)
+    expect(receiptCalls).toBe(2)
+    expect(receiptObserverConstructions).toBe(1)
+    expect(screen.getByRole('button', { name: '重试' })).toBeVisible()
+
+    // Trigger a receipt revision returning changed counts: updates UI once, still does NOT rebuild observer or loop.
+    currentReadCount = 1
+    view.rerender(<MessagePanel projectId={1} projectStatus="IN_PROGRESS" active receiptRevision="r3" realtimeConnected />)
+    await flush()
+    await advance(15000)
+    expect(receiptCalls).toBe(3)
+    expect(receiptObserverConstructions).toBe(1)
+    expect(screen.getAllByRole('button', { name: '查看留言回执：1/1' })).toHaveLength(20)
+    expect(screen.getByRole('button', { name: '重试' })).toBeVisible()
+    view.unmount()
+  })
 })

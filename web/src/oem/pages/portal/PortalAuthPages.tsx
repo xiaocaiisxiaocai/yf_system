@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Form, Input, Message, Spin } from '@arco-design/web-react'
+import axios from 'axios'
+import { Button, Form, Input, Message, Result, Space, Spin } from '@arco-design/web-react'
 import { IconLock, IconUser } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { isOemPortalPath, isSafeLoginReturnPath } from '../../../api/client'
 import AuthShell from '../../../components/AuthShell'
 import PasswordInput from '../../../components/PasswordInput'
 import { confirmPasswordRule, passwordRule } from '../../../utils/password'
-import { bootPortalSession, portalChangePassword, portalLogin, portalLogout, PORTAL_BASE, usePortalAuth, usePortalSessionSync } from '../../api/portalSession'
+import {
+  bootPortalSession, portalChangePassword, portalLogin, portalLogout, PORTAL_BASE, retryBootPortalSession,
+  usePortalAuth, usePortalSessionSync,
+} from '../../api/portalSession'
+import { oemRequestError } from '../../api/requestError'
 
 const OEM_BRAND = 'ODM/OEMA 文件传递'
 
@@ -15,21 +21,33 @@ export function PortalLoginPage() {
   const [form] = Form.useForm()
   const { booted, token, mustChangePassword } = usePortalAuth()
   const [loading, setLoading] = useState(false)
+  const submitting = useRef(false)
   useEffect(() => { void bootPortalSession() }, [])
 
   const submit = async (values: { employeeNo: string; password: string }) => {
+    if (submitting.current) return
+    submitting.current = true
     setLoading(true)
     try {
       // A successful login stores the session; the redirect below then leaves this page.
       await portalLogin(values.employeeNo.trim(), values.password)
+    } catch (error) {
+      if (!axios.isAxiosError(error)) {
+        Message.error(oemRequestError(error, '登录失败，请稍后重试'))
+      }
     } finally {
+      submitting.current = false
       setLoading(false)
     }
   }
 
   if (booted && token) {
-    const from = (location.state as { from?: string } | null)?.from
-    return <Navigate to={mustChangePassword ? `${PORTAL_BASE}/change-password` : from || `${PORTAL_BASE}/transfers`} replace />
+    const from = (location.state as { from?: unknown } | null)?.from
+    const pathOnly = typeof from === 'string' ? from.split(/[?#]/)[0] : ''
+    const safeFrom = isSafeLoginReturnPath(from) && isOemPortalPath(pathOnly) && pathOnly !== `${PORTAL_BASE}/login`
+      ? from
+      : `${PORTAL_BASE}/transfers`
+    return <Navigate to={mustChangePassword ? `${PORTAL_BASE}/change-password` : safeFrom} replace />
   }
 
   return (
@@ -50,9 +68,10 @@ export function PortalLoginPage() {
 export function PortalChangePasswordPage() {
   usePortalSessionSync()
   const navigate = useNavigate()
-  const { booted, token, mustChangePassword } = usePortalAuth()
+  const { booted, bootUnavailable, token, mustChangePassword, logout } = usePortalAuth()
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [retryingBoot, setRetryingBoot] = useState(false)
   const submitting = useRef(false)
   useEffect(() => { void bootPortalSession() }, [])
 
@@ -82,6 +101,10 @@ export function PortalChangePasswordPage() {
       await portalChangePassword(values.oldPassword, values.newPassword)
       Message.success('密码已修改，请使用新密码重新登录')
       navigate(`${PORTAL_BASE}/login`, { replace: true })
+    } catch (error) {
+      if (!axios.isAxiosError(error)) {
+        Message.error(oemRequestError(error, '修改密码失败，请稍后重试'))
+      }
     } finally {
       submitting.current = false
       setLoading(false)
@@ -94,6 +117,38 @@ export function PortalChangePasswordPage() {
       <main className="auth-page">
         <Spin tip="正在恢复登录状态…" />
       </main>
+    )
+  }
+  if (!token && bootUnavailable) {
+    return (
+      <div className="app-boot">
+        <img src="/saa-logo.svg" alt="SAA" />
+        <Result
+          status="warning"
+          title="暂时无法恢复登录状态"
+          subTitle="当前网络连接异常或服务暂时不可用，已保留本地会话。您可以重试恢复，或重新登录。"
+          extra={(
+            <Space>
+              <Button
+                type="primary"
+                loading={retryingBoot}
+                onClick={async () => {
+                  if (retryingBoot) return
+                  setRetryingBoot(true)
+                  try {
+                    await retryBootPortalSession()
+                  } finally {
+                    setRetryingBoot(false)
+                  }
+                }}
+              >
+                重试恢复会话
+              </Button>
+              <Button disabled={retryingBoot} onClick={() => logout()}>重新登录</Button>
+            </Space>
+          )}
+        />
+      </div>
     )
   }
   if (!token) return <Navigate to={`${PORTAL_BASE}/login`} replace />

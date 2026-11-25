@@ -95,12 +95,17 @@ Write-Output "child=$($child.Id)"
         source = SCRIPT.read_text(encoding="utf-8-sig")
         for gate in (
             "dotnet-tool-restore",
+            "http-audit-contracts",
+            "http-signalr-contracts",
             "python-script-self-tests",
             "npm-test-precompression",
         ):
             self.assertIn("'" + gate + "'", source)
         self.assertIn("[switch]$AllowSkips", source)
         self.assertIn("if (-not $AllowSkips -and -not $fullCoverage)", source)
+        self.assertIn("scripts/test_audit_contracts.py", source)
+        self.assertIn("scripts/test_signalr_contracts.py", source)
+        self.assertIn("'YF_TEST_API_DIR'", source)
         # npm ci must be preceded by the preflight that refuses to run while a process
         # (e.g. a Vite dev server) still references web/node_modules.
         self.assertIn("Get-ProcessesReferencingNodeModules", source)
@@ -115,6 +120,13 @@ Write-Output "child=$($child.Id)"
         self.assertIn('"ASPNETCORE_URLS": base', source)
         self.assertNotIn('"URLS": base', source)
         self.assertIn('["dotnet", str(DLL), "--urls", base]', source)
+
+    def test_standalone_http_contract_scripts_bypass_proxies(self):
+        for name in ("test_audit_contracts.py", "test_signalr_contracts.py"):
+            source = (ROOT / "server_dotnet/scripts" / name).read_text(encoding="utf-8")
+            self.assertIn("urllib.request.ProxyHandler({})", source, name)
+            self.assertIn('"ASPNETCORE_URLS": base', source, name)
+            self.assertNotIn('"URLS": base', source, name)
 
     def test_verify_all_output_root_and_ipv6_loopback_are_supported(self):
         source = SCRIPT.read_text(encoding="utf-8-sig")

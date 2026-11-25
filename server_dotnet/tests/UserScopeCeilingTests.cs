@@ -131,6 +131,43 @@ public sealed class UserScopeCeilingTests
             new DataScopeAssign([new DataScopeEntry(DataScopeDomains.Project, "ORG")]), ct);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task SystemAdminOemTransferScopeRuleAppliesAfterRoleChangesAndOnCreate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
+        await database.ExecuteAsync(Fixture, null, ct);
+        var users = Users(database);
+        var admin = new CurrentUser(1, "admin", "INTERNAL", null);
+
+        // 1. Creating a system administrator with a non-ALL oem_transfer scope is rejected atomically.
+        var createNarrow = await Assert.ThrowsAsync<ApiException>(() => users.CreateAsync(admin,
+            new UserCreate("bad_admin", "Strong#Pass9", "Bad Admin", "", 9301, 1, null,
+                [new DataScopeEntry(DataScopeDomains.OemTransfer, DataScopeValues.Self)]), ct));
+        Assert.Equal(400, createNarrow.Status);
+        Assert.Contains("ODM/OEMA", createNarrow.Message);
+        Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='bad_admin'", ct));
+
+        // 2. Promoting an ordinary user to system administrator while narrowing oem_transfer is rejected atomically.
+        var promoteNarrow = await Assert.ThrowsAsync<ApiException>(() => users.UpdateAsync(admin, 9202,
+            new UserUpdate(RoleId: 1, Scopes: [new DataScopeEntry(DataScopeDomains.OemTransfer, DataScopeValues.Self)]), ct));
+        Assert.Equal(400, promoteNarrow.Status);
+        Assert.Contains("ODM/OEMA", promoteNarrow.Message);
+        Assert.Equal(9102UL, await database.ScalarAsync<ulong>("SELECT role_id FROM user_roles WHERE user_id=9202", ct));
+        Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM user_data_scopes WHERE user_id=9202", ct));
+
+        // 3. Demoting a second system administrator while narrowing oem_transfer to SELF in one request succeeds.
+        var secondAdmin = await users.CreateAsync(admin,
+            new UserCreate("second_admin", "Strong#Pass9", "Second Admin", "", 9301, 1, null,
+                [new DataScopeEntry(DataScopeDomains.OemTransfer, DataScopeValues.All)]), ct);
+        await users.UpdateAsync(admin, secondAdmin.Id,
+            new UserUpdate(RoleId: 9102, Scopes: [new DataScopeEntry(DataScopeDomains.OemTransfer, DataScopeValues.Self)]), ct);
+        Assert.Equal(9102UL, await database.ScalarAsync<ulong>(
+            $"SELECT role_id FROM user_roles WHERE user_id={secondAdmin.Id}", ct));
+        Assert.Equal(DataScopeValues.Self, await database.ScalarAsync<string>(
+            $"SELECT `scope` FROM user_data_scopes WHERE user_id={secondAdmin.Id} AND `domain`='oem_transfer'", ct));
+    }
+
     private static UserService Users(MigratedTestDatabase database) =>
         new(EfTestSupport.DbContextFactory(database.Options), new PermissionService(), new AuditService([]));
 }

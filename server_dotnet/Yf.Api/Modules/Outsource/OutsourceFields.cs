@@ -57,7 +57,7 @@ internal sealed record OutsourceBuiltInField(string Key, string Category, double
 internal static class OutsourceBuiltInFields
 {
     internal const string ElectricalHandoffKey = "electricalHandoff";
-    internal const string ElectricalHandoffLabel = "是否转迅得电控";
+    internal const string ElectricalHandoffLabel = "转迅得研发电控设计";
     internal const string FilesKey = "files";
     internal const string FilesLabel = "档案";
     internal static string YesNo(bool value) => value ? "是" : "否";

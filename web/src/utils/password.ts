@@ -55,7 +55,7 @@ export function validatePassword(value: string): string | undefined {
   const sequenceCandidate = value.replace(/[!-/:-@[-`{-~]+$/, '').toLowerCase()
   if (policy.blockedStems.some(word => stem.length > 0 && stem.length % word.length === 0 && word.repeat(stem.length / word.length) === stem)
     || isSimpleSequence(stem) || isSimpleSequence(sequenceCandidate)
-    || [1, 2, 3, 4].some(period => characters.every((c, i) => c === characters[i % period]))) {
+    || [1, 2, 3, 4].some(period => period * 2 <= characters.length && characters.every((c, i) => c === characters[i % period]))) {
     return PASSWORD_VALIDATION_MESSAGE
   }
   return undefined

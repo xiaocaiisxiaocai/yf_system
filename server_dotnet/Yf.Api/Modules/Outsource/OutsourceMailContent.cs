@@ -23,6 +23,8 @@ internal static class OutsourceMailContent
 {
     private const string Cell = "border:1px solid #c9cdd4;padding:4px 8px;white-space:nowrap;";
     private const string Header = Cell + "background:#f2f3f5;font-weight:600;";
+    internal const int MaximumAttachmentNameLength = 128;
+    private static readonly HashSet<char> InvalidFileNameChars = [.. Path.GetInvalidFileNameChars()];
     private static readonly string[] WithdrawKeys = ["workOrderNo", "customer", "machineModel", "type", "quantity"];
 
     /// <summary>The body table's column keys for a notice or a withdrawal (the caller drops what vendors may not see).</summary>
@@ -35,8 +37,17 @@ internal static class OutsourceMailContent
 
     internal static string AttachmentName(string vendorName, DateOnly businessDay)
     {
-        var safe = new string(vendorName.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c).ToArray());
-        return $"外发清单_{safe}_{businessDay.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.xlsx";
+        const string prefix = "外发清单_";
+        var suffix = $"_{businessDay.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}.xlsx";
+        var maxVendorLength = MaximumAttachmentNameLength - prefix.Length - suffix.Length;
+        var builder = new StringBuilder(Math.Min(vendorName.Length, maxVendorLength));
+        foreach (var rune in vendorName.EnumerateRunes())
+        {
+            if (builder.Length + rune.Utf16SequenceLength > maxVendorLength) break;
+            if (rune.IsBmp && InvalidFileNameChars.Contains((char)rune.Value)) builder.Append('_');
+            else builder.Append(rune);
+        }
+        return $"{prefix}{builder}{suffix}";
     }
 
     internal static string Html(string kind, string vendorName, IReadOnlyList<OutsourceItemResponse> items,

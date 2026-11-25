@@ -623,7 +623,7 @@ public sealed class FileService(
             if (!available.TryGetValue(id, out var row)) throw ApiException.NotFound();
             if (viewableProjects.Add(row.ProjectId))
                 await RequireViewOrNotFoundAsync(conn, tx, actor, row.ProjectId, ct);
-            if (!Readable(actor, row)) throw ApiException.BadRequest($"文件 {row.OriginalName} 不可用");
+            if (!Readable(actor, row)) throw ApiException.BadRequest("所选文件中包含不可用的文件，请刷新后重试");
             var path = ResolveExisting(row, ct);
             inputBytes = checked(inputBytes + (ulong)new FileInfo(path).Length);
             if (inputBytes > BatchInputMaximumBytes)

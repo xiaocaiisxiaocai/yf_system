@@ -39,11 +39,31 @@ public sealed class ApiRequestPolicyTests
     [InlineData("/api/v1/oem/files/1/download-status", false)]
     [InlineData("/api/v1/oem/files/1/download/extra", false)]
     [InlineData("/api/v1/oem/files/not-an-id/content", false)]
+    [InlineData("/api/v1/messages/1/images/2", true)]
+    [InlineData("/API/V1/Messages/1/Images/2/", true)]
+    [InlineData("/api/v1/messages/not-an-id/images/2", false)]
+    [InlineData("/api/v1/messages/1/images/not-an-id", false)]
+    [InlineData("/api/v1/messages/1/images/2/extra", false)]
+    [InlineData("/api/v1/messages/1/reads", false)]
     public void ContentPolicyMatchesCaseInsensitiveRoutes(string path, bool expected)
     {
         var request = new DefaultHttpContext().Request;
         request.Method = "GET";
         request.Path = path;
+        Assert.Equal(expected, ApiRequestPolicy.IsFileContent(request));
+    }
+
+    [Theory]
+    [InlineData("GET", true)]
+    [InlineData("HEAD", true)]
+    [InlineData("POST", false)]
+    [InlineData("PUT", false)]
+    [InlineData("DELETE", false)]
+    public void MessageImageContentPolicyOnlyAppliesToReadMethods(string method, bool expected)
+    {
+        var request = new DefaultHttpContext().Request;
+        request.Method = method;
+        request.Path = "/api/v1/messages/10/images/20";
         Assert.Equal(expected, ApiRequestPolicy.IsFileContent(request));
     }
 }

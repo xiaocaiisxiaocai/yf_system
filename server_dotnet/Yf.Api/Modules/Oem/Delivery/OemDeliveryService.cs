@@ -67,8 +67,18 @@ public sealed class OemDeliveryService(
             var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
             var (loaded, _, capabilities) = await LoadReadableAsync(uow, current, fileId, ct);
             file = loaded;
-            if (file.SizeBytes > PreviewLimitBytes) throw new ApiException(413, 41301, "文件超过在线预览上限，请下载后查看");
-            path = await storage.ResolveExistingFileAsync(file.StoragePath, ct);
+            if (!OemPreviewFormats.IsPreviewableExtension(file.Ext))
+                throw ApiException.BadRequest("该文件格式不支持在线预览，请下载后查看");
+            if (file.SizeBytes > PreviewLimitBytes)
+                throw new ApiException(413, 41301, "文件超过在线预览上限，请下载后查看");
+            try
+            {
+                path = await storage.ResolveExistingFileAsync(file.StoragePath, ct);
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                throw new ApiException(410, 41003, "文件已到期或不可用");
+            }
             await audit.WriteAsync(uow, current, "OEM_FILE_PREVIEW", "oem_file", fileId, new
             {
                 targetName = file.OriginalName, transferId = file.TransferId,
@@ -77,8 +87,16 @@ public sealed class OemDeliveryService(
             }, ct);
             await uow.CommitAsync(ct);
         }
-        var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024, FileOptions.Asynchronous);
-        return Results.File(stream, file.MimeType ?? "application/octet-stream", enableRangeProcessing: true);
+        FileStream stream;
+        try
+        {
+            stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 64 * 1024, FileOptions.Asynchronous);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            throw new ApiException(410, 41003, "文件已到期或不可用");
+        }
+        return Results.File(stream, OemPreviewFormats.ContentTypeFor(file.Ext), enableRangeProcessing: true);
     }
 
     /// <summary>Starts a logical download session and hands the browser a path-scoped HttpOnly grant cookie.</summary>

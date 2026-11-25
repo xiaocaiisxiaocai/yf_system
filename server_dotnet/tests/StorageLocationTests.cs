@@ -3,6 +3,7 @@ using Dapper;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Logging.Abstractions;
+using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.SystemManagement;
@@ -278,6 +279,106 @@ public sealed class StorageLocationTests
         });
         Assert.Equal(new StorageRootPair(second, null), options.StorageRoots);
         Assert.Equal(new StorageRootPair("", null), options.OemStorageRoots);
+    }
+
+    [Fact]
+    public void StaleSnapshotCannotOverwriteNewerTimestampedState()
+    {
+        var first = Path.Combine(Path.GetTempPath(), "yf_mono_a");
+        var second = Path.Combine(Path.GetTempPath(), "yf_mono_b");
+        var third = Path.Combine(Path.GetTempPath(), "yf_mono_c");
+        var options = new AppOptions();
+        var t1 = new DateTime(2026, 11, 25, 10, 0, 0, DateTimeKind.Utc);
+        var t2 = t1.AddMilliseconds(50);
+
+        Assert.True(StorageLocationState.Apply(options, new Yf.Api.Infrastructure.Entities.StorageLocation
+        {
+            Kind = StorageKinds.Collaboration, Path = third, PreviousPath = second, Status = StorageStatuses.Migrating, UpdatedAt = t2,
+        }));
+        Assert.False(StorageLocationState.Apply(options, new Yf.Api.Infrastructure.Entities.StorageLocation
+        {
+            Kind = StorageKinds.Collaboration, Path = second, PreviousPath = null, Status = StorageStatuses.Idle, UpdatedAt = t1,
+        }));
+        Assert.Equal(new StorageRootPair(third, second), options.StorageRoots);
+
+        // Equal or newer timestamps continue to apply cleanly.
+        Assert.True(StorageLocationState.Apply(options, new Yf.Api.Infrastructure.Entities.StorageLocation
+        {
+            Kind = StorageKinds.Collaboration, Path = second, PreviousPath = third, Status = StorageStatuses.Migrating, UpdatedAt = t2,
+        }));
+        Assert.Equal(new StorageRootPair(second, third), options.StorageRoots);
+        Assert.NotEqual(first, options.StorageRoot);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task CompletionCommitCannotOverwriteAMigrationStartedImmediatelyAfter()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sandbox = Sandbox();
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("storage_commit_order", ct);
+        try
+        {
+            await database.InitializeAsync(ct);
+            var (app, firstRoot, secondRoot) = Roots(sandbox);
+            var thirdRoot = Path.Combine(sandbox, "third");
+            var options = database.Options;
+            options.StorageRoot = firstRoot;
+            // Two concurrent DB actors (worker completing + service starting next migration) need >1 pooled connection.
+            options.ConnectionString = new MySqlConnectionStringBuilder(options.ConnectionString) { MaximumPoolSize = 4 }.ConnectionString;
+            await StorageLocationBootstrap.ApplyAsync(options, app, seed: true, ct);
+            await WriteAsync(firstRoot, Path.Combine("blobs", "a.bin"), 4_096, ct);
+
+            var sharedDb = new AppDb(options);
+            var audit = new AuditService([]);
+            var signal = new StorageMigrationSignal();
+            var service = new StorageLocationService(sharedDb, options, audit, signal, new TestEnvironment(app));
+            var worker = new StorageMigrationWorker(sharedDb, options, audit, signal,
+                NullLogger<StorageMigrationWorker>.Instance) { DeleteGracePeriod = TimeSpan.Zero };
+            CurrentUser admin;
+            await using (var conn = await sharedDb.OpenAsync(ct))
+            {
+                await conn.ExecuteAsync(new CommandDefinition(
+                    "UPDATE users SET must_change_password=0 WHERE employee_no='admin'", cancellationToken: ct));
+                var adminId = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
+                    "SELECT id FROM users WHERE employee_no='admin'", cancellationToken: ct));
+                admin = new CurrentUser(adminId, "admin", "INTERNAL", null);
+            }
+
+            await service.MigrateAsync(admin, "COLLAB", new StorageMigrationRequest { Path = secondRoot }, null, ct);
+
+            var workerCommitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var allowWorkerApply = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var nextMigrationReachedLock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            worker.BeforeApplyingCompletion = async () =>
+            {
+                workerCommitted.TrySetResult();
+                await allowWorkerApply.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+            };
+            service.BeforeLocking = () =>
+            {
+                nextMigrationReachedLock.TrySetResult();
+                return Task.CompletedTask;
+            };
+
+            var workerTask = worker.RunOnceAsync(ct);
+            await workerCommitted.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+
+            // TX1 has committed IDLE in MySQL, while worker has not yet updated in-memory options.
+            var nextMigrationTask = service.MigrateAsync(admin, "COLLAB", new StorageMigrationRequest { Path = thirdRoot }, null, ct);
+            await nextMigrationReachedLock.Task.WaitAsync(TimeSpan.FromSeconds(15), ct);
+            // Give the second migration time to reach the commit/apply gate; it must wait for worker's apply first.
+            await Task.Delay(50, ct);
+            var completedBeforeWorkerApplied = nextMigrationTask.IsCompleted;
+
+            allowWorkerApply.TrySetResult();
+            Assert.True(await workerTask.WaitAsync(TimeSpan.FromSeconds(15), ct));
+            var secondStarted = await nextMigrationTask.WaitAsync(TimeSpan.FromSeconds(15), ct);
+
+            Assert.False(completedBeforeWorkerApplied);
+            Assert.Equal(("MIGRATING", thirdRoot, secondRoot), (secondStarted.Status, secondStarted.Path, secondStarted.PreviousPath));
+            Assert.Equal(new StorageRootPair(thirdRoot, secondRoot), options.StorageRoots);
+        }
+        finally { Directory.Delete(sandbox, true); }
     }
 
     [Fact(Timeout = 60_000)]

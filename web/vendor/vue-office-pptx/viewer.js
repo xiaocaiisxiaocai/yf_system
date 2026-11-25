@@ -58,6 +58,7 @@ async function preflightPptx(buffer) {
 }
 
 function sanitizeRenderedContent() {
+  host.querySelectorAll('script,iframe,object,embed,form').forEach(element => element.remove())
   host.querySelectorAll('a').forEach(anchor => {
     anchor.removeAttribute('href')
     anchor.removeAttribute('target')

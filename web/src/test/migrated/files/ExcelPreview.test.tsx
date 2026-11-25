@@ -88,9 +88,26 @@ describe('Excel preview request and frame boundary', () => {
 
     fireEvent.load(frame)
     await waitFor(() => expect(postMessage).toHaveBeenCalledOnce())
-    expect(loadContent).toHaveBeenCalledWith(expect.any(AbortSignal))
+    expect(loadContent).toHaveBeenCalledWith(expect.any(AbortSignal), expect.any(Function))
     expect(mocks.get).not.toHaveBeenCalled()
     expect((postMessage.mock.calls[0][0] as PostedMessage).type).toBe('excel:load')
+  })
+
+  it('Excel preview aborts a stalled external loadContent after the stall deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let signal: AbortSignal | undefined
+      const loadContent = vi.fn((abortSignal: AbortSignal) => {
+        signal = abortSignal
+        return new Promise<ArrayBuffer>(() => undefined)
+      })
+      render(<ExcelPreview fileId={12} ext="xlsx" loadContent={loadContent} />)
+      await vi.advanceTimersByTimeAsync(60_001)
+      expect(signal?.aborted).toBe(true)
+      expect(screen.getByRole('alert')).toHaveTextContent('Excel 预览失败')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('Excel preview retry fetches a new buffer and waits for the replacement frame', async () => {
