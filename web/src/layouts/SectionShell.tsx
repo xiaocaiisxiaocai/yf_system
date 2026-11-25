@@ -42,8 +42,8 @@ export default function SectionShell({ title, subtitle, menu, account, line }: {
           icon={<IconMenu />} onClick={() => setMobileMenuOpen(true)} />}
         <div className="layout-logo" title={subtitle ? `${title} · ${subtitle}` : title}>
           <img src="/saa-logo.svg" alt="SAA" />
-          <span>{title}</span>
-          {subtitle && <span style={{ marginLeft: 12, fontSize: 13, opacity: 0.8 }}>{subtitle}</span>}
+          <span className="layout-brand-title">{title}</span>
+          {subtitle && <span className="layout-brand-subtitle">{subtitle}</span>}
         </div>
         <div className="layout-header-account">{account}</div>
       </Header>

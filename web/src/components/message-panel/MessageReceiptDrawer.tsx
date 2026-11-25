@@ -1,4 +1,4 @@
-import { Button, Drawer, List, Space, Tag, Typography } from '@arco-design/web-react'
+import { Button, Drawer, List, Space, Spin, Tag, Typography } from '@arco-design/web-react'
 
 interface Reader {
   userId: number
@@ -36,7 +36,11 @@ export function MessageReceiptDrawer({ receipt, receiptRequest, fmtTime, onCance
       onCancel={onCancel}
       footer={null}
     >
-      {receiptRequest?.loading && !receipt && <Typography.Text type="secondary">回执加载中…</Typography.Text>}
+      {receiptRequest?.loading && !receipt && (
+        <div style={{ padding: '32px 0', textAlign: 'center' }}>
+          <Spin tip="回执加载中…" />
+        </div>
+      )}
       {receiptRequest?.error && !receipt && (
         <Space>
           <Typography.Text type="error">回执加载失败</Typography.Text>

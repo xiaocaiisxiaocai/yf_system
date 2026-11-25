@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Badge, Button, Card, Checkbox, Input, Message, Popconfirm, Select, Space, Table, Tabs, Tag, Tooltip, Typography,
+  Badge, Button, Card, Checkbox, Input, Message, Select, Space, Table, Tabs, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { ColumnResizeProvider } from '../../components/columnResize'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import { TABLE_PAGINATION } from '../../components/tablePagination'
 import type { ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
@@ -85,6 +86,12 @@ export default function ProjectList() {
   // 筛选和分页放在地址栏里：进入项目再返回时还原列表位置。用 replace，不在历史里逐页留痕。
   const [searchParams, setSearchParams] = useSearchParams()
   const keyword = searchParams.get('q') ?? ''
+  const [searchText, setSearchText] = useState(keyword)
+  const [syncedKeyword, setSyncedKeyword] = useState(keyword)
+  if (syncedKeyword !== keyword) {
+    setSyncedKeyword(keyword)
+    setSearchText(keyword)
+  }
   const status = parseStatusParam(searchParams.get('status'))
   const supplierParam = parsePositiveIntParam(searchParams.get('supplier'))
   const materialState = parseMaterialParam(searchParams.get('material'))
@@ -210,8 +217,23 @@ export default function ProjectList() {
     await http.delete<ApiResponses['DELETE /projects/{id}']>(`/projects/${project.id}`); Message.success('项目已删除'); load()
   }
 
+  const hasActiveFilters = Boolean(keyword || supplierId || responsibleUserId || sectionId || materialState || mine || overdue)
+  const resetFilters = () => {
+    setSearchText('')
+    applyQuery({
+      q: undefined,
+      supplier: undefined,
+      owner: undefined,
+      section: undefined,
+      material: undefined,
+      mine: undefined,
+      overdue: undefined,
+      page: 1,
+    })
+  }
+
   const baseColumns = [
-    { key: 'name', title: '项目名称', dataIndex: 'name', fixed: 'left' as const, ellipsis: true, render: (value: string, row: ProjectSummary) => <Link className="table-link" to={`/projects/${row.id}`} title={value}>{value}</Link> },
+    { key: 'name', title: '项目名称', dataIndex: 'name', fixed: 'left' as const, align: 'left' as const, ellipsis: true, render: (value: string, row: ProjectSummary) => <Link className="table-link" to={`/projects/${row.id}`} title={value}>{value}</Link> },
     { key: 'workOrderNos', title: '工令号', dataIndex: 'workOrderNos', ellipsis: true, render: (values?: string[]) => cellText(values?.join('、')) },
     { key: 'machineModel', title: '机型', dataIndex: 'machineModel', ellipsis: true, render: cellText },
     { key: 'supplierName', title: 'Robot 厂商', dataIndex: 'supplierName', ellipsis: true, render: cellText },
@@ -231,11 +253,28 @@ export default function ProjectList() {
     { key: 'unreadMessages', title: '未读留言', dataIndex: 'unreadMessages', align: 'center' as const, render: (value: number) => value > 0 ? <Badge count={value} /> : '-' },
     { key: 'actions', title: '操作', fixed: 'right' as const, render: (_: unknown, row: ProjectSummary) => actionSlots([
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/projects/${row.id}`)}>进入</Button>,
-      hasPerm('project:update') && <Button key="edit" size="mini" type="text"
-        disabled={!row.canManage || row.status !== 'IN_PROGRESS'} onClick={() => openEdit(row)}>编辑</Button>,
-      <Popconfirm key="delete" disabled={!row.canDelete} title={`确认删除项目“${row.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={() => remove(row)}>
-        <Button size="mini" type="text" status="danger" disabled={!row.canDelete}>删除</Button>
-      </Popconfirm>,
+      hasPerm('project:update') && (() => {
+        const editDisabled = !row.canManage || row.status !== 'IN_PROGRESS'
+        const editButton = (
+          <Button key="edit" size="mini" type="text" disabled={editDisabled} onClick={() => openEdit(row)}>编辑</Button>
+        )
+        return editDisabled ? (
+          <Tooltip key="edit" content={!row.canManage ? '仅项目负责人可编辑' : '仅进行中的项目可编辑'}>
+            <span>{editButton}</span>
+          </Tooltip>
+        ) : editButton
+      })(),
+      row.canDelete ? (
+        <DangerPopconfirm key="delete" title={`确认删除项目“${row.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={() => remove(row)}>
+          <Button size="mini" type="text" status="danger">删除</Button>
+        </DangerPopconfirm>
+      ) : (
+        <Tooltip key="delete" content={row.status !== 'TERMINATED' ? '仅已终止的项目可删除' : '无权删除此项目'}>
+          <span>
+            <Button size="mini" type="text" status="danger" disabled>删除</Button>
+          </span>
+        </Tooltip>
+      ),
     ], 'project-group') },
   ]
   // 与全站其他表格共用列宽逻辑：第一次手动拖动某列时，其余列固定在当前宽度，不再跟着晃动。
@@ -252,7 +291,7 @@ export default function ProjectList() {
       </Tabs>
       <div className="page-toolbar responsive-toolbar">
         <Space wrap>
-          <Input.Search allowClear placeholder="项目名称 / 工令号 / 机型 / 料号" style={{ width: 280 }} defaultValue={keyword} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => applyQuery({ q: undefined, page: 1 })} />
+          <Input.Search allowClear placeholder="项目名称 / 工令号 / 机型 / 料号" style={{ width: 280 }} value={searchText} onChange={setSearchText} onSearch={(value) => applyQuery({ q: value.trim(), page: 1 })} onClear={() => { setSearchText(''); applyQuery({ q: undefined, page: 1 }) }} />
           {isInternal && <Select allowClear showSearch placeholder="Robot 厂商" style={{ width: 180 }} value={supplierId} loading={supplierOptionsLoading} disabled={supplierOptionsError} onChange={(value) => applyQuery({ supplier: value as number | undefined, page: 1 })}>{suppliers.map((supplier) => <Select.Option key={supplier.id} value={supplier.id}>{supplier.name}</Select.Option>)}</Select>}
           {showOwnerFilter && <Select allowClear showSearch placeholder="负责人" style={{ width: 160 }} value={responsibleUserId} filterOption={(input, option) => String((option as { props?: { children?: unknown } })?.props?.children ?? '').toLowerCase().includes(input.trim().toLowerCase())} onChange={(value) => applyQuery({ owner: value as number | undefined, page: 1 })}>{filterOptions.responsibleUsers.map((owner) => <Select.Option key={owner.id} value={owner.id}>{`${owner.realName}（${owner.employeeNo}）`}</Select.Option>)}</Select>}
           {showSectionFilter && <Select allowClear showSearch placeholder="课别" style={{ width: 160 }} value={sectionId} onChange={(value) => applyQuery({ section: value as number | undefined, page: 1 })}>{filterOptions.sections.map((section) => <Select.Option key={section.id} value={section.id}>{section.name}</Select.Option>)}</Select>}
@@ -261,9 +300,10 @@ export default function ProjectList() {
           </Select>
           {isInternal && <Checkbox checked={mine} onChange={(checked) => applyQuery({ mine: checked ? 1 : undefined, page: 1 })}>只看我负责的</Checkbox>}
           <Checkbox checked={overdue} onChange={(checked) => applyQuery({ overdue: checked ? 1 : undefined, page: 1 })}>仅看逾期</Checkbox>
+          {hasActiveFilters && <Button onClick={resetFilters}>重置筛选</Button>}
         </Space>
         <Space>
-          {supplierOptionsError && <Button size="small" onClick={loadSupplierOptions}>重试加载供应商</Button>}
+          {supplierOptionsError && <Button onClick={loadSupplierOptions}>重试加载供应商</Button>}
           {isInternal && hasPerm('project:create') && <Button type="primary" icon={<IconPlus />} onClick={openCreate}>新建项目</Button>}
         </Space>
       </div>
@@ -275,7 +315,7 @@ export default function ProjectList() {
         </div>}
         <ColumnResizeProvider actions={columnLayout.actions} picker={columnLayout.picker}>
           <div ref={tableHostRef} className="page-table-host">
-            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} columns={columns} components={columnLayout.components} data={data.list} scroll={{ x: columnLayout.scrollX, y: 'var(--page-table-scroll-y)' }} pagination={{ ...TABLE_PAGINATION, total: data.total, current: page, pageSize, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
+            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} noDataElement={loading ? <span /> : undefined} columns={columns} components={columnLayout.components} data={data.list} scroll={{ x: columnLayout.scrollX, y: 'var(--page-table-scroll-y)' }} pagination={{ ...TABLE_PAGINATION, total: data.total, current: page, pageSize, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
           </div>
         </ColumnResizeProvider>
         </>}

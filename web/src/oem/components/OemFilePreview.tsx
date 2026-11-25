@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { Button, Modal, Result, Spin } from '@arco-design/web-react'
 import { IconClose } from '@arco-design/web-react/icon'
 import { PreviewWatermark } from '../../components/PreviewWatermark'
+import PreviewFallback from '../../components/PreviewFallback'
 import { createPreviewDeadline } from '../../components/previewDeadline'
 import { useAuth } from '../../store/auth'
 import { usePortalAuth } from '../api/portalSession'
@@ -101,7 +102,7 @@ export default function OemFilePreview({ file, onClose }: { file: OemPreviewFile
     >
       {file && kind && (
         <div className="file-preview-surface">
-          <Suspense fallback={<div role="status">加载预览…</div>}>
+          <Suspense fallback={<PreviewFallback />}>
             {kind === 'pdf' && <PdfPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
             {kind === 'image' && <OemImage file={file} toolbarContainer={toolbar} />}
             {kind === 'excel' && <ExcelPreview fileId={file.id} ext={file.ext} loadContent={loadContent} />}

@@ -10,6 +10,7 @@ import { useOem } from '../../OemContext'
 import { useHubSwitcher } from '../hubSwitcherContext'
 import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
 import StatusTag from '../../../components/StatusTag'
+import EnterSubmit from '../../../components/EnterSubmit'
 
 const SOURCES = [
   { value: 'DIRECT_LEADER', label: '上级主管' },
@@ -136,11 +137,11 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
 
   return (
     <Modal title={existing ? `编辑审批模板：${existing.name}` : '新建审批模板'} visible style={{ width: 860 }}
-      confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
+      confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} unmountOnExit
       cancelButtonProps={{ disabled: saving }} onCancel={() => { if (!saving) onClose() }} onOk={save}>
       <Space direction="vertical" style={{ width: '100%' }} size={12}>
-        <Space>
-          <Input style={{ width: 280 }} placeholder="模板名称" value={name} onChange={setName} maxLength={64} />
+        <Space wrap>
+          <Input style={{ width: 280 }} placeholder="模板名称" value={name} onChange={setName} onPressEnter={() => void save()} maxLength={64} />
           <Checkbox checked={isDefault} onChange={setIsDefault} disabled={existing?.isDefault}>默认模板</Checkbox>
           {existing && <Space><span>启用</span><Switch checked={active} onChange={setActive} disabled={existing.isDefault} /></Space>}
         </Space>
@@ -167,7 +168,7 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
               <Tooltip content="删除节点"><Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label={`删除节点 ${index + 1}`} disabled={nodes.length === 1} onClick={() => setNodes((list) => list.filter((item) => item.key !== node.key))} /></Tooltip>
             </Space>
           }>
-            <Form layout="vertical">
+            <Form layout="vertical" onSubmit={() => void save()}>
               <Space wrap align="start">
                 <Form.Item label="节点名称"><Input style={{ width: 180 }} value={node.name} onChange={(name) => patch(node.key, { name })} /></Form.Item>
                 <Form.Item label="审批人来源">
@@ -196,6 +197,7 @@ function TemplateEditor({ template, onClose, onSaved }: { template: FlowTemplate
               {node.approverSource === 'SPECIFIED_USERS' && node.selfPolicy === 'DESIGNATED' && (
                 <Form.Item label="备用审批人"><PeoplePicker value={node.fallbacks} onChange={(fallbacks) => patch(node.key, { fallbacks })} /></Form.Item>
               )}
+              <EnterSubmit />
             </Form>
           </Card>
         ))}
@@ -231,7 +233,7 @@ function RoutingPreviewCard() {
   }
   return (
     <Card title="审批路径预览" style={{ marginTop: 16 }}>
-      <Select showSearch filterOption={false} style={{ width: 360 }} placeholder="选择一名员工，查看其发送时的审批路径"
+      <Select showSearch filterOption={false} style={{ width: 360, maxWidth: '100%' }} placeholder="选择一名员工，查看其发送时的审批路径"
         onSearch={(keyword) => void search(keyword)} onFocus={() => void search('')}
         onChange={(userId: number) => void preview(userId)}
         options={users.map((user) => ({ value: user.id, label: `${user.realName}（${user.employeeNo}）${user.departmentName ? ' · ' + user.departmentName : ''}` }))} />
@@ -286,13 +288,31 @@ export default function FlowTemplatesPage() {
             action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />
         )}
         <Spin loading={loading} style={{ display: 'block' }}>
-        {!loading && !error && templates.length === 0 && <Empty />}
+        {!loading && !error && templates.length === 0 && <Empty description="暂无审批模板" />}
         <Space direction="vertical" style={{ width: '100%' }}>
           {templates.map((template) => (
-            <Card key={template.id} size="small" hoverable onClick={() => setEditing(template)} title={
-              <Space>{template.name}{template.isDefault && <Tag color="arcoblue">默认</Tag>}
-                <StatusTag status={template.status} /></Space>
-            }>
+            <Card
+              key={template.id}
+              size="small"
+              hoverable
+              style={{ cursor: 'pointer' }}
+              role="button"
+              tabIndex={0}
+              onClick={() => setEditing(template)}
+              onKeyDown={(event) => {
+                if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                  event.preventDefault()
+                  setEditing(template)
+                }
+              }}
+              title={
+                <Space wrap>{template.name}{template.isDefault && <Tag color="arcoblue">默认</Tag>}
+                  <StatusTag status={template.status} /></Space>
+              }
+              extra={
+                <Button size="mini" type="text" onClick={(event) => { event.stopPropagation(); setEditing(template) }}>编辑</Button>
+              }
+            >
               <div className="oem-flow-nodes">
                 <span>节点：</span>
                 {template.nodes.map((node, index) => (

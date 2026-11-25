@@ -33,9 +33,9 @@ const POLL_MS = 5000
 
 function Recipients({ list, kind }: { list: Recipient[]; kind: 'TO' | 'CC' }) {
   const rows = list.filter((recipient) => recipient.kind === kind)
-  if (rows.length === 0) return <span className="outsource-muted">—</span>
+  if (rows.length === 0) return <span className="outsource-muted">-</span>
   const rejected = rows.filter((recipient) => recipient.rejected).length
-  return <Popover trigger={['hover', 'focus']} content={<ul className="outsource-mail-recipients">
+  return <Popover trigger={['hover', 'focus', 'click']} content={<ul className="outsource-mail-recipients">
     {rows.map((recipient) => <li key={recipient.email} className={recipient.rejected ? 'outsource-mail-rejected' : undefined}>
       {recipient.name ? `${recipient.name} <${recipient.email}>` : recipient.email}{recipient.rejected ? '（被拒收）' : ''}
     </li>)}
@@ -166,28 +166,33 @@ export default function OutsourceMailsPage() {
   }
 
   const columns: TableColumnProps<Mail>[] = [
-    { title: '时间', width: 160, render: (_, mail) => fmtTime(mail.createdAt) },
+    { title: '时间', width: 148, render: (_, mail) => fmtTime(mail.createdAt) },
     {
-      title: '类型', width: 140, align: 'center',
+      title: '类型', width: 116, align: 'center',
       render: (_, mail) => <Tag color={MAIL_KIND[mail.kind]?.color}>{MAIL_KIND[mail.kind]?.label ?? mail.kind}</Tag>,
     },
-    { title: '厂商', dataIndex: 'vendorName', width: 110, ellipsis: true },
-    { title: '主旨', dataIndex: 'subject', width: 280, ellipsis: true },
+    { title: '厂商', dataIndex: 'vendorName', width: 90, align: 'left', ellipsis: true },
+    { title: '主旨', dataIndex: 'subject', width: 190, align: 'left', ellipsis: true },
     {
-      title: '工令', width: 200, ellipsis: true,
-      render: (_, mail) => <Tooltip content={mail.workOrderNos.join('、')}><span>{mail.workOrderNos.join('、')}</span></Tooltip>,
+      title: '工令', width: 120, align: 'left', ellipsis: true,
+      render: (_, mail) => mail.workOrderNos.length > 0
+        ? <Tooltip content={mail.workOrderNos.join('、')}><span className="table-cell-text">{mail.workOrderNos.join('、')}</span></Tooltip>
+        : '-',
     },
-    { title: '收件人', width: 110, render: (_, mail) => <Recipients list={mail.recipients} kind="TO" /> },
-    { title: '抄送', width: 110, render: (_, mail) => <Recipients list={mail.recipients} kind="CC" /> },
+    { title: '收件人', width: 88, render: (_, mail) => <Recipients list={mail.recipients} kind="TO" /> },
+    { title: '抄送', width: 80, render: (_, mail) => <Recipients list={mail.recipients} kind="CC" /> },
     {
-      title: '状态', width: 100, align: 'center',
+      title: '状态', width: 88, align: 'center',
       render: (_, mail) => <Tag color={STATUS[mail.status]?.color}>{STATUS[mail.status]?.label ?? mail.status}</Tag>,
     },
-    { title: '说明', dataIndex: 'lastError', width: 220, ellipsis: true, render: (value: string | null) => value ?? '' },
-    { title: '发送人', width: 170, ellipsis: true, render: (_, mail) => mail.createdByName
-      ? <Tooltip content={mail.createdByName}><span>{mail.createdByName}</span></Tooltip> : '—' },
+    { title: '说明', dataIndex: 'lastError', width: 180, align: 'left', ellipsis: true, render: (value: string | null) => value || '-' },
     {
-      title: '操作', width: 180, align: 'center', fixed: 'right',
+      title: '发送人', width: 140, align: 'left', ellipsis: true,
+      render: (_, mail) => mail.createdByName
+        ? <Tooltip content={mail.createdByName}><span className="table-cell-text">{mail.createdByName}</span></Tooltip> : '-',
+    },
+    {
+      title: '操作', width: 168, align: 'center', fixed: 'right',
       render: (_, mail) => actionSlots([
         <Button key="detail" type="text" size="mini" onClick={() => setViewing(mail)}>详情</Button>,
         <Button key="attachment" type="text" size="mini" loading={busy === mail.id} disabled={!mail.attachmentName}
@@ -198,6 +203,8 @@ export default function OutsourceMailsPage() {
     },
   ]
 
+  const hasActiveFilters = vendorId !== undefined || status !== undefined
+
   return <Card className="page-card page-card--table outsource-mails-page">
     <h1 className="visually-hidden">发送记录</h1>
     <div className="page-toolbar responsive-toolbar">
@@ -206,11 +213,12 @@ export default function OutsourceMailsPage() {
           onChange={(value) => { setVendorId(value); setPage(1) }} options={vendors.map((vendor) => ({ label: vendor.name, value: vendor.id }))} />
         <Select aria-label="状态" placeholder="全部状态" allowClear style={{ width: 140 }} value={status}
           onChange={(value) => { setStatus(value); setPage(1) }} options={STATUS_OPTIONS} />
+        {hasActiveFilters && <Button onClick={() => { setVendorId(undefined); setStatus(undefined); setPage(1) }}>重置筛选</Button>}
       </Space>
     </div>
     {error ? <LoadError message="发送记录加载失败" onRetry={() => void load()} />
       : <ResizableTable<Mail> tableId="outsource-mails" className="page-table" rowKey="id" loading={loading} data={mails} columns={columns}
-        noDataElement={loading ? <span /> : <Empty description="暂无发送记录" />} scroll={{ x: 1630, y: 'var(--page-table-scroll-y)' }}
+        noDataElement={loading ? <span /> : <Empty description="暂无发送记录" />} scroll={{ x: 1410, y: 'var(--page-table-scroll-y)' }}
         pagination={{ current: page, pageSize, total, onChange: (next, size) => { setPage(size === pageSize ? next : 1); setPageSize(size) } }} />}
     <Modal title="邮件发送详情" visible={viewing !== null} footer={null} onCancel={() => setViewing(null)} unmountOnExit>
       {viewing && (
@@ -223,20 +231,20 @@ export default function OutsourceMailsPage() {
             { label: '邮件类型', value: MAIL_KIND[viewing.kind]?.detail ?? viewing.kind },
             { label: '外发厂商', value: viewing.vendorName },
             { label: '邮件主旨', value: viewing.subject },
-            { label: '关联工令', value: viewing.workOrderNos.join('、') || '—' },
+            { label: '关联工令', value: viewing.workOrderNos.join('、') || '-' },
             {
               label: '收件人',
               value: viewing.recipients.filter((r) => r.kind === 'TO')
-                .map((r) => `${r.name ? `${r.name} <${r.email}>` : r.email}${r.rejected ? '（被拒收）' : ''}`).join('；') || '—',
+                .map((r) => `${r.name ? `${r.name} <${r.email}>` : r.email}${r.rejected ? '（被拒收）' : ''}`).join('；') || '-',
             },
             {
               label: '抄送',
               value: viewing.recipients.filter((r) => r.kind === 'CC')
-                .map((r) => `${r.name ? `${r.name} <${r.email}>` : r.email}${r.rejected ? '（被拒收）' : ''}`).join('；') || '—',
+                .map((r) => `${r.name ? `${r.name} <${r.email}>` : r.email}${r.rejected ? '（被拒收）' : ''}`).join('；') || '-',
             },
             { label: '发送状态', value: STATUS[viewing.status]?.label ?? viewing.status },
             ...(viewing.lastError ? [{ label: '失败原因', value: viewing.lastError }] : []),
-            { label: '发送人', value: viewing.createdByName || '—' },
+            { label: '发送人', value: viewing.createdByName || '-' },
             { label: '附件名称', value: viewing.attachmentName || '无附件' },
           ]}
         />

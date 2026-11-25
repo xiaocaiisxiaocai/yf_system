@@ -13,6 +13,8 @@ export type ActionSlotsVariant =
   | 'file'
   | 'oem-file'
   | 'outsource'
+  | 'outsource-customer'
+  | 'outsource-field'
   | 'outsource-mail'
   | 'outsource-handoff'
   | 'storage'

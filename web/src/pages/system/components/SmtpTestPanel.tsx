@@ -64,7 +64,7 @@ export default function SmtpTestPanel({ configured, dirty, saving, configuration
   return <div className="system-smtp-test">
     <Space wrap>
       <Input aria-label="测试收件邮箱" placeholder="输入接收测试邮件的邮箱" value={recipient} maxLength={320}
-        style={{ width: 300 }} disabled={busy} onChange={(value) => { setRecipient(value); setResult(null) }} onPressEnter={() => void send()} />
+        style={{ width: 300, maxWidth: '100%' }} disabled={busy} onChange={(value) => { setRecipient(value); setResult(null) }} onPressEnter={() => void send()} />
       <Button disabled={blocked || diagnosing} loading={sending} onClick={() => void send()}>发送测试邮件</Button>
       <Button disabled={blocked || sending} loading={diagnosing} onClick={() => void diagnose()}>检测连接</Button>
       <Typography.Text type="secondary">{dirty || !configured ? '请先保存完整的邮箱设置，再发送测试邮件或检测连接。' : '测试邮件立即发送一次；检测连接只检查连接、加密和登录，不发送邮件。'}</Typography.Text>

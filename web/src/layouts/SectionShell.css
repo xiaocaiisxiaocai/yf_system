@@ -1,6 +1,15 @@
 /* Section shells (ODM/OEMA, outsourcing list, vendor portal) must not depend on the collaboration route's CSS. */
 .oem-shell .layout-logo { flex: 1 1 0; min-width: 0; }
 .oem-shell .layout-logo > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.oem-shell .layout-brand-title { flex: 0 1 auto; }
+.oem-shell .layout-brand-subtitle {
+  flex: 0 1 auto;
+  padding-left: 10px;
+  border-left: 1px solid var(--app-border);
+  color: var(--app-text-muted);
+  font-size: 13px;
+  font-weight: 400;
+}
 .oem-shell .layout-header-account { display: flex; align-items: center; min-width: 0; max-width: 50%; margin-left: auto; }
 .oem-shell .layout-header-account > .arco-space { min-width: 0; max-width: 100%; }
 .oem-shell .layout-header-account .arco-space-item:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -9,7 +18,7 @@
 .oem-account-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 480px) {
-  .oem-shell .layout-logo > span { display: none; }
+  .oem-shell .layout-brand-subtitle { display: none; }
   .oem-shell .layout-header-account { max-width: 60%; }
 }
 

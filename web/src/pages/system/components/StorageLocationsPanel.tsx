@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Button, Input, Message, Modal, Popconfirm, Progress, Space, Spin, Tag, Typography } from '@arco-design/web-react'
+import { Alert, Button, Input, Message, Modal, Progress, Space, Spin, Tag, Typography } from '@arco-design/web-react'
+import DangerPopconfirm from '../../../components/DangerPopconfirm'
 import ResizableTable from '../../../components/ResizableTable'
 import http, { type QuietRequestConfig } from '../../../api/client'
 import type { ApiResponses } from '../../../api/types'
@@ -121,8 +122,11 @@ export default function StorageLocationsPanel() {
     { title: '存储', dataIndex: 'label', width: 140 },
     {
       title: '路径',
+      key: 'path',
+      width: 280,
+      align: 'left' as const,
       render: (_: unknown, row: StorageLocation) => (
-        <div className="storage-location-paths">
+        <div className="storage-location-paths" style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>
           <Typography.Text copyable={Boolean(row.path)}>{row.path || '-'}</Typography.Text>
           {row.previousPath && <Typography.Text type="secondary">原目录：{row.previousPath}</Typography.Text>}
           {row.pendingPath && <Typography.Text type="secondary">待生效：{row.pendingPath}</Typography.Text>}
@@ -151,15 +155,15 @@ export default function StorageLocationsPanel() {
       width: 200,
       // 三个操作始终在固定位置；当前状态下不能用的置灰，不隐藏。
       render: (_: unknown, row: StorageLocation) => actionSlots([
-        <Button key="edit" type="text" size="small" disabled={busy || row.status !== 'IDLE' || Boolean(row.previousPath)} onClick={() => openEdit(row)}>
+        <Button key="edit" type="text" size="mini" disabled={busy || row.status !== 'IDLE' || Boolean(row.previousPath)} onClick={() => openEdit(row)}>
           {row.path || row.pendingPath ? '更换路径' : '设置路径'}
         </Button>,
-        <Button key="retry" type="text" size="small" disabled={row.status !== 'FAILED'} loading={acting === row.kind} onClick={() => act(row, 'retry')}>重试</Button>,
+        <Button key="retry" type="text" size="mini" disabled={row.status !== 'FAILED'} loading={acting === row.kind} onClick={() => act(row, 'retry')}>重试</Button>,
         row.kind !== 'LOG' && (
-          <Popconfirm key="cancel" disabled={!row.previousPath || row.phase === 'DELETING'}
+          <DangerPopconfirm key="cancel" disabled={!row.previousPath || row.phase === 'DELETING'}
             title="取消迁移？已写入新目录的内容将迁回原目录" onOk={() => act(row, 'cancel')}>
-            <Button type="text" size="small" status="danger" disabled={!row.previousPath || row.phase === 'DELETING'} loading={acting === row.kind}>取消迁移</Button>
-          </Popconfirm>
+            <Button type="text" size="mini" status="danger" disabled={!row.previousPath || row.phase === 'DELETING'} loading={acting === row.kind}>取消迁移</Button>
+          </DangerPopconfirm>
         ),
       ], 'storage'),
     },
@@ -171,19 +175,24 @@ export default function StorageLocationsPanel() {
         <Alert key={item.kind} type={item.status === 'FAILED' ? 'error' : 'warning'} style={{ marginBottom: 12 }}
           content={`${item.label}：${item.lastError}`} />
       ))}
-      <ResizableTable tableId="storage-locations" rowKey="kind" data={items} columns={columns} pagination={false} border={false} />
+      <ResizableTable tableId="storage-locations" growKey="path" rowKey="kind" data={items} columns={columns} pagination={false} />
       <Modal
         title={editing ? `${editing.path ? '更换' : '设置'}${editing.label}路径` : ''}
         visible={Boolean(editing)}
         confirmLoading={submitting}
+        closable={!submitting}
+        maskClosable={!submitting}
+        escToExit={!submitting}
         okText={editing?.path ? '开始迁移' : '保存'}
         okButtonProps={{ disabled: !target.trim() }}
+        cancelButtonProps={{ disabled: submitting }}
         onOk={submit}
         onCancel={() => { if (!submitting) setEditing(null) }}
         unmountOnExit
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Input
+            autoFocus
             aria-label="新目录路径"
             placeholder="例如 D:\YfData\storage-new"
             value={target}

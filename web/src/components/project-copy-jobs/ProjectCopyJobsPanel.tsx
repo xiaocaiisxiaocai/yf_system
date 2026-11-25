@@ -38,12 +38,9 @@ export default function ProjectCopyJobsPanel({
   jobs, loading, error, onRetry, onOpenResult,
 }: ProjectCopyJobsPanelProps) {
   return (
-    <section className="page-card project-copy-jobs-card" aria-label="复制任务">
+    <section className="project-copy-jobs-panel" aria-label="复制任务">
       <div className="project-group-section-heading">
-        <div>
-          <h2>复制任务</h2>
-          <Typography.Text type="secondary">后台任务会继续执行，关闭弹窗或刷新页面不会取消复制。</Typography.Text>
-        </div>
+        <Typography.Text type="secondary">后台任务会继续执行，关闭弹窗或刷新页面不会取消复制。</Typography.Text>
         <Button size="small" loading={loading} onClick={onRetry}>刷新任务</Button>
       </div>
       {error && (

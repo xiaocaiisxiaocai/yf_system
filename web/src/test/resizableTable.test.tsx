@@ -218,4 +218,35 @@ describe('ResizableTable', () => {
     )
     expect(screen.getByRole('separator', { name: '调整文件名列宽' })).toHaveAttribute('aria-valuenow', '200')
   })
+
+  it('allows pagination.showTotal=false to suppress duplicate totals and hides empty state while loading', () => {
+    const view = render(
+      <ResizableTable<Row>
+        tableId="loading-and-total"
+        rowKey="id"
+        loading
+        data={[]}
+        noDataElement={<div>自定义空态</div>}
+        pagination={{ current: 1, pageSize: 20, total: 100, showTotal: false }}
+        columns={[{ title: '文件名', dataIndex: 'name', width: 200 }]}
+      />,
+    )
+    expect(screen.queryByText('自定义空态')).not.toBeInTheDocument()
+    expect(screen.queryByText('暂无数据')).not.toBeInTheDocument()
+    expect(screen.queryByText('共 100 条')).not.toBeInTheDocument()
+
+    view.rerender(
+      <ResizableTable<Row>
+        tableId="loading-and-total"
+        rowKey="id"
+        loading={false}
+        data={[]}
+        noDataElement={<div>自定义空态</div>}
+        pagination={{ current: 1, pageSize: 20, total: 100, showTotal: false }}
+        columns={[{ title: '文件名', dataIndex: 'name', width: 200 }]}
+      />,
+    )
+    expect(screen.getByText('自定义空态')).toBeInTheDocument()
+    expect(screen.queryByText('共 100 条')).not.toBeInTheDocument()
+  })
 })

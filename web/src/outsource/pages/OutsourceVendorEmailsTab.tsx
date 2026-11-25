@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Alert, Button, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag } from '@arco-design/web-react'
+import { Alert, Button, Empty, Form, Input, Message, Modal, Select, Space, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import type { ApiResponses } from '../../api/types'
 import { requestErrorMessage } from '../../api/requestError'
 import { actionSlots } from '../../components/ActionSlots'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type ImportRowOutcome, type PreparedImport } from '../../components/ExcelImportDialog'
 import LoadError from '../../components/LoadError'
@@ -163,19 +164,19 @@ export default function OutsourceVendorEmailsTab({ vendors }: { vendors: Vendor[
 
   const columns: TableColumnProps<VendorEmail>[] = [
     {
-      title: '厂商', dataIndex: 'vendorName', width: 260, ellipsis: true,
+      title: '厂商', dataIndex: 'vendorName', width: 260, align: 'left', ellipsis: true,
       render: (_: unknown, row: VendorEmail) => <Space size={4}>
         <span>{row.vendorName}</span>
         {disabledIds.has(row.vendorId) && <Tag size="small">已停用</Tag>}
       </Space>,
     },
-    { title: '邮箱', dataIndex: 'email', width: 360, ellipsis: true },
+    { title: '邮箱', dataIndex: 'email', width: 360, align: 'left', ellipsis: true },
     {
       title: '操作', width: 120, align: 'center', render: (_: unknown, row: VendorEmail) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => { form.setFieldsValue({ email: row.email }); setEditing(row) }}>编辑</Button>,
-        <Popconfirm key="delete" title={`删除“${row.vendorName}”的外协邮箱 ${row.email}？`} onOk={() => remove(row)}>
+        <DangerPopconfirm key="delete" title={`删除“${row.vendorName}”的外协邮箱 ${row.email}？`} onOk={() => remove(row)}>
           <Button type="text" size="mini" status="danger">删除</Button>
-        </Popconfirm>,
+        </DangerPopconfirm>,
       ], 'single'),
     },
   ]
@@ -203,7 +204,7 @@ export default function OutsourceVendorEmailsTab({ vendors }: { vendors: Vendor[
         scroll={{ x: 740, y: 'var(--page-table-scroll-y)' }} columns={columns} />}
     <Modal className="form-dialog" title={editing ? `编辑外协邮箱 · ${editing.vendorName}` : '编辑外协邮箱'} visible={editing !== null}
       onOk={() => void saveEdit()} onCancel={() => { if (!saving) setEditing(null) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
-      okText="保存" cancelText="取消" unmountOnExit>
+      escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText="保存" cancelText="取消" unmountOnExit>
       <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void saveEdit()}>
         <Form.Item field="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email', message: '邮箱格式不正确' }]}>
           <Input autoFocus maxLength={128} />

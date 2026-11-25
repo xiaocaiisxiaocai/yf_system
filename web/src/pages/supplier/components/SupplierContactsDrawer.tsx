@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Drawer, Form, Input, InputNumber, Message, Modal, Popconfirm, Space, Typography,
+  Alert, Button, Drawer, Form, Input, InputNumber, Message, Modal, Space, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../../api/client'
 import { actionSlots } from '../../../components/ActionSlots'
+import DangerPopconfirm from '../../../components/DangerPopconfirm'
 import { type ApiResponses, type SupplierContact } from '../../../api/types'
 import { textLengthRule } from '../../../utils/textRules'
 import type { Supplier } from './supplierTypes'
@@ -172,9 +173,9 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
                 编辑
               </Button>,
               contact.status === 'ACTIVE' ? (
-                <Popconfirm key="status" title="停用后不能再被选为 Robot 负责人或接收通知邮件，确认停用？" onOk={() => toggle(contact)}>
+                <DangerPopconfirm key="status" title="停用后不能再被选为 Robot 负责人或接收通知邮件，确认停用？" onOk={() => toggle(contact)}>
                   <Button size="mini" type="text" status="danger" loading={togglingIds.has(contact.id)} disabled={togglingIds.has(contact.id)}>停用</Button>
-                </Popconfirm>
+                </DangerPopconfirm>
               ) : (
                 <Button key="status" size="mini" type="text" status="success" loading={togglingIds.has(contact.id)} disabled={togglingIds.has(contact.id)} onClick={() => toggle(contact)}>启用</Button>
               ),
@@ -206,7 +207,7 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
               <Input placeholder="name@example.com" />
             </Form.Item>
             <Form.Item label="排序" field="sortNo">
-              <InputNumber min={0} max={9999} precision={0} placeholder="0" />
+              <InputNumber min={0} max={9999} precision={0} placeholder="0" style={{ width: '100%' }} />
             </Form.Item>
           </div>
         <EnterSubmit /></Form>

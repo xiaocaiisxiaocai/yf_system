@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Layout, Button, Drawer } from '@arco-design/web-react'
 import {
   IconHome,
@@ -41,6 +41,7 @@ export default function AdminLayout() {
   const nav = useNavigate()
   const loc = useLocation()
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const mobileMenuTrigger = useRef<HTMLElement | null>(null)
 
   const items = collaborationPages({ menus, permissions, user })
   const hasMenus = items.length > 0
@@ -65,9 +66,11 @@ export default function AdminLayout() {
     <Layout className="layout-shell">
       <Header className="layout-header">
         {hasNavigation && <Button
+          ref={(node) => { mobileMenuTrigger.current = node as HTMLElement | null }}
           className="mobile-menu-trigger"
           type="text"
           aria-label="打开导航菜单"
+          aria-expanded={mobileMenuOpen}
           icon={<IconMenu />}
           onClick={() => setMobileMenuOpen(true)}
         />}
@@ -102,7 +105,10 @@ export default function AdminLayout() {
         visible={mobileMenuOpen}
         footer={null}
         unmountOnExit
+        focusLock
+        autoFocus
         onCancel={() => setMobileMenuOpen(false)}
+        afterClose={() => mobileMenuTrigger.current?.focus({ preventScroll: true })}
       >
         <AppRail active="collaboration" variant="drawer" onNavigate={() => setMobileMenuOpen(false)} />
         {hasMenus && <NavMenu items={navItems} selectedKey={selected[0]} onSelect={(key) => { nav(key); setMobileMenuOpen(false) }} />}

@@ -328,6 +328,7 @@ describe('工作台协作生产界面', () => {
     const firstPage = [{ id: 11, name: '待确认项目 A', materialReviewStatus: 'PENDING', updatedAt: '2026-09-10T01:00:00Z' }]
     await act(async () => pendingRequests[1].request.resolve({ data: { list: firstPage, total: 11, page: 1, pageSize: 10 } }))
     expect(await screen.findByRole('link', { name: '待确认项目 A' })).toHaveAttribute('href', '/projects/11')
+    expect(document.querySelector('#dashboard-pending > .arco-card-body > .dashboard-scroll.arco-list-wrapper')).not.toBeNull()
     expect(screen.getByText('资料待审核')).toBeVisible()
 
     await user.click(screen.getByLabelText('第 2 页'))

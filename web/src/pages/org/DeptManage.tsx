@@ -112,7 +112,7 @@ function toTreeData(nodes: DeptNode[], flagMissingLeader: boolean): DeptTreeData
         <span className="org-view-tree-node">
           <span className="org-view-tree-name" title={n.name}>{n.name}</span>
           <span className="org-view-tree-kind">{ORG_KIND[kind].label}</span>
-          {n.status === 'DISABLED' && <Tag color="red" size="small">停用</Tag>}
+          {n.status === 'DISABLED' && <StatusTag status="DISABLED" size="small" />}
           {flagMissingLeader && n.status === 'ACTIVE' && !n.leader && <Tag color="gold" size="small">未设负责人</Tag>}
         </span>
       ),
@@ -513,6 +513,7 @@ export default function DeptManage() {
                             title: `${verb}${label}`,
                             content: `确认${verb}“${target.name}”？`,
                             okText: `确认${verb}`, cancelText: '取消',
+                            okButtonProps: target.status === 'ACTIVE' ? { status: 'danger' } : undefined,
                             onOk: () => toggle(target),
                           })
                         }

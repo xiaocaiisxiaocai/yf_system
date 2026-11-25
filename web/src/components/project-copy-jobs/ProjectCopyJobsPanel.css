@@ -1,6 +1,22 @@
-.project-copy-jobs-card {
+.project-copy-jobs-panel {
   flex: 0 0 auto;
-  padding: 14px 20px;
+}
+
+.project-group-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.project-group-section-heading h2 {
+  margin: 0 0 2px;
+  font-size: 16px;
+}
+
+.project-group-section-heading > .arco-btn {
+  flex: 0 0 auto;
 }
 
 .project-copy-jobs-list {
@@ -39,7 +55,6 @@
 .project-copy-jobs-loading { display: flex; justify-content: center; min-height: 80px; padding-top: 24px; }
 
 @media (max-width: 720px) {
-  .project-copy-jobs-card { padding: 12px; }
   .project-copy-job-heading { align-items: flex-start; }
   .project-copy-job-heading > div { flex-direction: column; gap: 0; }
 }

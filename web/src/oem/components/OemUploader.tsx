@@ -395,6 +395,7 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
         accept={acceptAttribute(allowedExtensions)}
         onChange={(event) => void choose(event.target.files)} />
       <div
+        className={`upload-dropzone${dragging ? ' is-active' : ''}${canChoose ? '' : ' is-disabled'}`}
         role="button"
         tabIndex={canChoose ? 0 : -1}
         aria-label="拖放或点击选择文件"
@@ -413,18 +414,12 @@ const OemUploader = forwardRef<OemUploaderHandle, Props>(function OemUploader({
           setDragging(false)
           if (canChoose) void choose(event.dataTransfer.files)
         }}
-        style={{
-          border: `1px dashed ${dragging ? 'rgb(var(--primary-6))' : 'var(--color-border-3)'}`,
-          borderRadius: 6,
-          padding: '18px 16px',
-          textAlign: 'center',
-          cursor: canChoose ? 'pointer' : 'not-allowed',
-          background: dragging ? 'var(--color-primary-light-1)' : 'var(--color-fill-1)',
-          opacity: disabled ? 0.65 : 1,
-        }}
+        style={{ cursor: canChoose ? 'pointer' : 'not-allowed' }}
       >
-        <IconUpload style={{ marginRight: 8 }} />
-        <Typography.Text>{busy ? '正在上传，请稍候' : '拖放文件到这里，或点击选择多个文件'}</Typography.Text>
+        <span>
+          <IconUpload style={{ marginRight: 8 }} />
+          <Typography.Text>{busy ? '正在上传，请稍候' : '拖放文件到这里，或点击选择多个文件'}</Typography.Text>
+        </span>
       </div>
       <Space direction="vertical" style={{ width: '100%', marginTop: entries.length ? 12 : 0 }}>
         {entries.map((entry) => (

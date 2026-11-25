@@ -57,11 +57,24 @@ function lockedByDefault<T>(column: TableColumnProps<T>, index: number) {
   return index === 0 || Boolean(column.fixed) || column.title === '操作' || typeof column.title !== 'string'
 }
 
+function mergePagination(pagination: TableProps['pagination']) {
+  if (!pagination || typeof pagination !== 'object') return pagination
+  return {
+    ...TABLE_PAGINATION,
+    ...pagination,
+    showTotal: pagination.showTotal !== undefined ? pagination.showTotal : TABLE_PAGINATION.showTotal,
+  }
+}
+
+function isTableLoading(loading: TableProps['loading']) {
+  return typeof loading === 'object' && loading !== null ? Boolean(loading.loading) : Boolean(loading)
+}
+
 /**
  * Arco 表格加上可拖动的列宽，宽度按表格和用户记在浏览器里（与项目列表等页面同一套机制）。
  * 列宽规格直接取自各列已写的 `width`；双击表头分隔线恢复该列默认宽度。
  */
-function FlatResizableTable<T extends object>({ tableId, columns, growKey, lockedKeys, className, scroll, pagination, pathname, ...rest }: ResizableTableProps<T> & { pathname: string }) {
+function FlatResizableTable<T extends object>({ tableId, columns, growKey, lockedKeys, className, scroll, pagination, noDataElement, pathname, ...rest }: ResizableTableProps<T> & { pathname: string }) {
   const { storageTableId, userId } = useTableOwner(tableId, pathname)
   const hostRef = useRef<HTMLDivElement>(null)
   useColumnTextSelection(hostRef)
@@ -99,7 +112,8 @@ function FlatResizableTable<T extends object>({ tableId, columns, growKey, locke
           className={[...classNames(className), table.tableClassName].join(' ')}
           columns={sized as TableColumnProps<T>[]}
           components={table.components}
-          pagination={pagination && typeof pagination === 'object' ? { ...TABLE_PAGINATION, ...pagination } : pagination}
+          noDataElement={isTableLoading(rest.loading) ? <span /> : noDataElement}
+          pagination={mergePagination(pagination)}
           // A column pinned to the left takes the checkbox column with it, or the two overlap while scrolling sideways.
           rowSelection={rest.rowSelection && sized.some((column) => column.fixed === 'left') ? { ...rest.rowSelection, fixed: true } : rest.rowSelection}
           // A page's own minimum table width stays the floor, so narrow screens still scroll instead of squeezing.
@@ -120,7 +134,7 @@ const flattenColumns = <T,>(columns: TableColumnProps<T>[]): Leaf<T>[] => column
  * 带分组表头（`children`）的表格：叶子列和其他表格一样可拖动列宽、在「显示列」里隐藏、排序和固定；
  * 表头分组按当前显示的相邻同组列重新合并（同组的列被拆开后，各段各有一个分组表头）。
  */
-function GroupedTable<T extends object>({ tableId, columns, lockedKeys, className, scroll, pagination, pathname, ...rest }: ResizableTableProps<T> & { pathname: string }) {
+function GroupedTable<T extends object>({ tableId, columns, lockedKeys, className, scroll, pagination, noDataElement, pathname, ...rest }: ResizableTableProps<T> & { pathname: string }) {
   const { storageTableId, userId } = useTableOwner(tableId, pathname)
   const hostRef = useRef<HTMLDivElement>(null)
   useColumnTextSelection(hostRef)
@@ -158,7 +172,8 @@ function GroupedTable<T extends object>({ tableId, columns, lockedKeys, classNam
           className={[...classNames(className), table.tableClassName].join(' ')}
           columns={tree}
           components={table.components}
-          pagination={pagination && typeof pagination === 'object' ? { ...TABLE_PAGINATION, ...pagination } : pagination}
+          noDataElement={isTableLoading(rest.loading) ? <span /> : noDataElement}
+          pagination={mergePagination(pagination)}
           scroll={{ ...scroll, x: Math.max(table.scrollX, typeof scroll?.x === 'number' ? scroll.x : 0) }}
         />
       </div>

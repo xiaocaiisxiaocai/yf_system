@@ -156,7 +156,7 @@ export default function MesOrdersPage() {
       setStarting(false)
     }
   }
-  const syncLabel = syncing && mirror ? `同步中 ${mirror.fetched} / ${mirror.total ?? '—'}` : '同步'
+  const syncLabel = syncing && mirror ? `同步中 ${mirror.fetched} / ${mirror.total ?? '-'}` : '同步'
 
   const apply = (prop: string, text: string) => {
     setFilters((current) => {

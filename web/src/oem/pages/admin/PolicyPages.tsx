@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Typography } from '@arco-design/web-react'
 import { IconSearch } from '@arco-design/web-react/icon'
+import { fmtSize } from '../../../api/types'
 import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
 import type { RetentionTemplate, SettingItem } from '../../api/types'
@@ -110,12 +111,12 @@ export function RetentionPage() {
           <Form.Item field="mode" label="删除方式" rules={[{ required: true }]}><Select options={MODES} /></Form.Item>
           {(mode === 'AFTER_RELEASE' || mode === 'FIRST_RECEIPT_OR_DEADLINE') && (
             <Form.Item field="releaseTtlMinutes" label="发布后最长保留（分钟）" rules={[{ required: true }]}>
-              <InputNumber min={1} max={5256000} />
+              <InputNumber style={{ width: '100%' }} min={1} max={5256000} />
             </Form.Item>
           )}
           {(mode === 'AFTER_FIRST_RECEIPT' || mode === 'FIRST_RECEIPT_OR_DEADLINE') && (
             <Form.Item field="receiptGraceMinutes" label="首次下载后保留（分钟）" rules={[{ required: true }]}>
-              <InputNumber min={1} max={5256000} />
+              <InputNumber style={{ width: '100%' }} min={1} max={5256000} />
             </Form.Item>
           )}
           {mode === 'AFTER_FIRST_RECEIPT' && <Typography.Text type="warning">注意：无人下载的文件在此策略下不会自动删除。</Typography.Text>}
@@ -127,7 +128,8 @@ export function RetentionPage() {
   )
 }
 
-// 以字节为单位的设置：输入框旁换算成 MB/GB，避免管理员数位数。
+// 后端以字节存容量上限，界面按 MB 编辑，旁侧展示换算结果（如 GB），避免管理员数位数。
+const BYTES_PER_MB = 1024 * 1024
 const BYTE_SETTING_KEYS = new Set([
   'oem.upload.max_file_size',
   'oem.upload.max_transfer_size',
@@ -135,16 +137,10 @@ const BYTE_SETTING_KEYS = new Set([
   'oem.upload.max_storage_per_company',
 ])
 
-function formatBytes(bytes: number) {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit += 1
-  }
-  return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/\.?0+$/, '')} ${units[unit]}`
-}
+const bytesToMb = (bytes: number) => Number((bytes / BYTES_PER_MB).toFixed(2))
+const mbToBytes = (mb: number) => Math.round(mb * BYTES_PER_MB)
+const displaySettingLabel = (item: SettingItem) =>
+  BYTE_SETTING_KEYS.has(item.key) ? item.label.replace(/（字节）|\(字节\)/g, '（MB）') : item.label
 
 export function SettingsForm({ group }: { group: 'file' | 'notify' }) {
   const { api } = useOem()
@@ -203,29 +199,42 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
       )}
       {error && <Alert type="error" content={error} action={<Button size="small" onClick={() => void load()} disabled={saving}>重新加载</Button>} />}
       <Spin loading={loading} style={{ display: 'block' }}>
-        {items.map((item) => (
-          <Space key={item.key} align="start" wrap style={{ width: '100%', padding: '8px 0' }}>
-            <span style={{ display: 'inline-block', width: 260, lineHeight: '32px' }}>{item.label}</span>
-            {item.kind === 'boolean'
-              ? <Switch aria-label={item.label} disabled={item.readOnly} checked={values[item.key] === 'true'} onChange={(checked) => setValues((v) => ({ ...v, [item.key]: String(checked) }))} />
-              : item.kind === 'integer'
-                ? <InputNumber style={{ width: 220 }} value={Number(values[item.key])}
-                    min={item.min ?? undefined} max={item.max ?? undefined} aria-label={item.label} disabled={item.readOnly}
-                    onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(value) }))} />
-              : item.kind === 'extensions'
-                ? <Input.TextArea style={{ width: 520, maxWidth: '100%' }} autoSize={{ minRows: 2, maxRows: 8 }} value={values[item.key]}
-                    aria-label={item.label} disabled={item.readOnly}
-                    onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />
-                : <Input style={{ width: 220 }} value={values[item.key]}
-                    aria-label={item.label} disabled={item.readOnly}
-                    onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
-            {BYTE_SETTING_KEYS.has(item.key) && Number(values[item.key]) > 0 && (
-              <Typography.Text type="secondary" className="oem-setting-size">约 {formatBytes(Number(values[item.key]))}</Typography.Text>
-            )}
-            {item.unsupportedReason && <Typography.Text type="warning">{item.unsupportedReason}</Typography.Text>}
-            {item.hint && <Typography.Text type="secondary">{item.hint}</Typography.Text>}
-          </Space>
-        ))}
+        {items.map((item) => {
+          const isByteSetting = BYTE_SETTING_KEYS.has(item.key)
+          const label = displaySettingLabel(item)
+          const rawValue = values[item.key]
+          const numericBytes = Number(rawValue)
+          return (
+            <Space key={item.key} align="start" wrap style={{ width: '100%', padding: '8px 0' }}>
+              <span style={{ display: 'inline-block', width: 260, lineHeight: '32px' }}>{label}</span>
+              {item.kind === 'boolean'
+                ? <Switch aria-label={label} disabled={item.readOnly} checked={rawValue === 'true'} onChange={(checked) => setValues((v) => ({ ...v, [item.key]: String(checked) }))} />
+                : item.kind === 'integer' && isByteSetting
+                  ? <InputNumber style={{ width: 220 }} suffix="MB"
+                      value={rawValue === '' ? undefined : bytesToMb(numericBytes)}
+                      min={item.min != null ? Math.ceil((item.min / BYTES_PER_MB) * 100) / 100 : undefined}
+                      max={item.max != null ? Math.floor((item.max / BYTES_PER_MB) * 100) / 100 : undefined}
+                      aria-label={label} disabled={item.readOnly}
+                      onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(mbToBytes(value)) }))} />
+                : item.kind === 'integer'
+                  ? <InputNumber style={{ width: 220 }} value={rawValue === '' ? undefined : numericBytes}
+                      min={item.min ?? undefined} max={item.max ?? undefined} aria-label={label} disabled={item.readOnly}
+                      onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(value) }))} />
+                : item.kind === 'extensions'
+                  ? <Input.TextArea style={{ width: 520, maxWidth: '100%' }} autoSize={{ minRows: 2, maxRows: 8 }} value={rawValue}
+                      aria-label={label} disabled={item.readOnly}
+                      onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />
+                  : <Input style={{ width: 220 }} value={rawValue}
+                      aria-label={label} disabled={item.readOnly}
+                      onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
+              {isByteSetting && numericBytes > 0 && (
+                <Typography.Text type="secondary" className="oem-setting-size">约 {fmtSize(numericBytes)}</Typography.Text>
+              )}
+              {item.unsupportedReason && <Typography.Text type="warning">{item.unsupportedReason}</Typography.Text>}
+              {item.hint && <Typography.Text type="secondary">{item.hint}</Typography.Text>}
+            </Space>
+          )
+        })}
       </Spin>
       <div className="oem-settings-actions">
         <Button type="primary" disabled={!changed || loading} loading={saving} onClick={() => void save()}>保存更改</Button>

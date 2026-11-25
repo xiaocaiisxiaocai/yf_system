@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Button, Form, Input, Message, Modal, Popconfirm, Space, Spin, Tag, Typography,
+  Button, Form, Input, Message, Modal, Space, Spin, Tag, Typography,
 } from '@arco-design/web-react'
 import { IconCheckCircle, IconCloseCircle, IconStop, IconUndo } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -9,6 +9,8 @@ import { MATERIAL_REVIEW, type Project, PROJECT_STATUS } from '../api/types'
 import { useAuth } from '../store/auth'
 import type { ApiResponses } from '../api/types'
 import ActiveUploadSessions from './ActiveUploadSessions'
+import DangerPopconfirm from './DangerPopconfirm'
+import EnterSubmit from './EnterSubmit'
 
 type WorkflowAction = 'start' | 'terminate' | 'materialApprove' | 'materialReturn' | 'reopen'
 
@@ -297,9 +299,9 @@ export default function ProjectWorkflowPanel({
             </Button>
           )}
           {canStatus && project.status === 'IN_PROGRESS' && (
-            <Popconfirm title="终止项目后需要重新开始才能继续，确认终止？" onOk={() => changeStatus('TERMINATED')}>
+            <DangerPopconfirm title="终止项目后需要重新开始才能继续，确认终止？" onOk={() => changeStatus('TERMINATED')}>
               <Button status="danger" icon={<IconStop />} {...actionProps('terminate')}>终止</Button>
-            </Popconfirm>
+            </DangerPopconfirm>
           )}
         </Space>
       )}
@@ -350,11 +352,11 @@ export default function ProjectWorkflowPanel({
         cancelText="取消"
         okButtonProps={{ status: 'warning' }}
       >
-        <Form form={returnForm} layout="vertical">
+        <Form form={returnForm} layout="vertical" onSubmit={() => void returnMaterial()}>
           <Form.Item label="退回原因（必填）" field="reason" rules={[{ required: true, message: '请填写退回原因' }]}>
             <Input.TextArea rows={4} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="请说明需要厂商补充或修改的资料" />
           </Form.Item>
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
 
       <Modal
@@ -375,11 +377,11 @@ export default function ProjectWorkflowPanel({
         cancelText="取消"
         okButtonProps={{ status: 'warning' }}
       >
-        <Form form={reopenForm} layout="vertical">
+        <Form form={reopenForm} layout="vertical" onSubmit={() => void reopen()}>
           <Form.Item label="重开原因（必填）" field="reason" rules={[{ required: true, message: '请填写重开原因' }]}>
             <Input.TextArea rows={4} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="请说明需要厂商返工的内容" />
           </Form.Item>
-        </Form>
+        <EnterSubmit /></Form>
       </Modal>
     </div>
   )

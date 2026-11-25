@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Button, Typography } from '@arco-design/web-react'
+import { Button, Spin, Typography } from '@arco-design/web-react'
 import { useQuery } from '@tanstack/react-query'
 import { useShallow } from 'zustand/react/shallow'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -82,7 +82,14 @@ export function ReceiptBody({ id, refreshKey = 0, onLoaded }: {
     if (query.data) onLoaded?.(query.data.id, query.data.readCount, query.data.totalCount)
   }, [query.data, query.dataUpdatedAt, onLoaded])
 
-  if (query.isPending) return <div style={{ fontSize: 12 }}>回执加载中…</div>
+  if (query.isPending) {
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+        <Spin size={14} />
+        <span>回执加载中…</span>
+      </div>
+    )
+  }
   if (query.isError) {
     return (
       <div style={{ fontSize: 12 }}>

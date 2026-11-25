@@ -1,13 +1,14 @@
 import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Tree, Typography,
+  Button, Card, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip, Tree, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import { useAuth } from '../../store/auth'
 import { type PageResp } from '../../api/types'
 import type { ApiResponses } from '../../api/types'
@@ -61,6 +62,7 @@ export default function RoleList() {
   const [savingPerms, setSavingPerms] = useState(false)
   const [editing, setEditing] = useState<Role | null>(null)
   const [permTarget, setPermTarget] = useState<Role | null>(null)
+  const [permKeyword, setPermKeyword] = useState('')
   const [roleScopes, setRoleScopes] = useState<Record<string, string>>({})
   const [roleScopesOriginal, setRoleScopesOriginal] = useState<Record<string, string>>({})
   const [roleScopesLoading, setRoleScopesLoading] = useState(false)
@@ -170,13 +172,30 @@ export default function RoleList() {
     }))
   }, [mutablePermissionIds, perms, removablePermissionIds])
 
-  const displayedPermTree = useMemo(() => savingPerms
-    ? permTree.map((group) => ({
-      ...group,
-      disabled: true,
-      children: group.children.map((child) => ({ ...child, disabled: true })),
-    }))
-    : permTree, [permTree, savingPerms])
+  const normalizedPermKeyword = permKeyword.trim().toLowerCase()
+  const displayedPermTree = useMemo(() => {
+    const matched = !normalizedPermKeyword
+      ? permTree
+      : permTree.flatMap((group) => {
+        const menuPerm = perms.find((p) => String(p.id) === group.key)
+        const menuMatches = group.title.toLowerCase().includes(normalizedPermKeyword)
+          || (menuPerm?.code ?? '').toLowerCase().includes(normalizedPermKeyword)
+        if (menuMatches) return [group]
+        const matchingChildren = group.children.filter((child) => {
+          const childPerm = perms.find((p) => String(p.id) === child.key)
+          return child.title.toLowerCase().includes(normalizedPermKeyword)
+            || (childPerm?.code ?? '').toLowerCase().includes(normalizedPermKeyword)
+        })
+        return matchingChildren.length > 0 ? [{ ...group, children: matchingChildren }] : []
+      })
+    return savingPerms
+      ? matched.map((group) => ({
+        ...group,
+        disabled: true,
+        children: group.children.map((child) => ({ ...child, disabled: true })),
+      }))
+      : matched
+  }, [normalizedPermKeyword, permTree, perms, savingPerms])
 
   const halfChecked = permTree
     .filter((group) => {
@@ -249,8 +268,9 @@ export default function RoleList() {
       const permsChanged = ids.length !== permOriginal.length
         || ids.some((id) => !permOriginal.includes(String(id)))
       if (!permsChanged && changedScopes.length === 0) {
-        Message.success('没有需要保存的修改')
+        Message.info('没有需要保存的修改')
         setPermTarget(null)
+        setPermKeyword('')
         return
       }
       // 一次请求、一个事务：动作权限与数据范围要么都生效，要么都不生效。
@@ -264,6 +284,7 @@ export default function RoleList() {
         })
       Message.success('权限已保存')
       setPermTarget(null)
+      setPermKeyword('')
       load()
     } catch (error) {
       // 请求层已展示错误；保留抽屉和当前选择，允许用户直接重试。
@@ -289,20 +310,22 @@ export default function RoleList() {
   return (
     <Card className="page-card page-card--table">
       <h1 className="visually-hidden">角色与权限</h1>
-      <div className="page-toolbar responsive-toolbar">
-        <span />
-        {canManageRoles && <Button
-          type="primary"
-          icon={<IconPlus />}
-          onClick={() => {
-            setEditing(null)
-            form.resetFields()
-            setEditOpen(true)
-          }}
-        >
-          新增角色
-        </Button>}
-      </div>
+      {canManageRoles && (
+        <div className="page-toolbar responsive-toolbar">
+          <span />
+          <Button
+            type="primary"
+            icon={<IconPlus />}
+            onClick={() => {
+              setEditing(null)
+              form.resetFields()
+              setEditOpen(true)
+            }}
+          >
+            新增角色
+          </Button>
+        </div>
+      )}
       {loadError ? (
         <LoadError onRetry={load} />
       ) : (
@@ -317,12 +340,14 @@ export default function RoleList() {
             title: '名称',
             dataIndex: 'name',
             width: 190,
+            align: 'left' as const,
             render: (v: string) => <span className="table-cell-wrap">{v}</span>,
           },
           {
             title: '说明',
             dataIndex: 'description',
             width: 200,
+            align: 'left' as const,
             render: (v?: string) => <span className="table-cell-wrap">{v || '-'}</span>,
           },
           { title: '权限点数', dataIndex: 'permissionIds', width: 96, align: 'center' as const, render: (v: number[]) => v.length },
@@ -352,6 +377,7 @@ export default function RoleList() {
                 type="text"
                 onClick={() => {
                   setPermTarget(r)
+                  setPermKeyword('')
                   setChecked(r.permissionIds.map(String))
                   setPermOriginal(r.permissionIds.map(String))
                   void loadRoleScopes(r.id)
@@ -378,23 +404,30 @@ export default function RoleList() {
                     <Button size="mini" type="text" status="danger" disabled>停用</Button>
                   </span>
                 </Tooltip>
+              ) : r.status === 'ACTIVE' ? (
+                <DangerPopconfirm
+                  key="status"
+                  disabled={r.canManage === false}
+                  title="确认停用该角色？"
+                  onOk={() => toggle(r)}
+                >
+                  <Button size="mini" type="text" status="danger" disabled={r.canManage === false}>停用</Button>
+                </DangerPopconfirm>
               ) : (
                 <Popconfirm
                   key="status"
                   disabled={r.canManage === false}
-                  title={r.status === 'ACTIVE' ? '确认停用该角色？' : '确认启用该角色？'}
+                  title="确认启用该角色？"
                   onOk={() => toggle(r)}
                 >
-                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled={r.canManage === false}>
-                    {r.status === 'ACTIVE' ? '停用' : '启用'}
-                  </Button>
+                  <Button size="mini" type="text" status="success" disabled={r.canManage === false}>启用</Button>
                 </Popconfirm>
               ),
               canDelete && (
-                <Popconfirm key="delete" disabled={r.canManage === false || r.isBuiltIn}
+                <DangerPopconfirm key="delete" disabled={r.canManage === false || r.isBuiltIn}
                   title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
                   <Button size="mini" type="text" status="danger" disabled={r.canManage === false || r.isBuiltIn}>删除</Button>
-                </Popconfirm>
+                </DangerPopconfirm>
               ),
             ], 'role'),
           },
@@ -417,6 +450,7 @@ export default function RoleList() {
         className="form-dialog"
         title={editing ? '编辑角色' : '新增角色'}
         visible={editOpen}
+        unmountOnExit
         confirmLoading={saving}
         closable={!saving}
         maskClosable={!saving}
@@ -428,24 +462,25 @@ export default function RoleList() {
       >
         <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <Form.Item label="角色名称" field="name" rules={[{ required: true, message: '请输入名称' }, textLengthRule('名称', 64)]}>
-            <Input placeholder="角色名称" disabled={editing?.isBuiltIn} />
+            <Input autoFocus={!editing?.isBuiltIn} placeholder="角色名称" disabled={editing?.isBuiltIn} />
           </Form.Item>
           <Form.Item label="角色说明" field="description">
-            <Input.TextArea rows={3} maxLength={255} placeholder="选填" />
+            <Input.TextArea autoFocus={editing?.isBuiltIn} rows={3} maxLength={255} placeholder="选填" />
           </Form.Item>
         <EnterSubmit /></Form>
       </Modal>
 
       <Drawer
-        width={440}
+        width="min(440px, 100vw)"
         title={permTarget ? `${permTarget.canManage === false ? '查看权限' : '分配权限'} · ${permTarget.name}` : ''}
         visible={!!permTarget}
-        onCancel={() => { if (!savingPerms) setPermTarget(null) }}
+        onCancel={() => { if (!savingPerms) { setPermTarget(null); setPermKeyword('') } }}
         closable={!savingPerms}
         maskClosable={!savingPerms}
+        escToExit={!savingPerms}
         footer={
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-            <Button disabled={savingPerms} onClick={() => setPermTarget(null)}>{permTarget?.canManage === false ? '关闭' : '取消'}</Button>
+            <Button disabled={savingPerms} onClick={() => { setPermTarget(null); setPermKeyword('') }}>{permTarget?.canManage === false ? '关闭' : '取消'}</Button>
             {permTarget?.canManage !== false && (
               <Button type="primary" loading={savingPerms} disabled={permsLoading || permsError || perms.length === 0} onClick={savePerms}>
                 保存权限
@@ -471,40 +506,57 @@ export default function RoleList() {
             <Button size="small" onClick={retryPermissions}>重试加载权限点</Button>
           </div>
         )}
-        {permsLoading && <Typography.Text type="secondary">权限点加载中…</Typography.Text>}
+        {permsLoading && (
+          <div style={{ padding: '24px 0', textAlign: 'center' }}>
+            <Spin tip="权限点加载中…" />
+          </div>
+        )}
         {!permsLoading && !permsError && perms.length === 0 && <Typography.Text type="secondary">暂无权限点</Typography.Text>}
-        {!permsLoading && !permsError && (
-          <Tree
-            checkable
-            checkStrictly
-            defaultExpandedKeys={permTree.map((g) => g.key)}
-            treeData={displayedPermTree}
-            checkedKeys={checked.filter((key) => !halfChecked.includes(key))}
-            halfCheckedKeys={halfChecked}
-            onCheck={(_, extra) => {
-              if (savingPerms) return
-              const next = new Set(checked)
-              const key = String(extra.node.key)
-              const permission = perms.find((p) => String(p.id) === key)
-              const group = permTree.find((item) => item.key === key)
-              if (!mutablePermissionIds.has(key)) {
-                if (!extra.checked && removablePermissionIds.has(key)) {
-                  next.delete(key)
+        {!permsLoading && !permsError && perms.length > 0 && (
+          <>
+            <Input
+              allowClear
+              placeholder="筛选权限名称或标识"
+              value={permKeyword}
+              onChange={setPermKeyword}
+              style={{ marginBottom: 12 }}
+            />
+            {displayedPermTree.length === 0 ? (
+              <Typography.Text type="secondary">未找到匹配的权限点</Typography.Text>
+            ) : (
+              <Tree
+                checkable
+                checkStrictly
+                defaultExpandedKeys={permTree.map((g) => g.key)}
+                treeData={displayedPermTree}
+                checkedKeys={checked.filter((key) => !halfChecked.includes(key))}
+                halfCheckedKeys={halfChecked}
+                onCheck={(_, extra) => {
+                  if (savingPerms) return
+                  const next = new Set(checked)
+                  const key = String(extra.node.key)
+                  const permission = perms.find((p) => String(p.id) === key)
+                  const group = permTree.find((item) => item.key === key)
+                  if (!mutablePermissionIds.has(key)) {
+                    if (!extra.checked && removablePermissionIds.has(key)) {
+                      next.delete(key)
+                      setChecked(Array.from(next))
+                    }
+                    return
+                  }
+                  const branch = [key, ...(group?.children.map((child) => child.key) || [])]
+                    .filter((id) => mutablePermissionIds.has(id))
+                  if (extra.checked) {
+                    branch.forEach((id) => next.add(id))
+                    if (permission?.parentId && mutablePermissionIds.has(String(permission.parentId))) next.add(String(permission.parentId))
+                  } else {
+                    branch.forEach((id) => next.delete(id))
+                  }
                   setChecked(Array.from(next))
-                }
-                return
-              }
-              const branch = [key, ...(group?.children.map((child) => child.key) || [])]
-                .filter((id) => mutablePermissionIds.has(id))
-              if (extra.checked) {
-                branch.forEach((id) => next.add(id))
-                if (permission?.parentId && mutablePermissionIds.has(String(permission.parentId))) next.add(String(permission.parentId))
-              } else {
-                branch.forEach((id) => next.delete(id))
-              }
-              setChecked(Array.from(next))
-            }}
-          />
+                }}
+              />
+            )}
+          </>
         )}
         {permTarget && (
           <>
@@ -514,10 +566,10 @@ export default function RoleList() {
             </Typography.Text>
             <div style={{ marginTop: 12 }}>
               {SCOPE_DOMAINS.map(({ domain, label }) => (
-                <div key={domain} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                  <span style={{ width: 150 }}>{label}</span>
+                <div key={domain} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                  <span style={{ flex: '0 1 150px' }}>{label}</span>
                   <Select
-                    style={{ width: 200 }}
+                    style={{ flex: '1 1 160px', maxWidth: '100%' }}
                     value={roleScopes[domain] ?? ''}
                     loading={roleScopesLoading}
                     disabled={permTarget.canManage === false || roleScopesLoading || roleScopesLoadedFor !== permTarget.id}

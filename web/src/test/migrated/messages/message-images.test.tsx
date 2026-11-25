@@ -61,7 +61,7 @@ describe('留言图片粘贴', () => {
     ])
     expect(result.prevented).toBe(true)
     expect(screen.getByRole('status', { name: '已选图片' })).toHaveTextContent('first.png')
-    expect(await screen.findByText('本次图片总量最多 50 MiB')).toBeVisible()
+    expect(await screen.findByText('本次图片总量最多 50 MB')).toBeVisible()
   })
 
   it('message image paste accepts an exact 50 MiB combined payload', () => {

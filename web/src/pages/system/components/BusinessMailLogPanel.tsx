@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react'
-import { Alert, Button, Card, Message, Pagination, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, Empty, Message, Pagination, Select, Space, Spin, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { useNavigate } from 'react-router-dom'
 import http from '../../../api/client'
@@ -109,7 +109,7 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
   const failure = data ? currentFailure(data) : null
   const pageLogs = logs?.key === logsKey ? logs : null
   return <Card className="page-card system-mail-card system-mail-log" title="邮件日志" extra={<Space wrap>
-    {canManageOem && <Select aria-label="邮件日志业务" style={{ width: 145 }} value={scope} onChange={(value: Scope) => { setScope(value); setSnapshot(null); setError(''); setPage(1) }}>
+    {canManageOem && <Select size="small" aria-label="邮件日志业务" style={{ width: 145 }} value={scope} onChange={(value: Scope) => { setScope(value); setSnapshot(null); setError(''); setPage(1) }}>
       {Object.entries(LABELS).map(([key, label]) => <Select.Option key={key} value={key}>{label}</Select.Option>)}
     </Select>}
     <Button size="small" loading={loading} onClick={() => void refresh()?.catch(() => undefined)}>刷新</Button>
@@ -139,12 +139,18 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
         {pageLogs && pageLogs.total > PAGE_SIZE && <Pagination size="small" simple current={page} pageSize={PAGE_SIZE} total={pageLogs.total} onChange={setPage} />}
       </div>
       {logsError ? <Alert type="error" content={logsError} action={<Button size="small" onClick={() => void loadLogs()}>重试</Button>} /> : <div className="system-mail-log-table">
-        <ResizableTable tableId="mail-logs" className="page-table" rowKey="id" size="small" pagination={false} loading={!pageLogs} noDataElement="暂无邮件记录" data={pageLogs?.list ?? []} scroll={{ x: 620, y: 'var(--page-table-scroll-y)' }}
+        <ResizableTable tableId="mail-logs" growKey="summary" className="page-table" rowKey="id" size="small" pagination={false} loading={!pageLogs} noDataElement={<Empty description="暂无邮件记录" />} data={pageLogs?.list ?? []} scroll={{ x: 480, y: 'var(--page-table-scroll-y)' }}
           expandedRowRender={(row: MailRecent) => <MailLogDetail row={row} formatTime={formatTime} />}
           columns={[
-            { title: '时间', dataIndex: 'createdAt', width: 160, render: formatTime },
-            { title: '结果', dataIndex: 'action', width: 150, render: (_action: string, row: MailRecent) => { const tag = mailActionTag(row); return <Tag color={tag.color}>{tag.label}</Tag> } },
-            { title: '说明', width: 300, render: (_value: unknown, row: MailRecent) => <span className="system-mail-log-summary">{mailRecentSummary(row, formatTime)}</span> },
+            { title: '时间', dataIndex: 'createdAt', width: 148, render: formatTime },
+            { title: '结果', dataIndex: 'action', width: 112, render: (_action: string, row: MailRecent) => { const tag = mailActionTag(row); return <Tag className="table-cell-tag-ellipsis" title={tag.label} color={tag.color}>{tag.label}</Tag> } },
+            {
+              title: '说明', key: 'summary', width: 180, align: 'left' as const, ellipsis: true,
+              render: (_value: unknown, row: MailRecent) => {
+                const text = mailRecentSummary(row, formatTime)
+                return <Tooltip content={text}><span className="table-cell-text system-mail-log-summary">{text}</span></Tooltip>
+              },
+            },
           ]} />
       </div>}
     </div>}

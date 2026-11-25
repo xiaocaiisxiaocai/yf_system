@@ -89,7 +89,7 @@ describe('Dictionaries migrated behavior', () => {
     const tabs = Array.from(document.querySelectorAll('.arco-tabs-header-title-text')).map((tab) => tab.textContent)
     expect(tabs).toEqual(['Robot 类型', 'Robot 料号', '优先级'])
     await waitFor(() => expect(document.querySelector<HTMLButtonElement>('.dictionary-add')).toBeEnabled())
-    expect(document.querySelector('.dictionary-add')).toHaveAccessibleName('新增 Robot 类型')
+    expect(document.querySelector('.dictionary-add')).toHaveAccessibleName('新增Robot 类型')
     expect(mocks.get).toHaveBeenCalledWith('/project-dictionaries', { params: { type: 'ROBOT_TYPE' } })
 
     await user.click(document.querySelector<HTMLButtonElement>('.dictionary-add')!)

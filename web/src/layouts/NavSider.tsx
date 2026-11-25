@@ -23,8 +23,9 @@ export function NavMenu({ items, selectedKey, onSelect, collapsed = false }: {
     onClickMenuItem={onSelect} style={{ width: '100%' }}>
     {items.flatMap((item) => [
       item.dividerBefore && <div key={`${item.key}:divider`} className="oem-menu-divider" role="separator" />,
-      <Menu.Item key={item.key} aria-label={collapsed ? item.label : undefined} renderItemInTooltip={() => item.label}>
-        {item.icon}{!collapsed && item.label}
+      <Menu.Item key={item.key} aria-label={collapsed ? item.label : undefined} renderItemInTooltip={() => item.badge ? `${item.label}（${item.badge}）` : item.label}>
+        {collapsed && Boolean(item.badge) ? <Badge className="nav-menu-badge-dot" dot count={item.badge} offset={[-2, 2]}>{item.icon}</Badge> : item.icon}
+        {!collapsed && item.label}
         {!collapsed && Boolean(item.badge) && <Badge className="nav-menu-badge" count={item.badge} maxCount={99} />}
       </Menu.Item>,
     ])}

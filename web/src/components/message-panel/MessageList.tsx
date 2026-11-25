@@ -5,6 +5,7 @@ import { IconCheck, IconDelete, IconRedo, IconUndo } from '@arco-design/web-reac
 import { memo, type ComponentType, type RefObject } from 'react'
 import type { Message as Msg } from '../../api/types'
 import { canWithdraw } from '../../hooks/useWithdrawClock'
+import DangerPopconfirm from '../DangerPopconfirm'
 import './MessageList.css'
 
 interface Props {
@@ -145,9 +146,9 @@ const MessageRow = memo(function MessageRow({
             </Button>
           </Popover>
           {m.senderId === userId && <Button className="msg-secondary-action" size="mini" type="text" onClick={() => onOpenReceipt(m.id)}>回执详情</Button>}
-          {canDelete && <Popconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => onRemove(m.id)}>
+          {canDelete && <DangerPopconfirm title="删除这条留言？删除后双方均不可见。" onOk={() => onRemove(m.id)}>
             <Button className="msg-secondary-action" size="mini" type="text" status="danger" icon={<IconDelete />}>删除</Button>
-          </Popconfirm>}
+          </DangerPopconfirm>}
           {mine && canWithdraw(m.withdrawableUntil, withdrawNow) && <Popconfirm title="撤回这条留言？撤回后双方只能看到撤回提示。" onOk={() => onWithdraw(m.id)}>
             <Button className="msg-secondary-action" size="mini" type="text" status="warning" icon={<IconUndo />}>撤回</Button>
           </Popconfirm>}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Button, Card, Descriptions, Drawer, Empty, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Badge, Button, Card, Descriptions, Drawer, Empty, Result, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconDown, IconLeft, IconUp } from '@arco-design/web-react/icon'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -403,28 +403,27 @@ function ProjectDetailContent({ id }: { id?: string }) {
   )
 
   if (!project || project.id !== pid)
-    return (
-      <div style={{ textAlign: 'center', padding: 80 }}>
-        {loadErrorFor === pid ? (
-          <>
-            <Empty description={missingProjectFor === pid ? '项目不存在或已删除' : '项目加载失败或没有访问权限'} />
-            {missingProjectFor === pid ? (
-              <Button type="primary" onClick={() => navigate('/projects')}>返回项目列表</Button>
-            ) : (
-              <Button
-                type="primary"
-                onClick={() => {
-                  setLoadErrorFor(null)
-                  loadProject()
-                }}
-              >
-                重试
-              </Button>
-            )}
-          </>
+    return loadErrorFor === pid ? (
+      <Result
+        status={missingProjectFor === pid ? '404' : 'error'}
+        title={missingProjectFor === pid ? '项目不存在或已删除' : '项目加载失败或没有访问权限'}
+        extra={missingProjectFor === pid ? (
+          <Button type="primary" onClick={() => navigate('/projects')}>返回项目列表</Button>
         ) : (
-          <Spin size={36} />
+          <Button
+            type="primary"
+            onClick={() => {
+              setLoadErrorFor(null)
+              loadProject()
+            }}
+          >
+            重试
+          </Button>
         )}
+      />
+    ) : (
+      <div style={{ textAlign: 'center', padding: 80 }}>
+        <Spin size={36} />
       </div>
     )
 

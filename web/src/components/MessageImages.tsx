@@ -2,7 +2,9 @@ import { lazy, Suspense, useEffect, useRef, useState, type ClipboardEvent } from
 import { Button, Message, Modal, Result, Spin, Tooltip } from '@arco-design/web-react'
 import { IconClose, IconDelete, IconImage } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
+import { fmtSize } from '../api/types'
 import './MessageImages.css'
+import PreviewFallback from './PreviewFallback'
 import { PreviewWatermark } from './PreviewWatermark'
 
 // 与 FileTable 的图片预览共用同一按需加载分包，避免此处的静态引用使其失效
@@ -51,7 +53,7 @@ function appendFiles(files: File[], candidates: File[]) {
 
   if (unsupported) Message.error('仅支持 PNG、JPEG、GIF、WebP 和 BMP 图片')
   if (countExceeded) Message.error(`每条留言最多添加 ${MESSAGE_IMAGE_MAX_COUNT} 张图片`)
-  if (totalExceeded) Message.error('本次图片总量最多 50 MiB')
+  if (totalExceeded) Message.error('本次图片总量最多 50 MB')
   return next
 }
 
@@ -150,7 +152,7 @@ export function MessageImageComposer({ files, onChange, disabled = false }: Mess
         if (next.length !== files.length) onChange(next)
       }}
     />
-    <Tooltip content="支持 Ctrl+V 粘贴，最多 9 张，合计 50 MiB">
+    <Tooltip content="支持 Ctrl+V 粘贴，最多 9 张，合计 50 MB">
       <Button
         className="message-image-add"
         size="small"
@@ -170,12 +172,6 @@ export function MessageImageComposer({ files, onChange, disabled = false }: Mess
       />)}
     </div>}
   </div>
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }
 
 // 缩图请求的是原图：同时只下载少量几张，离开视口后中止并释放，避免长留言历史占满内存。
@@ -242,7 +238,7 @@ function RemoteImageThumbnail({ messageId, image, pinned, onOpen }: {
       </button>}
     <div className="message-image-meta">
       <span title={image.name}>{image.name}</span>
-      <small>{formatBytes(image.sizeBytes)}</small>
+      <small>{fmtSize(image.sizeBytes)}</small>
     </div>
   </div>
 }
@@ -351,7 +347,7 @@ export function MessageImages({ messageId, images, watermarkEmployeeNo, watermar
       unmountOnExit
     >
       <div className="file-preview-surface">
-        <Suspense fallback={<div role="status">加载图片预览…</div>}>
+        <Suspense fallback={<PreviewFallback tip="加载图片预览…" />}>
           <ImagePreview
             sourceUrl={preview.source}
             name={preview.image.name}

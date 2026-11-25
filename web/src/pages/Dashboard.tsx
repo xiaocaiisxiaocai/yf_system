@@ -333,7 +333,8 @@ export default function Dashboard() {
               <>
                 <List
                   key={pendingPage}
-                  className="dashboard-pending-list dashboard-scroll"
+                  className="dashboard-pending-list"
+                  wrapperClassName="dashboard-scroll"
                   dataSource={pendingData.list}
                   render={(project) => (
                     <List.Item

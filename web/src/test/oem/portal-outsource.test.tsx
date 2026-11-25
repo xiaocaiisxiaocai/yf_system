@@ -95,7 +95,7 @@ describe('ODM/OEMA 门户外协清单', () => {
     const open = within((await screen.findByText('A1')).closest('tr')!)
     expect(open.getByText('否')).toBeInTheDocument()
     const blocked = within(screen.getByText('A4').closest('tr')!)
-    expect(blocked.getByText('—')).toBeInTheDocument()
+    expect(blocked.getByText('-')).toBeInTheDocument()
     expect(blocked.queryByText('否')).not.toBeInTheDocument()
     expect(blocked.queryByRole('button', { name: '转迅得电控' })).not.toBeInTheDocument()
     expect(within(screen.getByText('A2').closest('tr')!).queryByRole('button', { name: '转迅得电控' })).not.toBeInTheDocument()
@@ -123,7 +123,7 @@ describe('ODM/OEMA 门户外协清单', () => {
     await user.type(withdrawDialog.getByRole('textbox', { name: '签名' }), '赵一')
     await user.click(withdrawDialog.getByRole('button', { name: '确认' }))
     expect(setOutsourceElectricalHandoff).toHaveBeenLastCalledWith(1, { handoff: false, expected: true, signerName: '赵一' })
-    await waitFor(() => expect(open.getByText('—')).toBeInTheDocument())
+    await waitFor(() => expect(open.getByText('-')).toBeInTheDocument())
     expect(open.queryByRole('button', { name: '转迅得电控' })).not.toBeInTheDocument()
   })
 

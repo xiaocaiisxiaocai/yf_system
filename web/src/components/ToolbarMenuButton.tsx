@@ -9,7 +9,15 @@ export interface ToolbarMenuItem {
 }
 
 // 工具栏中同类的次要操作（如导入、导出）收进一个下拉按钮，菜单项保留完整名称。
-export default function ToolbarMenuButton({ label, items }: { label: string; items: (ToolbarMenuItem | false | null | undefined)[] }) {
+export default function ToolbarMenuButton({
+  label,
+  items,
+  size = 'default',
+}: {
+  label: string
+  items: (ToolbarMenuItem | false | null | undefined)[]
+  size?: 'mini' | 'small' | 'default' | 'large'
+}) {
   const visible = items.filter((item): item is ToolbarMenuItem => Boolean(item))
   if (visible.length === 0) return null
   return (
@@ -22,7 +30,7 @@ export default function ToolbarMenuButton({ label, items }: { label: string; ite
         </Menu>
       )}
     >
-      <Button size="small" loading={visible.some((item) => item.loading)}>{label}<IconDown /></Button>
+      <Button size={size} loading={visible.some((item) => item.loading)}>{label}<IconDown /></Button>
     </Dropdown>
   )
 }

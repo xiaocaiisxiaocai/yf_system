@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Button, Empty, Popover, Space, Spin, Tag } from '@arco-design/web-react'
+import { Button, Empty, Popover, Space, Spin, Tag, Tooltip } from '@arco-design/web-react'
 import type { OutsourceItemFilesResponse } from '../../api/generated/api-types'
 import { requestErrorMessage } from '../../api/requestError'
 import { fmtSize, fmtTime } from '../../api/types'
@@ -60,6 +60,14 @@ export default function ItemFilesPopover({ fileCount, purgedFileCount, loadFiles
             {load.response.files.map((file) => {
               const state = states[file.state]
               const ext = extensionOf(file.name)
+              const previewDisabledReason = !oemPreviewKind(ext)
+                ? '暂不支持在线预览该格式，请下载查看'
+                : file.sizeBytes > OEM_PREVIEW_MAX_BYTES
+                  ? `文件超过 ${fmtSize(OEM_PREVIEW_MAX_BYTES)}，请下载查看`
+                  : undefined
+              const previewButton = <Button type="text" size="mini" aria-label={`预览 ${file.name}`}
+                disabled={Boolean(previewDisabledReason)}
+                onClick={() => setPreview({ id: file.fileId, originalName: file.name, ext })}>预览</Button>
               return <li key={file.fileId} className="outsource-files-row">
                 <div className="outsource-files-summary">
                   <span className={file.state === 'PURGED' ? 'outsource-files-name--purged' : undefined}>{file.name}</span>
@@ -69,9 +77,7 @@ export default function ItemFilesPopover({ fileCount, purgedFileCount, loadFiles
                 <div className="outsource-files-details">
                   <span>{fmtSize(file.sizeBytes)}</span><span>{file.vendorName}</span><span>{fmtTime(file.sentAt)}</span>
                   {load.response.canOpen === true && file.state === 'AVAILABLE' && <Space size={4} className="outsource-files-actions">
-                    <Button type="text" size="mini" aria-label={`预览 ${file.name}`}
-                      disabled={!oemPreviewKind(ext) || file.sizeBytes > OEM_PREVIEW_MAX_BYTES}
-                      onClick={() => setPreview({ id: file.fileId, originalName: file.name, ext })}>预览</Button>
+                    {previewDisabledReason ? <Tooltip content={previewDisabledReason}><span>{previewButton}</span></Tooltip> : previewButton}
                     <Button type="text" size="mini" aria-label={`下载 ${file.name}`}
                       onClick={() => void downloadOemFile(api, file.fileId).catch(() => undefined)}>下载</Button>
                   </Space>}

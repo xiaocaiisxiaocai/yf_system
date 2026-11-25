@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Alert, Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select, Space, Typography,
+  Alert, Button, Drawer, Form, Input, Message, Modal, Select, Space, Tooltip, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../../api/client'
 import { actionSlots } from '../../../components/ActionSlots'
+import DangerPopconfirm from '../../../components/DangerPopconfirm'
 import PasswordInput from '../../../components/PasswordInput'
 import { useAuth } from '../../../store/auth'
 import { type ApiResponses, fmtTime } from '../../../api/types'
@@ -217,19 +218,28 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
       <div className="drawer-toolbar responsive-toolbar">
         <Typography.Text type="secondary">{loading ? '账号加载中…' : accountsFailed ? '账号列表暂不可用' : `共 ${accounts.length} 个账号`}</Typography.Text>
         <Space wrap>
-          <Button
-            type="primary"
-            size="small"
-            icon={<IconPlus />}
-            disabled={supplier?.status === 'DISABLED'}
-            onClick={() => {
-              form.resetFields()
-              setEditOpen(true)
-              void loadRoleOptions()
-            }}
-          >
-            新增账号
-          </Button>
+          {supplier?.status === 'DISABLED' ? (
+            <Tooltip content="供应商已停用，无法新增账号">
+              <span>
+                <Button type="primary" size="small" icon={<IconPlus />} disabled>
+                  新增账号
+                </Button>
+              </span>
+            </Tooltip>
+          ) : (
+            <Button
+              type="primary"
+              size="small"
+              icon={<IconPlus />}
+              onClick={() => {
+                form.resetFields()
+                setEditOpen(true)
+                void loadRoleOptions()
+              }}
+            >
+              新增账号
+            </Button>
+          )}
         </Space>
       </div>
       {!accountsFailed && <ResizableTable tableId="supplier-accounts"
@@ -261,7 +271,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
                 重置密码
               </Button>,
               account.status === 'ACTIVE' ? (
-                <Popconfirm key="status" title="停用后该账号立即无法登录，确认停用？" onOk={() => toggle(account)}>
+                <DangerPopconfirm key="status" title="停用后该账号立即无法登录，确认停用？" onOk={() => toggle(account)}>
                   <Button
                     size="mini"
                     type="text"
@@ -271,7 +281,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
                   >
                     停用
                   </Button>
-                </Popconfirm>
+                </DangerPopconfirm>
               ) : (
                 <Button
                   key="status"
@@ -286,9 +296,9 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
                 </Button>
               ),
               canDelete && (
-                <Popconfirm key="delete" title="删除后不可恢复，确认删除该账号？" onOk={() => removeAccount(account)}>
+                <DangerPopconfirm key="delete" title="删除后不可恢复，确认删除该账号？" onOk={() => removeAccount(account)}>
                   <Button size="mini" type="text" status="danger">删除</Button>
-                </Popconfirm>
+                </DangerPopconfirm>
               ),
             ], 'account'),
           },
@@ -299,6 +309,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
         className="form-dialog"
         title="新增供应商账号"
         visible={editOpen}
+        unmountOnExit
         confirmLoading={saving}
         closable={!saving}
         maskClosable={!saving}
@@ -346,6 +357,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
         className="form-dialog"
         title={`重置密码 · ${resetTarget?.employeeNo ?? ''}`}
         visible={!!resetTarget}
+        unmountOnExit
         confirmLoading={resettingPassword}
         closable={!resettingPassword}
         maskClosable={!resettingPassword}

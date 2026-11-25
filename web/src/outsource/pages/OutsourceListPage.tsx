@@ -7,6 +7,7 @@ import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconHistory, IconSy
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type ImportRowOutcome } from '../../components/ExcelImportDialog'
 import LoadError from '../../components/LoadError'
 import { OemProvider } from '../../oem/OemContext'
@@ -63,7 +64,7 @@ const MATCH_PROBLEM: Record<string, string> = {
 }
 /** A custom field's cell text: yes/no fields are stored as true/false. */
 const customText = (field: Pick<FieldColumn, 'dataType'>, value?: string | null) =>
-  field.dataType === 'BOOLEAN' ? (value === 'true' ? '是' : value === 'false' ? '否' : '') : (value ?? '')
+  field.dataType === 'BOOLEAN' ? (value === 'true' ? '是' : value === 'false' ? '否' : '-') : (value || '-')
 const BOOLEAN_OPTIONS = [{ label: '是', value: 'true' }, { label: '否', value: 'false' }]
 
 const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
@@ -178,6 +179,16 @@ export default function OutsourceListPage() {
   }, [load])
 
   const changeFilters = (next: Partial<Filters>) => { setFilters((current) => ({ ...current, ...next })); setPage(1) }
+  const hasActiveFilters = Boolean(
+    keywordDraft.trim() || filters.keyword || filters.vendorId !== undefined || filters.typeId !== undefined
+    || filters.status || filters.sendStatus || filters.dateRange || filters.includeClosed || filters.sendQueue,
+  )
+  const resetFilters = () => {
+    setKeywordDraft('')
+    setFilters({ keyword: '', includeClosed: false, sendQueue: false })
+    setSelected([])
+    setPage(1)
+  }
   const queueParam = searchParams.get('sendQueue') === '1'
   useEffect(() => {
     if (!queueParam) return
@@ -333,7 +344,7 @@ export default function OutsourceListPage() {
     return { ...data, rows: data.rows.map((row) => ({ ...row, status: row.status as ImportRowOutcome['status'] })) }
   }
 
-  const date = (value?: string | null) => value ?? ''
+  const date = (value?: string | null) => value || '-'
   // Built-in columns by key; their titles, order and presence come from the field settings (外协清单契约 → 栏位设定).
   const builtIn: Record<string, Partial<TableColumnProps<Item>>> = {
     files: {
@@ -346,19 +357,19 @@ export default function OutsourceListPage() {
     electricalHandoff: {
       width: 150, align: 'center',
       render: (_, item) => item.electricalHandoff
-        ? <Tooltip content={`签名：${item.electricalHandoffSigner ?? '—'}　时间：${fmtTime(item.electricalHandoffAt)}`}><span tabIndex={0}>是</span></Tooltip>
+        ? <Tooltip content={`签名：${item.electricalHandoffSigner ?? '-'}　时间：${fmtTime(item.electricalHandoffAt)}`}><span tabIndex={0}>是</span></Tooltip>
         : '否',
     },
     workOrderNo: { dataIndex: 'workOrderNo', width: 110 },
     customer: {
       dataIndex: 'customer', width: 150, ellipsis: true,
       render: (_, item) => item.customerFullName && item.customerFullName !== item.customer
-        ? <Tooltip content={item.customerFullName}><span>{item.customer}</span></Tooltip> : item.customer,
+        ? <Tooltip content={item.customerFullName}><span className="table-cell-text">{item.customer}</span></Tooltip> : (item.customer || '-'),
     },
     machineModel: { dataIndex: 'machineModel', width: 120, ellipsis: true },
     type: {
       width: 200, render: (_, item) => <Space size={4}>
-        <span>{item.typeLabel ?? item.typeCode ?? ''}</span>
+        <span>{item.typeLabel ?? item.typeCode ?? '-'}</span>
         {MATCH_PROBLEM[item.matchState] && <Tooltip content={MATCH_PROBLEM[item.matchState]}><Tag size="small" color="orangered">不符</Tag></Tooltip>}
       </Space>,
     },
@@ -384,11 +395,20 @@ export default function OutsourceListPage() {
     return {
       ...column,
       render: (value: unknown, item: Item, index: number) => {
-        const content = base.render ? base.render(value, item, index) : (value ?? '')
-        if (field.key === 'electricalHandoff' && item.electricalHandoff) {
+        const raw = base.render ? base.render(value, item, index) : value
+        const content = raw === null || raw === undefined || raw === '' ? '-' : raw
+        const changed = Boolean(item.changedFields?.includes(field.key))
+        const handedOff = field.key === 'electricalHandoff' && item.electricalHandoff
+        if (changed && handedOff) {
+          return { children: content, props: { className: 'outsource-cell-changed outsource-cell-handed-off outsource-cell-handed-off--changed' } }
+        }
+        if (changed) {
+          return { children: content, props: { className: 'outsource-cell-changed' } }
+        }
+        if (handedOff) {
           return { children: content, props: { className: 'outsource-cell-handed-off' } }
         }
-        return item.changedFields?.includes(field.key) ? { children: content, props: { className: 'outsource-cell-changed' } } : content
+        return content
       },
     }
   })
@@ -403,10 +423,10 @@ export default function OutsourceListPage() {
         {item.closed && <Tag color="gray">已完成</Tag>}
       </Space>,
     },
-    { title: '导入人', dataIndex: 'importedBy', width: 100, ellipsis: true },
-    { title: '导入时间', width: 130, render: (_, item) => item.importedAt ? fmtTime(item.importedAt).slice(0, 16) : '' },
-    { title: '修改人', dataIndex: 'modifiedBy', width: 100, ellipsis: true },
-    { title: '修改时间', width: 130, render: (_, item) => item.modifiedAt ? fmtTime(item.modifiedAt).slice(0, 16) : '' },
+    { title: '导入人', dataIndex: 'importedBy', width: 100, ellipsis: true, render: (value: string | null) => value || '-' },
+    { title: '导入时间', width: 130, render: (_, item) => item.importedAt ? fmtTime(item.importedAt).slice(0, 16) : '-' },
+    { title: '修改人', dataIndex: 'modifiedBy', width: 100, ellipsis: true, render: (value: string | null) => value || '-' },
+    { title: '修改时间', width: 130, render: (_, item) => item.modifiedAt ? fmtTime(item.modifiedAt).slice(0, 16) : '-' },
     {
       title: '操作', width: editable.length > 0 ? 80 : 56, align: 'center', fixed: 'right',
       render: (_, item) => <Space size={0}>
@@ -443,6 +463,7 @@ export default function OutsourceListPage() {
           value={filters.dateRange} onChange={(value) => changeFilters({ dateRange: value?.length === 2 ? [value[0], value[1]] : undefined })} />
         <Checkbox checked={filters.includeClosed} onChange={(value) => changeFilters({ includeClosed: value })}>显示已完成</Checkbox>
         {canSend && <Checkbox checked={filters.sendQueue} onChange={(value) => changeFilters({ sendQueue: value })}>待发送</Checkbox>}
+        {hasActiveFilters && <Button onClick={resetFilters}>重置筛选</Button>}
       </Space>
       <Space wrap>
         {canManage && closedSelected > 0 && <Button onClick={() => void setCompletion(false)}>重新开启 ({closedSelected})</Button>}
@@ -458,20 +479,20 @@ export default function OutsourceListPage() {
           <Button icon={<IconCheckCircle />}>标记完成</Button>
         </Popconfirm>}
         {canManage && selected.length > 0 && (
-          <Popconfirm title={[
+          <DangerPopconfirm title={[
             sentSelected > 0 ? `所选含 ${sentSelected} 条已发送给厂商的记录，删除后不会通知厂商` : '',
             closedSelected > 0 ? `所选含 ${closedSelected} 条已完成记录` : '',
             `确定删除所选 ${selected.length} 条？删除后无法恢复。`,
           ].filter(Boolean).join('；')} onOk={removeSelected}>
             <Button status="danger">删除</Button>
-          </Popconfirm>
+          </DangerPopconfirm>
         )}
         {syncStatus && <SyncBadge status={syncStatus} />}
         {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running || (selected.length > 0 && openSelected.length === 0)}
           onClick={() => void syncNow()}>{openSelected.length > 0 ? `同步所选 (${openSelected.length})` : '立即同步'}</Button>}
         <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
         {canDateImport && <Button icon={<IconUpload />} onClick={() => setDateImportOpen(true)}>导入BOM/发图</Button>}
-        {canManage && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>汇入</Button>}
+        {canManage && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>导入</Button>}
       </Space>
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
@@ -568,7 +589,8 @@ function EditDialog({ item, vendors, types, fields, onClose, onSaved }: {
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
   }
   return <Modal className="form-dialog" title={item ? `编辑工令 ${item.workOrderNo}` : '编辑'} visible={item !== null} onOk={() => void save()}
-    onCancel={() => { if (!saving) onClose() }} confirmLoading={saving} closable={!saving} maskClosable={!saving} okText="保存" cancelText="取消" unmountOnExit>
+    onCancel={() => { if (!saving) onClose() }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
+    cancelButtonProps={{ disabled: saving }} okText="保存" cancelText="取消" unmountOnExit>
     <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
       {can('type') && <Form.Item field="typeId" label="外发类型" rules={[{ required: true, message: '请选择外发类型' }]}
         extra={item && item.typeId == null ? '当前外发类型不在字典中，请重新选择' : undefined}>
@@ -623,9 +645,10 @@ function BatchDialog({ visible, items, vendors, types, fields, onClose, onSaved 
     } catch { /* 统一请求层提示，保留输入 */ } finally { setSaving(false) }
   }
   return <Modal className="form-dialog" title={`批量修改 ${items.length} 条记录`} visible={visible} onOk={() => void save()}
-    okButtonProps={{ disabled: nothing }} onCancel={() => { if (!saving) { reset(); onClose() } }} confirmLoading={saving}
-    okText="保存" cancelText="取消">
-    <Form layout="vertical" disabled={saving}>
+    okButtonProps={{ disabled: nothing }} cancelButtonProps={{ disabled: saving }}
+    onCancel={() => { if (!saving) { reset(); onClose() } }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
+    okText="保存" cancelText="取消" unmountOnExit>
+    <Form layout="vertical" disabled={saving} onSubmit={() => void save()}>
       {can('type') && <Form.Item label="外发类型"><Select aria-label="外发类型" allowClear placeholder="不修改" value={typeId}
         onChange={(value: number | undefined) => {
           setTypeId(value)
@@ -646,6 +669,7 @@ function BatchDialog({ visible, items, vendors, types, fields, onClose, onSaved 
         <CustomInput field={field} placeholder="不修改" value={customValues[field.key]}
           onChange={(value) => setCustomValues((current) => ({ ...current, [field.key]: value }))} />
       </Form.Item>)}
+      <EnterSubmit />
     </Form>
   </Modal>
 }

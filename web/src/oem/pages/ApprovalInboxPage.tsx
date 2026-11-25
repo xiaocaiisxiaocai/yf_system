@@ -37,7 +37,7 @@ export default function ApprovalInboxPage() {
   const rows: PendingTask[] = approvals.data?.list ?? []
   const approvalColumns = useMemo(() => [
     {
-      key: 'title', title: '传递单', dataIndex: 'title',
+      key: 'title', title: '传递单', dataIndex: 'title', align: 'left' as const,
       render: (value: string, row: PendingTask) => (
         <Link className="table-link" to={`${base}/transfers/${row.transferId}`} onClick={(event) => event.stopPropagation()}>{value}</Link>
       ),
@@ -55,11 +55,13 @@ export default function ApprovalInboxPage() {
 
   return (
     <Card className="page-card page-card--table" title={<h1 className="visually-hidden">待我审批</h1>}>
-      <div className="page-toolbar responsive-toolbar">
-        <Space wrap>
-          {switcher}
-        </Space>
-      </div>
+      {switcher && (
+        <div className="page-toolbar responsive-toolbar">
+          <Space wrap>
+            {switcher}
+          </Space>
+        </div>
+      )}
       {approvals.isError && (
         <Alert type="error" style={{ marginBottom: 12 }}
           content={oemRequestError(approvals.error, '待审批列表加载失败，请重试')}

@@ -40,7 +40,7 @@ export default function BlockedRecoveryPage() {
   })
   const rows: TransferSummary[] = blocked.data?.list ?? []
   const recoveryColumns = useMemo(() => [
-    { key: 'title', title: '传递单', dataIndex: 'title', render: (value: string) => <Typography.Text bold>{value}</Typography.Text> },
+    { key: 'title', title: '传递单', dataIndex: 'title', align: 'left' as const, render: (value: string) => <Typography.Text bold>{value}</Typography.Text> },
     { key: 'companyName', title: '目标厂商', dataIndex: 'companyName' },
     { key: 'sender', title: '发送人', render: (_: unknown, row: TransferSummary) => `${row.sender.realName}（${row.sender.employeeNo}）` },
     {
@@ -58,11 +58,13 @@ export default function BlockedRecoveryPage() {
 
   return (
     <Card className="page-card page-card--table" title={<h1 className="visually-hidden">审批异常</h1>}>
-      <div className="page-toolbar responsive-toolbar">
-        <Space wrap>
-          {switcher}
-        </Space>
-      </div>
+      {switcher && (
+        <div className="page-toolbar responsive-toolbar">
+          <Space wrap>
+            {switcher}
+          </Space>
+        </div>
+      )}
       <Alert
         type="info"
         content="这里只显示尚未发布且审批出现异常的传递单。处置管理员可以终止传递，不能代替审批人通过，也不能读取附件内容。"

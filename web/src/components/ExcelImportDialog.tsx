@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react'
-import { Alert, Button, Message, Modal, Space, Typography } from '@arco-design/web-react'
+import { Alert, Button, Message, Modal, Space, Tag, Typography } from '@arco-design/web-react'
 import ResizableTable from './ResizableTable'
 import { downloadExcelWorkbook, readExcelTable, type ExcelImportRow, type ExcelWorkbookSheet } from '../utils/excelWorkbook'
 
@@ -57,6 +57,14 @@ const STATUS_LABEL: Record<ImportPreviewStatus, string> = {
   INVALID: '有错误',
   CREATED: '已导入',
   FAILED: '失败',
+}
+
+const STATUS_COLOR: Record<ImportPreviewStatus, string> = {
+  READY: 'arcoblue',
+  SKIPPED: 'gray',
+  INVALID: 'red',
+  CREATED: 'green',
+  FAILED: 'red',
 }
 
 export default function ExcelImportDialog<T>({
@@ -201,8 +209,17 @@ export default function ExcelImportDialog<T>({
     >
       <Space wrap style={{ marginBottom: 12 }}>
         <Button size="small" onClick={() => void downloadTemplate()}>下载模板</Button>
-        <Button size="small" loading={parsing} disabled={saving || parsing} onClick={() => inputRef.current?.click()}>
-          {fileName || '选择 .xlsx 文件'}
+        <Button
+          size="small"
+          loading={parsing}
+          disabled={saving || parsing}
+          title={fileName || undefined}
+          style={{ display: 'inline-flex', alignItems: 'center', maxWidth: 'min(360px, 100%)' }}
+          onClick={() => inputRef.current?.click()}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+            {fileName || '选择 .xlsx 文件'}
+          </span>
         </Button>
         {prepared && !saving && <Button size="small" type="text" onClick={reset}>重新选择</Button>}
       </Space>
@@ -238,7 +255,7 @@ export default function ExcelImportDialog<T>({
               { title: 'Excel 行', dataIndex: 'rowNumber', width: 72 },
               { title: keyTitle, dataIndex: 'key', width: 180, ellipsis: true },
               { title: '内容', dataIndex: 'detail', width: 200, ellipsis: true },
-              { title: '结果', dataIndex: 'status', width: 90, render: (value: ImportPreviewStatus) => STATUS_LABEL[value] ?? value },
+              { title: '结果', dataIndex: 'status', width: 90, render: (value: ImportPreviewStatus) => <Tag color={STATUS_COLOR[value]}>{STATUS_LABEL[value] ?? value}</Tag> },
               { title: '说明', dataIndex: 'message', ellipsis: true },
             ]}
           />

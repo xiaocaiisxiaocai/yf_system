@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Button, Drawer, Form, Input, Message, Modal, Popconfirm, Select } from '@arco-design/web-react'
+import { Button, Drawer, Form, Input, Message, Modal, Select } from '@arco-design/web-react'
 import { useNavigate } from 'react-router-dom'
 import { isAxiosError } from 'axios'
 import http from '../../api/client'
 import { isVersionConflict } from '../../api/versionConflict'
 import { createProjectCopyJob, unwrapCopyJob } from '../../api/copyJobs'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import ProjectCopyJobsPanel from '../../components/project-copy-jobs/ProjectCopyJobsPanel'
 import EnterSubmit from '../../components/EnterSubmit'
 import { useProjectCopyJobs } from '../../hooks/useProjectCopyJobs'
@@ -180,9 +181,9 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
       )}
       {showCopyJobs && <Button size="small" onClick={() => setCopyJobsOpen(true)}>复制任务</Button>}
       {project.canDelete && (
-        <Popconfirm title={`确认删除项目“${project.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={remove}>
+        <DangerPopconfirm title={`确认删除项目“${project.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={remove}>
           <Button size="small" status="danger">删除</Button>
-        </Popconfirm>
+        </DangerPopconfirm>
       )}
 
       <ProjectFormModal
@@ -207,7 +208,7 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
         okButtonProps={{ disabled: !transferTarget }}
         unmountOnExit
       >
-        <Form layout="vertical">
+        <Form layout="vertical" onSubmit={() => void submitTransfer()}>
           <Form.Item label="当前负责人"><Input readOnly value={responsible} /></Form.Item>
           <Form.Item label="新负责人" required>
             <Select
@@ -227,6 +228,7 @@ export default function ProjectManageActions({ project, onChanged }: Props) {
               ))}
             </Select>
           </Form.Item>
+          <EnterSubmit />
         </Form>
       </Modal>
 

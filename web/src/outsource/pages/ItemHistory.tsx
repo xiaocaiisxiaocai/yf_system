@@ -44,8 +44,8 @@ export function ItemHistoryDrawer({ item, onClose }: { item: { id: number; workO
   const columns: TableColumnProps<Change>[] = [
     { title: '时间', width: 160, render: (_, change) => fmtTime(change.changedAt) },
     { title: '字段', dataIndex: 'label', width: 100 },
-    { title: '原值', dataIndex: 'oldValue', width: 130, ellipsis: true, render: (value: string | null) => value ?? '—' },
-    { title: '新值', dataIndex: 'newValue', width: 130, ellipsis: true, render: (value: string | null) => value ?? '—' },
+    { title: '原值', dataIndex: 'oldValue', width: 130, align: 'left', ellipsis: true, render: (value: string | null) => value || '-' },
+    { title: '新值', dataIndex: 'newValue', width: 130, align: 'left', ellipsis: true, render: (value: string | null) => value || '-' },
     {
       title: '来源', width: 120,
       render: (_, change) => <Tag color={SOURCE[change.source]?.color}>{SOURCE[change.source]?.label ?? change.source}</Tag>,
@@ -53,12 +53,12 @@ export function ItemHistoryDrawer({ item, onClose }: { item: { id: number; workO
     {
       title: '操作人', width: 120, ellipsis: true,
       // A vendor change is signed with the person's name (the shared vendor login is not a person).
-      render: (_, change) => change.source === 'VENDOR' ? `厂商签名：${change.signerName ?? '—'}` : change.actorName ?? '—',
+      render: (_, change) => change.source === 'VENDOR' ? `厂商签名：${change.signerName || '-'}` : change.actorName || '-',
     },
   ]
   return <Drawer width={820} title={item ? `工令 ${item.workOrderNo} · 变更履历` : '变更履历'} visible={item !== null}
     footer={null} onCancel={onClose} unmountOnExit>
-    {error ? <LoadError message="履历加载失败" onRetry={retry} /> : <ResizableTable<Change> tableId="outsource-item-history" rowKey="id" loading={changes === null} data={changes ?? []}
+    {error ? <LoadError message="履历加载失败" onRetry={retry} /> : <ResizableTable<Change> tableId="outsource-item-history" size="small" rowKey="id" loading={changes === null} data={changes ?? []}
       columns={columns} pagination={false} scroll={{ x: 760 }} noDataElement={<Empty description="暂无变更" />} />}
   </Drawer>
 }
@@ -69,9 +69,9 @@ function DueHistory({ itemId, originalDueDate }: { itemId: number; originalDueDa
   if (changes === null) return <Spin size={16} />
   const due = changes.filter((change) => change.field === 'latestDueDate').reverse()
   return <ol className="outsource-due-history">
-    <li><span>{originalDueDate ?? '—'}</span><span className="outsource-due-history-note">原始交期</span></li>
+    <li><span>{originalDueDate || '-'}</span><span className="outsource-due-history-note">原始交期</span></li>
     {due.map((change) => <li key={change.id}>
-      <span>{change.newValue ?? '—'}</span>
+      <span>{change.newValue || '-'}</span>
       <span className="outsource-due-history-note">{fmtTime(change.changedAt).slice(5, 16)} {SOURCE[change.source]?.label ?? change.source}</span>
     </li>)}
   </ol>
@@ -80,8 +80,8 @@ function DueHistory({ itemId, originalDueDate }: { itemId: number; originalDueDa
 /** The latest due date; when it differs from the original, it is highlighted and shows its history on hover. */
 export function LatestDueCell({ item }: { item: { id: number; originalDueDate?: string | null; latestDueDate?: string | null } }) {
   const changed = (item.originalDueDate ?? null) !== (item.latestDueDate ?? null)
-  if (!changed) return <span>{item.latestDueDate ?? ''}</span>
-  return <Popover title="交期变更" trigger={['hover', 'focus']} content={<DueHistory itemId={item.id} originalDueDate={item.originalDueDate} />}>
-    <span className="outsource-due-changed" tabIndex={0}>{item.latestDueDate ?? '—'}</span>
+  if (!changed) return <span>{item.latestDueDate || '-'}</span>
+  return <Popover title="交期变更" trigger={['hover', 'focus', 'click']} content={<DueHistory itemId={item.id} originalDueDate={item.originalDueDate} />}>
+    <span className="outsource-due-changed" tabIndex={0}>{item.latestDueDate || '-'}</span>
   </Popover>
 }
