@@ -2265,6 +2265,25 @@ export interface UploadedChunkDigestResponse {
   sha256: string
 }
 
+export interface UserBatchFailure {
+  id: number
+  employeeNo: string | null
+  message: string
+}
+
+export interface UserBatchResponse {
+  succeeded: Array<number>
+  failed: Array<UserBatchFailure>
+}
+
+export interface UserBatchUpdate {
+  userIds: Array<number>
+  roleId?: number | null
+  departmentId?: number | null
+  networkScope?: string | null
+  status?: string | null
+}
+
 export interface UserBrief {
   id: number
   employeeNo: string
@@ -2369,6 +2388,7 @@ export interface ApiResponses {
   "GET /admin/user-role-options": Array<RoleOption>
   "GET /admin/users": PageResponseOfUserResponse
   "POST /admin/users": UserResponse
+  "PUT /admin/users/batch": UserBatchResponse
   "POST /admin/users/import": AdminImportResponse
   "DELETE /admin/users/{id}": EmptyResponse
   "PUT /admin/users/{id}": UserResponse

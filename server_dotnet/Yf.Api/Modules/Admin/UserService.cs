@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Identity;
@@ -8,6 +9,9 @@ namespace Yf.Api.Modules.Admin;
 
 public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, PermissionService permissionCeiling, AuditService audit)
 {
+    // The individual profile and status endpoints currently share this permission.
+    private const string UserManagePermission = "user:manage";
+
     public async Task<PageResponse<UserResponse>> ListAsync(CurrentUser actor, ulong page, uint size, ulong offset, string? keyword, ulong? departmentId, string? status, CancellationToken ct)
     {
         AccessService.RequireInternal(actor);
@@ -271,13 +275,85 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             _ => throw ApiException.BadRequest("组织编号格式不正确")
         };
         var roleId = AdminValidation.OneRole(request.RoleId, request.RoleIds, false);
+        var changes = new UserChanges(roleId, departmentId, departmentSpecified, networkScope, request.RealName, request.Email, request.Scopes);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await ManagementAsync(context, actor, "user:manage", ct);
-        var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
+        await ManagementAsync(context, actor, UserManagePermission, ct);
         var user = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块维护");
-        await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
+        await EnsureManageUserAsync(context, actor, id, ct);
+        var updated = await UpdateUserAsync(context, actor, user, changes, null, ct);
+        var result = await JsonAsync(context, updated, ct);
+        await transaction.CommitAsync(ct);
+        return result;
+    }
+
+    public async Task<UserBatchResponse> BatchUpdateAsync(CurrentUser actor, UserBatchUpdate request, CancellationToken ct)
+    {
+        if (request.UserIds is not { Length: >= 1 and <= 100 })
+            throw ApiException.BadRequest("请选择 1 到 100 个账号");
+        var hasProfileChanges = request.RoleId is not null || request.DepartmentId is not null || request.NetworkScope is not null;
+        if (!hasProfileChanges && request.Status is null) throw ApiException.BadRequest("请提供要变更的字段");
+
+        await using (var context = await dbFactory.CreateDbContextAsync(ct))
+            await ManagementAuthorization.PrecheckAsync(context, actor, UserManagePermission, ct);
+
+        var changes = new UserChanges(
+            AdminValidation.OneRole(request.RoleId, null, false),
+            request.DepartmentId, request.DepartmentId.HasValue,
+            request.NetworkScope is null ? null : AccountNetworkAccess.ValidateScope(request.NetworkScope));
+        var status = request.Status is null ? null : AdminValidation.Status(request.Status);
+        var succeeded = new List<ulong>();
+        var failed = new List<UserBatchFailure>();
+        foreach (var id in request.UserIds.Distinct())
+        {
+            string? employeeNo = null;
+            try
+            {
+                await using var context = await dbFactory.CreateDbContextAsync(ct);
+                await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
+                await ManagementAsync(context, actor, UserManagePermission, ct);
+                var user = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
+                employeeNo = user.EmployeeNo;
+                if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("仅支持内部账号");
+                if (status == AccountStatuses.Disabled && id == actor.Id)
+                    throw ApiException.BadRequest("不能停用自己的账号");
+                await EnsureManageUserAsync(context, actor, id, ct);
+                if (status is not null && user.Status == status)
+                    throw ApiException.BadRequest(status == AccountStatuses.Active ? "账号已启用" : "账号已停用");
+
+                if (hasProfileChanges) await UpdateUserAsync(context, actor, user, changes, status, ct);
+                else await SetUserStatusAsync(context, actor, user, status!, ct);
+
+                await transaction.CommitAsync(ct);
+                succeeded.Add(id);
+            }
+            catch (ApiException error)
+            {
+                failed.Add(new(id, employeeNo, error.Message));
+            }
+            catch (Exception error) when (error is MySqlException { Number: 1205 or 1213 }
+                or DbUpdateException { InnerException: MySqlException { Number: 1205 or 1213 } }
+                or InvalidOperationException { InnerException: MySqlException { Number: 1205 or 1213 } })
+            {
+                failed.Add(new(id, employeeNo, ApiException.Busy().Message));
+            }
+        }
+        return new(succeeded.ToArray(), failed.ToArray());
+    }
+
+    private sealed record UserChanges(ulong RoleId, ulong? DepartmentId, bool DepartmentSpecified, string? NetworkScope,
+        string? RealName = null, string? Email = null, IReadOnlyList<DataScopeEntry>? Scopes = null);
+
+    private Task EnsureManageUserAsync(YfDbContext context, CurrentUser actor, ulong id, CancellationToken ct) =>
+        permissionCeiling.EnsureManageUserAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
+
+    private async Task<User> UpdateUserAsync(
+        YfDbContext context, CurrentUser actor, User user, UserChanges request, string? status, CancellationToken ct)
+    {
+        var id = user.Id;
+        var (roleId, departmentId, departmentSpecified, networkScope, _, _, _) = request;
+        var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
         // Range, role and organisation can change together, so the per-part checks below cannot see the combined
         // result; this baseline lets the final check compare the range the account really ends up with.
         var scopeSnapshot = await DataScopeCeiling.CaptureAsync(context, actor, [id], ct);
@@ -324,6 +400,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await EnsureAdminOemTransferScopeAsync(context, id, request.Scopes, ct);
             await ApplyUserScopeAssignmentAsync(context, actor, user, id, request.Scopes, ct);
         }
+        // A combined batch edit records the status change in the same USER_UPDATE audit.
+        if (status is not null) await ApplyStatusAsync(context, actor, user, status, ct);
         await DataScopeCeiling.EnsureAsync(context, scopeSnapshot, [id], DomainsOf(request.Scopes), ct);
         var updated = await FindAsync(context, id, ct) ?? throw ApiException.NotFound(); var newRoleId = roleChanged ? roleId : oldRoleId;
         var newRole = await FindRoleAsync(context, newRoleId, ct);
@@ -332,7 +410,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             new AuditChange("realName", "姓名", oldRealName, updated.RealName), new AuditChange("email", "邮箱", oldEmail, updated.Email),
             new AuditChange("networkScope", "访问范围", oldNetworkScope, updated.NetworkScope),
             new AuditChange("departmentId", "所属组织", DepartmentAuditJson(oldDepartment), DepartmentAuditJson(newDepartment)),
-            new AuditChange("roleId", "角色", RoleAuditJson(oldRole), RoleAuditJson(newRole)));
+            new AuditChange("roleId", "角色", RoleAuditJson(oldRole), RoleAuditJson(newRole)),
+            new AuditChange("status", "状态", user.Status, updated.Status));
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_UPDATE", "user", id, new
         {
             updated.EmployeeNo, changedFields = changes.Select(x => x.Field).ToArray(), oldDepartmentId = oldDepartmentIdForAudit,
@@ -340,7 +419,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             newDepartmentName = newDepartment?.Name, oldRoleName = oldRole?.Name, newRoleName = newRole?.Name,
             targetName = UserAuditName(updated), changes
         }, null, ct);
-        var result = await JsonAsync(context, updated, ct); await transaction.CommitAsync(ct); return result;
+        return updated;
     }
 
     public async Task<UserResponse> SetStatusAsync(CurrentUser actor, ulong id, string status, CancellationToken ct)
@@ -348,13 +427,33 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         status = AdminValidation.Status(status);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, ct);
-        await ManagementAsync(context, actor, "user:manage", ct);
+        await ManagementAsync(context, actor, UserManagePermission, ct);
         if (id == actor.Id) throw ApiException.BadRequest("不能停用自己的账号");
         var user = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (user.UserType != UserTypes.Internal) throw ApiException.BadRequest("供应商人员请在供应商模块维护");
-        var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
-        await permissionCeiling.EnsureManageUserAsync(connection, dbTransaction, actor, id, ct);
+        await EnsureManageUserAsync(context, actor, id, ct);
         if (user.Status == status) return await JsonAsync(context, user, ct);
+        await SetUserStatusAsync(context, actor, user, status, ct);
+        var result = await JsonAsync(context, await FindAsync(context, id, ct) ?? throw ApiException.NotFound(), ct);
+        await transaction.CommitAsync(ct);
+        return result;
+    }
+
+    private async Task SetUserStatusAsync(YfDbContext context, CurrentUser actor, User user, string status, CancellationToken ct)
+    {
+        var id = user.Id;
+        var connection = context.Database.Connection(); var dbTransaction = context.Database.RequireTransaction();
+        await ApplyStatusAsync(context, actor, user, status, ct);
+        await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_STATUS", "user", id, new
+        {
+            user.EmployeeNo, oldStatus = user.Status, newStatus = status, targetName = UserAuditName(user),
+            changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", user.Status, status))
+        }, null, ct);
+    }
+
+    private static async Task ApplyStatusAsync(YfDbContext context, CurrentUser actor, User user, string status, CancellationToken ct)
+    {
+        var id = user.Id;
         if (status == AccountStatuses.Disabled) { await EnsureNoActiveProjectResponsibilityAsync(context, id, ct); await EnsureAdminRemovalSafeAsync(context, actor.Id, id, null, ct); }
         else
         {
@@ -365,14 +464,8 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await EnsureRoleAssignableAsync(context, roleIds[0], ct);
         }
         await context.Users.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
-        if (status == AccountStatuses.Disabled) await IdentityService.RevokeAllAsync(connection, dbTransaction, id, RefreshRevokeReasons.Admin, ct);
-        await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_STATUS", "user", id, new
-        {
-            user.EmployeeNo, oldStatus = user.Status, newStatus = status, targetName = UserAuditName(user),
-            changes = AuditChange.OnlyChanged(new AuditChange("status", "状态", user.Status, status))
-        }, null, ct);
-        var result = await JsonAsync(context, await FindAsync(context, id, ct) ?? throw ApiException.NotFound(), ct);
-        await transaction.CommitAsync(ct); return result;
+        if (status == AccountStatuses.Disabled)
+            await IdentityService.RevokeAllAsync(context.Database.Connection(), context.Database.RequireTransaction(), id, RefreshRevokeReasons.Admin, ct);
     }
 
     public async Task ResetPasswordAsync(CurrentUser actor, ulong id, string password, CancellationToken ct)

@@ -23,6 +23,8 @@ public static class AdminModule
         admin.MapPost("/users", (UserCreate r, HttpContext c, UserService s, CancellationToken ct) => s.CreateAsync(AccessService.GetCurrent(c), r, ct));
         admin.MapPost("/users/import", (InternalUserImportRequest r, HttpContext c, AdminImportService s, CancellationToken ct) =>
             s.ImportInternalUsersAsync(AccessService.GetCurrent(c), r, ct)).Produces<AdminImportResponse>();
+        admin.MapPut("/users/batch", (UserBatchUpdate r, HttpContext c, UserService s, CancellationToken ct) =>
+            s.BatchUpdateAsync(AccessService.GetCurrent(c), r, ct));
         admin.MapPut("/users/{id:long}", (ulong id, UserUpdate r, HttpContext c, UserService s, CancellationToken ct) => s.UpdateAsync(AccessService.GetCurrent(c), id, r, ct));
         admin.MapPut("/users/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, UserService s, CancellationToken ct) => s.SetStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
         admin.MapPut("/users/{id:long}/password", async (ulong id, PasswordRequest r, HttpContext c, UserService s, CancellationToken ct) => { await s.ResetPasswordAsync(AccessService.GetCurrent(c), id, r.NewPassword, ct); return EmptyResponse.Instance; });

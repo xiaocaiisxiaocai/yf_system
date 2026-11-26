@@ -44,6 +44,14 @@ public sealed record UserUpdate(
     IReadOnlyList<ulong>? RoleIds = null,
     IReadOnlyList<DataScopeEntry>? Scopes = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NetworkScope = null);
+public sealed record UserBatchUpdate(
+    [property: JsonRequired] ulong[] UserIds,
+    ulong? RoleId = null,
+    ulong? DepartmentId = null,
+    string? NetworkScope = null,
+    string? Status = null);
+public sealed record UserBatchFailure(ulong Id, string? EmployeeNo, string Message);
+public sealed record UserBatchResponse(ulong[] Succeeded, UserBatchFailure[] Failed);
 public sealed record SupplierUpsert([property: JsonRequired] string Name, string? Remark);
 public sealed record SupplierAccountCreate(
     [property: JsonRequired] string EmployeeNo,

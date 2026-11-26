@@ -94,8 +94,8 @@ describe('系统参数与 SMTP 生产界面', () => {
     const user = userEvent.setup()
     renderConfig()
 
-    const networks = await screen.findByRole('textbox', { name: '內網網段' })
-    const hosts = screen.getByRole('textbox', { name: '外網訪問地址' })
+    const networks = await screen.findByRole('textbox', { name: '内网网段' })
+    const hosts = screen.getByRole('textbox', { name: '外网访问地址' })
     expect(networks).toHaveValue('10.0.0.0/8\n172.16.0.0/12\n::1')
     expect(hosts).toHaveValue('external.example.invalid:8090\n183.238.37.108:8090')
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
