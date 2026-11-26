@@ -68,7 +68,7 @@ public sealed class OutsourceSyncTests
 
         var vendor = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, type, ct, vendorIds: [vendor.Id]);
         foreach (var no in new[] { "A1", "B1", "C1", "D1", "E1" }) ipms.Add(no);
         var imported = await items.ImportAsync(buyer, new(new[] { "A1", "B1", "C1", "D1", "E1" }
             .Select((no, index) => new OutsourceImportRow(index + 2, "2026-11-04", no, "鼎亚", "OEMA")).ToArray()), ct);
@@ -186,7 +186,7 @@ public sealed class OutsourceSyncTests
         var vendor = await OutsourceTestVendors.CreateAsync(factory, "主管同步测试厂", ct);
         await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendor.Id, "vendor@example.invalid", ct);
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, type, ct, vendorIds: [vendor.Id]);
         string[] orders = ["DIFFERENT", "SAME", "CLEARED", "NO-LEADER"];
         foreach (var no in orders) ipms.Add(no);
         ipms.Orders["NO-LEADER"] = ipms.Orders["NO-LEADER"] with { MechanicalOwner = "未知人员" };
@@ -263,7 +263,7 @@ public sealed class OutsourceSyncTests
         var vendor = await OutsourceTestVendors.CreateAsync(factory, "旧快照测试厂", ct);
         await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendor.Id, "vendor@example.invalid", ct);
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, type, ct, vendorIds: [vendor.Id]);
         ipms.Add("LEGACY");
         ipms.Orders["LEGACY"] = ipms.Orders["LEGACY"] with { MechanicalOwner = "机构甲" };
         await items.ImportAsync(buyer, new([new OutsourceImportRow(2, "2026-11-04", "LEGACY", vendor.Name, "OEMA")]), ct);
@@ -317,7 +317,7 @@ public sealed class OutsourceSyncTests
         var sync = new OutsourceIpmsSyncService(factory, audit, ipms, new AppOptions(), NullLogger<OutsourceIpmsSyncService>.Instance);
         var vendor = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, type, ct, vendorIds: [vendor.Id]);
         ipms.Add("A1"); ipms.Add("B1");
         await items.ImportAsync(buyer, new([new(2, "2026-11-04", "A1", "鼎亚", "OEMA"), new(3, "2026-11-04", "B1", "鼎亚", "OEMA")]), ct);
         await database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT' WHERE work_order_no='B1'", ct);

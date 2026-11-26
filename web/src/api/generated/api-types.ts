@@ -1575,10 +1575,6 @@ export interface OutsourceTypeUpsert {
   status?: string | null
 }
 
-export interface OutsourceTypeVendorsRequest {
-  vendorIds?: Array<number> | null
-}
-
 export interface OutsourceVendorColumn {
   key: string
   title: string
@@ -2563,8 +2559,6 @@ export interface ApiResponses {
   "GET /outsource/settings/types": Array<OutsourceTypeResponse>
   "POST /outsource/settings/types": OutsourceTypeResponse
   "PUT /outsource/settings/types/{id}": OutsourceTypeResponse
-  "PUT /outsource/settings/types/{id}/status": OutsourceTypeResponse
-  "PUT /outsource/settings/types/{id}/vendors": OutsourceTypeResponse
   "GET /outsource/settings/vendor-emails": Array<OutsourceVendorEmailResponse>
   "POST /outsource/settings/vendor-emails": OutsourceVendorEmailResponse
   "POST /outsource/settings/vendor-emails/import": AdminImportResponse

@@ -80,7 +80,7 @@ public sealed class OutsourceMailTests
         await OutsourceTestVendors.AddOutsourceEmailAsync(factory, duopu.Id, "p1@vendor.invalid", ct);
         await OutsourceTestVendors.AddContactAsync(factory, dingya.Id, "ODM窗口", "odm@vendor.invalid", ct, sortNo: 1);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id, duopu.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [dingya.Id, duopu.Id]);
         await settings.SetDefaultCcAsync(buyer, new([
             new(9913, [OutsourceDefaultCcModules.Notice, OutsourceDefaultCcModules.ElectricalHandoff]),
             new(9914, [OutsourceDefaultCcModules.ElectricalHandoff])]), ct);
@@ -192,7 +192,7 @@ public sealed class OutsourceMailTests
         Assert.DoesNotContain((await mails.PreviewAsync(buyer, new([b.Id]), ct)).Mails, x => x.Kind == "WITHDRAW");
 
         // Items that would be refused by the type/vendor guard cannot be mailed.
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [dingya.Id]);
         var blocked = await Assert.ThrowsAsync<ApiException>(() => mails.PreviewAsync(buyer, new([Id("C1")]), ct));
         Assert.Contains("外发类型与厂商不符", blocked.Message, StringComparison.Ordinal);
     }
@@ -242,7 +242,7 @@ public sealed class OutsourceMailTests
         var vendor = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendor.Id, "d1@vendor.invalid", ct);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([vendor.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [vendor.Id]);
         ipms.Orders["S1"] = new("S1", "客户甲", "ST-201L", null, null, null, 1, new DateOnly(2026, 12, 31), false);
         await items.ImportAsync(buyer, new([new(2, "2026-11-04", "S1", "鼎亚", "OEMA")]), ct);
         var item = Assert.Single((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List);
@@ -304,7 +304,7 @@ public sealed class OutsourceMailTests
         await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendorA.Id, "a@vendor.invalid", ct);
         await OutsourceTestVendors.AddOutsourceEmailAsync(factory, vendorB.Id, "b@vendor.invalid", ct);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([vendorA.Id, vendorB.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [vendorA.Id, vendorB.Id]);
         ipms.Orders["R1"] = new("R1", "客户甲", "ST-201L", null, null, null, 1, new DateOnly(2026, 12, 31), false);
         await items.ImportAsync(buyer, new([new(2, "2026-11-04", "R1", "鼎亚", "OEMA")]), ct);
         var imported = Assert.Single((await items.ListAsync(buyer, Query(), 1, 20, 0, ct)).List);

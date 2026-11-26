@@ -98,9 +98,10 @@ public sealed class OemOutsourceViewTests
         const string itemsPath = "/api/v1/oem/outsource-items";
         var type = new { code = "HANDOFF", name = "电控设定", sortNo = 1 };
         var typeId = (await admin.PostAsync(typesPath, type, ct).Ok()).Id();
-        var inactiveTypeId = (await admin.PostAsync(typesPath,
-            new { code = "INACTIVE", name = "旧类型", sortNo = 2, allowElectricalHandoff = false }, ct).Ok()).Id();
-        await admin.PutAsync($"{typesPath}/{inactiveTypeId}/status", new { status = "DISABLED" }, ct).Ok();
+        var inactive = new { code = "INACTIVE", name = "旧类型", sortNo = 2, allowElectricalHandoff = false };
+        var inactiveTypeId = (await admin.PostAsync(typesPath, inactive, ct).Ok()).Id();
+        await admin.PutAsync($"{typesPath}/{inactiveTypeId}",
+            new { inactive.code, inactive.name, inactive.sortNo, status = "DISABLED" }, ct).Ok();
 
         await using (var conn = await host.OpenAsync(ct))
         {
@@ -183,8 +184,10 @@ public sealed class OemOutsourceViewTests
                 .Concat(new[] { handoffUser, disabledUser, blankEmailUser }
                     .Select(userId => new { userId, modules = new[] { "ELECTRICAL_HANDOFF" } })).ToArray(),
         }, ct).Ok();
-        var typeId = (await admin.PostAsync("/api/v1/outsource/settings/types", new { code = "OEMA", name = "进料+制造", sortNo = 1 }, ct).Ok()).Id();
-        await admin.PutAsync($"/api/v1/outsource/settings/types/{typeId}/vendors", new { vendorIds = new[] { company } }, ct).Ok();
+        var type = new { code = "OEMA", name = "进料+制造", sortNo = 1 };
+        var typeId = (await admin.PostAsync("/api/v1/outsource/settings/types", type, ct).Ok()).Id();
+        await admin.PutAsync($"/api/v1/outsource/settings/types/{typeId}",
+            new { type.code, type.name, type.sortNo, vendorIds = new[] { company } }, ct).Ok();
 
         ulong id, closedId, oemAccountId;
         await using (var conn = await host.OpenAsync(ct))

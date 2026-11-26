@@ -253,8 +253,6 @@
   "PUT /api/v1/outsource/settings/sync-schedule",
   "PUT /api/v1/outsource/settings/sync-time",
   "PUT /api/v1/outsource/settings/types/{}",
-  "PUT /api/v1/outsource/settings/types/{}/status",
-  "PUT /api/v1/outsource/settings/types/{}/vendors",
   "PUT /api/v1/project-dictionaries/{}",
   "PUT /api/v1/projects/{}",
   "PUT /api/v1/projects/{}/responsible",

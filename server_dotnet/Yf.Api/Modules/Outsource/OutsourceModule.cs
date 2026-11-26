@@ -65,10 +65,6 @@ public static class OutsourceModule
             s.CreateTypeAsync(AccessService.GetCurrent(c), r, ct));
         settings.MapPut("/types/{id:long}", (ulong id, OutsourceTypeUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.UpdateTypeAsync(AccessService.GetCurrent(c), id, r, ct));
-        settings.MapPut("/types/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.SetTypeStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
-        settings.MapPut("/types/{id:long}/vendors", (ulong id, OutsourceTypeVendorsRequest r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
-            s.SetTypeVendorsAsync(AccessService.GetCurrent(c), id, r, ct));
 
         settings.MapGet("/default-cc", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.DefaultCcAsync(AccessService.GetCurrent(c), ct));

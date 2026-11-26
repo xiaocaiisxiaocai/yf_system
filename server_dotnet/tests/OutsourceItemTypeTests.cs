@@ -62,8 +62,8 @@ public sealed class OutsourceItemTypeTests
         var yuankong = await OutsourceTestVendors.CreateAsync(factory, "元控", ct);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         var odm = await settings.CreateTypeAsync(buyer, new("ODM-12345", "含售前售后", 2), ct);
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);
-        await settings.SetTypeVendorsAsync(buyer, odm.Id, new([yuankong.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [dingya.Id]);
+        await settings.UpdateTypeSettingsAsync(buyer, odm, ct, vendorIds: [yuankong.Id]);
         return new(database, items, settings, ipms, sync, planner, buyer, dingya, yuankong, oema, odm);
     }
 
@@ -202,7 +202,7 @@ public sealed class OutsourceItemTypeTests
     }
 
     [Fact(Timeout = 180_000)]
-    public async Task TypeUpsertsOnlyAllowRetainingDisabledVendorsAndStandaloneEndpointsKeepTheirContract()
+    public async Task TypeUpsertsAllowRetainingDisabledVendorsButRejectAddingThemBack()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var host = await OemTestHost.StartAsync(ct);
@@ -228,13 +228,15 @@ public sealed class OutsourceItemTypeTests
         Assert.Equal([second], VendorIds(removed));
         Assert.True(JsonNode.DeepEquals(removed, listed));
 
-        var mapped = await admin.PutAsync($"{typePath}/vendors", new { original.vendorIds }, ct).Ok();
+        await admin.PutAsync($"{companies}/{first}/status", new { status = "ACTIVE" }, ct).Ok();
+        var mapped = await admin.PutAsync(typePath, original, ct).Ok();
         Assert.Equal([first], VendorIds(mapped));
-        await admin.PutAsync($"{typePath}/vendors", new { vendorIds = new[] { second, 999_999UL } }, ct).Status(HttpStatusCode.BadRequest);
-        var disabled = await admin.PutAsync($"{typePath}/status", new { status = "DISABLED" }, ct).Ok();
+        await admin.PutAsync(typePath, new { original.code, original.name, vendorIds = new[] { second, 999_999UL } }, ct)
+            .Status(HttpStatusCode.BadRequest);
+        var disabled = await admin.PutAsync(typePath, new { original.code, original.name, status = "DISABLED" }, ct).Ok();
         Assert.Equal("DISABLED", disabled["status"]!.GetValue<string>());
         Assert.Equal([first], VendorIds(disabled));
-        var cleared = await admin.PutAsync($"{typePath}/vendors", new { vendorIds = (ulong[]?)null }, ct).Ok();
+        var cleared = await admin.PutAsync(typePath, new { original.code, original.name, vendorIds = Array.Empty<ulong>() }, ct).Ok();
         Assert.Empty(VendorIds(cleared));
         Assert.Equal("DISABLED", cleared["status"]!.GetValue<string>());
     }
@@ -246,8 +248,7 @@ public sealed class OutsourceItemTypeTests
         var f = await CreateAsync("outsource_type_import", ct);
         await using var _ = f.Database;
         var old = await f.Settings.CreateTypeAsync(f.Buyer, new("OLD", "停用类型", 3), ct);
-        await f.Settings.SetTypeVendorsAsync(f.Buyer, old.Id, new([f.Dingya.Id]), ct);
-        await f.Settings.SetTypeStatusAsync(f.Buyer, old.Id, AccountStatuses.Disabled, ct);
+        await f.Settings.UpdateTypeSettingsAsync(f.Buyer, old, ct, vendorIds: [f.Dingya.Id], status: AccountStatuses.Disabled);
         foreach (var no in new[] { "W1", "W2", "W3", "W4", "W5", "W6", "W7" }) f.Ipms.Add(no);
         var request = Request(
             ("W1", "鼎亚", "OEMA"), ("W2", "鼎亚", "oema【进料+制造】"), ("W3", "鼎亚", "  "), ("W4", "鼎亚", "ZZZ"),
@@ -504,7 +505,7 @@ public sealed class OutsourceItemTypeTests
     private static async Task<OutsourceTypeResponse> NewTypeAsync(Fixture f, string code, OutsourceTestVendors.Vendor vendor, CancellationToken ct)
     {
         var type = await f.Settings.CreateTypeAsync(f.Buyer, new(code, "测试类型", 9), ct);
-        await f.Settings.SetTypeVendorsAsync(f.Buyer, type.Id, new([vendor.Id]), ct);
+        await f.Settings.UpdateTypeSettingsAsync(f.Buyer, type, ct, vendorIds: [vendor.Id]);
         return type;
     }
 
@@ -593,7 +594,7 @@ public sealed class OutsourceItemTypeTests
         await using var _ = f.Database;
         var item = await ImportOneAsync(f, "W1", "鼎亚", "OEMA", ct);
         var oemb = await NewTypeAsync(f, "OEMB", f.Dingya, ct);
-        await f.Settings.SetTypeStatusAsync(f.Buyer, f.Oema.Id, AccountStatuses.Disabled, ct);
+        await f.Settings.UpdateTypeSettingsAsync(f.Buyer, f.Oema, ct, status: AccountStatuses.Disabled);
         var current = (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single();
         Assert.Equal(OutsourceMatchStates.UnknownType, current.MatchState);
 
