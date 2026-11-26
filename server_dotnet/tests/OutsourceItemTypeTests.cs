@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text.Json.Nodes;
 using Dapper;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -102,6 +103,140 @@ public sealed class OutsourceItemTypeTests
             .Where(change => change!["field"]!.GetValue<string>() == "allowElectricalHandoff")
             .Select(change => (audit.Action, change!["before"]?.GetValue<bool>(), change["after"]?.GetValue<bool>())));
         Assert.Equal([("OUTSOURCE_TYPE_CREATE", (bool?)null, (bool?)true), ("OUTSOURCE_TYPE_UPDATE", (bool?)true, (bool?)false)], changes);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task TypeUpsertsSaveFieldsVendorsAndStatusAtomicallyAndAuditTheChanges()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        var dingya = (await admin.PostAsync("/api/v1/oem/companies", new { name = "鼎亚" }, ct).Ok()).Id();
+        var yuankong = (await admin.PostAsync("/api/v1/oem/companies", new { name = "元控" }, ct).Ok()).Id();
+        const string path = "/api/v1/outsource/settings/types";
+        const ulong missingVendor = 999_999UL;
+        const string typeCode = "COMPOSITE";
+
+        var rejectedCreate = await admin.PostAsync(path,
+            new { code = typeCode, name = "原名称", sortNo = 1, vendorIds = new[] { dingya, missingVendor } }, ct)
+            .Status(HttpStatusCode.BadRequest);
+        Assert.Equal("所选厂商不存在", rejectedCreate.Json?["message"]?.GetValue<string>());
+        Assert.DoesNotContain((await admin.GetAsync(path, ct).Ok()).AsArray(), row => row?["code"]?.GetValue<string>() == typeCode);
+
+        var created = await admin.PostAsync(path,
+            new { code = typeCode, name = "原名称", sortNo = 1, vendorIds = new[] { dingya, dingya } }, ct).Ok();
+        var id = created.Id();
+        Assert.Equal("ACTIVE", created["status"]?.GetValue<string>());
+        Assert.Equal([dingya], VendorIds(created));
+
+        var updatePath = $"{path}/{id}";
+        var rejectedUpdate = await admin.PutAsync(updatePath, new
+        {
+            code = "ROLLBACK", name = "回滚名称", sortNo = 9, allowElectricalHandoff = false,
+            vendorIds = new[] { yuankong, missingVendor }, status = "DISABLED",
+        }, ct).Status(HttpStatusCode.BadRequest);
+        Assert.Equal("所选厂商不存在", rejectedUpdate.Json?["message"]?.GetValue<string>());
+        var afterRejection = Assert.Single((await admin.GetAsync(path, ct).Ok()).AsArray(), row => row!.Id() == id);
+        Assert.True(JsonNode.DeepEquals(created, afterRejection));
+
+        var updated = await admin.PutAsync(updatePath, new
+        {
+            code = typeCode, name = "新名称", sortNo = 2, allowElectricalHandoff = false,
+            vendorIds = new[] { yuankong }, status = "DISABLED",
+        }, ct).Ok();
+        Assert.Equal(("新名称", 2, false, "DISABLED"), (updated["name"]!.GetValue<string>(), updated["sortNo"]!.GetValue<int>(),
+            updated["allowElectricalHandoff"]!.GetValue<bool>(), updated["status"]!.GetValue<string>()));
+        Assert.Equal([yuankong], VendorIds(updated));
+
+        var preserved = await admin.PutAsync(updatePath, new
+        {
+            code = typeCode, name = "新名称", sortNo = 2, vendorIds = (ulong[]?)null, status = (string?)null,
+        }, ct).Ok();
+        Assert.True(JsonNode.DeepEquals(updated, preserved));
+        var cleared = await admin.PutAsync(updatePath,
+            new { code = typeCode, name = "新名称", sortNo = 2, vendorIds = Array.Empty<ulong>() }, ct).Ok();
+        Assert.Empty(VendorIds(cleared));
+        Assert.Equal("DISABLED", cleared["status"]?.GetValue<string>());
+
+        await using var connection = await host.OpenAsync(ct);
+        var audits = (await connection.QueryAsync<(string Action, string Detail)>("""
+            SELECT action,detail FROM audit_logs WHERE target_type='outsource_type' ORDER BY id
+            """)).ToArray();
+        Assert.Equal(["OUTSOURCE_TYPE_CREATE", "OUTSOURCE_TYPE_UPDATE", "OUTSOURCE_TYPE_UPDATE", "OUTSOURCE_TYPE_UPDATE"],
+            audits.Select(audit => audit.Action));
+        Assert.Equal(("", "鼎亚"), Change(audits[0].Detail, "vendors"));
+        Assert.Equal(("鼎亚", "元控"), Change(audits[1].Detail, "vendors"));
+        Assert.Equal(("ACTIVE", "DISABLED"), Change(audits[1].Detail, "status"));
+        Assert.Equal(("原名称", "新名称"), Change(audits[1].Detail, "name"));
+        Assert.Empty(JsonNode.Parse(audits[2].Detail)!["changes"]!.AsArray());
+        Assert.Equal(("元控", ""), Change(audits[3].Detail, "vendors"));
+
+        static (string Before, string After) Change(string detail, string field)
+        {
+            var change = Assert.Single(JsonNode.Parse(detail)!["changes"]!.AsArray(), item => item!["field"]!.GetValue<string>() == field)!;
+            return (change["before"]!.GetValue<string>(), change["after"]!.GetValue<string>());
+        }
+    }
+
+    private static IEnumerable<ulong> VendorIds(JsonNode row) => row["vendorIds"]!.AsArray().Select(item => item!.GetValue<ulong>());
+
+    [Fact(Timeout = 180_000)]
+    public async Task TypeUpsertsRejectDuplicateCodesAndInvalidStatusWithoutChangingTheType()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        const string path = "/api/v1/outsource/settings/types";
+        var original = new { code = "ORIGINAL", name = "原类型", vendorIds = (ulong[]?)null };
+        var taken = new { code = "TAKEN", name = "另一类型" };
+        var created = await admin.PostAsync(path, original, ct).Ok();
+        Assert.Empty(VendorIds(created));
+        var id = created.Id();
+        await admin.PostAsync(path, taken, ct).Ok();
+
+        await admin.PostAsync(path, original, ct).Status(HttpStatusCode.Conflict);
+        await admin.PutAsync($"{path}/{id}", new { taken.code, taken.name, status = "DISABLED" }, ct).Status(HttpStatusCode.Conflict);
+        await admin.PutAsync($"{path}/{id}", new { original.code, name = "不应保存", status = "disabled" }, ct).Status(HttpStatusCode.BadRequest);
+        var listed = Assert.Single((await admin.GetAsync(path, ct).Ok()).AsArray(), row => row!.Id() == id);
+        Assert.True(JsonNode.DeepEquals(created, listed));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task TypeUpsertsOnlyAllowRetainingDisabledVendorsAndStandaloneEndpointsKeepTheirContract()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var admin = await host.LoginAdminAsync(ct);
+        const string path = "/api/v1/outsource/settings/types";
+        const string companies = "/api/v1/oem/companies";
+        var first = (await admin.PostAsync(companies, new { name = "甲厂" }, ct).Ok()).Id();
+        var second = (await admin.PostAsync(companies, new { name = "乙厂" }, ct).Ok()).Id();
+        var original = new { code = "MAPPING", name = "厂商映射", vendorIds = new[] { first } };
+        var created = await admin.PostAsync(path, original, ct).Ok();
+        var typePath = $"{path}/{created.Id()}";
+        await admin.PutAsync($"{companies}/{first}/status", new { status = "DISABLED" }, ct).Ok();
+
+        var rejected = new { code = "REJECTED", original.name, original.vendorIds };
+        await admin.PostAsync(path, rejected, ct).Status(HttpStatusCode.BadRequest);
+        Assert.DoesNotContain((await admin.GetAsync(path, ct).Ok()).AsArray(), row => row!["code"]!.GetValue<string>() == rejected.code);
+        var retained = await admin.PutAsync(typePath, new { original.code, original.name, vendorIds = new[] { first, second } }, ct).Ok();
+        Assert.Equal(new[] { first, second }.Order(), VendorIds(retained));
+        var removed = await admin.PutAsync(typePath, new { original.code, original.name, vendorIds = new[] { second } }, ct).Ok();
+        await admin.PutAsync(typePath, new { original.code, name = "不应保存", original.vendorIds, status = "DISABLED" }, ct)
+            .Status(HttpStatusCode.BadRequest);
+        var listed = Assert.Single((await admin.GetAsync(path, ct).Ok()).AsArray(), row => row!.Id() == created.Id());
+        Assert.Equal([second], VendorIds(removed));
+        Assert.True(JsonNode.DeepEquals(removed, listed));
+
+        var mapped = await admin.PutAsync($"{typePath}/vendors", new { original.vendorIds }, ct).Ok();
+        Assert.Equal([first], VendorIds(mapped));
+        await admin.PutAsync($"{typePath}/vendors", new { vendorIds = new[] { second, 999_999UL } }, ct).Status(HttpStatusCode.BadRequest);
+        var disabled = await admin.PutAsync($"{typePath}/status", new { status = "DISABLED" }, ct).Ok();
+        Assert.Equal("DISABLED", disabled["status"]!.GetValue<string>());
+        Assert.Equal([first], VendorIds(disabled));
+        var cleared = await admin.PutAsync($"{typePath}/vendors", new { vendorIds = (ulong[]?)null }, ct).Ok();
+        Assert.Empty(VendorIds(cleared));
+        Assert.Equal("DISABLED", cleared["status"]!.GetValue<string>());
     }
 
     [Fact(Timeout = 180_000)]

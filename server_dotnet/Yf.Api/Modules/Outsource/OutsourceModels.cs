@@ -4,8 +4,13 @@ namespace Yf.Api.Modules.Outsource;
 
 
 
+public sealed record OutsourceTypeCreate(string? Code, string? Name, int? SortNo,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? AllowElectricalHandoff = null,
+    ulong[]? VendorIds = null);
+
 public sealed record OutsourceTypeUpsert(string? Code, string? Name, int? SortNo,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? AllowElectricalHandoff = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? AllowElectricalHandoff = null,
+    ulong[]? VendorIds = null, string? Status = null);
 
 public sealed record OutsourceTypeVendorsRequest(ulong[]? VendorIds);
 

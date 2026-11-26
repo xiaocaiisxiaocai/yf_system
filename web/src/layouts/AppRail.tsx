@@ -1,15 +1,15 @@
 import { useEffect } from 'react'
 import { Badge, Tooltip } from '@arco-design/web-react'
-import { IconList, IconRobot, IconSwap } from '@arco-design/web-react/icon'
+import { IconList, IconRobot } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import { refreshCollaborationSummary, useCollaboration } from '../store/collaboration'
-import { businessHomes } from './navigation'
+import { businessHomes, WORK_ORDER_TITLE } from './navigation'
 import { OUTSOURCE_PERMISSIONS } from '../outsource/outsourceNavigation'
-import { SEND_QUEUE_PATH, useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
+import { useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
 
-export type BusinessLine = 'collaboration' | 'oem' | 'outsource'
+export type BusinessLine = 'collaboration' | 'workOrder'
 
 const COLLABORATION_BADGE_POLL_MS = 60_000
 
@@ -30,9 +30,9 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
     user: state.user,
   })))
   const navigate = useNavigate()
-  const { collaboration: collaborationPath, oem: oemPath, outsource: outsourcePath } = businessHomes(grants)
+  const { collaboration: collaborationPath, workOrder: workOrderPath } = businessHomes(grants)
   // Outsourcing items waiting for a sender are counted on the rail from every section, not only inside outsourcing.
-  const canSend = Boolean(outsourcePath) && grants.user?.userType === 'INTERNAL' && grants.permissions.includes(OUTSOURCE_PERMISSIONS.send)
+  const canSend = Boolean(workOrderPath) && grants.permissions.includes(OUTSOURCE_PERMISSIONS.send)
   useSendQueuePolling(canSend)
   const queued = useSendQueue((state) => state.count)
 
@@ -73,11 +73,10 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
       key: 'collaboration' as const, label: 'Robot仿真协作', short: '仿真协作', icon: <IconRobot />,
       path: collaborationPath, badge: canUseCollaboration ? collaborationUnread : 0,
     }] : []),
-    ...(outsourcePath ? [{
-      key: 'outsource' as const, label: '外协清单', short: '外协清单', icon: <IconList />,
-      path: canSend && queued > 0 ? SEND_QUEUE_PATH : outsourcePath, badge: canSend ? queued : 0,
+    ...(workOrderPath ? [{
+      key: 'workOrder' as const, label: WORK_ORDER_TITLE, short: '工令协作', icon: <IconList />,
+      path: workOrderPath, badge: canSend ? queued : 0,
     }] : []),
-    ...(oemPath ? [{ key: 'oem' as const, label: 'ODM/OEMA 文件传递', short: 'ODM/OEMA', icon: <IconSwap />, path: oemPath, badge: 0 }] : []),
   ]
   if (lines.length === 0 || (lines.length === 1 && lines[0].key === active)) return null
   const go = (line: (typeof lines)[number]) => {

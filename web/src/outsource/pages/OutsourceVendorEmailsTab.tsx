@@ -26,8 +26,8 @@ const WORKBOOK: ExcelWorkbookSheet[] = [
   { name: '数据', headers: IMPORT_HEADERS, rows: [['示例厂商', 'example@example.com']] },
   { name: '说明', headers: ['说明'], rows: [
     ['一行一个邮箱；同一厂商有多个邮箱时，重复填写厂商名称。'],
-    ['厂商是 ODM/OEMA 厂商管理里已有的厂商，名称须与系统中的一致。'],
-    [`外协清单邮件寄给这里的邮箱，与 ODM/OEMA 联络人分开；只新增，已有的邮箱会跳过；每家厂商最多 ${MAXIMUM_PER_VENDOR} 个。`],
+    ['厂商名称须与“外协管理设定”中已有的厂商一致。'],
+    [`外发工令邮件寄给这里的邮箱，与 ODM/OEMA 联络人分开；只新增，已有的邮箱会跳过；每家厂商最多 ${MAXIMUM_PER_VENDOR} 个。`],
   ] },
 ]
 
@@ -214,7 +214,7 @@ export default function OutsourceVendorEmailsTab({ vendors }: { vendors: Vendor[
     </Modal>
     <ExcelImportDialog<ImportPayload> visible={importOpen} title="导入外协邮箱" templateName="外协邮箱导入模板.xlsx"
       requiredHeaders={IMPORT_HEADERS} templateSheets={WORKBOOK} keyTitle="邮箱" maxRows={500}
-      notice={<>按厂商名称新增外协邮箱，一行一个邮箱；厂商必须是 ODM/OEMA 厂商管理里已有且启用的厂商。厂商已有的邮箱和文件内重复的邮箱会跳过，不会覆盖；每家厂商最多 {MAXIMUM_PER_VENDOR} 个。最多 500 行。</>}
+      notice={<>按厂商名称新增外协邮箱，一行一个邮箱；厂商须已在“外协管理设定”中启用。厂商已有的邮箱和文件内重复的邮箱会跳过，不会覆盖；每家厂商最多 {MAXIMUM_PER_VENDOR} 个。最多 500 行。</>}
       prepare={prepareImport} commit={commitImport}
       onImported={() => { void load() }} onClose={() => setImportOpen(false)} />
   </>

@@ -46,7 +46,7 @@ export default function AdminLayout() {
   const items = collaborationPages({ menus, permissions, user })
   const hasMenus = items.length > 0
   const homes = businessHomes({ menus, permissions, user })
-  const hasNavigation = hasMenus || Boolean(homes.oem || homes.outsource)
+  const hasNavigation = hasMenus || Boolean(homes.workOrder)
   const canUseCollaboration = Boolean(
     token && menus.includes('project:list') && permissions.includes('project:list'),
   )

@@ -7,6 +7,7 @@ import AppRail from '../../layouts/AppRail'
 import OutsourceLayout from '../../outsource/OutsourceLayout'
 import OutsourceCustomersTab from '../../outsource/pages/OutsourceCustomersTab'
 import OutsourceSettingsPage from '../../outsource/pages/OutsourceSettingsPage'
+import OutsourceTypesTab from '../../outsource/pages/OutsourceTypesTab'
 import { useAuth } from '../../store/auth'
 
 function CurrentLocation() {
@@ -43,13 +44,13 @@ function mockSettings() {
   } as never))
 }
 
-describe('外协清单入口与设定', () => {
+describe('工令协作入口与外发工令设定', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
   })
 
-  it('每个内部员工都可从业务切换栏进入外协清单，不需要权限', async () => {
+  it('每个内部员工都可从业务切换栏进入外发工令，不需要权限', async () => {
     const user = userEvent.setup()
     setInternalSession([])
     render(
@@ -57,77 +58,161 @@ describe('外协清单入口与设定', () => {
         <Routes><Route path="*" element={<><AppRail active="collaboration" /><CurrentLocation /></>} /></Routes>
       </MemoryRouter>,
     )
-    expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '外协清单' }))
+    await user.click(screen.getByRole('button', { name: 'ODM/OEM工令协作' }))
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/items')
   })
 
-  it('厂商账号没有外协清单入口', () => {
+  it('厂商账号没有工令协作的内部入口', () => {
     setInternalSession(['outsource:settings'])
     useAuth.setState({ user: { ...useAuth.getState().user!, userType: 'SUPPLIER', supplierId: 3 } })
     render(<MemoryRouter><AppRail active="collaboration" /></MemoryRouter>)
-    expect(screen.queryByRole('button', { name: '外协清单' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'ODM/OEM工令协作' })).not.toBeInTheDocument()
   })
 
-  it('不再维护厂商，类型的可用厂商显示 ODM/OEMA 厂商名', async () => {
+  it('外发工令设定默认显示客户简称，仍加载默认抄送和邮箱所需厂商', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])
-    mockSettings()
+    const get = mockSettings()
     render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
 
-    expect(screen.queryByRole('tab', { name: '外协厂商' })).not.toBeInTheDocument()
-    const typeRow = (await screen.findByText('OEMA【进料+制造】')).closest('tr')!
-    expect(within(typeRow).getByText('鼎亚')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '外发工令设定' })).toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '外发类型' })).not.toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: '客户简称' })).toHaveAttribute('aria-selected', 'true')
+    expect(await screen.findByText(aliases[0].fullName)).toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: '默认抄送' }))
     expect(await screen.findByText('生管甲')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: '外协邮箱' }))
+    await user.click(screen.getByRole('combobox', { name: '选择厂商' }))
+    expect(await screen.findByRole('option', { name: '鼎亚' })).toBeInTheDocument()
+    expect(get).not.toHaveBeenCalledWith('/outsource/settings/types')
   })
 
-  it('外发类型默认允许转迅得电控，可在编辑时关闭，列表显示设定值', async () => {
+  it('新增外发类型时只列启用厂商，一次创建含所选厂商且默认允许转迅得电控', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])
     let savedTypes = [...types]
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-      data: url.endsWith('/types') ? savedTypes : [],
+      data: url.endsWith('/types') ? savedTypes : [...vendors, { id: 2, name: '旧厂商', status: 'DISABLED' }],
     } as never))
     const post = vi.spyOn(http, 'post').mockImplementation(async () => {
       const created = { ...types[0], id: 6, code: 'ENG', name: '工程', sortNo: 20 }
       savedTypes = [...savedTypes, created]
       return { data: created } as never
     })
-    const put = vi.spyOn(http, 'put').mockImplementation(async () => {
-      const updated = { ...types[0], allowElectricalHandoff: false }
-      savedTypes = savedTypes.map((type) => type.id === updated.id ? updated : type)
-      return { data: updated } as never
-    })
-    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+    const put = vi.spyOn(http, 'put').mockResolvedValue({ data: {} } as never)
+    render(<OutsourceTypesTab />)
 
     const original = within((await screen.findByText('OEMA【进料+制造】')).closest('tr')!)
     expect(screen.getByRole('columnheader', { name: /^转迅得电控/ })).toBeInTheDocument()
+    expect(original.getByText('鼎亚')).toBeInTheDocument()
     expect(original.getByText('是')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '新增外发类型' }))
     const create = within(await screen.findByRole('dialog', { name: '新增外发类型' }))
     expect(create.getByRole('switch', { name: '允许转迅得电控' })).toBeChecked()
+    expect(create.queryByRole('switch', { name: '状态' })).not.toBeInTheDocument()
+    expect(create.queryByRole('checkbox', { name: /旧厂商/ })).not.toBeInTheDocument()
     await user.type(create.getByRole('textbox', { name: '类型代码' }), 'ENG')
     await user.type(create.getByRole('textbox', { name: '中文名称' }), '工程')
+    await user.click(create.getByRole('checkbox', { name: '鼎亚' }))
     await user.click(create.getByRole('button', { name: '创建' }))
-    expect(post).toHaveBeenCalledWith('/outsource/settings/types', { code: 'ENG', name: '工程', sortNo: 20, allowElectricalHandoff: true })
-    expect(within((await screen.findByText('ENG【工程】')).closest('tr')!).getByText('是')).toBeInTheDocument()
+    expect(post).toHaveBeenCalledWith('/outsource/settings/types', { code: 'ENG', name: '工程', sortNo: 20, allowElectricalHandoff: true, vendorIds: [1] })
+    const createdRow = within((await screen.findByText('ENG【工程】')).closest('tr')!)
+    expect(createdRow.getByText('是')).toBeInTheDocument()
+    expect(createdRow.getByText('启用')).toBeInTheDocument()
+    expect(createdRow.getByText('鼎亚')).toBeInTheDocument()
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(put).not.toHaveBeenCalled()
+  })
 
-    await user.click(original.getByRole('button', { name: '编辑' }))
+  it('编辑外发类型保留已选停用厂商，停用确认后将厂商与状态一次保存', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    const vendorOptions = [
+      ...vendors, { id: 2, name: '原厂商', status: 'DISABLED' }, { id: 3, name: '其他停用厂商', status: 'DISABLED' },
+    ]
+    let saved = { ...types[0], vendorIds: [2] }
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/types') ? [saved] : vendorOptions,
+    } as never))
+    const put = vi.spyOn(http, 'put').mockImplementation(async () => {
+      saved = { ...saved, vendorIds: [1], status: 'DISABLED', allowElectricalHandoff: false }
+      return { data: saved } as never
+    })
+    render(<OutsourceTypesTab />)
+
+    const row = within((await screen.findByText('OEMA【进料+制造】')).closest('tr')!)
+    expect(screen.getByRole('columnheader', { name: /^可用厂商/ })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: /^状态/ })).toBeInTheDocument()
+    expect(row.getAllByRole('button').map((button) => button.textContent)).toEqual(['编辑'])
+    expect(row.getByText('原厂商')).toBeInTheDocument()
+    expect(row.getByText('启用')).toBeInTheDocument()
+    await user.click(row.getByRole('button', { name: '编辑' }))
+
     const edit = within(await screen.findByRole('dialog', { name: '编辑外发类型' }))
-    const handoff = edit.getByRole('switch', { name: '允许转迅得电控' })
-    expect(handoff).toBeChecked()
-    await user.click(handoff)
-    expect(handoff).not.toBeChecked()
+    const former = edit.getByRole('checkbox', { name: '原厂商（已停用）' })
+    expect(former).toBeChecked()
+    expect(edit.queryByRole('checkbox', { name: /其他停用厂商/ })).not.toBeInTheDocument()
+    await user.click(former)
+    await user.click(edit.getByRole('checkbox', { name: '鼎亚' }))
+    await user.click(edit.getByRole('switch', { name: '允许转迅得电控' }))
+    await user.click(edit.getByRole('switch', { name: '状态' }))
     await user.click(edit.getByRole('button', { name: '保存' }))
-    expect(put).toHaveBeenCalledWith('/outsource/settings/types/5', { code: 'OEMA', name: '进料+制造', sortNo: 10, allowElectricalHandoff: false })
-    expect(await original.findByText('否')).toBeInTheDocument()
+    const confirmationTitle = '确认停用外发类型“OEMA【进料+制造】”？'
+    const confirmation = within(await screen.findByRole('dialog', { name: confirmationTitle }))
+    expect(put).not.toHaveBeenCalled()
+    await user.click(confirmation.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: confirmationTitle })).not.toBeInTheDocument())
+    expect(put).not.toHaveBeenCalled()
+    expect(edit.getByRole('checkbox', { name: '鼎亚' })).toBeChecked()
 
-    await user.click(original.getByRole('button', { name: '编辑' }))
-    expect(within(await screen.findByRole('dialog', { name: '编辑外发类型' }))
-      .getByRole('switch', { name: '允许转迅得电控' })).not.toBeChecked()
+    await user.click(edit.getByRole('button', { name: '保存' }))
+    const confirmed = within(await screen.findByRole('dialog', { name: confirmationTitle }))
+    await user.click(confirmed.getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/types/5', {
+      code: 'OEMA', name: '进料+制造', sortNo: 10, allowElectricalHandoff: false, vendorIds: [1], status: 'DISABLED',
+    }))
+    expect(await row.findByText('停用')).toBeInTheDocument()
+    expect(row.getByText('鼎亚')).toBeInTheDocument()
+    expect(row.getByText('否')).toBeInTheDocument()
+    expect(row.getAllByRole('button').map((button) => button.textContent)).toEqual(['编辑'])
+    expect(put).toHaveBeenCalledTimes(1)
+    await user.click(row.getByRole('button', { name: '编辑' }))
+    const reopened = within(await screen.findByRole('dialog', { name: '编辑外发类型' }))
+    expect(reopened.getByRole('switch', { name: '状态' })).not.toBeChecked()
+    expect(reopened.getByRole('switch', { name: '允许转迅得电控' })).not.toBeChecked()
+  })
+
+  it('没有厂商可选时新增外发类型显示空状态', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(http, 'get').mockResolvedValue({ data: [] } as never)
+    render(<OutsourceTypesTab />)
+    await screen.findByText('暂无外发类型')
+    await user.click(screen.getByRole('button', { name: '新增外发类型' }))
+    const create = within(await screen.findByRole('dialog', { name: '新增外发类型' }))
+    expect(create.getByText('请先新增外协厂商')).toBeInTheDocument()
+    expect(create.queryByRole('checkbox')).not.toBeInTheDocument()
+  })
+
+  it('重新启用外发类型时直接保存状态，保留服务器上的厂商映射', async () => {
+    const user = userEvent.setup()
+    const type = { ...types[0], status: 'DISABLED' }
+    vi.spyOn(http, 'get').mockImplementation(async (url) => ({ data: url.endsWith('/types') ? [type] : vendors }))
+    const put = vi.spyOn(http, 'put').mockImplementation(async () => {
+      type.status = 'ACTIVE'
+      return { data: type }
+    })
+    render(<OutsourceTypesTab />)
+    const row = within((await screen.findByText('OEMA【进料+制造】')).closest('tr')!)
+    await user.click(row.getByRole('button', { name: '编辑' }))
+    const edit = within(await screen.findByRole('dialog', { name: '编辑外发类型' }))
+    await user.click(edit.getByRole('switch', { name: '状态' }))
+    await user.click(edit.getByRole('button', { name: '保存' }))
+    expect(await row.findByText('启用')).toBeInTheDocument()
+    expect(put).toHaveBeenCalledExactlyOnceWith('/outsource/settings/types/5', {
+      code: 'OEMA', name: '进料+制造', sortNo: 10, allowElectricalHandoff: true, vendorIds: null, status: 'ACTIVE',
+    })
   })
 
   it('默认抄送的人员选项列出全部内部账号，可本地搜索，未填邮箱的不可选', async () => {
@@ -199,7 +284,7 @@ describe('外协清单入口与设定', () => {
     expect(put).toHaveBeenCalledTimes(2)
   })
 
-  it('更新外协清单的定时同步可以停止和开启', async () => {
+  it('更新外发工令的定时同步可以停止和开启', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])
     const syncStatus = {
@@ -231,7 +316,7 @@ describe('外协清单入口与设定', () => {
     expect(screen.queryByRole('button', { name: /立即同步/ })).not.toBeInTheDocument()
   })
 
-  it('有管理权限时，更新外协清单可以立即同步全部未完成项目', async () => {
+  it('有管理权限时，更新外发工令可以立即同步全部未完成项目', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings', 'outsource:manage'])
     const syncStatus = {
@@ -369,7 +454,7 @@ describe('外协清单入口与设定', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/18', { editorScope: 'ROLES', editorRoleIds: [72], editorUserIds: [] }))
   })
 
-  it('有发送权限时，业务切换栏的外协清单显示待发送数量，点击直接进入待发送筛选', async () => {
+  it('有发送权限时，业务切换栏的工令协作入口显示待发送数量，点击直接进入待发送筛选', async () => {
     const user = userEvent.setup()
     setInternalSession(['dashboard', 'project:list', 'outsource', 'outsource:send'])
     useAuth.setState({ menus: ['dashboard'] })
@@ -378,17 +463,16 @@ describe('外协清单入口与设定', () => {
     } as never))
     render(<MemoryRouter initialEntries={['/']}><AppRail active="collaboration" /><CurrentLocation /></MemoryRouter>)
 
-    const entry = await screen.findByRole('button', { name: '外协清单' })
+    const entry = await screen.findByRole('button', { name: 'ODM/OEM工令协作' })
     expect(await within(entry).findByText('3')).toBeInTheDocument()
     expect(get).toHaveBeenCalledWith('/outsource/send-queue', expect.anything())
     await user.click(entry)
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/items')
   })
 
-  it('外发类型与栏位设定停用前需二次确认，启用按钮带绿色语义', async () => {
+  it('栏位设定停用前需二次确认，启用按钮带绿色语义', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])
-    let savedTypes = [...types, { id: 6, code: 'ODM', name: '停用类型', status: 'DISABLED', sortNo: 20, vendorIds: [], allowElectricalHandoff: false }]
     const fieldsSettings = {
       fields: [{
         id: 6, key: 'hasRobotV', builtIn: false, label: '是否有RobotV', dataType: 'BOOLEAN', options: [], category: 'CUSTOM',
@@ -398,29 +482,17 @@ describe('外协清单入口与设定', () => {
       roles: [],
     }
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-      data: url === '/outsource/settings/fields' ? fieldsSettings : url.endsWith('/types') ? savedTypes : url.endsWith('/vendors') ? vendors : [],
+      data: url === '/outsource/settings/fields' ? fieldsSettings : url.endsWith('/vendors') ? vendors : [],
     } as never))
-    const put = vi.spyOn(http, 'put').mockImplementation(async (url: string) => {
-      if (url === '/outsource/settings/types/5/status') {
-        savedTypes = savedTypes.map((type) => type.id === 5 ? { ...type, status: 'DISABLED' } : type)
-        return { data: {} } as never
-      }
-      return { data: { ...fieldsSettings, fields: [{ ...fieldsSettings.fields[0], status: 'DISABLED' }] } } as never
-    })
+    const put = vi.spyOn(http, 'put').mockResolvedValue({
+      data: { ...fieldsSettings, fields: [{ ...fieldsSettings.fields[0], status: 'DISABLED' }] },
+    } as never)
     render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
-
-    const activeType = within((await screen.findByText('OEMA【进料+制造】')).closest('tr')!)
-    const disabledType = within(screen.getByText('ODM【停用类型】').closest('tr')!)
-    expect(disabledType.getByRole('button', { name: '启用' })).toHaveClass('arco-btn-status-success')
-    await user.click(activeType.getByRole('button', { name: '停用' }))
-    expect(put).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
-    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/types/5/status', { status: 'DISABLED' }))
 
     await user.click(screen.getByRole('tab', { name: '栏位设定' }))
     const fieldRow = within((await screen.findByText('是否有RobotV')).closest('tr')!)
     await user.click(fieldRow.getByRole('button', { name: '停用' }))
-    expect(put).toHaveBeenCalledTimes(1)
+    expect(put).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '确定' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/6/status', { status: 'DISABLED' }))
     expect(await within(screen.getByText('是否有RobotV').closest('tr')!).findByRole('button', { name: '启用' })).toHaveClass('arco-btn-status-success')
@@ -454,7 +526,7 @@ describe('外协设定与入口回归保护', () => {
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
   })
 
-  it('非内部员工访问外协清单 403 页面提供返回首页按钮并可跳回首页', async () => {
+  it('非内部员工访问外发工令 403 页面提供返回首页按钮并可跳回首页', async () => {
     const user = userEvent.setup()
     setInternalSession([])
     useAuth.setState({ user: { ...useAuth.getState().user!, userType: 'SUPPLIER', supplierId: 3 } })
@@ -467,7 +539,7 @@ describe('外协设定与入口回归保护', () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByText('外协清单仅供公司员工使用')).toBeInTheDocument()
+    expect(screen.getByText('没有 ODM/OEM工令协作 的可用功能')).toBeInTheDocument()
     const homeBtn = screen.getByRole('button', { name: '返回首页' })
     await user.click(homeBtn)
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/')
@@ -477,7 +549,7 @@ describe('外协设定与入口回归保护', () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings', 'outsource:manage'])
     vi.spyOn(http, 'get').mockImplementation((url: string) => {
-      if (url.endsWith('/vendors') || url.endsWith('/types') || url.endsWith('/default-cc')) {
+      if (url.endsWith('/vendors') || url.endsWith('/default-cc')) {
         return Promise.reject(new Error('parent failed'))
       }
       if (url.endsWith('/customers')) return Promise.resolve({ data: aliases } as never)
@@ -489,7 +561,8 @@ describe('外协设定与入口回归保护', () => {
     })
 
     render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
-    expect(await screen.findByText('设定加载失败')).toBeInTheDocument()
+    expect(await screen.findByText('庆鼎精密电子(淮安)有限公司')).toBeInTheDocument()
+    expect(screen.queryByText('设定加载失败')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('tab', { name: '默认抄送' }))
     expect(screen.getByText('设定加载失败')).toBeInTheDocument()

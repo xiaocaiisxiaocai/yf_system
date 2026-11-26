@@ -186,7 +186,7 @@ describe('ODM/OEMA 一键发送文件', () => {
     const dialog = await openSendDialog(user)
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '图纸.pdf'))
     await user.type(within(dialog).getByRole('textbox', { name: '工令' }), 'NO-SUCH-WO')
-    expect(await within(dialog).findByText('外协清单里没有这个工令，或该工令已完成')).toBeVisible()
+    expect(await within(dialog).findByText('外发工令里没有这个工令，或该工令已完成')).toBeVisible()
     expect(within(dialog).getByRole('button', { name: '提交审批' })).toBeDisabled()
     expect(api.createTransfer).not.toHaveBeenCalled()
   })
@@ -274,10 +274,10 @@ describe('ODM/OEMA 一键发送文件', () => {
     expect(within(dialog).getByText('正在查询工令…')).toBeVisible()
     await waitFor(() => expect(sendableItems).toHaveBeenCalledTimes(1))
     await user.type(input, '0')
-    expect(await within(dialog).findByText('外协清单里没有这个工令，或该工令已完成')).toBeVisible()
+    expect(await within(dialog).findByText('外发工令里没有这个工令，或该工令已完成')).toBeVisible()
     await act(async () => resolveFirst([workOrder]))
     expect(within(dialog).queryByText(/发送给：/)).not.toBeInTheDocument()
-    expect(within(dialog).getByText('外协清单里没有这个工令，或该工令已完成')).toBeVisible()
+    expect(within(dialog).getByText('外发工令里没有这个工令，或该工令已完成')).toBeVisible()
   })
 
   it('returning to the previous work order still waits for the full debounce', async () => {

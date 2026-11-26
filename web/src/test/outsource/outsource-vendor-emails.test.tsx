@@ -42,7 +42,7 @@ async function openTab(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByText('a@vendor.test')
 }
 
-describe('外协清单设定 → 外协邮箱', () => {
+describe('外发工令设定 → 外协邮箱', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })

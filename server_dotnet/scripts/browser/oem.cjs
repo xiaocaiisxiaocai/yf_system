@@ -1,6 +1,6 @@
 // OEM business line, driven end to end through the real UI:
-// admin creates an OEM vendor + account (/oem/admin/companies) → an internal sender submits a
-// PDF to that vendor → the section leader approves from the paged approval inbox → the vendor
+// admin creates an OEM vendor + account (/oem/admin/outsource-settings?tab=companies) → an internal sender submits a
+// PDF against an open work order for that vendor → the section leader approves from the paged approval inbox → the vendor
 // changes its first-login password in /oem-portal, previews (watermarked) and downloads the
 // released file → the vendor sends a file back and the internal sender downloads it.
 // File validation/promotion runs through the TestHost's opt-in OEM job loop
@@ -86,7 +86,7 @@ async function openReleasedFile(page, url, fileName) {
     // refresh is in flight would drop the rotated cookie and trip refresh-replay revocation.
     const row = page.getByRole('row').filter({ hasText: fileName });
     await row.waitFor();
-    if (await row.getByRole('button', { name: '下载', exact: true }).isVisible()) return row;
+    if (await row.getByRole('button', { name: '下载', exact: true }).isEnabled()) return row;
     await page.reload();
     return null;
   });
@@ -105,6 +105,8 @@ async function openReleasedFile(page, url, fileName) {
     const quiet = OUT + '/' + quietName;
     fs.writeFileSync(quiet, '%PDF-1.4\n% OEM inbound sent while the release reminder is off ' + marker + '\n%%EOF\n');
     const companyName = 'UI ODM/OEMA厂商-' + marker;
+    const workOrderNo = 'WO-' + marker;
+    const customerName = '工令客户-' + marker;
     const vendor = { username: 'uioem_' + marker, password: password(), changedPassword: password() };
 
     // Admin session: OEM directory management happens in the UI; roles/org/users are harness fixtures.
@@ -145,10 +147,10 @@ async function openReleasedFile(page, url, fileName) {
       save();
     });
 
-    await record('管理员在 ODM/OEMA 厂商与账号页面新增厂商和首次登录账号', async () => {
+    await record('管理员在外协管理设定的厂商与账号分页新增厂商和首次登录账号', async () => {
       const page = admin.page;
-      await page.goto(s.base + '/oem/admin/companies');
-      await page.getByText('ODM/OEMA 厂商与账号', { exact: true }).waitFor();
+      await page.goto(s.base + '/oem/admin/outsource-settings?tab=companies');
+      await page.getByRole('tab', { name: '厂商与账号', exact: true, selected: true }).waitFor();
       await page.getByRole('button', { name: '新增厂商', exact: true }).click();
       let modal = visibleModal(page);
       await modal.getByLabel('厂商名称', { exact: true }).fill(companyName);
@@ -355,11 +357,48 @@ async function openReleasedFile(page, url, fileName) {
       assert.equal(exportedCompany[4], '0');
       assert.equal(exportedCompany[5], '0');
     });
+    await record('管理员建立厂商的外发类型并汇入一笔开放工令', async () => {
+      const type = await json(admin.context, adminToken, 'POST', '/outsource/settings/types', {
+        code: 'OEM-' + marker, name: '浏览器外发类型-' + marker, vendorIds: [f.oem.companyId],
+      });
+      assert.equal(type.status, 'ACTIVE');
+      assert.deepEqual(type.vendorIds, [f.oem.companyId]);
+
+      // The default TestHost IPMS reader looks up work orders in the local MES mirror.
+      const mirror = await json(admin.context, adminToken, 'POST', '/outsource/mes-mirror/import', {
+        rows: [{ rowNumber: 2, workOrder: workOrderNo, values: { customerName } }],
+        overwrite: [], chosenRows: {},
+      });
+      assert.equal(mirror.added, 1, JSON.stringify(mirror));
+      const imported = await json(admin.context, adminToken, 'POST', '/outsource/items/import', {
+        rows: [{ rowNumber: 2, workOrderNo, outsourceDate: new Date().toISOString().slice(0, 10),
+          vendorName: companyName, typeName: type.code }],
+      });
+      assert.equal(imported.created, 1, JSON.stringify(imported.rows));
+      const items = await json(admin.context, adminToken, 'GET', '/oem/sendable-items?workOrderNo=' + workOrderNo);
+      const item = items.find(candidate => candidate.workOrderNo === workOrderNo);
+      assert.ok(item, 'imported work order is open: ' + workOrderNo);
+      assert.equal(item.vendorName, companyName);
+      assert.equal(item.disabledReason, null);
+      f.oem.workOrderNo = workOrderNo;
+      f.oem.outsourceItemId = item.id;
+      save();
+    });
     await admin.context.close();
+
+    const enterWorkOrder = async (modal, destination) => {
+      await modal.getByRole('textbox', { name: '工令', exact: true }).fill(workOrderNo);
+      await modal.getByText(destination, { exact: true }).waitFor();
+    };
+    const assertWorkOrder = summary => {
+      assert.equal(summary.outsourceItemId, f.oem.outsourceItemId);
+      assert.equal(summary.workOrderNo, workOrderNo);
+      assert.equal(summary.companyId, f.oem.companyId);
+    };
 
     const sender = await newPage('oem-sender');
     let outboundId;
-    await record('内部发送人首次改密后选择 ODM/OEMA 厂商、上传 PDF 并提交审批', async () => {
+    await record('内部发送人首次改密后输入工令、核对收件厂商、上传 PDF 并提交审批', async () => {
       await internalFirstLogin(sender.page, users.sender);
       const page = sender.page;
       await page.goto(s.base + '/oem');
@@ -367,8 +406,7 @@ async function openReleasedFile(page, url, fileName) {
       await page.getByRole('button', { name: '发送文件', exact: true }).click();
       const modal = visibleModal(page);
       await modal.getByText('发送文件', { exact: true }).first().waitFor();
-      await modal.getByPlaceholder('选择厂商', { exact: true }).click();
-      await page.getByRole('option', { name: companyName, exact: true }).click();
+      await enterWorkOrder(modal, '发送给：' + companyName + ' · ' + customerName);
       await modal.getByLabel('选择文件', { exact: true }).setInputFiles(outbound);
       await modal.getByText(outboundName, { exact: true }).waitFor();
       const sent = await action(page, '/send', 'POST',
@@ -376,9 +414,11 @@ async function openReleasedFile(page, url, fileName) {
       assert.equal(sent.summary.direction, 'INTERNAL_TO_OEM');
       assert.equal(sent.summary.lifecycleStatus, 'SEALED');
       assert.equal(sent.summary.title, outboundName);
+      assertWorkOrder(sent.summary);
       outboundId = sent.summary.id;
       await page.waitForURL(s.base + '/oem/transfers/' + outboundId);
       await page.getByText(outboundName, { exact: true }).first().waitFor();
+      await page.locator('.oem-transfer-meta').getByText(workOrderNo, { exact: true }).waitFor();
       f.oem.outboundId = outboundId;
       save();
       await page.screenshot({ path: OUT + '/oem-sender-submitted.png', fullPage: true });
@@ -407,6 +447,7 @@ async function openReleasedFile(page, url, fileName) {
       await page.getByRole('heading', { name: '待我审批', exact: true }).waitFor({ state: 'attached' });
       await page.locator('.arco-pagination').waitFor();
       const row = page.getByRole('row').filter({ hasText: outboundName });
+      await row.getByRole('cell', { name: companyName, exact: true }).waitFor();
       await row.getByText(users.sender.realName + '（' + users.sender.username + '）', { exact: true }).waitFor();
       await page.screenshot({ path: OUT + '/oem-approval-inbox.png', fullPage: true });
       await row.getByRole('link', { name: outboundName, exact: true }).click();
@@ -452,7 +493,10 @@ async function openReleasedFile(page, url, fileName) {
         assert.equal(response.status(), 200);
         return (await response.json()).list.some(item => item.id === outboundId);
       });
-      await page.getByRole('link', { name: outboundName, exact: true }).click();
+      const released = page.getByRole('row').filter({ has: page.getByRole('link', { name: outboundName, exact: true }) });
+      await released.getByRole('cell', { name: workOrderNo, exact: true }).waitFor();
+      await released.getByTitle('来自 ' + users.sender.realName, { exact: true }).waitFor();
+      await released.getByRole('link', { name: outboundName, exact: true }).click();
       await page.waitForURL('**/oem-portal/transfers/' + outboundId);
       const row = await openReleasedFile(page, '/oem-portal/transfers/' + outboundId, outboundName);
       await row.getByRole('button', { name: '预览', exact: true }).click();
@@ -485,6 +529,7 @@ async function openReleasedFile(page, url, fileName) {
       await page.goto(s.base + '/oem-portal/transfers');
       await page.getByRole('button', { name: '发送文件', exact: true }).click();
       const modal = visibleModal(page);
+      await enterWorkOrder(modal, '客户：' + customerName);
       await modal.getByLabel('选择文件', { exact: true }).setInputFiles(filePath);
       await modal.getByText(fileName, { exact: true }).waitFor();
       // 厂商回传必须自由填写签名，不再要求是已录入的联络人。
@@ -506,7 +551,10 @@ async function openReleasedFile(page, url, fileName) {
         () => modal.getByRole('button', { name: '发送文件', exact: true }).click());
       assert.equal(sent.summary.direction, 'OEM_TO_INTERNAL');
       assert.equal(sent.summary.approvalStatus, 'NOT_REQUIRED');
+      assertWorkOrder(sent.summary);
       await page.waitForURL('**/oem-portal/transfers/' + sent.summary.id);
+      // The release event enqueues mail under the rule in effect at release time.
+      await page.locator('.oem-transfer-detail').getByText('已发送', { exact: true }).waitFor({ timeout: 90000 });
       return sent.summary.id;
     };
 
@@ -562,7 +610,13 @@ async function openReleasedFile(page, url, fileName) {
       assert.equal((await filtered).status(), 200);
       const link = page.getByRole('link', { name: inboundName, exact: true });
       await link.waitFor();
-      await page.getByRole('row').filter({ hasText: inboundName }).getByText(companyName, { exact: true }).waitFor();
+      const receivedRow = page.getByRole('row').filter({ has: link });
+      await receivedRow.getByRole('cell', { name: workOrderNo, exact: true }).waitFor();
+      // The vendor name may shrink to zero width next to the recipient; check the visible cell containing both.
+      await receivedRow.getByRole('cell').filter({
+        has: page.getByText(companyName, { exact: true }),
+        hasText: users.sender.realName,
+      }).waitFor();
       await link.click();
       await page.waitForURL(s.base + '/oem/transfers/' + inboundId);
       const row = await openReleasedFile(page, '/oem/transfers/' + inboundId, inboundName);
@@ -575,20 +629,27 @@ async function openReleasedFile(page, url, fileName) {
     await record('内部传递单详情：审批进度在附件表最后一列，没有审批流程卡片和改派入口', async () => {
       const page = sender.page;
       await page.goto(s.base + '/oem/transfers/' + outboundId);
-      const headers = page.getByRole('columnheader');
-      await headers.first().waitFor();
+      const detail = page.locator('.oem-transfer-detail');
+      const attachments = detail.locator('.oem-transfer-files-card');
+      const fileRow = attachments.getByRole('row').filter({ has: page.getByRole('cell', { name: outboundName, exact: true }) });
+      await fileRow.getByText('审批通过', { exact: true }).waitFor();
+      const headers = attachments.getByRole('columnheader');
       const names = (await headers.allInnerTexts()).map(text => text.trim());
       assert.equal(names[names.length - 1], '审批', 'approval progress must be the last attachment column: ' + names.join('|'));
       // 最后一列要在 1440 宽的窗口里完整可见，不能被挤到需要横向滚动才看得到的位置。
       const box = await headers.last().boundingBox();
       assert(box && box.x >= 0 && box.x + box.width <= 1440, 'approval column must be fully visible without horizontal scrolling: ' + JSON.stringify(box));
-      assert.equal(await page.getByText(/审批流程/).count(), 0, 'no approval flow card below the attachments');
-      assert.equal(await page.getByRole('button', { name: '改派', exact: true }).count(), 0, 'reassignment is gone');
+      assert.equal(await detail.getByText(/审批流程/).count(), 0, 'no approval flow card below the attachments');
+      assert.equal(await detail.getByRole('button', { name: '改派', exact: true }).count(), 0, 'reassignment is gone');
       // 操作列：按钮组的中心要和列头中心对齐（允许 6px 误差）。
-      const actionHeader = await page.getByRole('columnheader', { name: /操作/ }).first().boundingBox();
-      const group = await page.locator('.action-slots').first().boundingBox();
-      const buttons = await page.locator('.action-slots .arco-btn').evaluateAll(list => list.map(item => { const r = item.getBoundingClientRect(); return { x: r.x, w: r.width }; }));
-      console.log('ACTION-ALIGN', JSON.stringify({ actionHeader, group, buttons }));
+      const actionHeader = await attachments.getByRole('columnheader', { name: /操作/ }).boundingBox();
+      const actions = fileRow.getByRole('cell').filter({ has: page.getByRole('button', { name: '下载', exact: true }) });
+      const buttons = await actions.getByRole('button').evaluateAll(list => list.map(button => {
+        const { x, width } = button.getBoundingClientRect();
+        return { x, w: width };
+      }));
+      assert(actionHeader && buttons.length >= 2, 'expected the action header and the released file actions');
+      console.log('ACTION-ALIGN', JSON.stringify({ actionHeader, buttons }));
       const left = Math.min(...buttons.map(item => item.x));
       const right = Math.max(...buttons.map(item => item.x + item.w));
       const headerCenter = actionHeader.x + actionHeader.width / 2;
@@ -596,6 +657,7 @@ async function openReleasedFile(page, url, fileName) {
       await page.screenshot({ path: OUT + '/oem-detail-approval-column.png', fullPage: true });
     });
 
+    lastPage = portal.page;
     await record('厂商门户选择不支持的格式时当场拒绝，不创建传递单或上传会话', async () => {
       const page = portal.page;
       await page.goto(s.base + '/oem-portal/transfers');
@@ -608,11 +670,15 @@ async function openReleasedFile(page, url, fileName) {
       try {
         await page.getByRole('button', { name: '发送文件', exact: true }).click();
         const modal = visibleModal(page);
+        await enterWorkOrder(modal, '客户：' + customerName);
+        const rejectedName = 'unsupported-' + marker + '.exe';
+        // The uploader sets accept only after it has applied the server's extension rules.
+        await modal.locator('input[type="file"][accept]:not([accept=""])').waitFor({ state: 'attached' });
         await modal.getByLabel('选择文件', { exact: true }).setInputFiles({
-          name: 'unsupported-' + marker + '.exe', mimeType: 'application/octet-stream', buffer: Buffer.from('MZ'),
+          name: rejectedName, mimeType: 'application/octet-stream', buffer: Buffer.from('MZ'),
         });
-        await page.getByText(/不支持的文件格式|不支持.*格式/).first().waitFor();
-        assert.equal(await modal.getByText('unsupported-' + marker + '.exe', { exact: true }).count(), 0, 'rejected file must not be queued');
+        await page.getByText('不支持的文件格式，已拒绝：' + rejectedName, { exact: true }).waitFor();
+        assert.equal(await modal.getByText(rejectedName, { exact: true }).count(), 0, 'rejected file must not be queued');
         assert.deepEqual(writes, [], 'no transfer or upload session may be created: ' + writes.join(', '));
         await page.screenshot({ path: OUT + '/oem-unsupported-format.png' });
         await page.keyboard.press('Escape');
@@ -627,32 +693,47 @@ async function openReleasedFile(page, url, fileName) {
       await page.getByRole('link', { name: inboundName, exact: true }).waitFor();
       await page.getByRole('columnheader', { name: /发送人/ }).locator('.arco-table-filters').click();
       const input = page.getByLabel('筛选发送人', { exact: true });
+      const missingSender = '不存在的发送人-' + marker;
       const filtered = page.waitForResponse(r => {
         const url = new URL(r.url());
-        return url.pathname === '/api/v1/oem/transfers' && url.searchParams.get('sender') === '不存在的发送人-' + marker;
+        return r.request().method() === 'GET' && url.pathname === '/api/v1/oem/transfers'
+          && url.searchParams.get('sender') === missingSender;
       });
-      await input.fill('不存在的发送人-' + marker);
+      await input.fill(missingSender);
       await input.press('Enter');
-      const body = await (await filtered).json();
+      const response = await filtered;
+      assert.equal(response.status(), 200);
+      const body = await response.json();
       assert.equal(body.total, 0);
+      assert.deepEqual(body.list, []);
+      await page.locator('.page-table .arco-table-empty-row').waitFor();
       await page.getByRole('link', { name: inboundName, exact: true }).waitFor({ state: 'hidden' });
     });
 
     await record('厂商传递单列表：勾选多行批量下载，每个文件各发起一次下载', async () => {
       const page = portal.page;
       await page.goto(s.base + '/oem-portal/transfers');
-      await page.getByRole('link', { name: inboundName, exact: true }).waitFor();
-      const rows = page.locator('tbody tr').filter({ has: page.getByRole('checkbox') });
-      const count = Math.min(await rows.count(), 2);
-      assert(count >= 1, 'need at least one selectable transfer');
-      const sessions = [];
-      page.on('response', r => { if (/\/api\/v1\/oem\/files\/\d+\/download-sessions$/.test(new URL(r.url()).pathname)) sessions.push(r.status()); });
-      for (let i = 0; i < count; i += 1) await rows.nth(i).getByRole('checkbox').locator('..').click();
+      for (const name of [outboundName, inboundName]) {
+        const row = page.getByRole('row').filter({ has: page.getByRole('link', { name, exact: true }) });
+        await row.getByRole('checkbox').locator('..').click();
+      }
       assert.equal(new URL(page.url()).pathname, '/oem-portal/transfers', 'checking a row must not open the detail');
-      await page.getByRole('button', { name: new RegExp('批量下载（' + count + '）') }).click();
-      await page.waitForResponse(r => /\/download-sessions$/.test(new URL(r.url()).pathname), { timeout: 30000 });
-      await page.waitForTimeout(1500);
-      assert(sessions.length >= count && sessions.every(status => status === 200 || status === 201), 'every selected file starts a download session: ' + sessions.join(','));
+      const sessions = [];
+      const onResponse = response => {
+        const path = new URL(response.url()).pathname;
+        if (response.request().method() === 'POST' && /^\/api\/v1\/oem\/files\/\d+\/download-sessions$/.test(path))
+          sessions.push({ path, status: response.status() });
+      };
+      page.on('response', onResponse);
+      try {
+        await page.getByRole('button', { name: '批量下载（2）', exact: true }).click();
+        await page.getByText('已开始下载 2 个文件', { exact: true }).waitFor();
+        assert.equal(sessions.length, 2);
+        assert.equal(new Set(sessions.map(item => item.path)).size, 2);
+        assert(sessions.every(item => item.status === 200 || item.status === 201), JSON.stringify(sessions));
+      } finally {
+        page.off('response', onResponse);
+      }
     });
   } catch (error) {
     if (lastPage) {

@@ -11,7 +11,7 @@ const Dashboard = lazy(() => import('./Dashboard'))
 export default function Home() {
   const grants = useAuth(useShallow(state => ({ menus: state.menus, permissions: state.permissions, user: state.user })))
   const homes = businessHomes(grants)
-  const home = homes.collaboration ?? homes.oem ?? homes.outsource
+  const home = homes.collaboration ?? homes.workOrder
   const navigate = useNavigate()
   if (home === '/') return <Dashboard />
   if (home) return <Navigate to={home} replace />

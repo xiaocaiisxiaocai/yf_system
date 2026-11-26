@@ -10,7 +10,7 @@ const changes = [
   { id: 1, field: 'latestDueDate', label: '最新交期', oldValue: '2026-12-31', newValue: '2027-01-15', source: 'IPMS_MANUAL', actorName: '采购乙', changedAt: '2026-11-10T03:00:00Z' },
 ]
 
-describe('外协清单变更履历', () => {
+describe('外发工令变更履历', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('交期未变时只显示日期，不加载履历', () => {

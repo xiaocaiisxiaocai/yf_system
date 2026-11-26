@@ -241,7 +241,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
                   action={<Button size="small" onClick={() => void sendableItems.refetch()}>重试</Button>} />
               )}
               {!workOrdersLoading && sendableItems.isSuccess && workOrders.length === 0 && (
-                <span role="status">外协清单里没有这个工令，或该工令已完成</span>
+                <span role="status">外发工令里没有这个工令，或该工令已完成</span>
               )}
               {workOrders.length > 0 && !matchedWorkOrder && (
                 <Space wrap>

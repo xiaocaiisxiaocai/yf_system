@@ -16,7 +16,7 @@ export interface MenuEntry {
 }
 
 /**
- * Shell for a self-contained business section (ODM/OEMA, outsourcing list, vendor portal): its own header
+ * Shell for work order collaboration and the vendor portal: its own header
  * title and second-level menu. The `oem-shell` class carries the section card styling shared by these areas.
  */
 export default function SectionShell({ title, subtitle, menu, account, line }: {
@@ -27,7 +27,8 @@ export default function SectionShell({ title, subtitle, menu, account, line }: {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const mobileMenuTrigger = useRef<HTMLElement | null>(null)
   const items = menu.filter((item) => item.visible)
-  const selected = items.filter((item) => location.pathname.startsWith(item.path)).sort((a, b) => b.path.length - a.path.length)[0]?.path
+  const selected = items.filter(({ path }) => location.pathname === path || location.pathname.startsWith(`${path}/`))
+    .sort((a, b) => b.path.length - a.path.length)[0]?.path
   const target = (key: string) => items.find((item) => item.path === key)?.to ?? key
   const navItems: NavItem[] = items.map((item, index) => ({
     key: item.path, label: item.label, icon: item.icon, badge: item.badge,

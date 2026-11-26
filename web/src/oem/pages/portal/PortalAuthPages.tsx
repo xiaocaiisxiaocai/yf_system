@@ -13,7 +13,7 @@ import {
 } from '../../api/portalSession'
 import { oemRequestError } from '../../api/requestError'
 
-const OEM_BRAND = 'ODM/OEMA 文件传递'
+const OEM_BRAND = 'ODM/OEM工令协作'
 
 export function PortalLoginPage() {
   usePortalSessionSync()

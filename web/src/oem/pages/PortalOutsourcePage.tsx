@@ -73,7 +73,7 @@ export default function PortalOutsourcePage() {
     setExporting(true)
     try {
       const day = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Shanghai' }).replaceAll('-', '')
-      saveBlob(await api.outsourceExport({ keyword: applied, includeClosed }), `外协清单_${day}.xlsx`)
+      saveBlob(await api.outsourceExport({ keyword: applied, includeClosed }), `外发工令_${day}.xlsx`)
     } catch {
       // 统一请求层提示
     } finally {
@@ -128,7 +128,7 @@ export default function PortalOutsourcePage() {
   ], [api, data?.columns, filesScope, loading, saving])
 
   return <Card className="page-card page-card--table outsource-list-page">
-    <h1 className="visually-hidden">外协清单</h1>
+    <h1 className="visually-hidden">外发工令</h1>
     <div className="page-toolbar responsive-toolbar">
       <Space wrap>
         <Input allowClear prefix={<IconSearch />} placeholder="工令、客户或机型" style={{ width: 260 }} value={keyword}
@@ -138,7 +138,7 @@ export default function PortalOutsourcePage() {
       </Space>
       <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
     </div>
-    {error ? <LoadError message="外协清单加载失败" onRetry={load} />
+    {error ? <LoadError message="外发工令加载失败" onRetry={load} />
       : <ResizableTable<Row> tableId="oem-portal-outsource" className="page-table outsource-table" rowKey="id" loading={loading}
           data={data?.list ?? []} columns={columns} rowClassName={rowClass}
           noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}

@@ -75,7 +75,7 @@ function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length)
   } as never))
 }
 
-describe('外协清单页面', () => {
+describe('外发工令页面', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
@@ -333,7 +333,7 @@ describe('外协清单页面', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText(/填写外发日期、工令、外发类型和外发厂商/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
-    await waitFor(() => expect(download).toHaveBeenCalledWith('外协清单汇入模板.xlsx', [{
+    await waitFor(() => expect(download).toHaveBeenCalledWith('外发工令汇入模板.xlsx', [{
       name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商'],
       rows: [['2026-11-23', '21000001', 'OEMA', '示例厂商']],
     }]))

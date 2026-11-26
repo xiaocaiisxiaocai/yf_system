@@ -1,3 +1,33 @@
+.outsource-management-tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.outsource-management-tabs > .arco-tabs-header {
+  flex-shrink: 0;
+}
+
+@media (min-width: 721px) and (min-height: 481px) {
+  .outsource-management-tabs > .arco-tabs-content {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .outsource-management-tabs .arco-tabs-content-inner,
+  .outsource-management-tabs .arco-tabs-content-inner > .arco-tabs-content-item-active,
+  .outsource-management-tabs .arco-tabs-pane {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .outsource-management-tabs .arco-tabs-pane {
+    display: flex;
+    flex-direction: column;
+  }
+}
+
 .oem-directory-table .arco-table-th-item,
 .oem-account-table .arco-table-th-item {
   white-space: nowrap;
