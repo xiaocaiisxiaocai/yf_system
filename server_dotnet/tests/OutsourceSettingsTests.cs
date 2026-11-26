@@ -49,13 +49,15 @@ public sealed class OutsourceSettingsTests
         var odm = await service.CreateTypeAsync(buyer, new("ODM-12345", "含售前售后", 1), ct);
         Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() => service.CreateTypeAsync(buyer, new("OEM A", "空格", 5), ct))).Status);
         Assert.Equal(409, (await Assert.ThrowsAsync<ApiException>(() => service.CreateTypeAsync(buyer, new("oema", "大小写", 5), ct))).Status);
-        oema = await service.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id, dingya.Id]), ct);
-        odm = await service.SetTypeVendorsAsync(buyer, odm.Id, new([yuankong.Id]), ct);
+        oema = await service.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [dingya.Id, dingya.Id]);
+        odm = await service.UpdateTypeSettingsAsync(buyer, odm, ct, vendorIds: [yuankong.Id]);
         Assert.Equal([dingya.Id], oema.VendorIds);
         Assert.Equal(400, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.SetTypeVendorsAsync(buyer, odm.Id, new([yuankong.Id, 999_999UL]), ct))).Status);
+            service.UpdateTypeSettingsAsync(buyer, odm, ct, vendorIds: [yuankong.Id, 999_999UL]))).Status);
         Assert.Equal(["ODM-12345", "OEMA"], (await service.TypesAsync(buyer, ct)).Select(x => x.Code));
-        await service.SetTypeStatusAsync(buyer, odm.Id, AccountStatuses.Disabled, ct);
+        odm = await service.UpdateTypeSettingsAsync(buyer, odm, ct, status: AccountStatuses.Disabled);
+        Assert.Equal(AccountStatuses.Disabled, odm.Status);
+        Assert.Equal([yuankong.Id], odm.VendorIds);
 
         // Default copy list: active internal accounts with email and at least one known module.
         string[] notice = [OutsourceDefaultCcModules.Notice];
@@ -99,7 +101,7 @@ public sealed class OutsourceSettingsTests
             "SELECT action FROM audit_logs WHERE action LIKE 'OUTSOURCE_%' ORDER BY id")).ToArray();
         Assert.Equal(
             ["OUTSOURCE_TYPE_CREATE", "OUTSOURCE_TYPE_CREATE",
-             "OUTSOURCE_TYPE_VENDORS", "OUTSOURCE_TYPE_VENDORS", "OUTSOURCE_TYPE_STATUS", "OUTSOURCE_DEFAULT_CC"],
+             "OUTSOURCE_TYPE_UPDATE", "OUTSOURCE_TYPE_UPDATE", "OUTSOURCE_TYPE_UPDATE", "OUTSOURCE_DEFAULT_CC"],
             actions);
     }
 

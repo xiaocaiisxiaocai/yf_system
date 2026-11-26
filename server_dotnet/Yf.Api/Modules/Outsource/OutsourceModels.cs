@@ -12,8 +12,6 @@ public sealed record OutsourceTypeUpsert(string? Code, string? Name, int? SortNo
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? AllowElectricalHandoff = null,
     ulong[]? VendorIds = null, string? Status = null);
 
-public sealed record OutsourceTypeVendorsRequest(ulong[]? VendorIds);
-
 public sealed record OutsourceDefaultCcEntry(ulong UserId, IReadOnlyList<string>? Modules);
 public sealed record OutsourceDefaultCcRequest(IReadOnlyList<OutsourceDefaultCcEntry>? Entries);
 

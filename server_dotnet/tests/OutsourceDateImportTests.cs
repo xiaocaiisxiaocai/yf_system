@@ -58,7 +58,7 @@ public sealed class OutsourceDateImportTests
         var dates = new OutsourceDateImportService(factory, audit);
         var vendor = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, type.Id, new([vendor.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, type, ct, vendorIds: [vendor.Id]);
         foreach (var no in new[] { "W1", "W2", "W3" }) ipms.Add(no);
         await items.ImportAsync(buyer, new([.. new[] { "W1", "W2", "W3" }.Select((no, index) =>
             new OutsourceImportRow(index + 2, "2026-11-04", no, "鼎亚", "OEMA"))]), ct);

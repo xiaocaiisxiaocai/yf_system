@@ -59,7 +59,7 @@ public sealed class OutsourceFieldTests
         var buyer = new CurrentUser(9742, "of_buyer", "INTERNAL", null);
         var dingya = await OutsourceTestVendors.CreateAsync(factory, "鼎亚", ct);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [dingya.Id]);
         return new(database, new OutsourceItemService(factory, audit, ipms), new OutsourceFieldService(factory, audit), ipms,
             new CurrentUser(9741, "of_planner", "INTERNAL", null), buyer, new CurrentUser(9743, "of_mechanic", "INTERNAL", null),
             new CurrentUser(9740, "of_admin", "INTERNAL", null), dingya);

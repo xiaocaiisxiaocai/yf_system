@@ -65,8 +65,8 @@ public sealed class OutsourceItemTests
         await factory.CreateDbContext().OemCompanies.Where(x => x.Id == retired.Id).ExecuteUpdateAsync(x => x.SetProperty(c => c.Status, AccountStatuses.Disabled), ct);
         var oema = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         var odm = await settings.CreateTypeAsync(buyer, new("ODM-12345", "含售前售后", 2), ct);
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([dingya.Id]), ct);
-        await settings.SetTypeVendorsAsync(buyer, odm.Id, new([yuankong.Id]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [dingya.Id]);
+        await settings.UpdateTypeSettingsAsync(buyer, odm, ct, vendorIds: [yuankong.Id]);
 
         ipms.Add("21089901");
         ipms.Add("21089961");
@@ -171,7 +171,7 @@ public sealed class OutsourceItemTests
             service.BatchUpdateAsync(buyer, new([new(first.Id, DateTime.UtcNow)], null, null, null, null, null), ct))).Status);
 
         // The mapping is resolved on read: removing it flags the item instead of changing its vendor.
-        await settings.SetTypeVendorsAsync(buyer, oema.Id, new([]), ct);
+        await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: []);
         Assert.Equal(OutsourceMatchStates.VendorMismatch,
             (await service.ListAsync(buyer, Query(vendorId: dingya.Id), 1, 20, 0, ct)).List.Single().MatchState);
 
