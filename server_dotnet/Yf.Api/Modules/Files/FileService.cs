@@ -169,7 +169,7 @@ public sealed class FileService(
             throw ApiException.Unauthorized("下载会话与文件不匹配");
 
         await using var conn = await db.OpenAsync(ct);
-        var actor = await RequireActiveDownloadActorAsync(conn, session, ct);
+        var actor = await RequireActiveDownloadActorAsync(conn, session, context, ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:download", ct);
         var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
@@ -219,7 +219,7 @@ public sealed class FileService(
         if (!session.Batch) throw ApiException.Unauthorized("下载会话与批量文件不匹配");
 
         await using var conn = await db.OpenAsync(ct);
-        var actor = await RequireActiveDownloadActorAsync(conn, session, ct);
+        var actor = await RequireActiveDownloadActorAsync(conn, session, context, ct);
         var batch = await PrepareBatchAsync(conn, actor, new BatchDownloadRequest(session.FileIds), ct);
         var lease = limiter.Acquire(actor.Id);
         try
@@ -270,7 +270,7 @@ public sealed class FileService(
         await using var conn = await db.OpenAsync(ct);
         if (!await identity.HasActiveSessionAsync(conn, null, grant.UserId, grant.SessionId, ct))
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
-        var actor = await LoadMediaActorAsync(conn, grant.UserId, ct);
+        var actor = await LoadMediaActorAsync(conn, grant.UserId, context, ct);
         await AccessService.RequirePermissionAsync(conn, null, actor, "file:preview", ct);
         var row = await LoadReadableAsync(conn, actor, id, ct);
         await RequireViewOrNotFoundAsync(conn, null, actor, row.ProjectId, ct);
@@ -635,11 +635,11 @@ public sealed class FileService(
     }
 
     private async Task<CurrentUser> RequireActiveDownloadActorAsync(
-        MySqlConnection conn, DownloadSession session, CancellationToken ct)
+        MySqlConnection conn, DownloadSession session, HttpContext context, CancellationToken ct)
     {
         if (!await identity.HasActiveSessionAsync(conn, null, session.UserId, session.AuthSessionId, ct))
             throw ApiException.Unauthorized("登录状态已失效，请重新登录");
-        return await LoadMediaActorAsync(conn, session.UserId, ct);
+        return await LoadMediaActorAsync(conn, session.UserId, context, ct);
     }
 
     private DownloadSession ResolveDownloadSession(HttpContext context, string handle, string path)
@@ -809,19 +809,22 @@ public sealed class FileService(
 
     private static string MediaPath(ulong id) => $"/api/v1/files/{id}/media";
 
-    private static async Task<CurrentUser> LoadMediaActorAsync(MySqlConnection conn, ulong userId, CancellationToken ct)
+    private async Task<CurrentUser> LoadMediaActorAsync(
+        MySqlConnection conn, ulong userId, HttpContext context, CancellationToken ct)
     {
         await using var ef = EfDb.Use(conn);
         var row = await ef.Users.Where(user => user.Id == userId).Select(user => new MediaActorRow
         {
             Id = user.Id, EmployeeNo = user.EmployeeNo, UserType = user.UserType, SupplierId = user.SupplierId,
-            Status = user.Status, MustChangePassword = user.MustChangePassword,
+            Status = user.Status, MustChangePassword = user.MustChangePassword, NetworkScope = user.NetworkScope,
         }).SingleOrDefaultAsync(ct);
         if (row is null || row.Status != AccountStatuses.Active || row.MustChangePassword)
             throw ApiException.Unauthorized("账号状态已变化，请重新登录");
         if (row.UserType == UserTypes.Supplier && (row.SupplierId is not ulong supplierId
             || !await ef.Suppliers.AnyAsync(supplier => supplier.Id == supplierId && supplier.Status == AccountStatuses.Active, ct)))
             throw ApiException.Unauthorized("所属供应商已被停用");
+        if (await AccountNetworkAccess.IsDeniedAsync(ef, row.UserType, row.NetworkScope,
+                RequestNetworkOrigin.Resolve(context, options), ct)) throw AccountNetworkAccess.Denied();
         return new(row.Id, row.EmployeeNo, row.UserType, row.SupplierId);
     }
 
@@ -856,6 +859,7 @@ public sealed class FileService(
         public ulong Id { get; set; }
         public string EmployeeNo { get; set; } = "";
         public string UserType { get; set; } = "";
+        public string NetworkScope { get; set; } = "";
         public ulong? SupplierId { get; set; }
         public string Status { get; set; } = "";
         public bool MustChangePassword { get; set; }

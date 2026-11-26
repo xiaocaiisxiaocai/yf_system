@@ -79,6 +79,43 @@ describe('系统参数与 SMTP 生产界面', () => {
     mocks.put.mockResolvedValue({ data: baseSmtp })
   })
 
+  it('edits internal networks and external hosts as one item per line', async () => {
+    let stored = [
+      { key: 'security.internal_networks', value: '10.0.0.0/8,172.16.0.0/12,::1' },
+      { key: 'security.external_hosts', value: 'external.example.invalid:8090,183.238.37.108:8090' },
+    ]
+    mocks.get.mockImplementation(async (url: string) => ({
+      data: url.endsWith('/configs') ? stored : url.endsWith('/mail-settings') ? baseSmtp : baseMail,
+    }))
+    mocks.put.mockImplementation(async (_url: string, { items }: { items: typeof stored }) => {
+      stored = items.map(({ key, value }) => ({ key, value: value.replaceAll('\n', ',') }))
+      return { data: {} }
+    })
+    const user = userEvent.setup()
+    renderConfig()
+
+    const networks = await screen.findByRole('textbox', { name: '内网网段' })
+    const hosts = screen.getByRole('textbox', { name: '外网访问地址' })
+    expect(networks).toHaveValue('10.0.0.0/8\n172.16.0.0/12\n::1')
+    expect(hosts).toHaveValue('external.example.invalid:8090\n183.238.37.108:8090')
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+
+    const newNetworks = '10.0.0.0/8\nfd00::/8'
+    const newHosts = 'external.example.invalid:8443\n[2001:db8::2]:8090'
+    fireEvent.change(networks, { target: { value: newNetworks } })
+    fireEvent.change(hosts, { target: { value: newHosts } })
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    expect(mocks.put).toHaveBeenCalledWith('/admin/system/configs', { items: [
+      { key: 'security.internal_networks', value: newNetworks },
+      { key: 'security.external_hosts', value: newHosts },
+    ] })
+    await waitFor(() => expect(networks).toBeEnabled())
+    expect(networks).toHaveValue(newNetworks)
+    expect(hosts).toHaveValue(newHosts)
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+  })
+
   it('system config exposes mail configuration, queue outcomes and missing mailbox hints', async () => {
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/admin/system/configs') return { data: [{ key: 'storage.warn_percent', value: '85' }] }

@@ -104,7 +104,9 @@ export interface NumericConfig {
   step?: number
 }
 
-export const CONFIG_META: Record<string, { name: string; description: string; hint?: string; numeric?: NumericConfig }> = {
+export const CONFIG_META: Record<string, { name: string; description: string; hint?: string; numeric?: NumericConfig; lineList?: boolean }> = {
+  'security.internal_networks': { name: '内网网段', description: 'CIDR 或单个 IP', lineList: true },
+  'security.external_hosts': { name: '外网访问地址', description: '主机名或 IP（含端口）', lineList: true },
   'upload.allowed_exts': { name: '允许上传类型', description: '允许上传的文件扩展名', hint: '使用英文逗号分隔' },
   'upload.chunk_size': { name: '上传分片大小', description: '每个上传分片的大小', numeric: { min: 0.25, max: 64, unit: 'MB', scale: MB, precision: 2, step: 0.25 } },
   'upload.max_file_size': { name: '单文件大小上限', description: '单个文件允许的最大大小', numeric: { min: 1, max: 20 * 1024, unit: 'MB', scale: MB } },

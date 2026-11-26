@@ -2,7 +2,7 @@ import { optionalTextLengthRule, textLengthRule } from '../../utils/textRules'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
-  Button, Card, Form, Input, Message, Modal, Popconfirm, Result, Select, Space, Tag, Tooltip, TreeSelect, Typography,
+  Button, Card, Form, Input, Message, Modal, Popconfirm, Radio, Result, Select, Space, Tag, Tooltip, TreeSelect, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -16,7 +16,7 @@ import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule, validateInitialPassword } from '../../utils/password'
 import type { ApiResponses } from '../../api/types'
-import type { DataScopeResponse, DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
+import type { DataScopeResponse, DepartmentTreeNode as ApiDepartmentTreeNode, UserBatchFailure, UserBatchUpdate, UserResponse } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../components/ExcelImportDialog'
@@ -37,6 +37,7 @@ interface UserRow {
   roleIds?: number[]
   roleNames?: string[]
   status: 'ACTIVE' | 'DISABLED'
+  networkScope: NetworkScope
   mustChangePassword?: boolean
   lastLoginAt?: string | null
   createdAt: string
@@ -48,6 +49,14 @@ interface RoleOpt {
 }
 
 const EMPTY_ROLE_OPTIONS: RoleOpt[] = []
+
+const NETWORK_SCOPE_LABELS = { INTERNAL_ONLY: '仅内网', ANY: '内外网均可' } as const
+type NetworkScope = keyof typeof NETWORK_SCOPE_LABELS & UserResponse['networkScope']
+
+const MAX_BATCH_USERS = 100
+const BATCH_EDIT_LABELS = { roleId: '更换角色', networkScope: '设置访问范围', departmentId: '调整组织' } as const
+type BatchEditField = keyof typeof BATCH_EDIT_LABELS
+type BatchChanges = Omit<UserBatchUpdate, 'userIds'>
 
 // Department tree from the API, with kind narrowed to the fixed three-level hierarchy.
 type DeptNode = Omit<ApiDepartmentTreeNode, 'kind' | 'children'> & {
@@ -159,6 +168,11 @@ export default function UserList() {
   const [status, setStatus] = useState<string>()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [batchField, setBatchField] = useState<BatchEditField | null>(null)
+  const [batchChanges, setBatchChanges] = useState<BatchChanges>({})
+  const [batchFailures, setBatchFailures] = useState<UserBatchFailure[]>([])
+  const batchInFlight = useRef(false)
   const [editOpen, setEditOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -213,6 +227,7 @@ export default function UserList() {
   const optionsError = canManageUsers && optionsQuery.isError && !optionsQuery.isFetching
   const loadedDepts = authorizationError || optionsQuery.isError ? undefined : optionsQuery.data?.depts
   const deptTreeData = useMemo(() => toTreeData(loadedDepts ?? []), [loadedDepts])
+  const batchDeptTreeData = useMemo(() => toTreeData(loadedDepts ?? [], { disableInactive: true }), [loadedDepts])
   const formDeptTreeData = useMemo(
     () => toTreeData(loadedDepts ?? [], { disableInactive: true, allowedInactiveId: editing?.departmentId ?? null }),
     [editing?.departmentId, loadedDepts],
@@ -355,6 +370,10 @@ export default function UserList() {
     ),
     onSuccess: invalidateUsers,
   }, queryClient)
+  const batchMutation = useMutation({
+    mutationFn: (request: UserBatchUpdate) =>
+      http.put<ApiResponses['PUT /admin/users/batch']>('/admin/users/batch', request),
+  }, queryClient)
   const deleteMutation = useMutation({
     mutationFn: (u: UserRow) => http.delete<ApiResponses['DELETE /admin/users/{id}']>(`/admin/users/${u.id}`),
     onSuccess: invalidateUsers,
@@ -366,6 +385,31 @@ export default function UserList() {
   }, queryClient)
   const saving = saveMutation.isPending
   const resettingPassword = passwordMutation.isPending
+  const batchPending = batchMutation.isPending
+  const batchDisabled = batchPending || selectedIds.length > MAX_BATCH_USERS
+
+  const openBatchEdit = (field: BatchEditField) => {
+    setBatchChanges({})
+    setBatchField(field)
+  }
+
+  const submitBatch = async (changes: BatchChanges) => {
+    if (!canManageUsers || batchInFlight.current || batchDisabled || !selectedIds.length) return
+    batchInFlight.current = true
+    try {
+      const { data: result } = await batchMutation.mutateAsync({ userIds: selectedIds, ...changes })
+      const succeeded = new Set(result.succeeded)
+      setSelectedIds((ids) => ids.filter((id) => !succeeded.has(id)))
+      setBatchField(null)
+      if (result.failed.length) setBatchFailures(result.failed)
+      else Message.success(`已更新 ${result.succeeded.length} 项`)
+      void invalidateUsers()
+    } catch {
+      // 全局请求拦截器已显示错误，保留选择与输入以便重试。
+    } finally {
+      batchInFlight.current = false
+    }
+  }
 
   // 打开编辑时读取该账号的显式覆盖值；加载失败就保持“跟随角色默认”，避免误清空已有设置。
   const loadScopes = async (userId: number) => {
@@ -411,7 +455,7 @@ export default function UserList() {
         Message.error('组织和角色选项尚未就绪，请重试加载')
         return
       }
-      const { roleId, ...values } = v
+      const { roleId, networkScope, ...values } = v
       const payload = {
         ...values,
         // 邮箱可选；留空时提交空字符串（清空已有邮箱），该账号不再收到邮件通知。
@@ -447,6 +491,7 @@ export default function UserList() {
             email: payload.email,
             departmentId: payload.departmentId,
             roleId: payload.roleId,
+            ...(networkScope !== (editing.networkScope ?? 'ANY') ? { networkScope } : {}),
             ...(changedScopes.length > 0
               ? { scopes: changedScopes.map(({ domain, value }) => ({ domain, scope: value || null })) }
               : {}),
@@ -459,7 +504,7 @@ export default function UserList() {
           .filter(({ domain }) => scopeValues[domain])
           .map(({ domain }) => ({ domain, scope: scopeValues[domain] }))
         await saveMutation.mutateAsync({
-          payload: { ...payload, ...(newScopes.length > 0 ? { scopes: newScopes } : {}) },
+          payload: { ...payload, networkScope, ...(newScopes.length > 0 ? { scopes: newScopes } : {}) },
         })
         Message.success('用户已创建（首次登录需改密）')
       }
@@ -609,6 +654,7 @@ export default function UserList() {
                 setScopeEffective({})
                 setScopeLoadedFor(null)
                 form.resetFields()
+                form.setFieldValue('networkScope', 'ANY')
                 setEditOpen(true)
               }}
             >
@@ -617,6 +663,30 @@ export default function UserList() {
           </Space>
         )}
       </div>
+      {canManageUsers && selectedIds.length > 0 && (
+        <div className="page-toolbar responsive-toolbar">
+          <Space wrap>
+            <Typography.Text>已选 {selectedIds.length} 项</Typography.Text>
+            <Button type="text" size="small" disabled={batchPending} onClick={() => setSelectedIds([])}>取消选择</Button>
+            {selectedIds.length > MAX_BATCH_USERS && <Typography.Text type="error">每次最多操作 100 项</Typography.Text>}
+            <Button size="small" disabled={batchDisabled || optionsLoading || optionsError || roles.length === 0} onClick={() => openBatchEdit('roleId')}>
+              {BATCH_EDIT_LABELS.roleId}
+            </Button>
+            <Button size="small" disabled={batchDisabled} onClick={() => openBatchEdit('networkScope')}>
+              {BATCH_EDIT_LABELS.networkScope}
+            </Button>
+            <Button size="small" disabled={batchDisabled || optionsLoading || optionsError || activeOrganizations.length === 0} onClick={() => openBatchEdit('departmentId')}>
+              {BATCH_EDIT_LABELS.departmentId}
+            </Button>
+            <DangerPopconfirm title={`启用所选 ${selectedIds.length} 个账号？`} okText="确认启用" onOk={() => submitBatch({ status: 'ACTIVE' })}>
+              <Button size="small" disabled={batchDisabled}>启用</Button>
+            </DangerPopconfirm>
+            <DangerPopconfirm title={`停用所选 ${selectedIds.length} 个账号？`} okText="确认停用" onOk={() => submitBatch({ status: 'DISABLED' })}>
+              <Button size="small" status="danger" disabled={batchDisabled}>停用</Button>
+            </DangerPopconfirm>
+          </Space>
+        </div>
+      )}
       {refreshError && (
         <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 8 }}>
           <Typography.Text type="error">加载失败</Typography.Text>
@@ -630,6 +700,14 @@ export default function UserList() {
         <ResizableTable tableId="users"
           className="page-table"
           rowKey="id"
+          rowSelection={canManageUsers ? {
+            type: 'checkbox',
+            selectedRowKeys: selectedIds,
+            checkCrossPage: true,
+            preserveSelectedRowKeys: true,
+            onChange: (keys) => { if (!batchInFlight.current) setSelectedIds(keys.map(Number)) },
+            checkboxProps: (row) => ({ disabled: batchPending, 'aria-label': `选择 ${row.employeeNo}` }),
+          } : undefined}
           loading={loading}
           data={data.list}
           scroll={{ x: 1060, y: 'var(--page-table-scroll-y)' }}
@@ -650,6 +728,12 @@ export default function UserList() {
             render: (v?: string) => (v ? <Tag size="small" className="table-cell-wrap">{v}</Tag> : '-'),
           },
           { title: '邮箱', dataIndex: 'email', width: 220, align: 'left' as const, ellipsis: true, render: (v?: string) => v || '-' },
+          {
+            title: '访问范围', dataIndex: 'networkScope', width: 112,
+            render: (value: NetworkScope) => <Tag size="small" color={value === 'INTERNAL_ONLY' ? 'orange' : undefined}>
+              {NETWORK_SCOPE_LABELS[value ?? 'ANY']}
+            </Tag>,
+          },
           {
             title: '状态',
             dataIndex: 'status',
@@ -680,6 +764,7 @@ export default function UserList() {
                       email: r.email,
                       departmentId: r.departmentId ? String(r.departmentId) : undefined,
                       roleId: r.roleId ?? r.roleIds?.[0],
+                      networkScope: r.networkScope ?? 'ANY',
                     })
                     setEditOpen(true)
                   }}
@@ -731,6 +816,57 @@ export default function UserList() {
           }}
         />
       )}
+
+      <Modal
+        title={batchField ? BATCH_EDIT_LABELS[batchField] : ''}
+        visible={canManageUsers && batchField !== null}
+        style={{ width: 360, maxWidth: 'calc(100vw - 32px)' }}
+        unmountOnExit
+        confirmLoading={batchPending}
+        closable={!batchPending}
+        maskClosable={!batchPending}
+        escToExit={!batchPending}
+        okButtonProps={{ disabled: !batchField || batchChanges[batchField] == null || batchDisabled }}
+        cancelButtonProps={{ disabled: batchPending }}
+        onOk={() => submitBatch(batchChanges)}
+        onCancel={() => { if (!batchInFlight.current) setBatchField(null) }}
+      >
+        {batchField === 'roleId' && (
+          <Select showSearch placeholder="选择角色" value={batchChanges.roleId ?? undefined} onChange={(roleId) => setBatchChanges({ roleId })}>
+            {roles.map((role) => <Select.Option key={role.id} value={role.id}>{role.name}</Select.Option>)}
+          </Select>
+        )}
+        {batchField === 'networkScope' && (
+          <Radio.Group aria-label="访问范围" value={batchChanges.networkScope} onChange={(networkScope) => setBatchChanges({ networkScope })}>
+            <Radio value="INTERNAL_ONLY">{NETWORK_SCOPE_LABELS.INTERNAL_ONLY}</Radio>
+            <Radio value="ANY">{NETWORK_SCOPE_LABELS.ANY}</Radio>
+          </Radio.Group>
+        )}
+        {batchField === 'departmentId' && (
+          <TreeSelect
+            showSearch
+            placeholder="选择组织"
+            treeData={batchDeptTreeData}
+            value={batchChanges.departmentId?.toString()}
+            onChange={(id) => setBatchChanges({ departmentId: Number(id) })}
+            filterTreeNode={(input, node) => String(node.props?.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
+          />
+        )}
+      </Modal>
+      <Modal
+        className="form-dialog"
+        title={`操作失败（${batchFailures.length} 项）`}
+        visible={canManageUsers && batchFailures.length > 0}
+        unmountOnExit
+        footer={<Button type="primary" onClick={() => setBatchFailures([])}>关闭</Button>}
+        onCancel={() => setBatchFailures([])}
+      >
+        <ul style={{ maxHeight: 'min(50vh, 360px)', overflowY: 'auto', paddingInlineStart: 20, margin: 0 }}>
+          {batchFailures.map(({ id, employeeNo, message }) => (
+            <li key={id}><strong>{employeeNo ?? `#${id}`}</strong>：{message}</li>
+          ))}
+        </ul>
+      </Modal>
 
       <ExcelImportDialog<InternalUserImportPayload>
         visible={importOpen}
@@ -806,6 +942,12 @@ export default function UserList() {
                   </Select.Option>
                 ))}
               </Select>
+            </Form.Item>
+            <Form.Item className="form-grid-full" label="访问范围" field="networkScope">
+              <Radio.Group aria-label="访问范围">
+                <Radio value="INTERNAL_ONLY">{NETWORK_SCOPE_LABELS.INTERNAL_ONLY}</Radio>
+                <Radio value="ANY">{NETWORK_SCOPE_LABELS.ANY}</Radio>
+              </Radio.Group>
             </Form.Item>
             {canManageUsers && SCOPE_DOMAINS.map(({ domain, label }) => (
               <Form.Item key={domain} label={label}>

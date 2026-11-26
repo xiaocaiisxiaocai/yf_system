@@ -25,7 +25,8 @@ public sealed class MigrationRoundTripTests
     private const string BeforeOutsourceFilesField = "20261124083731_AddOutsourceTransferLink";
     private const string BeforeOutsourceTypeElectricalHandoff = "20261124093646_AddOutsourceFilesField";
     private const string RenameHandoffLabel = "20261125030000_RenameOutsourceHandoffLabel";
-    private const string Latest = "20261125140406_WidenOutsourceMailRecipientEmail";
+    private const string WidenRecipientEmail = "20261125140406_WidenOutsourceMailRecipientEmail";
+    private const string Latest = "20261126031537_AddAccountNetworkScope";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -253,12 +254,49 @@ public sealed class MigrationRoundTripTests
         var before = await SchemaAsync(database, ct);
         Assert.Contains(before, line => line.StartsWith("column|outsource_mail_recipients|email|varchar(128)|", StringComparison.Ordinal));
 
-        await migrator.MigrateAsync(Latest, ct);
+        await migrator.MigrateAsync(WidenRecipientEmail, ct);
         var after = await SchemaAsync(database, ct);
         Assert.Contains(after, line => line.StartsWith("column|outsource_mail_recipients|email|varchar(254)|", StringComparison.Ordinal));
 
         await migrator.MigrateAsync(RenameHandoffLabel, ct);
         Assert.Equal(before, await SchemaAsync(database, ct));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AccountNetworkScopeDefaultsExistingUsersAndPreservesSettingsOnRollback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("account_network_scope", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(WidenRecipientEmail, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO users(employee_no,password_hash,real_name,email,user_type)
+            VALUES ('legacy-internal','placeholder','旧账号','','INTERNAL');
+            """, ct);
+        var before = await SchemaAsync(database, ct);
+
+        await migrator.MigrateAsync(Latest, ct);
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal("ANY", await conn.ExecuteScalarAsync<string>("SELECT network_scope FROM users WHERE employee_no='legacy-internal'"));
+            Assert.Equal("183.238.37.108:8090", await conn.ExecuteScalarAsync<string>(
+                "SELECT cfg_value FROM system_configs WHERE cfg_key='security.external_hosts'"));
+            Assert.Equal("10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1", await conn.ExecuteScalarAsync<string>(
+                "SELECT cfg_value FROM system_configs WHERE cfg_key='security.internal_networks'"));
+            var revision = await conn.ExecuteScalarAsync<ulong>("SELECT CAST(cfg_value AS UNSIGNED) FROM system_configs WHERE cfg_key='security.identity_revision'");
+            await conn.ExecuteAsync("UPDATE users SET network_scope='INTERNAL_ONLY' WHERE employee_no='legacy-internal'");
+            Assert.Equal(revision + 1, await conn.ExecuteScalarAsync<ulong>("SELECT CAST(cfg_value AS UNSIGNED) FROM system_configs WHERE cfg_key='security.identity_revision'"));
+            await conn.ExecuteAsync("UPDATE system_configs SET cfg_value='outside.example:443' WHERE cfg_key='security.external_hosts'");
+        }
+
+        await migrator.MigrateAsync(WidenRecipientEmail, ct);
+        Assert.Equal(before, await SchemaAsync(database, ct));
+        await migrator.MigrateAsync(Latest, ct);
+        await using var restored = await database.Database.OpenAsync(ct);
+        Assert.Equal("outside.example:443", await restored.ExecuteScalarAsync<string>(
+            "SELECT cfg_value FROM system_configs WHERE cfg_key='security.external_hosts'"));
+        Assert.Equal("ANY", await restored.ExecuteScalarAsync<string>("SELECT network_scope FROM users WHERE employee_no='legacy-internal'"));
     }
 
     private static async Task<string?> HandoffLabelAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct)
@@ -286,6 +324,7 @@ public sealed class MigrationRoundTripTests
         var beforeElectricalHandoff = await SchemaAsync(database, ct);
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("table|outsource_default_cc_modules|", StringComparison.Ordinal));
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|outsource_items|electrical_handoff", StringComparison.Ordinal));
+        Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|users|network_scope|", StringComparison.Ordinal));
         Assert.Contains(beforeElectricalHandoff, line => line.StartsWith("column|outsource_mails|kind|varchar(16)|", StringComparison.Ordinal));
         Assert.Contains(beforeElectricalHandoff, line => line.StartsWith("column|outsource_mails|created_by|bigint(20) unsigned|NO|", StringComparison.Ordinal)
             || line.StartsWith("column|outsource_mails|created_by|bigint unsigned|NO|", StringComparison.Ordinal));

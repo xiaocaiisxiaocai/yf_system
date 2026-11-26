@@ -216,6 +216,7 @@
   "PUT /api/v1/admin/suppliers/{}/status",
   "PUT /api/v1/admin/system/configs",
   "PUT /api/v1/admin/system/mail-settings",
+  "PUT /api/v1/admin/users/batch",
   "PUT /api/v1/admin/users/{}",
   "PUT /api/v1/admin/users/{}/data-scopes",
   "PUT /api/v1/admin/users/{}/password",

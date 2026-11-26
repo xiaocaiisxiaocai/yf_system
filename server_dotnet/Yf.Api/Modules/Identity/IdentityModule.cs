@@ -20,7 +20,7 @@ public static class IdentityModule
         auth.MapPost("/login", async (LoginRequest request, HttpContext ctx, IdentityService service, AppOptions options, CancellationToken ct) =>
         {
             if (!OriginAllowed(ctx.Request, options.AllowedWebOrigins)) throw ApiException.Forbidden();
-            var result = await service.LoginAsync(request, ClientIp.Resolve(ctx, options), ct);
+            var result = await service.LoginAsync(request, RequestNetworkOrigin.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, result.RefreshExpiresAt, options);
             return result.Response;
         });
@@ -28,7 +28,7 @@ public static class IdentityModule
         {
             if (!OriginAllowed(ctx.Request, options.AllowedWebOrigins)) throw ApiException.Forbidden();
             if (!ctx.Request.Cookies.TryGetValue(RefreshCookie, out var raw)) throw ApiException.Unauthorized("缺少登录凭证");
-            var result = await service.RefreshAsync(raw, ClientIp.Resolve(ctx, options), ct);
+            var result = await service.RefreshAsync(raw, RequestNetworkOrigin.Resolve(ctx, options), ct);
             SetRefreshCookie(ctx, result.Refresh, result.RefreshExpiresAt, options);
             return result.Response;
         });

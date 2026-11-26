@@ -22,7 +22,8 @@ internal static class HandwrittenTestSchemas
             status VARCHAR(20) NOT NULL, must_change_password BOOLEAN NOT NULL,
             email VARCHAR(255) NULL, real_name VARCHAR(100) NOT NULL,
             password_hash VARCHAR(255) NOT NULL DEFAULT '', department_id BIGINT UNSIGNED NULL,
-            last_login_at DATETIME(6) NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            last_login_at DATETIME(6) NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+            network_scope VARCHAR(16) NOT NULL DEFAULT 'ANY'
         );
         CREATE TABLE suppliers(
             id BIGINT UNSIGNED PRIMARY KEY, name VARCHAR(128) NOT NULL,
@@ -182,7 +183,8 @@ internal static class HandwrittenTestSchemas
             supplier_id BIGINT UNSIGNED NULL,
             department_id BIGINT UNSIGNED NULL,
             status VARCHAR(16) NOT NULL,
-            must_change_password TINYINT(1) NOT NULL DEFAULT 0
+            must_change_password TINYINT(1) NOT NULL DEFAULT 0,
+            network_scope VARCHAR(16) NOT NULL DEFAULT 'ANY'
         );
         CREATE TABLE role_data_scopes(
             role_id BIGINT UNSIGNED NOT NULL, domain VARCHAR(32) NOT NULL, scope VARCHAR(16) NOT NULL,
@@ -241,7 +243,8 @@ internal static class HandwrittenTestSchemas
         CREATE TABLE users(
             id BIGINT UNSIGNED PRIMARY KEY, employee_no VARCHAR(32) NOT NULL,
             user_type VARCHAR(16) NOT NULL, supplier_id BIGINT UNSIGNED NULL,
-            status VARCHAR(16) NOT NULL, must_change_password BOOLEAN NOT NULL
+            status VARCHAR(16) NOT NULL, must_change_password BOOLEAN NOT NULL,
+            network_scope VARCHAR(16) NOT NULL DEFAULT 'ANY'
         );
         CREATE TABLE suppliers(id BIGINT UNSIGNED PRIMARY KEY, status VARCHAR(16) NOT NULL);
         CREATE TABLE refresh_tokens(

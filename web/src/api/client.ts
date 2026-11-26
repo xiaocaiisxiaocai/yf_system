@@ -207,15 +207,25 @@ async function refreshProfileAfterForbidden(): Promise<void> {
 /**
  * ok: 已换到新令牌。rejected: 服务端明确拒绝（refresh cookie 失效、响应不符合契约），会话已结束。
  * unavailable: 网络、超时、429、5xx 或本地锁协调失败（也包括会话已被替换而放弃本次刷新）；
- * refresh cookie 仍可能有效，调用方保留本地登录态，不得据此登出。
+ * 40305: 当前网络被拒绝，携带服务端错误说明。两者都保留本地登录态，换网后可重试。
  */
-type RefreshOutcome = 'ok' | 'rejected' | 'unavailable'
+type TemporaryRefreshFailure = 'unavailable' | { error: AxiosError<ApiErrorResponse>; message: string }
+type RefreshOutcome = 'ok' | 'rejected' | TemporaryRefreshFailure
 
+const NETWORK_SCOPE_ERROR_CODE = 40305
 const REFRESH_UNAVAILABLE_MESSAGE = '网络错误，暂时无法恢复登录状态，请稍后重试'
 
+function refreshFailureMessage(outcome: TemporaryRefreshFailure): string {
+  return outcome === 'unavailable' ? REFRESH_UNAVAILABLE_MESSAGE : outcome.message
+}
+
 function classifyRefreshFailure(error: unknown): RefreshOutcome {
-  if (!axios.isAxiosError(error)) return 'unavailable'
+  if (!axios.isAxiosError<ApiErrorResponse>(error)) return 'unavailable'
   const status = error.response?.status
+  if (status === 403 && error.response?.data?.code === NETWORK_SCOPE_ERROR_CODE) {
+    const message = error.response.data.message
+    return { error, message: isNonEmptyString(message) ? message : '该账号仅限内网访问' }
+  }
   if (status === undefined || status === 408 || status === 425 || status === 429 || status >= 500) return 'unavailable'
   return 'rejected'
 }
@@ -259,7 +269,7 @@ export async function getRealtimeAccessToken(forceRefresh = false): Promise<stri
   if (!before.token) return ''
   if (forceRefresh || tokenExpiresSoon(before.token)) {
     const refreshed = await tryRefresh(before.generation)
-    if (refreshed !== 'ok') throw new Error('实时协作登录状态刷新失败')
+    if (refreshed !== 'ok') throw new Error(typeof refreshed === 'string' ? '实时协作登录状态刷新失败' : refreshed.message)
   }
   const after = useAuth.getState()
   if (after.generation !== before.generation || !after.token) throw new Error('实时协作会话已变化')
@@ -300,9 +310,9 @@ export async function bootAuth(): Promise<void> {
     if (useAuth.getState().generation === generation) {
       // 只有服务端明确拒绝才清空持久化用户态；网络或服务暂时不可用时保留，允许手动重试恢复。
       if (outcome === 'rejected') useAuth.getState().logout()
-      else if (outcome === 'unavailable') {
+      else if (outcome !== 'ok') {
         useAuth.getState().setBootUnavailable(true)
-        Message.error(REFRESH_UNAVAILABLE_MESSAGE)
+        Message.error(refreshFailureMessage(outcome))
       }
     }
   }
@@ -331,7 +341,7 @@ export async function retryBootAuth(): Promise<void> {
       useAuth.getState().logout()
     } else {
       useAuth.getState().setBootUnavailable(true)
-      Message.error(REFRESH_UNAVAILABLE_MESSAGE)
+      Message.error(refreshFailureMessage(outcome))
     }
   })().finally(() => {
     if (retryingBoot === task) retryingBoot = null
@@ -374,10 +384,9 @@ http.interceptors.response.use(
       if (!isCurrentSession(cfg)) return Promise.reject(error)
       if (isOemPortalPath(location.pathname)) return Promise.reject(error)
       if (outcome === 'ok') return http(cfg)
-      if (outcome === 'unavailable') {
-        // 刷新请求没有得到服务端的明确答复，会话未必失效：保留登录态，只让这次请求失败。
-        Message.error(REFRESH_UNAVAILABLE_MESSAGE)
-        return Promise.reject(error)
+      if (outcome !== 'rejected') {
+        Message.error(refreshFailureMessage(outcome))
+        return Promise.reject(outcome === 'unavailable' ? error : outcome.error)
       }
     }
     if (status === 401 && !isOemPortalPath(location.pathname)) {
@@ -391,7 +400,7 @@ http.interceptors.response.use(
     if (biz === 40303 && !isOemPortalPath(location.pathname) && location.pathname !== '/change-password') {
       useAuth.setState({ mustChangePassword: true })
     }
-    if (status === 403 && biz !== 40303 && !cfg?.url?.includes('/auth/profile')) {
+    if (status === 403 && biz !== 40303 && biz !== NETWORK_SCOPE_ERROR_CODE && !cfg?.url?.includes('/auth/profile')) {
       // 资料刷新放到后台（内部已去重并吞掉失败）：调用方立即拿到原始 403，不被最长 60 秒的资料请求拖住。
       void refreshProfileAfterForbidden()
     }

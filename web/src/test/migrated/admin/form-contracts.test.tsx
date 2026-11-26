@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -236,10 +236,155 @@ describe('管理员表单契约', () => {
     await openArcoSelect('选择组织', '研发部（部门）')
     expect((await screen.findAllByText('历史部（部门）（已停用）')).at(-1)!.closest('.arco-tree-node')).toHaveClass('arco-tree-node-disabled')
     await openArcoSelect('选择角色', '内部成员')
+    expect(screen.getByRole('radio', { name: '内外网均可' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: '仅内网' }))
     await user.click(screen.getByRole('button', { name: '创建用户' }))
 
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1))
-    expect(mocks.post.mock.calls[0][1]).toMatchObject({ employeeNo: 'zhuhui.cai', email: '' })
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ employeeNo: 'zhuhui.cai', email: '', networkScope: 'INTERNAL_ONLY' })
+  })
+
+  it('internal user edit reads the network scope and submits the changed value', async () => {
+    const getFixtures = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/users') return { data: page([{
+        id: 21, employeeNo: 'limited', realName: '内部员工', email: '', departmentId: 4, departmentName: '研发部',
+        roleId: 7, roleName: '内部成员', status: 'ACTIVE', networkScope: 'INTERNAL_ONLY',
+      }]) }
+      if (url === '/admin/users/21/data-scopes') return { data: [] }
+      return getFixtures(url)
+    })
+    const user = userEvent.setup()
+    render(<UserList />)
+
+    expect((await screen.findByText('仅内网')).closest('.arco-tag')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '编辑' }))
+    expect(await screen.findByRole('radio', { name: '仅内网' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: '内外网均可' }))
+    await user.click(screen.getByRole('button', { name: '保存用户' }))
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/users/21', expect.objectContaining({ networkScope: 'ANY' })))
+  })
+
+  const batchUsers = [
+    { id: 21, employeeNo: 'batch_first', realName: '员工一', status: 'ACTIVE', networkScope: 'ANY' },
+    { id: 22, employeeNo: 'batch_second', realName: '员工二', status: 'DISABLED', networkScope: 'ANY' },
+  ]
+
+  it('keeps selected users across pages and sends the selected IDs with a single role', async () => {
+    const getFixtures = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string, config?: { params?: { page?: number } }) => {
+      if (url !== '/admin/users') return getFixtures(url)
+      const currentPage = config?.params?.page ?? 1
+      return { data: { list: [batchUsers[currentPage - 1]], page: currentPage, pageSize: 10, total: 11 } }
+    })
+    mocks.put.mockResolvedValue({ data: { succeeded: [21, 22], failed: [] } })
+    const user = userEvent.setup()
+    const { container } = render(<UserList />)
+
+    await user.click(await screen.findByRole('checkbox', { name: '选择 batch_first' }))
+    expect(screen.getByText('已选 1 项')).toBeVisible()
+    await user.click(container.querySelector<HTMLElement>('.arco-pagination-item-next')!)
+    await user.click(await screen.findByRole('checkbox', { name: '选择 batch_second' }))
+    expect(screen.getByText('已选 2 项')).toBeVisible()
+    await user.click(container.querySelector<HTMLElement>('.arco-pagination-item-prev')!)
+    expect(await screen.findByRole('checkbox', { name: '选择 batch_first' })).toBeChecked()
+
+    await user.click(screen.getByRole('button', { name: '更换角色' }))
+    const dialog = await screen.findByRole('dialog', { name: '更换角色' })
+    expect(within(dialog).getByRole('button', { name: '确定' })).toBeDisabled()
+    await openArcoSelect('选择角色', '内部成员')
+    await user.click(within(dialog).getByRole('button', { name: '确定' }))
+
+    expect(await screen.findByText('已更新 2 项')).toBeVisible()
+    expect(mocks.put).toHaveBeenCalledExactlyOnceWith('/admin/users/batch', { userIds: [21, 22], roleId: 7 })
+    expect(screen.queryByRole('button', { name: '取消选择' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('checkbox', { name: '选择 batch_first' })).not.toBeChecked()
+  })
+
+  it('reports partial network-scope failures, refreshes the list, and retries only failed IDs', async () => {
+    const getFixtures = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string) =>
+      url === '/admin/users' ? { data: page(batchUsers) } : getFixtures(url))
+    mocks.put
+      .mockResolvedValueOnce({ data: { succeeded: [21], failed: [{ id: 22, employeeNo: 'batch_second', message: '无操作权限' }] } })
+      .mockResolvedValueOnce({ data: { succeeded: [22], failed: [] } })
+    const user = userEvent.setup()
+    render(<UserList />)
+
+    await user.click(await screen.findByRole('checkbox', { name: '选择 batch_first' }))
+    await user.click(screen.getByRole('checkbox', { name: '选择 batch_second' }))
+    const setNetworkScope = async (label: string) => {
+      await user.click(screen.getByRole('button', { name: '设置访问范围' }))
+      const dialog = await screen.findByRole('dialog', { name: '设置访问范围' })
+      await user.click(within(dialog).getByRole('radio', { name: label }))
+      await user.click(within(dialog).getByRole('button', { name: '确定' }))
+    }
+    await setNetworkScope('仅内网')
+
+    const result = await screen.findByRole('dialog', { name: '操作失败（1 项）' })
+    expect(within(result).getByRole('listitem')).toHaveTextContent('batch_second：无操作权限')
+    expect(mocks.put).toHaveBeenNthCalledWith(1, '/admin/users/batch', { userIds: [21, 22], networkScope: 'INTERNAL_ONLY' })
+    expect(screen.getByRole('checkbox', { name: '选择 batch_first' })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: '选择 batch_second' })).toBeChecked()
+    expect(screen.getByText('已选 1 项')).toBeVisible()
+    expect(mocks.get.mock.calls.filter(([url]) => url === '/admin/users')).toHaveLength(2)
+    await user.click(within(result).getByRole('button', { name: '关闭' }))
+
+    await setNetworkScope('内外网均可')
+    expect(await screen.findByText('已更新 1 项')).toBeVisible()
+    expect(mocks.put).toHaveBeenNthCalledWith(2, '/admin/users/batch', { userIds: [22], networkScope: 'ANY' })
+  })
+
+  it('clears selection and hides batch controls for users without edit permission', async () => {
+    const getFixtures = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string) =>
+      url === '/admin/users' ? { data: page(batchUsers) } : getFixtures(url))
+    const user = userEvent.setup()
+    const { rerender } = render(<UserList />)
+    await user.click(await screen.findByRole('checkbox', { name: '选择 batch_first' }))
+    await user.click(screen.getByRole('button', { name: '取消选择' }))
+    expect(screen.getByRole('checkbox', { name: '选择 batch_first' })).not.toBeChecked()
+    expect(screen.queryByText('已选 1 项')).not.toBeInTheDocument()
+
+    mocks.permissions = ['user:view']
+    rerender(<UserList />)
+    expect(await screen.findByText('batch_first')).toBeVisible()
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '更换角色' })).not.toBeInTheDocument()
+  })
+
+  it('submits the chosen organization and confirms a status change for all selected users', async () => {
+    const getFixtures = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string) =>
+      url === '/admin/users' ? { data: page(batchUsers) } : getFixtures(url))
+    mocks.put.mockResolvedValue({ data: { succeeded: [21, 22], failed: [] } })
+    const user = userEvent.setup()
+    render(<UserList />)
+
+    const selectBoth = async () => {
+      await user.click(await screen.findByRole('checkbox', { name: '选择 batch_first' }))
+      await user.click(screen.getByRole('checkbox', { name: '选择 batch_second' }))
+    }
+    await selectBoth()
+    await user.click(screen.getByRole('button', { name: '调整组织' }))
+    const dialog = await screen.findByRole('dialog', { name: '调整组织' })
+    await openArcoSelect('选择组织', '研发部（部门）')
+    await user.click(within(dialog).getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(screen.queryByText('已选 2 项')).not.toBeInTheDocument())
+    await waitFor(() => expect(dialog).not.toBeInTheDocument())
+    expect(mocks.put).toHaveBeenNthCalledWith(1, '/admin/users/batch', { userIds: [21, 22], departmentId: 4 })
+
+    await selectBoth()
+    const toolbar = screen.getByText('已选 2 项').closest<HTMLElement>('.page-toolbar')!
+    await user.click(within(toolbar).getByRole('button', { name: '停用' }))
+    const confirmation = await screen.findByRole('tooltip')
+    expect(within(confirmation).getByText('停用所选 2 个账号？')).toBeVisible()
+    expect(mocks.put).toHaveBeenCalledTimes(1)
+    fireEvent.click(within(confirmation).getByRole('button', { name: '确认停用' }))
+    await waitFor(() => expect(mocks.put).toHaveBeenNthCalledWith(2, '/admin/users/batch', {
+      userIds: [21, 22], status: 'DISABLED',
+    }))
   })
 
   it('password change rejects same-render duplicate submissions and unlocks after completion', async () => {
