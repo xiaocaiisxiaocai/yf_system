@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Dapper;
 using Yf.Api.Infrastructure;
@@ -247,6 +248,77 @@ public sealed class OutsourceItemTests
         var list = await service.ListAsync(viewer, Query(), 1, 20, 0, ct);
         Assert.Equal(["A101", "A102", "A300", "B100", "B200"], list.List.Select(x => x.WorkOrderNo));
         Assert.Equal(["A300", "B100"], (await service.ListAsync(viewer, Query(), 2, 2, 2, ct)).List.Select(x => x.WorkOrderNo));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task WorkOrderTermsFilterThePagedListAndWorkbook()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_work_orders", ct);
+        await database.InitializeBusinessFixtureAsync(ct);
+        await database.ExecuteAsync("""
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
+              (9722,'wo_viewer','unused','查看甲','wo@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            """, ct);
+        var viewer = new CurrentUser(9722, "wo_viewer", "INTERNAL", null);
+        var factory = EfTestSupport.DbContextFactory(database.Options);
+        var service = new OutsourceItemService(factory, new AuditService([]), new StubIpms());
+        var alpha = await OutsourceTestVendors.CreateAsync(factory, "Alpha", ct);
+        var beta = await OutsourceTestVendors.CreateAsync(factory, "Beta", ct);
+        await using (var context = factory.CreateDbContext())
+        {
+            uint serial = 0;
+            void Add(string no, string customer, ulong vendorId) => context.OutsourceItems.Add(new()
+            {
+                WorkOrderNo = no, SerialNo = ++serial, Customer = customer, VendorId = vendorId,
+                OutsourceDate = new DateOnly(2026, 11, 20), Status = "NORMAL", SendStatus = "UNSENT",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            });
+            Add("WO-ALPHA-01", "Target", alpha.Id);
+            Add("WO-BETA-02", "Target", beta.Id);
+            Add("WO-BETA-03", "Other", alpha.Id);
+            Add("WO-GAMMA-04", "Target", alpha.Id);
+            Add("WO-WITH SPACE,COMMA-05", "Other", alpha.Id);
+            Add("WO-LITERAL%06", "Other", alpha.Id);
+            Add("WO-LITERAL_07", "Other", alpha.Id);
+            Add("WO-LITERALX06", "Other", alpha.Id);
+            Add("WO-LITERALX07", "Other", alpha.Id);
+            await context.SaveChangesAsync(ct);
+        }
+
+        static OutsourceItemQuery Parse(string workOrders, string? keyword = null, ulong? vendorId = null)
+        {
+            var request = new DefaultHttpContext().Request;
+            request.QueryString = QueryString.Create("workOrders", workOrders);
+            if (keyword is not null) request.QueryString += QueryString.Create("keyword", keyword);
+            if (vendorId is { } id) request.QueryString += QueryString.Create("vendorId", id.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return OutsourceItemQuery.From(request);
+        }
+
+        var multiple = Parse("ALPHA, BETA GAMMA-MISSING");
+        var firstPage = await service.ListAsync(viewer, multiple, 1, 2, 0, ct);
+        Assert.Equal(3UL, firstPage.Total);
+        Assert.Equal(["WO-ALPHA-01", "WO-BETA-03"], firstPage.List.Select(x => x.WorkOrderNo));
+        var secondPage = await service.ListAsync(viewer, multiple, 2, 2, 2, ct);
+        Assert.Equal("WO-BETA-02", Assert.Single(secondPage.List).WorkOrderNo);
+
+        async Task<string[]> Orders(OutsourceItemQuery query) =>
+            (await service.ListAsync(viewer, query, 1, 20, 0, ct)).List.Select(x => x.WorkOrderNo).ToArray();
+        var combined = Parse("ALPHA, BETA", keyword: "Target", vendorId: alpha.Id);
+        Assert.Equal(["WO-ALPHA-01"], await Orders(combined));
+        Assert.Equal(["WO-GAMMA-04", "WO-WITH SPACE,COMMA-05"], await Orders(Parse(" WITH SPACE,COMMA \r\n\r\n GAMMA ")));
+        // Wildcards match literally; the list order follows the database collation, so compare ordinally.
+        Assert.Equal(["WO-LITERAL%06", "WO-LITERAL_07"], (await Orders(Parse("% _"))).OrderBy(x => x, StringComparer.Ordinal));
+
+        var export = await service.ExportAsync(viewer, multiple, ct);
+        using var zip = new ZipArchive(new MemoryStream(export.Content));
+        using var reader = new StreamReader(zip.GetEntry("xl/worksheets/sheet1.xml")!.Open());
+        var sheet = await reader.ReadToEndAsync(ct);
+        Assert.Contains("WO-ALPHA-01", sheet, StringComparison.Ordinal);
+        Assert.Contains("WO-BETA-02", sheet, StringComparison.Ordinal);
+        Assert.Contains("WO-BETA-03", sheet, StringComparison.Ordinal);
+        Assert.DoesNotContain("WO-GAMMA-04", sheet, StringComparison.Ordinal);
+        Assert.DoesNotContain("WO-LITERAL", sheet, StringComparison.Ordinal);
     }
 
     private static OutsourceItemQuery Query(ulong? vendorId = null, ulong? typeId = null, string? keyword = null, bool includeClosed = false) =>

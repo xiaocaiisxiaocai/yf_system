@@ -452,8 +452,6 @@ public sealed partial class MesMirrorSyncService(
 
     private sealed record OrderRecord(string WorkOrderNo, DateTime FetchedAt, string RawJson);
 
-    private static readonly System.Text.RegularExpressions.Regex TermSeparators = new(@"[\s,，;；、]+");
-
     private static readonly System.Text.RegularExpressions.Regex FieldName = new("^[A-Za-z][A-Za-z0-9]{0,40}$");
 
     /// <summary>
@@ -467,19 +465,11 @@ public sealed partial class MesMirrorSyncService(
         foreach (var (field, text) in (filters ?? new Dictionary<string, string?>()).Where(item => !string.IsNullOrEmpty(item.Value)).Take(60))
         {
             if (!FieldName.IsMatch(field)) throw ApiException.BadRequest("筛选条件格式不正确");
-            var terms = Terms(text!).Distinct(StringComparer.OrdinalIgnoreCase).Take(500).ToArray();
+            var terms = OutsourceFilterTerms.Split(text!).Distinct(StringComparer.OrdinalIgnoreCase).Take(500).ToArray();
             if (terms.Length > 0) result.Add((field, terms));
         }
         return result;
     }
-
-    /// <summary>
-    /// Pasted lines are whole terms, so a name with spaces or commas ("Peng Shen Technology (Thailand)") stays one name;
-    /// a single line splits on spaces, commas and semicolons.
-    /// </summary>
-    private static IEnumerable<string> Terms(string text) => text.Contains('\n')
-        ? text.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0)
-        : TermSeparators.Split(text).Where(term => term.Length > 0);
 
     private static Dictionary<string, string?> OrderValues(JsonElement root) => root.ValueKind == JsonValueKind.Object
         ? root.EnumerateObject().ToDictionary(p => p.Name, p => FieldText(p.Value), StringComparer.Ordinal)

@@ -6,6 +6,7 @@ import http from '../../api/client'
 import { fmtTime } from '../../api/types'
 import { normalizeImportDate } from '../../outsource/importDate'
 import * as workbook from '../../utils/excelWorkbook'
+import * as downloads from '../../utils/saveBlob'
 import OutsourceListPage from '../../outsource/pages/OutsourceListPage'
 import { useAuth } from '../../store/auth'
 
@@ -65,9 +66,10 @@ const fieldLayout = {
 /** The same columns for an account that fills none of them in. */
 const readOnlyLayout = { fields: fieldLayout.fields.map((field) => ({ ...field, canEdit: false })) }
 
-function mockApi(layout: typeof fieldLayout = fieldLayout) {
+function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length) {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-    data: url === '/outsource/items' ? { list: items, total: 2, page: 1, pageSize: 20 }
+    data: url === '/outsource/items' ? { list: items, total, page: 1, pageSize: 20 }
+        : url === '/outsource/items/export' ? new Blob()
         : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
           : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
   } as never))
@@ -129,6 +131,50 @@ describe('外协清单页面', () => {
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: undefined, page: 1 }),
     })))
+    expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
+  })
+
+  it('工令表头可粘贴多个工令，筛选回到第一页，导出和重置复用筛选条件', async () => {
+    const user = userEvent.setup()
+    setSession([])
+    const get = mockApi(readOnlyLayout, 40)
+    const saveBlob = vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    const title = await screen.findByText('工令', { selector: '.arco-table-th-item-title' })
+    const filter = title.closest('th')!.querySelector<HTMLElement>('.arco-table-filters')!
+    expect(filter).toBeInTheDocument()
+    expect(filter).not.toHaveClass('arco-table-filters-active')
+    await user.click(await screen.findByText('2', { selector: '.arco-pagination-item' }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ page: 2 }),
+    })))
+    get.mockClear()
+
+    await user.click(filter)
+    const input = await screen.findByPlaceholderText('筛选工令，可粘贴多个')
+    await waitFor(() => expect(getComputedStyle(input).pointerEvents).not.toBe('none'))
+    await user.click(input)
+    const workOrders = '21089901\n21089961'
+    await user.paste(workOrders)
+    await user.click(screen.getByRole('button', { name: /^筛选$/ }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ workOrders, page: 1 }),
+    })))
+    expect(filter).toHaveClass('arco-table-filters-active')
+
+    await user.click(screen.getByRole('button', { name: /^导出$/ }))
+    await waitFor(() => expect(saveBlob).toHaveBeenCalled())
+    expect(get).toHaveBeenCalledWith('/outsource/items/export', expect.objectContaining({
+      params: expect.objectContaining({ workOrders }), responseType: 'blob',
+    }))
+
+    get.mockClear()
+    await user.click(screen.getByRole('button', { name: '重置筛选' }))
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ workOrders: undefined, page: 1 }),
+    })))
+    expect(filter).not.toHaveClass('arco-table-filters-active')
     expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
   })
 
