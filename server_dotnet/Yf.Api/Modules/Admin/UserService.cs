@@ -205,6 +205,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     public async Task<UserResponse> CreateAsync(CurrentUser actor, UserCreate request, CancellationToken ct, bool importedInitialPassword = false)
     {
         AdminValidation.EmployeeNo(request.EmployeeNo); ValidateName(request.RealName); AdminValidation.OptionalEmail(request.Email);
+        var networkScope = AccountNetworkAccess.ValidateScope(request.NetworkScope ?? AccountNetworkAccess.Any);
         if (importedInitialPassword) PasswordService.ValidateInitial(request.Password); else PasswordService.Validate(request.Password);
         var roleId = AdminValidation.OneRole(request.RoleId, request.RoleIds, true);
         if (request.DepartmentId is not ulong departmentId) throw ApiException.BadRequest("请选择所属组织");
@@ -226,6 +227,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         {
             EmployeeNo = employeeNo, PasswordHash = passwordHash, RealName = request.RealName.Trim(),
             Email = request.Email?.Trim() ?? "", UserType = UserTypes.Internal, DepartmentId = departmentId, Status = AccountStatuses.Active,
+            NetworkScope = networkScope,
             MustChangePassword = true, FailedLoginAttempts = 0, CreatedBy = actor.Id
         };
         context.Users.Add(user); await context.SaveChangesAsync(ct);
@@ -250,6 +252,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             changes = AuditChange.OnlyChanged(
                 new AuditChange("employeeNo", "账号", null, created.EmployeeNo), new AuditChange("realName", "姓名", null, created.RealName),
                 new AuditChange("email", "邮箱", null, created.Email), new AuditChange("departmentId", "所属组织", null, DepartmentAuditJson(department)),
+                new AuditChange("networkScope", "访问范围", null, created.NetworkScope),
                 new AuditChange("roleId", "角色", null, RoleAuditJson(role)), new AuditChange("status", "状态", null, created.Status))
         }, null, ct);
         var result = await JsonAsync(context, created, ct); await transaction.CommitAsync(ct); return result;
@@ -259,6 +262,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     {
         if (request.RealName is not null) ValidateName(request.RealName);
         if (request.Email is not null) AdminValidation.OptionalEmail(request.Email);
+        var networkScope = request.NetworkScope is null ? null : AccountNetworkAccess.ValidateScope(request.NetworkScope);
         var departmentSpecified = request.DepartmentId.ValueKind != System.Text.Json.JsonValueKind.Undefined;
         ulong? departmentId = request.DepartmentId.ValueKind switch
         {
@@ -289,6 +293,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var oldRoleId = oldRoleIds[0]; var oldRole = await FindRoleAsync(context, oldRoleId, ct);
         var oldDepartment = user.DepartmentId is ulong oldDepartmentId ? await FindDepartmentAsync(context, oldDepartmentId, ct) : null;
         var oldRealName = user.RealName; var oldEmail = user.Email; var oldDepartmentIdForAudit = user.DepartmentId;
+        var oldNetworkScope = user.NetworkScope;
         var roleChanged = roleId != 0 && roleId != oldRoleId; var departmentChanged = departmentSpecified && departmentId != user.DepartmentId;
         if (roleChanged)
         {
@@ -303,6 +308,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         context.Attach(user);
         if (request.RealName is not null) user.RealName = request.RealName.Trim();
         if (request.Email is not null) user.Email = request.Email.Trim();
+        if (networkScope is not null) user.NetworkScope = networkScope;
         if (departmentSpecified) user.DepartmentId = departmentId;
         await context.SaveChangesAsync(ct);
         if (departmentChanged) await DepartmentService.EnsureLeaderRulesAsync(context, leaderBaseline!, ct);
@@ -324,6 +330,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var newDepartment = updated.DepartmentId is ulong newDepartmentId ? await FindDepartmentAsync(context, newDepartmentId, ct) : null;
         var changes = AuditChange.OnlyChanged(
             new AuditChange("realName", "姓名", oldRealName, updated.RealName), new AuditChange("email", "邮箱", oldEmail, updated.Email),
+            new AuditChange("networkScope", "访问范围", oldNetworkScope, updated.NetworkScope),
             new AuditChange("departmentId", "所属组织", DepartmentAuditJson(oldDepartment), DepartmentAuditJson(newDepartment)),
             new AuditChange("roleId", "角色", RoleAuditJson(oldRole), RoleAuditJson(newRole)));
         await audit.WriteAsync(connection, dbTransaction, actor.Id, "USER_UPDATE", "user", id, new
@@ -573,7 +580,7 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
             var firstRole = roles.FirstOrDefault();
             var departmentName = user.DepartmentId is ulong departmentId ? departmentNames.GetValueOrDefault(departmentId) : null;
             return new UserResponse(
-                user.Id, user.EmployeeNo, user.RealName, user.Email, user.UserType, user.SupplierId, user.DepartmentId, departmentName,
+                user.Id, user.EmployeeNo, user.RealName, user.Email, user.UserType, user.NetworkScope, user.SupplierId, user.DepartmentId, departmentName,
                 user.Status, user.MustChangePassword, user.LastLoginAt, user.CreatedAt, firstRole?.Id, firstRole?.Name,
                 roles.Select(x => x.Id).ToArray(), roles.Select(x => x.Name).ToArray());
         }).ToList();

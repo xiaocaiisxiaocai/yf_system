@@ -146,6 +146,21 @@ describe('login security migration', () => {
     expect(useAuth.getState().user).toBeNull()
   })
 
+  it('shows the server message verbatim when the network scope rejects login', async () => {
+    const message = '该账号仅限内网访问'
+    mocks.post.mockRejectedValueOnce({ isAxiosError: true, response: { status: 403, data: { code: 40305, message } } })
+    const user = userEvent.setup()
+    renderLogin('/projects')
+
+    await user.type(screen.getByLabelText('账号'), 'tester')
+    await user.type(screen.getByLabelText('密码'), 'secret')
+    await user.click(screen.getByRole('button', { name: '登录' }))
+
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledExactlyOnceWith(message))
+    expect(useAuth.getState().token).toBeNull()
+    expect(screen.getByRole('button', { name: '登录' })).toBeEnabled()
+  })
+
   it('ChangePassword exitLogin logs out locally even if auth lock fails and passes quietNetworkError', async () => {
     const user = userEvent.setup()
     useAuth.setState({ ...loginPayload('cp-token'), token: 'cp-token', mustChangePassword: true, booted: true })

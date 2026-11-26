@@ -19824,6 +19824,10 @@
               "$ref": "#/components/schemas/DataScopeEntry"
             },
             "nullable": true
+          },
+          "networkScope": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -19838,6 +19842,7 @@
           "id",
           "lastLoginAt",
           "mustChangePassword",
+          "networkScope",
           "realName",
           "roleId",
           "roleIds",
@@ -19863,6 +19868,9 @@
             "type": "string"
           },
           "userType": {
+            "type": "string"
+          },
+          "networkScope": {
             "type": "string"
           },
           "supplierId": {
@@ -19957,6 +19965,10 @@
             "items": {
               "$ref": "#/components/schemas/DataScopeEntry"
             },
+            "nullable": true
+          },
+          "networkScope": {
+            "type": "string",
             "nullable": true
           }
         },

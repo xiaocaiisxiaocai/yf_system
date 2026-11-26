@@ -3245,6 +3245,14 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDefaultValue(true)
                         .HasColumnName("must_change_password");
 
+                    b.Property<string>("NetworkScope")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ANY")
+                        .HasColumnName("network_scope");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(255)

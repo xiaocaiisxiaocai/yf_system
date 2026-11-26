@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Infrastructure.Entities;
 
@@ -12,6 +13,7 @@ public sealed class User
     public string RealName { get; set; } = null!;
     public string Email { get; set; } = null!;
     public string UserType { get; set; } = null!;
+    public string NetworkScope { get; set; } = AccountNetworkAccess.Any;
     public ulong? SupplierId { get; set; }
     public ulong? DepartmentId { get; set; }
     public string Status { get; set; } = null!;
@@ -67,6 +69,7 @@ public sealed class UserConfig : IEntityTypeConfiguration<User>
         b.Property(x => x.RealName).HasColumnName("real_name").HasMaxLength(64).IsRequired();
         b.Property(x => x.Email).HasColumnName("email").HasMaxLength(128).IsRequired();
         b.Property(x => x.UserType).HasColumnName("user_type").HasMaxLength(16).IsRequired();
+        b.Property(x => x.NetworkScope).HasColumnName("network_scope").HasMaxLength(16).IsRequired().HasDefaultValue(AccountNetworkAccess.Any);
         b.Property(x => x.SupplierId).HasColumnName("supplier_id");
         b.Property(x => x.DepartmentId).HasColumnName("department_id");
         b.Property(x => x.Status).HasColumnName("status").HasMaxLength(16).IsRequired().HasDefaultValue(AccountStatuses.Active);

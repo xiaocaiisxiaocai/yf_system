@@ -2,6 +2,7 @@ using Microsoft.IdentityModel.Tokens;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Projects;
+using Yf.Api.Modules.SystemManagement;
 
 namespace Yf.Api.Modules.Identity;
 
@@ -46,10 +47,20 @@ public sealed class IdentityMiddleware(RequestDelegate next, IEnumerable<IRealmI
         // Authentication owns only its lookup connection, not the downstream request. Cache hits
         // still probe the database revision and clock, so committed revocation and expiry are never
         // hidden by an application TTL.
-        var row = await identityCache.ResolveAsync(db, claims, ct);
-        if (row is null || !row.SessionActive) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
-        if (row.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被停用");
-        if (row.UserType == UserTypes.Supplier && !row.SupplierActive) throw ApiException.Unauthorized("所属供应商已被停用");
+        IdentityProjection? row;
+        await using (var connection = await db.OpenAsync(ct))
+        {
+            row = await identityCache.ResolveAsync(connection, claims, ct);
+            if (row is null || !row.SessionActive) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
+            if (row.Status != AccountStatuses.Active) throw ApiException.Unauthorized("账号已被停用");
+            if (row.UserType == UserTypes.Supplier && !row.SupplierActive) throw ApiException.Unauthorized("所属供应商已被停用");
+            if (AccountNetworkAccess.RequiresInternalNetwork(row.UserType, row.NetworkScope))
+            {
+                await using var settingsContext = EfDb.Use(connection);
+                var origin = RequestNetworkOrigin.Resolve(context, context.RequestServices.GetRequiredService<AppOptions>());
+                if (await RuntimeSettings.IsExternalAsync(settingsContext, origin, ct)) throw AccountNetworkAccess.Denied();
+            }
+        }
         if (row.MustChangePassword && !IsAllowedDuringPasswordChange(context.Request))
             throw new ApiException(403, 40303, "请先修改初始密码");
         context.Items[typeof(CurrentUser)] = new CurrentUser(row.Id, row.EmployeeNo, row.UserType, row.SupplierId, claims.SessionId);

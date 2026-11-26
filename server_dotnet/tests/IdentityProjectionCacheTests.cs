@@ -114,5 +114,5 @@ public sealed class IdentityProjectionCacheTests
 
     private static IdentityProjection Projection(DateTime validUntil, int version) => new(
         Claims.UserId, $"cache-user-{version}", UserTypes.Internal, null,
-        AccountStatuses.Active, false, false, validUntil);
+        AccountStatuses.Active, false, false, validUntil, AccountNetworkAccess.Any);
 }

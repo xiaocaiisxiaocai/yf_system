@@ -3,6 +3,7 @@ import { Message } from '@arco-design/web-react'
 import type { QuietRequestConfig } from '../../../api/client'
 import type { ApiResponses } from '../../../api/types'
 import {
+  CONFIG_META,
   EMPTY_MAIL_STATUS,
   EMPTY_NOTIFICATION_POLICY,
   EMPTY_SMTP,
@@ -56,7 +57,11 @@ export function useSystemConfig(http: HttpClient) {
       http.get<ApiResponses['GET /admin/system/mail-settings']>('/admin/system/mail-settings', quietRequest),
     ])
     return {
-      configs: (configsResponse.data as Cfg[]).filter((item) => item.key !== 'storage.warn_percent' && !NOTIFICATION_CONFIG_KEYS.has(item.key)),
+      configs: (configsResponse.data as Cfg[])
+        .filter((item) => item.key !== 'storage.warn_percent' && !NOTIFICATION_CONFIG_KEYS.has(item.key))
+        .map((item) => CONFIG_META[item.key]?.lineList
+          ? { ...item, value: (item.value ?? '').split(/[,\r\n]/).map((entry) => entry.trim()).filter(Boolean).join('\n') }
+          : item),
       mail: normalizeMailStatus(mailResponse.data),
       smtp: { ...EMPTY_SMTP, ...smtpResponse.data } as SmtpSettings,
     }

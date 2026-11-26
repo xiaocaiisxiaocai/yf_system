@@ -53,9 +53,11 @@ export function renderSystemConfigTable({
         />
       )
     }
-    if (cfg.key === 'upload.allowed_exts') {
+    const lineList = CONFIG_META[cfg.key]?.lineList
+    if (lineList || cfg.key === 'upload.allowed_exts') {
       return (
         <Input.TextArea aria-label={label} value={value} disabled={saving} autoSize={{ minRows: 2, maxRows: 8 }}
+          placeholder={lineList ? '每行一項' : undefined}
           onChange={(next) => onSetValue(cfg.key, next)} />
       )
     }

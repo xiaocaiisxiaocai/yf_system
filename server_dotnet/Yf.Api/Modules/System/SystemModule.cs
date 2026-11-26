@@ -127,6 +127,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
         if (key.StartsWith(AuditScopes.OemConfigPrefix, StringComparison.Ordinal))
             throw ApiException.BadRequest($"未知系统参数：{key}");
         if (key == "storage.warn_percent") throw ApiException.BadRequest("存储告警阈值已停用");
+        if (RuntimeSettings.NetworkLabel(key) is not null) return RuntimeSettings.NormalizeNetworkSetting(key, value);
         (long min, long max)? range = key switch
         {
             "upload.max_file_size" => (1048576, 21474836480),
@@ -190,7 +191,8 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
                 var safe = EmailNotificationPolicy.Keys.Contains(item.Key, StringComparer.Ordinal)
                     || item.Key is "upload.max_file_size" or "upload.chunk_size" or "upload.allowed_exts"
                         or EmailNotificationPolicy.DueRemindDaysBeforeKey
-                    || RuntimeSettings.Find(item.Key) is not null;
+                    || RuntimeSettings.Find(item.Key) is not null
+                    || RuntimeSettings.NetworkLabel(item.Key) is not null;
                 changes.Add(new AuditChange(item.Key, ConfigLabel(item.Key), safe ? previous : "未展示", safe ? item.Value : "已更新"));
             }
             config.CfgValue = item.Value;
@@ -298,6 +300,7 @@ public sealed class SystemService(AppDb db, AuditService audit, AppOptions? opti
         "notify.due.supplier.enabled" => "到期提醒发给厂商",
         "notify.due.remind_days_before" => "到期提前提醒天数",
         _ when RuntimeSettings.Find(key) is { } setting => setting.Label,
+        _ when RuntimeSettings.NetworkLabel(key) is { } label => label,
         "upload.max_file_size" => "单文件大小上限",
         "upload.chunk_size" => "上传分片大小",
         "upload.allowed_exts" => "允许的文件类型",

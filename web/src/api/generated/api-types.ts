@@ -2284,6 +2284,7 @@ export interface UserCreate {
   roleId?: number | null
   roleIds?: Array<number> | null
   scopes?: Array<DataScopeEntry> | null
+  networkScope?: string | null
 }
 
 export interface UserResponse {
@@ -2292,6 +2293,7 @@ export interface UserResponse {
   realName: string
   email: string
   userType: string
+  networkScope: string
   supplierId: number | null
   departmentId: number | null
   departmentName: string | null
@@ -2312,6 +2314,7 @@ export interface UserUpdate {
   roleId?: number | null
   roleIds?: Array<number> | null
   scopes?: Array<DataScopeEntry> | null
+  networkScope?: string | null
 }
 
 /** Success body of each endpoint, keyed by "METHOD path" relative to /api/v1 (the axios baseURL). */

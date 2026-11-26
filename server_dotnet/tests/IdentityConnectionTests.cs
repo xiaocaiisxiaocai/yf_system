@@ -31,7 +31,8 @@ public sealed class IdentityConnectionTests
             {
                 await seed.ExecuteAsync(new CommandDefinition(HandwrittenTestSchemas.AuthenticationConnection + Environment.NewLine + """
                     INSERT INTO system_configs VALUES('security.identity_revision','0');
-                    INSERT INTO users VALUES(1,'pool_test','INTERNAL',NULL,'ACTIVE',0);
+                    INSERT INTO users(id,employee_no,user_type,supplier_id,status,must_change_password)
+                    VALUES(1,'pool_test','INTERNAL',NULL,'ACTIVE',0);
                     INSERT INTO refresh_tokens
                         (user_id,session_id,revoked,expires_at,session_created_at,session_expires_at)
                     VALUES(1,'pool-session',0,DATE_ADD(UTC_TIMESTAMP(),INTERVAL 1 HOUR),

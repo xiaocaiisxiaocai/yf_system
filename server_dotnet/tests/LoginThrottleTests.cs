@@ -260,7 +260,7 @@ public sealed class LoginThrottleTests
             """, new { hash = TokenService.HashRefreshToken(login.Refresh) }, ct);
         var shortened = await scope.RefreshStateAsync(login.Refresh, ct);
 
-        var rotated = await scope.Service().RefreshAsync(login.Refresh, "192.0.2.211", ct);
+        var rotated = await scope.Service().RefreshAsync(login.Refresh, new("192.0.2.211"), ct);
         var current = await scope.RefreshStateAsync(rotated.Refresh, ct);
 
         Assert.Equal((ulong)1, rotated.Response.User.Id);
@@ -278,7 +278,7 @@ public sealed class LoginThrottleTests
         // A rotated token is never accepted again. Replaying it immediately revokes the
         // current generation from the same family as well, and is audited as a replay.
         var replay = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Service().RefreshAsync(login.Refresh, "192.0.2.212", ct));
+            scope.Service().RefreshAsync(login.Refresh, new("192.0.2.212"), ct));
         Assert.Equal(401, replay.Status);
         Assert.Equal(0, await scope.SessionsAsync(1, ct));
         Assert.Equal(RefreshRevokeReasons.Replay, await scope.RevokeReasonAsync(rotated.Refresh, ct));
@@ -297,7 +297,7 @@ public sealed class LoginThrottleTests
             """, new { hash = TokenService.HashRefreshToken(expiredLogin.Refresh) }, ct);
 
         var absoluteExpiry = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Service().RefreshAsync(expiredLogin.Refresh, "192.0.2.214", ct));
+            scope.Service().RefreshAsync(expiredLogin.Refresh, new("192.0.2.214"), ct));
         Assert.Equal(401, absoluteExpiry.Status);
         Assert.False(await scope.Service().HasActiveSessionAsync(
             connection, null, 1, expiredState.SessionId, ct));
@@ -313,7 +313,7 @@ public sealed class LoginThrottleTests
         Assert.Equal(RefreshRevokeReasons.Logout, await scope.RevokeReasonAsync(loggedOut.Refresh, ct));
 
         var stale = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Service().RefreshAsync(loggedOut.Refresh, "192.0.2.231", ct));
+            scope.Service().RefreshAsync(loggedOut.Refresh, new("192.0.2.231"), ct));
         Assert.Equal(401, stale.Status);
         Assert.Equal(RefreshRevokeReasons.Logout, await scope.RevokeReasonAsync(loggedOut.Refresh, ct));
         Assert.Equal(0, await scope.ReplayAuditsAsync(ct));
@@ -331,15 +331,15 @@ public sealed class LoginThrottleTests
         for (var attempt = 0; attempt < 10; attempt++)
         {
             var wrong = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
-                new(spellings[attempt % spellings.Length], scope.Password + "wrong"), "192.0.2.77", ct));
+                new(spellings[attempt % spellings.Length], scope.Password + "wrong"), new("192.0.2.77"), ct));
             Assert.Equal(401, wrong.Status);
         }
 
         var limited = await Assert.ThrowsAsync<ApiException>(() => service.LoginAsync(
-            new("TÁRGET", scope.Password), "192.0.2.77", ct));
+            new("TÁRGET", scope.Password), new("192.0.2.77"), ct));
         Assert.Equal((429, 42902), (limited.Status, limited.Code));
         // Another source address is unaffected, and the correct password signs in there.
-        Assert.Equal(1UL, (await service.LoginAsync(new("tárget", scope.Password), "192.0.2.78", ct)).Response.User.Id);
+        Assert.Equal(1UL, (await service.LoginAsync(new("tárget", scope.Password), new("192.0.2.78"), ct)).Response.User.Id);
     }
 
     [Fact(Timeout = 120_000)]
@@ -389,7 +389,7 @@ public sealed class LoginThrottleTests
         var first = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.240", ct);
         var second = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.241", ct);
         // Rotating the oldest family does not make it newer: the cap orders by session creation.
-        var firstRotated = await scope.Service().RefreshAsync(first.Refresh, "192.0.2.240", ct);
+        var firstRotated = await scope.Service().RefreshAsync(first.Refresh, new("192.0.2.240"), ct);
         var third = await scope.LoginWithRefreshAsync("target", scope.Password, "192.0.2.242", ct);
         var other = await scope.LoginWithRefreshAsync("unaffected", scope.Password, "192.0.2.243", ct);
 
@@ -402,10 +402,10 @@ public sealed class LoginThrottleTests
         Assert.Null(await scope.RevokeReasonAsync(other.Refresh, ct));
 
         var evicted = await Assert.ThrowsAsync<ApiException>(() =>
-            scope.Service().RefreshAsync(firstRotated.Refresh, "192.0.2.244", ct));
+            scope.Service().RefreshAsync(firstRotated.Refresh, new("192.0.2.244"), ct));
         Assert.Equal(401, evicted.Status);
         Assert.Equal(0, await scope.ReplayAuditsAsync(ct));
-        var refreshed = await scope.Service().RefreshAsync(second.Refresh, "192.0.2.245", ct);
+        var refreshed = await scope.Service().RefreshAsync(second.Refresh, new("192.0.2.245"), ct);
         Assert.False(string.IsNullOrEmpty(refreshed.Refresh));
     }
 
@@ -476,12 +476,12 @@ public sealed class LoginThrottleTests
         public async Task<LoginResponse> LoginAsync(string employeeNo, string supplied, string ip, CancellationToken ct)
         {
             // Each request gets a fresh in-memory limiter, representing another application instance.
-            return (await Service().LoginAsync(new(employeeNo, supplied), ip, ct)).Response;
+            return (await Service().LoginAsync(new(employeeNo, supplied), new(ip), ct)).Response;
         }
 
         public async Task<(LoginResponse Response, string Refresh)> LoginWithRefreshAsync(
             string employeeNo, string supplied, string ip, CancellationToken ct) =>
-            WithoutRefreshExpiry(await Service().LoginAsync(new(employeeNo, supplied), ip, ct));
+            WithoutRefreshExpiry(await Service().LoginAsync(new(employeeNo, supplied), new(ip), ct));
 
         private static (LoginResponse Response, string Refresh) WithoutRefreshExpiry(
             (LoginResponse Response, string Refresh, DateTime RefreshExpiresAt) result) =>

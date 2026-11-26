@@ -27,7 +27,7 @@ public sealed class AuditTrailRegressionTests
         await using var database = await MigratedTestDatabase.CreateOrSkipAsync(ct);
         var service = await SeedIdentityAsync(database, ct);
 
-        var login = await service.LoginAsync(new(EmployeeNo, Password), "192.0.2.77", ct);
+        var login = await service.LoginAsync(new(EmployeeNo, Password), new("192.0.2.77"), ct);
 
         Assert.Equal(UserId, login.Response.User.Id);
         Assert.Equal(1, await database.ScalarAsync<int>(
@@ -52,7 +52,7 @@ public sealed class AuditTrailRegressionTests
             END
             """, null, ct);
 
-        await Assert.ThrowsAnyAsync<Exception>(() => service.LoginAsync(new(EmployeeNo, Password), "192.0.2.78", ct));
+        await Assert.ThrowsAnyAsync<Exception>(() => service.LoginAsync(new(EmployeeNo, Password), new("192.0.2.78"), ct));
 
         // No session was issued and no success audit survived: the sign-in is all or nothing.
         Assert.Equal(0, await database.ScalarAsync<int>($"SELECT COUNT(*) FROM refresh_tokens WHERE user_id={UserId}", ct));
@@ -60,7 +60,7 @@ public sealed class AuditTrailRegressionTests
         Assert.Equal(1, await database.ScalarAsync<int>($"SELECT last_login_at IS NULL FROM users WHERE id={UserId}", ct));
 
         await database.ExecuteAsync("DROP TRIGGER trg_block_login_audit", null, ct);
-        await service.LoginAsync(new(EmployeeNo, Password), "192.0.2.79", ct);
+        await service.LoginAsync(new(EmployeeNo, Password), new("192.0.2.79"), ct);
         Assert.Equal(1, await database.ScalarAsync<int>($"SELECT COUNT(*) FROM refresh_tokens WHERE user_id={UserId}", ct));
         Assert.Equal(1, await database.ScalarAsync<int>("SELECT COUNT(*) FROM audit_logs WHERE action='LOGIN'", ct));
     }

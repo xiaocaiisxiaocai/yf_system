@@ -2,7 +2,7 @@ import { optionalTextLengthRule, textLengthRule } from '../../utils/textRules'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
-  Button, Card, Form, Input, Message, Modal, Popconfirm, Result, Select, Space, Tag, Tooltip, TreeSelect, Typography,
+  Button, Card, Form, Input, Message, Modal, Popconfirm, Radio, Result, Select, Space, Tag, Tooltip, TreeSelect, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
@@ -16,7 +16,7 @@ import { useAuth } from '../../store/auth'
 import { type PageResp, fmtTime } from '../../api/types'
 import { passwordRule, validateInitialPassword } from '../../utils/password'
 import type { ApiResponses } from '../../api/types'
-import type { DataScopeResponse, DepartmentTreeNode as ApiDepartmentTreeNode } from '../../api/generated/api-types'
+import type { DataScopeResponse, DepartmentTreeNode as ApiDepartmentTreeNode, UserResponse } from '../../api/generated/api-types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../components/ExcelImportDialog'
@@ -37,6 +37,7 @@ interface UserRow {
   roleIds?: number[]
   roleNames?: string[]
   status: 'ACTIVE' | 'DISABLED'
+  networkScope: NetworkScope
   mustChangePassword?: boolean
   lastLoginAt?: string | null
   createdAt: string
@@ -48,6 +49,9 @@ interface RoleOpt {
 }
 
 const EMPTY_ROLE_OPTIONS: RoleOpt[] = []
+
+const NETWORK_SCOPE_LABELS = { INTERNAL_ONLY: '僅內網', ANY: '內外網均可' } as const
+type NetworkScope = keyof typeof NETWORK_SCOPE_LABELS & UserResponse['networkScope']
 
 // Department tree from the API, with kind narrowed to the fixed three-level hierarchy.
 type DeptNode = Omit<ApiDepartmentTreeNode, 'kind' | 'children'> & {
@@ -411,7 +415,7 @@ export default function UserList() {
         Message.error('组织和角色选项尚未就绪，请重试加载')
         return
       }
-      const { roleId, ...values } = v
+      const { roleId, networkScope, ...values } = v
       const payload = {
         ...values,
         // 邮箱可选；留空时提交空字符串（清空已有邮箱），该账号不再收到邮件通知。
@@ -447,6 +451,7 @@ export default function UserList() {
             email: payload.email,
             departmentId: payload.departmentId,
             roleId: payload.roleId,
+            ...(networkScope !== (editing.networkScope ?? 'ANY') ? { networkScope } : {}),
             ...(changedScopes.length > 0
               ? { scopes: changedScopes.map(({ domain, value }) => ({ domain, scope: value || null })) }
               : {}),
@@ -459,7 +464,7 @@ export default function UserList() {
           .filter(({ domain }) => scopeValues[domain])
           .map(({ domain }) => ({ domain, scope: scopeValues[domain] }))
         await saveMutation.mutateAsync({
-          payload: { ...payload, ...(newScopes.length > 0 ? { scopes: newScopes } : {}) },
+          payload: { ...payload, networkScope, ...(newScopes.length > 0 ? { scopes: newScopes } : {}) },
         })
         Message.success('用户已创建（首次登录需改密）')
       }
@@ -609,6 +614,7 @@ export default function UserList() {
                 setScopeEffective({})
                 setScopeLoadedFor(null)
                 form.resetFields()
+                form.setFieldValue('networkScope', 'ANY')
                 setEditOpen(true)
               }}
             >
@@ -651,6 +657,12 @@ export default function UserList() {
           },
           { title: '邮箱', dataIndex: 'email', width: 220, align: 'left' as const, ellipsis: true, render: (v?: string) => v || '-' },
           {
+            title: '訪問範圍', dataIndex: 'networkScope', width: 112,
+            render: (value: NetworkScope) => <Tag size="small" color={value === 'INTERNAL_ONLY' ? 'orange' : undefined}>
+              {NETWORK_SCOPE_LABELS[value ?? 'ANY']}
+            </Tag>,
+          },
+          {
             title: '状态',
             dataIndex: 'status',
             width: 72,
@@ -680,6 +692,7 @@ export default function UserList() {
                       email: r.email,
                       departmentId: r.departmentId ? String(r.departmentId) : undefined,
                       roleId: r.roleId ?? r.roleIds?.[0],
+                      networkScope: r.networkScope ?? 'ANY',
                     })
                     setEditOpen(true)
                   }}
@@ -806,6 +819,12 @@ export default function UserList() {
                   </Select.Option>
                 ))}
               </Select>
+            </Form.Item>
+            <Form.Item className="form-grid-full" label="訪問範圍" field="networkScope">
+              <Radio.Group aria-label="訪問範圍">
+                <Radio value="INTERNAL_ONLY">{NETWORK_SCOPE_LABELS.INTERNAL_ONLY}</Radio>
+                <Radio value="ANY">{NETWORK_SCOPE_LABELS.ANY}</Radio>
+              </Radio.Group>
             </Form.Item>
             {canManageUsers && SCOPE_DOMAINS.map(({ domain, label }) => (
               <Form.Item key={domain} label={label}>

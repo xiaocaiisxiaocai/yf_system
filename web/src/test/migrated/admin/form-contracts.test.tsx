@@ -236,10 +236,34 @@ describe('管理员表单契约', () => {
     await openArcoSelect('选择组织', '研发部（部门）')
     expect((await screen.findAllByText('历史部（部门）（已停用）')).at(-1)!.closest('.arco-tree-node')).toHaveClass('arco-tree-node-disabled')
     await openArcoSelect('选择角色', '内部成员')
+    expect(screen.getByRole('radio', { name: '內外網均可' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: '僅內網' }))
     await user.click(screen.getByRole('button', { name: '创建用户' }))
 
     await waitFor(() => expect(mocks.post).toHaveBeenCalledTimes(1))
-    expect(mocks.post.mock.calls[0][1]).toMatchObject({ employeeNo: 'zhuhui.cai', email: '' })
+    expect(mocks.post.mock.calls[0][1]).toMatchObject({ employeeNo: 'zhuhui.cai', email: '', networkScope: 'INTERNAL_ONLY' })
+  })
+
+  it('internal user edit reads the network scope and submits the changed value', async () => {
+    const getFixtures = mocks.get.getMockImplementation()!
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/admin/users') return { data: page([{
+        id: 21, employeeNo: 'limited', realName: '内部员工', email: '', departmentId: 4, departmentName: '研发部',
+        roleId: 7, roleName: '内部成员', status: 'ACTIVE', networkScope: 'INTERNAL_ONLY',
+      }]) }
+      if (url === '/admin/users/21/data-scopes') return { data: [] }
+      return getFixtures(url)
+    })
+    const user = userEvent.setup()
+    render(<UserList />)
+
+    expect((await screen.findByText('僅內網')).closest('.arco-tag')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '编辑' }))
+    expect(await screen.findByRole('radio', { name: '僅內網' })).toBeChecked()
+    await user.click(screen.getByRole('radio', { name: '內外網均可' }))
+    await user.click(screen.getByRole('button', { name: '保存用户' }))
+
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/users/21', expect.objectContaining({ networkScope: 'ANY' })))
   })
 
   it('password change rejects same-render duplicate submissions and unlocks after completion', async () => {

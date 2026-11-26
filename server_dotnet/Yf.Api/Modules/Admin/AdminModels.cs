@@ -34,14 +34,16 @@ public sealed record UserCreate(
     ulong? DepartmentId,
     ulong? RoleId,
     IReadOnlyList<ulong>? RoleIds,
-    IReadOnlyList<DataScopeEntry>? Scopes = null);
+    IReadOnlyList<DataScopeEntry>? Scopes = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NetworkScope = null);
 public sealed record UserUpdate(
     string? RealName = null,
     string? Email = null,
     JsonElement DepartmentId = default,
     ulong? RoleId = null,
     IReadOnlyList<ulong>? RoleIds = null,
-    IReadOnlyList<DataScopeEntry>? Scopes = null);
+    IReadOnlyList<DataScopeEntry>? Scopes = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? NetworkScope = null);
 public sealed record SupplierUpsert([property: JsonRequired] string Name, string? Remark);
 public sealed record SupplierAccountCreate(
     [property: JsonRequired] string EmployeeNo,
@@ -166,6 +168,7 @@ public sealed record UserResponse(
     string RealName,
     string Email,
     string UserType,
+    string NetworkScope,
     ulong? SupplierId,
     ulong? DepartmentId,
     string? DepartmentName,

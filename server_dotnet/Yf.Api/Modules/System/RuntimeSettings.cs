@@ -2,13 +2,13 @@ using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
+using Yf.Api.Modules.Identity;
 
 namespace Yf.Api.Modules.SystemManagement;
 
 /// <summary>
-/// Data-retention, upload-quota, background-job and batch-download settings maintained on the system settings page (system_configs). The configured
-/// App values only seed a missing row on first start; afterwards the page wins. Every consumer reads the in-memory
-/// <see cref="AppOptions"/>, which is refreshed at startup and right after a committed change (single instance).
+/// Runtime settings maintained in system_configs. Numeric limits are applied to <see cref="AppOptions"/>
+/// at startup and after a save. Network restrictions read the committed settings when authorizing a request.
 /// </summary>
 internal static class RuntimeSettings
 {
@@ -50,6 +50,39 @@ internal static class RuntimeSettings
 
     internal const string SupplierFileWithdrawKey = "withdraw.supplier_file_minutes";
     internal const string SupplierMessageWithdrawKey = "withdraw.supplier_message_minutes";
+    internal const string InternalNetworksKey = "security.internal_networks";
+    internal const string ExternalHostsKey = "security.external_hosts";
+
+    internal static string? NetworkLabel(string key) => key switch
+    {
+        InternalNetworksKey => "内网网段",
+        ExternalHostsKey => "外网访问地址",
+        _ => null,
+    };
+
+    internal static string NormalizeNetworkSetting(string key, string? value)
+    {
+        var entries = AccountNetworkAccess.SplitEntries(value);
+        var label = NetworkLabel(key);
+        if (key == InternalNetworksKey && entries.Any(entry => !AccountNetworkAccess.TryParseNetwork(entry, out _)))
+            throw ApiException.BadRequest($"{label}必须为有效的 CIDR 网段或 IP 地址");
+        if (key == ExternalHostsKey && entries.Any(entry => !AccountNetworkAccess.IsHostAndPort(entry)))
+            throw ApiException.BadRequest($"{label}必须为有效的主机:端口");
+        var normalized = string.Join(',', entries.Distinct(StringComparer.OrdinalIgnoreCase));
+        if (normalized.Length > 2048) throw ApiException.BadRequest($"{label}不能超过 2048 个字符");
+        return normalized;
+    }
+
+    internal static async Task<bool> IsExternalAsync(YfDbContext context, RequestNetworkOrigin origin, CancellationToken ct)
+    {
+        // Read both security settings together so an authenticated request sees committed configuration
+        // without waiting for startup, a cache expiry, or an in-memory update after the commit.
+        var rows = await context.SystemConfigs.AsNoTracking()
+            .Where(config => config.CfgKey == InternalNetworksKey || config.CfgKey == ExternalHostsKey)
+            .ToDictionaryAsync(config => config.CfgKey, config => config.CfgValue, StringComparer.Ordinal, ct);
+        return AccountNetworkAccess.IsExternal(origin, rows.GetValueOrDefault(InternalNetworksKey),
+            rows.GetValueOrDefault(ExternalHostsKey));
+    }
 
     internal static Setting? Find(string key) => All.FirstOrDefault(setting => setting.Key == key);
 

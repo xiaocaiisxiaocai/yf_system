@@ -15,8 +15,9 @@ public sealed class IdentityService(
     AuditService audit,
     ILogger<IdentityService>? logger = null)
 {
-    public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> LoginAsync(LoginRequest request, string clientIp, CancellationToken ct)
+    public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> LoginAsync(LoginRequest request, RequestNetworkOrigin origin, CancellationToken ct)
     {
+        var clientIp = origin.ClientIp;
         var employeeNo = request.EmployeeNo?.Trim() ?? "";
         if (employeeNo.Length == 0 || string.IsNullOrEmpty(request.Password)) throw ApiException.BadRequest("账号和密码不能为空");
         if (employeeNo.EnumerateRunes().Count() > 64 || System.Text.Encoding.UTF8.GetByteCount(request.Password) > PasswordService.MaxPasswordBytes)
@@ -82,6 +83,13 @@ public sealed class IdentityService(
             await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, "LOGIN_FAILED", null, null, null, clientIp, ct);
             throw ApiException.Unauthorized("账号或密码错误");
         }
+        if (await AccountNetworkAccess.IsDeniedAsync(context, user.UserType, user.NetworkScope, origin, ct))
+        {
+            await tx.RollbackAsync(ct);
+            await AuditBestEffortAsync(context.Database.Connection(), user.Id, employeeNo, "LOGIN_FAILED", null, null,
+                new { reason = "NETWORK_SCOPE" }, clientIp, ct);
+            throw AccountNetworkAccess.Denied();
+        }
         user.FailedLoginAttempts = 0;
         user.LockedUntil = null;
         user.LastLoginAt = dbNow;
@@ -104,7 +112,7 @@ public sealed class IdentityService(
         return (response, refresh.Token, refresh.ExpiresAt);
     }
 
-    public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> RefreshAsync(string refreshToken, string clientIp, CancellationToken ct)
+    public async Task<(LoginResponse Response, string Refresh, DateTime RefreshExpiresAt)> RefreshAsync(string refreshToken, RequestNetworkOrigin origin, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(refreshToken)) throw ApiException.Unauthorized("缺少登录凭证");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
@@ -117,6 +125,10 @@ public sealed class IdentityService(
                    ?? throw ApiException.Unauthorized("账号不存在");
         var row = await context.RefreshTokens.FromSqlInterpolated($"SELECT * FROM refresh_tokens WHERE id = {found.Id} FOR UPDATE").SingleOrDefaultAsync(ct)
                   ?? throw ApiException.Unauthorized("登录状态无效");
+        if (user.Status == AccountStatuses.Active
+            && await AccountNetworkAccess.IsDeniedAsync(context, user.UserType, user.NetworkScope, origin, ct))
+            throw AccountNetworkAccess.Denied();
+        var clientIp = origin.ClientIp;
         var dbNow = await DbClock.UtcNowAsync(context, ct);
         var isExpired = row.ExpiresAt <= dbNow || row.SessionExpiresAt <= dbNow;
         if (row.Revoked || isExpired)

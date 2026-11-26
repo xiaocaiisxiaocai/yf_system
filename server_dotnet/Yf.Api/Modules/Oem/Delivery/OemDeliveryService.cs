@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem.Common;
 using Yf.Api.Modules.Oem.Data;
 using Yf.Api.Modules.Oem.Policies;
@@ -166,7 +167,7 @@ public sealed class OemDeliveryService(
         var appAnchor = DateTime.UtcNow;
         await using (var uow = await OemUnitOfWork.BeginAsync(dbFactory, ct))
         {
-            var actor = await LiveActorAsync(uow, grant, ct);
+            var actor = await LiveActorAsync(uow, grant, ct, RequestNetworkOrigin.Resolve(context, options));
             session = await uow.Db.OemDownloadSessions.AsNoTracking().SingleOrDefaultAsync(item => item.Id == grant.DownloadSessionId, ct)
                 ?? throw ApiException.Unauthorized("下载会话不存在");
             if (session.FileId != fileId || session.ActorRealm != actor.Realm || session.ActorId != actor.Id || session.FileStoredName != grant.StoredName)
@@ -463,7 +464,8 @@ public sealed class OemDeliveryService(
     }
 
     /// <summary>Rebuilds the caller behind a download grant from live data (account, vendor, login session).</summary>
-    private static async Task<OemActor> LiveActorAsync(OemUnitOfWork uow, DownloadGrant grant, CancellationToken ct)
+    private static async Task<OemActor> LiveActorAsync(
+        OemUnitOfWork uow, DownloadGrant grant, CancellationToken ct, RequestNetworkOrigin? origin = null)
     {
         if (grant.Realm == OemRealms.Oem)
         {
@@ -479,7 +481,10 @@ public sealed class OemDeliveryService(
         if (!sessionActive) throw ApiException.Unauthorized("登录状态已失效，请重新登录");
         var user = await uow.Db.Users.AsNoTracking().SingleOrDefaultAsync(item => item.Id == grant.ActorId, ct) ?? throw ApiException.Unauthorized();
         var internalActor = new InternalOemActor(new CurrentUser(user.Id, user.EmployeeNo, user.UserType, user.SupplierId, grant.LoginSessionId), grant.LoginSessionId);
-        return await OemAuthorizer.RecheckAsync(uow, internalActor, ct);
+        var actorFromSession = await OemAuthorizer.RecheckAsync(uow, internalActor, ct);
+        if (origin is { } requestOrigin && await AccountNetworkAccess.IsDeniedAsync(uow.Db, user.UserType, user.NetworkScope, requestOrigin, ct))
+            throw AccountNetworkAccess.Denied();
+        return actorFromSession;
     }
 
     private static DateTime Min(DateTime left, DateTime right) => left <= right ? left : right;

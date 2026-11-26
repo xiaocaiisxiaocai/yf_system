@@ -38,6 +38,13 @@ public sealed class IdentityProjectionCache
     {
         RequireInternalRealm(claims);
         await using var connection = await db.OpenAsync(ct);
+        return await ResolveAsync(connection, claims, ct);
+    }
+
+    internal async Task<IdentityProjection?> ResolveAsync(
+        MySqlConnection connection, AccessClaims claims, CancellationToken ct)
+    {
+        RequireInternalRealm(claims);
         var probe = await ProbeAsync(connection, ct);
         return await ResolveAsync(probe, claims,
             token => LoadAsync(connection, claims.UserId, claims.SessionId, token), ct);
@@ -150,7 +157,7 @@ public sealed class IdentityProjectionCache
                          AND rt.revoked = 0
                          AND rt.expires_at > UTC_TIMESTAMP(6)
                          AND rt.session_expires_at > UTC_TIMESTAMP(6)
-                   ) AS valid_until
+                   ) AS valid_until, u.network_scope
             FROM users u
             LEFT JOIN suppliers s ON s.id = u.supplier_id
             WHERE u.id = @userId
@@ -168,7 +175,8 @@ public sealed class IdentityProjectionCache
             reader.GetString(4),
             reader.GetBoolean(5),
             reader.GetBoolean(6),
-            reader.IsDBNull(7) ? null : AsUtc(reader.GetDateTime(7)));
+            reader.IsDBNull(7) ? null : AsUtc(reader.GetDateTime(7)),
+            reader.GetString(8));
     }
 
     private static DateTime AsUtc(DateTime value) =>
@@ -186,7 +194,8 @@ internal sealed record IdentityProjection(
     string Status,
     bool MustChangePassword,
     bool SupplierActive,
-    DateTime? ValidUntil)
+    DateTime? ValidUntil,
+    string NetworkScope)
 {
     internal bool SessionActive => ValidUntil.HasValue;
 }

@@ -125,6 +125,9 @@ function rejected(error: unknown) {
 /** 403 的资料刷新在后台进行：等后台请求落定后再断言资料写回的结果。 */
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
+const networkScopeMessage = '该账号仅限内网访问'
+const networkScopeError = { isAxiosError: true, response: { status: 403, data: { code: 40305, message: networkScopeMessage } } }
+
 async function forbidden(loaded: Awaited<ReturnType<typeof loadClient>>, url = '/projects') {
   const config = loaded.harness.requestHandlers[0]({ url, headers: {} })
   return loaded.harness.responseFailures[0]({
@@ -213,6 +216,52 @@ describe('auth client migration', () => {
       expect(loaded.auth.useAuth.getState()).toMatchObject({ token: null, user: null, booted: true, generation: 5 })
       expect(loaded.harness.errors).toEqual([])
     }
+  })
+
+  it('boot refresh preserves the session after a network restriction and retries when access is restored', async () => {
+    const loaded = await loadClient()
+    seedBoot(loaded.auth)
+    loaded.harness.axios.post.mockRejectedValueOnce(networkScopeError)
+
+    await loaded.client.bootAuth()
+    expect(loaded.auth.useAuth.getState()).toMatchObject({
+      token: null, user: { id: 7 }, booted: true, bootUnavailable: true, generation: 4,
+    })
+    expect(loaded.harness.errors).toEqual([networkScopeMessage])
+
+    await settle()
+    loaded.harness.axios.post.mockResolvedValueOnce({ data: completeRefreshPayload('recovered-token') })
+    await loaded.client.retryBootAuth()
+    expect(loaded.harness.axios.post).toHaveBeenCalledTimes(2)
+    expect(loaded.auth.useAuth.getState()).toMatchObject({
+      token: 'recovered-token', user: { id: 7 }, bootUnavailable: false, generation: 4,
+    })
+  })
+
+  it('reports network restrictions without fetching the profile or ending the current session', async () => {
+    const loaded = await loadClient()
+    seedSession(loaded.auth, 'old-token', 7, 2)
+    window.history.replaceState({}, '', '/projects/1')
+    const newRequest = () => loaded.harness.requestHandlers[0]({ url: '/projects/1', method: 'GET', headers: {} })
+    const onFailure = loaded.harness.responseFailures[0]
+    const forbiddenError = { ...networkScopeError, config: newRequest() }
+    await expect(onFailure(forbiddenError)).rejects.toBe(forbiddenError)
+    expect(loaded.harness.axios.get).not.toHaveBeenCalled()
+    expect(loaded.harness.axios.post).not.toHaveBeenCalled()
+
+    loaded.harness.axios.post.mockRejectedValueOnce(networkScopeError)
+    const expired = () => ({ config: newRequest(), response: { status: 401, data: { message: 'expired' } } })
+    await expect(onFailure(expired())).rejects.toBe(networkScopeError)
+    expect(loaded.harness.replays).toEqual([])
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'old-token', user: { id: 7 }, generation: 2 })
+    expect(window.location.pathname).toBe('/projects/1')
+    expect(loaded.harness.errors).toEqual([networkScopeMessage, networkScopeMessage])
+
+    await settle()
+    loaded.harness.axios.post.mockResolvedValueOnce({ data: completeRefreshPayload('recovered-token') })
+    await onFailure(expired())
+    expect(loaded.harness.replays).toEqual([expect.objectContaining({ headers: { Authorization: 'Bearer recovered-token' } })])
+    expect(loaded.auth.useAuth.getState()).toMatchObject({ token: 'recovered-token', user: { id: 7 }, generation: 2 })
   })
 
   it('a 401 whose refresh gets no definite answer fails that request without signing the user out', async () => {
