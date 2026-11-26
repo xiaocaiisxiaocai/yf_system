@@ -1,10 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
+  Alert, Button, Card, Drawer, Dropdown, Empty, Form, Input, InputNumber, Menu, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
-import { IconPlus } from '@arco-design/web-react/icon'
+import { IconDown, IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import { oemRequestError } from '../../api/requestError'
 import type { Company, CompanyContact, InternalRecipient, VendorAccount } from '../../api/types'
@@ -52,6 +52,7 @@ import PasswordInput from '../../../components/PasswordInput'
 import ToolbarMenuButton from '../../../components/ToolbarMenuButton'
 import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../../utils/accountName'
 import StatusTag from '../../../components/StatusTag'
+import DangerPopconfirm from '../../../components/DangerPopconfirm'
 
 function EllipsisText({ value }: { value: string | null | undefined }) {
   const text = value || '-'
@@ -174,7 +175,8 @@ function InternalRecipientsDrawer({ open, onClose }: InternalRecipientsDrawerPro
         <Button disabled={loading || removedRows.length === 0} onClick={openImport}>重新导入</Button>
       </div>
       <Modal title="重新导入" visible={importOpen} onCancel={() => !importing && setImportOpen(false)} onOk={() => void reimport()}
-        okText="导入" confirmLoading={importing} okButtonProps={{ disabled: picked.length === 0 }} unmountOnExit>
+        okText="导入" confirmLoading={importing} closable={!importing} maskClosable={!importing} escToExit={!importing}
+        cancelButtonProps={{ disabled: importing }} okButtonProps={{ disabled: picked.length === 0 }} unmountOnExit>
         <ResizableTable tableId="oem-internal-recipients-reimport" rowKey="userId" size="small" pagination={false} data={removedRows}
           scroll={{ y: 320 }}
           rowSelection={{ type: 'checkbox', selectedRowKeys: picked, onChange: (keys) => setPicked(keys as number[]) }}
@@ -289,16 +291,25 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
           { title: '状态', width: 64, align: 'center' as const, render: (_: unknown, row: CompanyContact) => <StatusTag status={row.status} /> },
           { title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: CompanyContact) => <Space size={4}>
             <Button size="mini" type="text" onClick={() => { setEditingContact(row); form.setFieldsValue(row); setAdding(true) }}>编辑</Button>
-            <Popconfirm title={row.status === 'ACTIVE' ? '确认停用该联络人？' : '确认启用该联络人？'} onOk={async () => { await api.setContactStatus(row.id, row.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE'); await load(); onChanged() }}>
-              <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
-            </Popconfirm>
+            {row.status === 'ACTIVE' ? (
+              <DangerPopconfirm title="确认停用该联络人？" onOk={async () => { await api.setContactStatus(row.id, 'DISABLED'); await load(); onChanged() }}>
+                <Button size="mini" type="text" status="danger">停用</Button>
+              </DangerPopconfirm>
+            ) : (
+              <Popconfirm title="确认启用该联络人？" onOk={async () => { await api.setContactStatus(row.id, 'ACTIVE'); await load(); onChanged() }}>
+                <Button size="mini" type="text" status="success">启用</Button>
+              </Popconfirm>
+            )}
           </Space> },
         ]} />
-        <Modal className="form-dialog" title={editingContact ? '编辑联络人' : '新增联络人'} visible={adding} confirmLoading={saving} onCancel={() => { if (!saving) setAdding(false) }} onOk={() => void createContact()} unmountOnExit>
-          <Form form={form} layout="vertical">
+        <Modal className="form-dialog" title={editingContact ? '编辑联络人' : '新增联络人'} visible={adding} confirmLoading={saving}
+          closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }}
+          onCancel={() => { if (!saving) setAdding(false) }} onOk={() => void createContact()} unmountOnExit>
+          <Form form={form} layout="vertical" onSubmit={() => void createContact()}>
             <Form.Item field="name" label="姓名" rules={[{ required: true }, { maxLength: 64 }]}><Input autoFocus /></Form.Item>
             <Form.Item field="email" label="邮箱" rules={[{ required: true, message: '请输入邮箱' }, { type: 'email' }]}><Input /></Form.Item>
-            <Form.Item field="sortNo" label="排序"><InputNumber min={0} max={9999} precision={0} placeholder="0" /></Form.Item>
+            <Form.Item field="sortNo" label="排序"><InputNumber style={{ width: '100%' }} min={0} max={9999} precision={0} placeholder="0" /></Form.Item>
+            <EnterSubmit />
           </Form>
         </Modal>
       </>}
@@ -447,10 +458,13 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       render: (_: unknown, row: VendorAccount) => (can.manageAccounts ? (
         <Space size={4}>
           <Button size="mini" type="text" onClick={() => reset(row)}>重置密码</Button>
-          <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}
-            onClick={() => void toggleAccountStatus(row)}>
-            {row.status === 'ACTIVE' ? '停用' : '启用'}
-          </Button>
+          {row.status === 'ACTIVE' ? (
+            <DangerPopconfirm title="停用后该账号将立即退出登录，确定停用？" onOk={() => void toggleAccountStatus(row)}>
+              <Button size="mini" type="text" status="danger">停用</Button>
+            </DangerPopconfirm>
+          ) : (
+            <Button size="mini" type="text" status="success" onClick={() => void toggleAccountStatus(row)}>启用</Button>
+          )}
           {can.deleteAccounts && (
             <Button
               size="mini"
@@ -492,7 +506,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
           <div className="drawer-toolbar responsive-toolbar">
             <Typography.Text type="secondary">共 {rows.length} 个账号</Typography.Text>
             <Space>
-              <Button type="primary" icon={<IconPlus />} onClick={() => { form.resetFields(); setAdding(true) }} disabled={!can.manageAccounts}>新增账号</Button>
+              <Button type="primary" size="small" icon={<IconPlus />} onClick={() => { form.resetFields(); setAdding(true) }} disabled={!can.manageAccounts}>新增账号</Button>
             </Space>
           </div>
           {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
@@ -885,6 +899,18 @@ export default function CompaniesPage() {
     }
   }
 
+  const confirmToggleCompanyStatus = (company: Company) => {
+    const disabling = company.status === 'ACTIVE'
+    Modal.confirm({
+      title: disabling ? `停用厂商“${company.name}”` : `启用厂商“${company.name}”`,
+      content: disabling ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？',
+      okText: '确定',
+      cancelText: '取消',
+      okButtonProps: disabling ? { status: 'danger' } : undefined,
+      onOk: () => toggleCompanyStatus(company),
+    })
+  }
+
   const confirmDeleteCompany = (company: Company) => {
     Modal.confirm({
       title: `删除厂商“${company.name}”`,
@@ -906,32 +932,44 @@ export default function CompaniesPage() {
   }, [load])
 
   const companyColumns = [
-    { key: 'name', title: '名称', dataIndex: 'name', width: 240, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
+    { key: 'name', title: '名称', dataIndex: 'name', width: 240, align: 'left' as const, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
     { key: 'status', title: '状态', width: 70, align: 'center' as const, render: (_: unknown, row: Company) => <StatusTag status={row.status} /> },
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
     {
-      key: 'actions', title: '操作', width: 450, fixed: 'right' as const,
+      key: 'actions', title: '操作', width: 260, fixed: 'right' as const,
       render: (_: unknown, row: Company) => (
         <Space size={4}>
           {can.viewTransfers && <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers?companyId=${row.id}`)}>传递记录</Button>}
           {(can.manageAccounts || can.viewDirectory) && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号管理</Button>}
           {can.manageCompanies && <Button size="mini" type="text" onClick={() => setContactsOf(row)}>联络人</Button>}
-          {can.manageCompanies && <Button size="mini" type="text" onClick={() => { form.setFieldsValue(row); setEditing(row) }}>编辑</Button>}
-          {can.manageCompanies && <Popconfirm title={row.status === 'ACTIVE' ? '停用后该厂商所有账号将立即退出登录，确定？' : '确定启用该厂商？'}
-            onOk={() => toggleCompanyStatus(row)}>
-            <Button size="mini" type="text" status={row.status === 'ACTIVE' ? 'danger' : 'success'}>{row.status === 'ACTIVE' ? '停用' : '启用'}</Button>
-          </Popconfirm>}
-          {can.manageCompanies && can.deleteCompanies && (
-            <Button
-              size="mini"
-              type="text"
-              status="danger"
-              loading={deletingIds.has(row.id)}
-              disabled={deletingIds.has(row.id)}
-              onClick={() => confirmDeleteCompany(row)}
+          {can.manageCompanies && (
+            <Dropdown
+              trigger="click"
+              position="br"
+              droplist={
+                <Menu
+                  onClickMenuItem={(key) => {
+                    if (key === 'edit') { form.setFieldsValue(row); setEditing(row) }
+                    if (key === 'toggle') confirmToggleCompanyStatus(row)
+                    if (key === 'delete') confirmDeleteCompany(row)
+                  }}
+                >
+                  <Menu.Item key="edit">编辑</Menu.Item>
+                  <Menu.Item key="toggle">
+                    <span style={{ color: row.status === 'ACTIVE' ? 'rgb(var(--danger-6))' : 'rgb(var(--success-6))' }}>
+                      {row.status === 'ACTIVE' ? '停用' : '启用'}
+                    </span>
+                  </Menu.Item>
+                  {can.deleteCompanies && (
+                    <Menu.Item key="delete" disabled={deletingIds.has(row.id)}>
+                      <span style={{ color: 'rgb(var(--danger-6))' }}>删除</span>
+                    </Menu.Item>
+                  )}
+                </Menu>
+              }
             >
-              删除
-            </Button>
+              <Button size="mini" type="text">更多<IconDown style={{ marginLeft: 2 }} /></Button>
+            </Dropdown>
           )}
         </Space>
       ),
@@ -976,7 +1014,7 @@ export default function CompaniesPage() {
             loading={listLoading}
             data={rows}
             columns={companyColumns}
-            scroll={{ x: 790, y: 'var(--page-table-scroll-y)' }}
+            scroll={{ x: 750, y: 'var(--page-table-scroll-y)' }}
             pagination={{ current: page, total, pageSize, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
 

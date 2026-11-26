@@ -54,7 +54,7 @@ export function PortalLoginPage() {
     <AuthShell brand={OEM_BRAND} title="账号登录">
       <Form className="auth-form" form={form} layout="vertical" onSubmit={submit} autoComplete="on">
         <Form.Item field="employeeNo" rules={[{ required: true, message: '请输入登录账号' }]}>
-          <Input size="large" prefix={<IconUser />} placeholder="请输入登录账号" aria-label="登录账号" autoComplete="username" disabled={loading} />
+          <Input autoFocus size="large" prefix={<IconUser />} placeholder="请输入登录账号" aria-label="登录账号" autoComplete="username" disabled={loading} />
         </Form.Item>
         <Form.Item field="password" rules={[{ required: true, message: '请输入密码' }]}>
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入密码" aria-label="密码" autoComplete="current-password" disabled={loading} onPressEnter={() => form.submit()} />
@@ -114,9 +114,10 @@ export function PortalChangePasswordPage() {
   // Bootstrap may fail to restore a session (expired refresh cookie): there is nothing to change then.
   if (!booted) {
     return (
-      <main className="auth-page">
+      <div className="app-boot">
+        <img src="/saa-logo.svg" alt="SAA" />
         <Spin tip="正在恢复登录状态…" />
-      </main>
+      </div>
     )
   }
   if (!token && bootUnavailable) {

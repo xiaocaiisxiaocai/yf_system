@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Popconfirm, Space, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Button, Space, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import { IconExclamationCircleFill } from '@arco-design/web-react/icon'
+import DangerPopconfirm from './DangerPopconfirm'
 import http, { type QuietRequestConfig } from '../api/client'
 import { abortUpload } from '../api/uploads'
 import { fmtSize } from '../api/types'
@@ -108,9 +109,9 @@ export default function ActiveUploadSessions({
                 <Button size="mini" type="primary" onClick={onResume}>继续</Button>
               )}
               {item.canAbort && (
-                <Popconfirm title="取消后已上传的分片会被丢弃，确认取消？" onOk={() => abort(item.sessionId)}>
+                <DangerPopconfirm title="取消后已上传的分片会被丢弃，确认取消？" onOk={() => abort(item.sessionId)}>
                   <Button size="mini" type="text" status="danger" loading={busyId === item.sessionId}>取消</Button>
-                </Popconfirm>
+                </DangerPopconfirm>
               )}
             </Space>
           </li>

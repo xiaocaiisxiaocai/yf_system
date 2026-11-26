@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Spin, Tag, Tooltip,
+  Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip,
 } from '@arco-design/web-react'
 import ResizableTable from './ResizableTable'
 import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconUndo, IconRedo } from '@arco-design/web-react/icon'
@@ -9,9 +9,11 @@ import { useAuth } from '../store/auth'
 import { type FileItem, type PageResp, PROJECT_STATUS, fmtSize, fmtTime } from '../api/types'
 import { actionSlots } from './ActionSlots'
 import ActiveUploadSessions from './ActiveUploadSessions'
+import DangerPopconfirm from './DangerPopconfirm'
 import LoadError from './LoadError'
 import ChunkUploader from './ChunkUploader'
 import PdfPreview from './PdfPreview'
+import PreviewFallback from './PreviewFallback'
 import { useCoalescedRefresh } from '../hooks/useCoalescedRefresh'
 import { canWithdraw, useWithdrawClock } from '../hooks/useWithdrawClock'
 import { useCollaboration } from '../store/collaboration'
@@ -25,11 +27,6 @@ const PptxPreview = lazy(() => import('./PptxPreview'))
 const DocxPreview = lazy(() => import('./DocxPreview'))
 const VideoPreview = lazy(() => import('./VideoPreview'))
 const ImagePreview = lazy(() => import('./ImagePreview'))
-
-/** 预览渲染器按需加载时的统一占位：居中转圈加说明。 */
-function PreviewLoading({ text }: { text: string }) {
-  return <div className="pdf-preview-status" role="status"><Spin />{text}</div>
-}
 
 interface Props {
   projectId: number
@@ -119,6 +116,7 @@ export default function FileTable({
   const [direction, setDirection] = useState<string>()
   const [category, setCategory] = useState<string>()
   const [keyword, setKeyword] = useState('')
+  const [searchText, setSearchText] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [loadError, setLoadError] = useState(false)
@@ -259,6 +257,7 @@ export default function FileTable({
       title: '文件名',
       dataIndex: 'originalName',
       width: compactMedium ? undefined : COLUMN_WIDTHS.name[w],
+      align: 'left' as const,
       ellipsis: true,
       render: (v: string, r: FileItem) => (
         <Space size={4} className="file-name-cell">
@@ -306,9 +305,9 @@ export default function FileTable({
         ),
         // 删除（内部账号）与撤回/恢复（上传它的厂商账号）互斥，共用同一个操作位以保持对齐。
         r.canDelete && projectStatus === 'IN_PROGRESS' ? (
-          <Popconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
+          <DangerPopconfirm key="delete" title={`删除文件「${r.originalName}」？`} onOk={() => remove(r)}>
             <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件">{compactNarrow ? null : '删除'}</Button>
-          </Popconfirm>
+          </DangerPopconfirm>
         ) : r.canRestore ? (
           <Popconfirm key="restore" title={`恢复文件「${r.originalName}」？`} onOk={() => restore(r)}>
             <Button size="mini" type="text" icon={<IconRedo />} aria-label="恢复文件">{compactNarrow ? null : '恢复'}</Button>
@@ -320,9 +319,9 @@ export default function FileTable({
               disabled={!canWithdraw(r.withdrawableUntil, withdrawNow)}>{compactNarrow ? null : '撤回'}</Button>
           </Popconfirm>
         ) : (
-          <Popconfirm key="delete" disabled title={`删除文件「${r.originalName}」？`}>
+          <DangerPopconfirm key="delete" disabled title={`删除文件「${r.originalName}」？`}>
             <Button size="mini" type="text" status="danger" icon={<IconDelete />} aria-label="删除文件" disabled>{compactNarrow ? null : '删除'}</Button>
-          </Popconfirm>
+          </DangerPopconfirm>
         ),
       ], 'file'),
     },
@@ -342,12 +341,13 @@ export default function FileTable({
   return (
     <div ref={hostRef} className={`file-table${compact ? ' file-table--compact' : ''}${compactNarrow ? ' file-table--narrow' : ''}`}>
       <Space className="responsive-toolbar" size={compact ? 8 : undefined} style={{ marginBottom: compact ? 8 : 12, width: '100%', justifyContent: 'space-between' }}>
-        <Space>
+        <Space wrap>
           <Select
             allowClear
             placeholder="方向"
             size={compact ? 'small' : undefined}
             style={{ width: compact ? 124 : 150 }}
+            value={direction}
             onChange={(v) => {
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
@@ -379,6 +379,8 @@ export default function FileTable({
             placeholder="文件名"
             size={compact ? 'small' : undefined}
             style={{ width: compact ? 160 : 200 }}
+            value={searchText}
+            onChange={setSearchText}
             onSearch={(v) => {
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
@@ -388,8 +390,24 @@ export default function FileTable({
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
               setPage(1)
               setKeyword('')
+              setSearchText('')
             }}
           />
+          {(direction || category || keyword) && (
+            <Button
+              size={compact ? 'small' : undefined}
+              onClick={() => {
+                setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
+                setPage(1)
+                setDirection(undefined)
+                setCategory(undefined)
+                setKeyword('')
+                setSearchText('')
+              }}
+            >
+              重置筛选
+            </Button>
+          )}
         </Space>
         <Space>
           {selected.length > 0 && hasPerm('file:download') && (
@@ -427,7 +445,7 @@ export default function FileTable({
             checkboxProps: (record: FileItem) => ({ disabled: !readable(record) }),
           } : undefined}
           size={compact ? 'small' : undefined}
-          noDataElement={compact ? <Empty description="暂无文件" /> : undefined}
+          noDataElement={loading ? <span /> : <Empty description="暂无文件" />}
           scroll={{ x: scrollX }}
           columns={columns}
           pagination={{
@@ -471,28 +489,28 @@ export default function FileTable({
         unmountOnExit
       >
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'excel' && (
-          <Suspense fallback={<PreviewLoading text="加载 Excel 渲染器…" />}>
+          <Suspense fallback={<PreviewFallback tip="加载 Excel 渲染器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><ExcelPreview fileId={preview.id} ext={preview.ext} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pdf' && <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><PdfPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'image' && (
-          <Suspense fallback={<PreviewLoading text="加载图片预览…" />}>
+          <Suspense fallback={<PreviewFallback tip="加载图片预览…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><ImagePreview fileId={preview.id} name={preview.originalName} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'pptx' && (
-          <Suspense fallback={<PreviewLoading text="加载 PPTX 渲染器…" />}>
+          <Suspense fallback={<PreviewFallback tip="加载 PPTX 渲染器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><PptxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'docx' && (
-          <Suspense fallback={<PreviewLoading text="加载 Word 渲染器…" />}>
+          <Suspense fallback={<PreviewFallback tip="加载 Word 渲染器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><DocxPreview fileId={preview.id} toolbarContainer={previewToolbar} /></WatermarkedPreview>
           </Suspense>
         )}
         {preview && previewKind(preview.ext, preview.sizeBytes) === 'video' && (
-          <Suspense fallback={<PreviewLoading text="加载视频播放器…" />}>
+          <Suspense fallback={<PreviewFallback tip="加载视频播放器…" />}>
             <WatermarkedPreview employeeNo={user?.employeeNo} realName={user?.userType === 'INTERNAL' ? user.realName : undefined}><VideoPreview fileId={preview.id} /></WatermarkedPreview>
           </Suspense>
         )}

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { actionSlots } from '../../components/ActionSlots'
-import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
+import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Select, Space, Switch, Tabs, Tooltip, Typography } from '@arco-design/web-react'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import ResizableTable from '../../components/ResizableTable'
+import StatusTag from '../../components/StatusTag'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
@@ -140,28 +142,28 @@ export default function Dictionaries() {
   const emptyContent = <div className="dictionary-empty">
     <Empty description={hasFilter ? '未找到匹配项' : `暂无${label}数据`} />
     <Typography.Text type="secondary">{hasFilter ? '请调整关键字或筛选条件' : type === 'ROBOT_PART' && !activeSuppliers.length ? '请先维护一个启用的供应商' : `创建后可在项目中选择${label}`}</Typography.Text>
-    {hasFilter ? <Button onClick={resetFilters}>清空筛选</Button> : <Button type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增 {label}</Button>}
+    {hasFilter ? <Button onClick={resetFilters}>清空筛选</Button> : <Button type="outline" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增{label}</Button>}
   </div>
 
   const columns = type === 'ROBOT_PART'
     ? [
-      { title: 'Robot 厂商', dataIndex: 'supplierName', width: 110, ellipsis: true },
-      { title: 'Robot 料号', dataIndex: 'partNumber', width: 170, ellipsis: true },
-      { title: 'Robot 型号', dataIndex: 'model', width: 400, ellipsis: true, render: (value: string) => <Tooltip content={value}><span>{value}</span></Tooltip> },
+      { title: 'Robot 厂商', dataIndex: 'supplierName', width: 110, align: 'left' as const, ellipsis: true },
+      { title: 'Robot 料号', dataIndex: 'partNumber', width: 170, align: 'left' as const, ellipsis: true },
+      { title: 'Robot 型号', dataIndex: 'model', width: 400, align: 'left' as const, ellipsis: true, render: (value: string) => <Tooltip content={value}><span className="table-cell-text">{value}</span></Tooltip> },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
-      { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: RobotPart) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
+      { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: RobotPart) => <StatusTag status={item.enabled ? 'ACTIVE' : 'DISABLED'} /> },
       { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: RobotPart) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
-        canDeleteItems && (item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <Popconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>),
+        canDeleteItems && (item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <DangerPopconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></DangerPopconfirm>),
       ], 'single') },
     ]
     : [
-      { title: '名称', dataIndex: 'name', width: 280, ellipsis: true },
+      { title: '名称', dataIndex: 'name', width: 280, align: 'left' as const, ellipsis: true },
       { title: '排序号', dataIndex: 'sortNo', width: 90, align: 'center' as const },
-      { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <Tag color={item.enabled ? 'green' : 'gray'}>{item.enabled ? '启用' : '停用'}</Tag> },
+      { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <StatusTag status={item.enabled ? 'ACTIVE' : 'DISABLED'} /> },
       { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
-        canDeleteItems && <Popconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></Popconfirm>,
+        canDeleteItems && <DangerPopconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></DangerPopconfirm>,
       ], 'single') },
     ]
 
@@ -174,16 +176,16 @@ export default function Dictionaries() {
         <Input.Search aria-label={`搜索${label}`} placeholder={type === 'ROBOT_PART' ? '搜索料号或型号' : '搜索名称'} value={keyword} onChange={setKeyword} allowClear style={{ width: 240 }} />
         {type === 'ROBOT_PART' && <Select aria-label="筛选 Robot 厂商" placeholder="全部厂商" value={supplierId} onChange={setSupplierId} allowClear showSearch style={{ width: 180 }} options={suppliers.map((item) => ({ label: item.name, value: item.id }))} />}
       </Space>
-      <Button className="dictionary-add" aria-label={`新增 ${label}`} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增 {label}</Button>
+      <Button className="dictionary-add" aria-label={`新增${label}`} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增{label}</Button>
     </div>
-    {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <ResizableTable<ManagedItem> tableId={`dictionaries-${type}`} className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20 }} noDataElement={loading ? <span /> : emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
-    <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={`${editing ? '保存' : '创建'}${label}`} cancelText="取消">
+    {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <ResizableTable<ManagedItem> tableId={`dictionaries-${type}`} className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20 }} noDataElement={emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
+    <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={`${editing ? '保存' : '创建'}${label}`} cancelText="取消" unmountOnExit>
       <Form onSubmit={() => void save()} form={form} layout="vertical" disabled={saving}>
         {type === 'ROBOT_PART' ? <>
           <Form.Item field="supplierId" label="Robot 厂商" rules={[{ required: true, message: '请选择 Robot 厂商' }]} help={editingPart?.inUse ? '已被项目引用，厂商、料号和型号不可修改。' : undefined}><Select placeholder="选择 Robot 厂商" showSearch disabled={!!editingPart?.inUse} options={suppliers.filter((item) => item.status === 'ACTIVE' || item.id === editingPart?.supplierId).map((item) => ({ label: `${item.name}${item.status === 'ACTIVE' ? '' : '（已停用）'}`, value: item.id }))} /></Form.Item>
           <Form.Item field="partNumber" label="Robot 料号" rules={[{ required: true, message: '请输入 Robot 料号' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? 'Robot 料号需为 1–128 个字符' : undefined) }]}><Input autoFocus placeholder="输入 Robot 料号" disabled={!!editingPart?.inUse} maxLength={128} showWordLimit /></Form.Item>
           <Form.Item field="model" label="Robot 型号" rules={[{ required: true, message: '请输入 Robot 型号' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 512 ? 'Robot 型号需为 1–512 个字符' : undefined) }]}><Input.TextArea placeholder="输入该料号对应的完整型号" disabled={!!editingPart?.inUse} autoSize={{ minRows: 2, maxRows: 5 }} maxLength={512} showWordLimit wordLimitPosition="outside" /></Form.Item>
-        </> : <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? '名称需为 1–128 个字符' : undefined) }]}><Input placeholder={label} /></Form.Item>}
+        </> : <Form.Item field="name" label="名称" rules={[{ required: true, message: '请输入名称' }, { validator: (value, callback) => callback(!value?.trim() || Array.from(value.trim()).length > 128 ? '名称需为 1–128 个字符' : undefined) }]}><Input autoFocus placeholder={label} /></Form.Item>}
         <Form.Item field="sortNo" label="排序号"><InputNumber min={0} max={100000} precision={0} style={{ width: '100%' }} /></Form.Item>
         <Form.Item field="enabled" label="启用" triggerPropName="checked"><Switch /></Form.Item>
       <EnterSubmit /></Form>

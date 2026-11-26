@@ -382,4 +382,45 @@ describe('外协清单入口与设定', () => {
     await user.click(entry)
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/items')
   })
+
+  it('外发类型与栏位设定停用前需二次确认，启用按钮带绿色语义', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    let savedTypes = [...types, { id: 6, code: 'ODM', name: '停用类型', status: 'DISABLED', sortNo: 20, vendorIds: [], allowElectricalHandoff: false }]
+    const fieldsSettings = {
+      fields: [{
+        id: 6, key: 'hasRobotV', builtIn: false, label: '是否有RobotV', dataType: 'BOOLEAN', options: [], category: 'CUSTOM',
+        sortNo: 60, status: 'ACTIVE', pinned: false, vendorVisible: false, vendorVisibleLocked: false, vendorEditable: false,
+        vendorEditableAllowed: true, editorScope: 'ALL', editorScopeAllowed: true, editorRoleIds: [], inUse: false, updatedAt: '2026-11-19T00:00:00.000Z',
+      }],
+      roles: [],
+    }
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/settings/fields' ? fieldsSettings : url.endsWith('/types') ? savedTypes : url.endsWith('/vendors') ? vendors : [],
+    } as never))
+    const put = vi.spyOn(http, 'put').mockImplementation(async (url: string) => {
+      if (url === '/outsource/settings/types/5/status') {
+        savedTypes = savedTypes.map((type) => type.id === 5 ? { ...type, status: 'DISABLED' } : type)
+        return { data: {} } as never
+      }
+      return { data: { ...fieldsSettings, fields: [{ ...fieldsSettings.fields[0], status: 'DISABLED' }] } } as never
+    })
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+
+    const activeType = within((await screen.findByText('OEMA【进料+制造】')).closest('tr')!)
+    const disabledType = within(screen.getByText('ODM【停用类型】').closest('tr')!)
+    expect(disabledType.getByRole('button', { name: '启用' })).toHaveClass('arco-btn-status-success')
+    await user.click(activeType.getByRole('button', { name: '停用' }))
+    expect(put).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/types/5/status', { status: 'DISABLED' }))
+
+    await user.click(screen.getByRole('tab', { name: '栏位设定' }))
+    const fieldRow = within((await screen.findByText('是否有RobotV')).closest('tr')!)
+    await user.click(fieldRow.getByRole('button', { name: '停用' }))
+    expect(put).toHaveBeenCalledTimes(1)
+    fireEvent.click(await screen.findByRole('button', { name: '确定' }))
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/6/status', { status: 'DISABLED' }))
+    expect(await within(screen.getByText('是否有RobotV').closest('tr')!).findByRole('button', { name: '启用' })).toHaveClass('arco-btn-status-success')
+  })
 })

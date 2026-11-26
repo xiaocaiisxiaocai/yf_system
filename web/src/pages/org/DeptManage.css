@@ -82,7 +82,7 @@
 .org-view-child-main strong { font-size: 14px; line-height: 22px; font-weight: 500; color: var(--app-text); overflow-wrap: anywhere; }
 .org-view-child-main small { font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
 .org-view-child-main .org-view-child-leader { color: var(--color-text-2); }
-.org-view-child-status { flex-shrink: 0; font-size: 12px; line-height: 20px; color: rgb(var(--success-6)); }
+.org-view-child-status { flex-shrink: 0; font-size: 12px; line-height: 20px; color: var(--app-success-text, #007a21); }
 .org-view-child-status.is-disabled { color: var(--app-text-muted); }
 .org-view-child > svg { flex-shrink: 0; font-size: 14px; color: var(--color-text-3); }
 .org-view-child:focus-visible, .org-view-breadcrumb button:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 2px; }

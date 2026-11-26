@@ -129,7 +129,7 @@
 .audit-source--current {
   border-color: rgb(var(--orange-2));
   background: rgb(var(--orange-1));
-  color: rgb(var(--orange-6));
+  color: var(--app-warning-text, #b54708);
 }
 
 .audit-change-table {
@@ -172,14 +172,14 @@
 }
 
 .audit-before {
-  color: rgb(var(--red-6));
+  color: rgb(var(--red-7));
   background: rgb(var(--red-1));
   text-decoration: line-through;
   text-decoration-color: rgb(var(--red-4));
 }
 
 .audit-after {
-  color: rgb(var(--green-7));
+  color: var(--app-success-text, #007a21);
   background: rgb(var(--green-1));
   font-weight: 500;
 }
@@ -302,7 +302,7 @@
   margin-top: 12px;
   border-color: rgb(var(--orange-2));
   background: rgb(var(--orange-1));
-  color: rgb(var(--orange-7));
+  color: var(--app-warning-text, #b54708);
   font-size: 13px;
 }
 
@@ -354,10 +354,20 @@
 }
 
 .audit-raw-collapse .arco-collapse-item-header {
-  padding: 11px 14px;
+  padding: 11px 14px 11px 34px;
   background: var(--color-fill-1);
   font-size: 14px;
   font-weight: 500;
+  transition: background-color 0.15s ease;
+}
+
+.audit-raw-collapse .arco-collapse-item-header:hover {
+  background: var(--color-fill-2);
+}
+
+.audit-raw-collapse .arco-collapse-item-header-icon {
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 
 .audit-raw-collapse .arco-collapse-item-content-box {

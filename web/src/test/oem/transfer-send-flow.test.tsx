@@ -315,7 +315,7 @@ describe('ODM/OEMA 一键发送文件', () => {
     const headers = screen.getAllByRole('columnheader').map((header) => header.textContent)
     expect(headers.slice(1, 3)).toEqual(['文件', '工令'])
     expect(within(boundRow).getByRole('cell', { name: workOrder.workOrderNo })).toBeVisible()
-    expect(within(legacyRow).getByRole('cell', { name: '—' })).toBeVisible()
+    expect(within(legacyRow).getAllByRole('cell')[2]).toHaveTextContent('-')
   })
 
   it('不支持的文件格式在选择时就被拒绝：不入队、不建草稿', async () => {

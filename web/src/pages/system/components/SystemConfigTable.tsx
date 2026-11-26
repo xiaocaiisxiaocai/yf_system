@@ -86,6 +86,7 @@ export function renderSystemConfigTable({
             title: '参数',
             dataIndex: 'key',
             width: 250,
+            align: 'left' as const,
             render: (key: string) => (
               <div className="system-config-param">
                 <strong>{CONFIG_META[key]?.name || key}</strong>
@@ -108,6 +109,7 @@ export function renderSystemConfigTable({
             title: '说明',
             dataIndex: 'description',
             width: 270,
+            align: 'left' as const,
             render: (description: string, record: Cfg) => (
               <div className="system-config-description">
                 <span>{CONFIG_META[record.key]?.description || description || '-'}</span>

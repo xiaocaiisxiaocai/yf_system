@@ -54,6 +54,7 @@ describe('操作日志真实界面', () => {
     render(<AuditLog />)
     expect(await screen.findByText('10000+ 条记录，请缩小筛选范围查看完整结果')).toBeVisible()
     expect(screen.queryByText('共 10001 条记录')).not.toBeInTheDocument()
+    expect(screen.queryByText('共 10001 条')).not.toBeInTheDocument()
   })
 
   it('audit time filtering preserves an explicitly selected midnight endpoint', async () => {

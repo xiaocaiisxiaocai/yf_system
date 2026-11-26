@@ -150,6 +150,8 @@ describe('ExcelImportDialog', () => {
     expect(screen.queryByRole('button', { name: '导出错误数据' })).not.toBeInTheDocument()
     await user.upload(screen.getByLabelText('选择 Excel 文件'), new File([buffer], 'accounts.xlsx'))
     expect(await screen.findByText('错误 1')).toBeInTheDocument()
+    expect(screen.getByText('待导入').closest('.arco-tag')).toHaveClass('arco-tag-arcoblue')
+    expect(screen.getByText('有错误').closest('.arco-tag')).toHaveClass('arco-tag-red')
     await user.click(screen.getByRole('button', { name: '导出错误数据' }))
     expect(download).toHaveBeenCalledWith('账号模板_错误数据.xlsx', [{
       name: '错误数据',

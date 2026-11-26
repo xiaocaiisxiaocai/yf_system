@@ -300,7 +300,7 @@ describe('系统参数与 SMTP 生产界面', () => {
     expect(writes[0].body.password).toBe('replacement-fixture-code')
     expect(warning).toHaveBeenCalledWith('邮箱设置已保存，但邮件状态刷新失败，请稍后刷新页面')
     expect(screen.getByLabelText('邮箱密码或授权码')).toHaveValue('')
-    expect(screen.getByLabelText('邮箱密码或授权码')).toHaveAttribute('placeholder', '已设置，留空保留原授权码')
+    expect(screen.getByLabelText('邮箱密码或授权码')).toHaveAttribute('placeholder', '已设置，留空保持原值')
   })
 
   it('system config freezes edits during save and keeps the committed value when refresh fails', async () => {

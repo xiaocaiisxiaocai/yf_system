@@ -45,4 +45,16 @@ describe('全站统一的表格与侧边栏', () => {
       .map(({ path }) => path)
     expect(offenders).toEqual([])
   })
+
+  it('删除、停用、终止、移除等破坏性气泡确认都用 DangerPopconfirm（红底危险确认按钮）', () => {
+    const destructive = /删除|移除|终止|停用|丢弃|取消迁移/
+    const offenders = files.flatMap(({ path, text }) => {
+      if (path === 'components/DangerPopconfirm.tsx') return []
+      const matches = text.match(/<Popconfirm\b[\s\S]*?<\/Popconfirm>/g) ?? []
+      return matches
+        .filter((block) => destructive.test(block) || /status=["']danger["']/.test(block))
+        .map(() => path)
+    })
+    expect(offenders).toEqual([])
+  })
 })

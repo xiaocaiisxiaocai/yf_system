@@ -101,6 +101,10 @@ async function openAccounts(user: ReturnType<typeof userEvent.setup>) {
   return document.querySelector<HTMLElement>('.oem-accounts-drawer')!
 }
 
+async function openRowMore(user: ReturnType<typeof userEvent.setup>, row: HTMLElement) {
+  await user.click(within(row).getByRole('button', { name: '更多' }))
+}
+
 describe('ODM/OEMA 厂商与账号目录', () => {
   it('厂商列表和编辑资料与 Robot 一致，默认显示名称、状态、创建时间和操作', async () => {
     const user = userEvent.setup()
@@ -108,7 +112,8 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
     expect(screen.getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['名称', '状态', '创建时间', '操作'])
     expect(screen.getByRole('button', { name: '显示列' })).toBeInTheDocument()
-    await user.click(within(row).getByRole('button', { name: '编辑' }))
+    await openRowMore(user, row)
+    fireEvent.click(await screen.findByRole('menuitem', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog', { name: '编辑厂商' })
     expect(within(dialog).getByLabelText('厂商名称')).toBeVisible()
     expect(within(dialog).getByLabelText('备注')).toBeVisible()
@@ -265,15 +270,18 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     const user = userEvent.setup()
     const view = renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
 
-    expect(await screen.findByText('精工制造有限公司')).toBeVisible()
-    expect(screen.queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+    const rowWithoutDelete = (await screen.findByText('精工制造有限公司')).closest('tr')!
+    await openRowMore(user, rowWithoutDelete)
+    expect(await screen.findByRole('menuitem', { name: '编辑' })).toBeVisible()
+    expect(screen.queryByRole('menuitem', { name: '删除' })).not.toBeInTheDocument()
     const drawer = await openAccounts(user)
     expect(within(drawer).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
     view.unmount()
 
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:company_delete', 'oem:account_manage', 'oem:account_delete'])
     const companyRow = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    expect(within(companyRow).getByRole('button', { name: '删除' })).toBeVisible()
+    await openRowMore(user, companyRow)
+    expect(await screen.findByRole('menuitem', { name: '删除' })).toBeVisible()
     const permittedDrawer = await openAccounts(user)
     expect(within(permittedDrawer).getByRole('button', { name: '删除' })).toBeVisible()
   })
@@ -326,7 +334,8 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     const accountRow = within(drawer).getByText('OEM_0031').closest('tr')!
 
     await user.click(within(accountRow).getByRole('button', { name: '停用' }))
-    expect(setAccountStatus).toHaveBeenCalledWith(31, 'DISABLED')
+    fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
+    await waitFor(() => expect(setAccountStatus).toHaveBeenCalledWith(31, 'DISABLED'))
     expect(await within(drawer).findByRole('alert')).toHaveTextContent(`停用失败：${backendReason}`)
     expect(accounts).toHaveBeenCalledTimes(1)
     expect(within(accountRow).getByRole('button', { name: '停用' })).toBeVisible()
@@ -344,17 +353,20 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     renderDirectory(baseApi({ companies, setCompanyStatus }), ['oem:company_manage', 'oem:account_manage'])
     const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
 
-    await user.click(within(row).getByRole('button', { name: '停用' }))
-    // The popconfirm is still animating in (pointer-events: none), so click it directly.
-    fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
+    await openRowMore(user, row)
+    fireEvent.click(await screen.findByRole('menuitem', { name: '停用' }))
+    let confirmDialog = (await screen.findByText('停用厂商“精工制造有限公司”')).closest<HTMLElement>('[role="dialog"]')!
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: /确\s*定/ }))
     expect(await screen.findByText(`停用失败：${backendReason}`)).toHaveAttribute('role', 'alert')
     expect(setCompanyStatus).toHaveBeenCalledWith(7, 'DISABLED')
     expect(companies).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByText('停用厂商“精工制造有限公司”')).not.toBeInTheDocument())
 
     shouldFail = false
-    await user.click(within(row).getByRole('button', { name: '停用' }))
-    const confirms = await screen.findAllByRole('button', { name: /确\s*定/ })
-    fireEvent.click(confirms.at(-1)!)
+    await openRowMore(user, row)
+    fireEvent.click((await screen.findAllByRole('menuitem', { name: '停用' })).at(-1)!)
+    confirmDialog = (await screen.findAllByText('停用厂商“精工制造有限公司”')).at(-1)!.closest<HTMLElement>('[role="dialog"]')!
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: /确\s*定/ }))
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(screen.queryByText(`停用失败：${backendReason}`)).not.toBeInTheDocument())
   })
@@ -375,7 +387,8 @@ describe('ODM/OEMA 厂商与账号目录', () => {
 
     fireEvent.click((await screen.findByText('2')).closest('.arco-pagination-item')!)
     const lastRow = (await screen.findByText('末页厂商')).closest('tr')!
-    await user.click(within(lastRow).getByRole('button', { name: '删除' }))
+    await openRowMore(user, lastRow)
+    fireEvent.click(await screen.findByRole('menuitem', { name: '删除' }))
     expect(await screen.findByText('删除厂商“末页厂商”')).toBeVisible()
     const confirmDialog = screen.getByText('删除厂商“末页厂商”').closest<HTMLElement>('[role="dialog"]')!
     const confirm = within(confirmDialog).getByRole('button', { name: '确认删除' })

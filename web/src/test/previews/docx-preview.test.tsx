@@ -61,12 +61,18 @@ describe('Word preview', () => {
     message(frame.contentWindow, { type: 'docx:rendered', channel, scale: 0.8, zoom: 'fit' })
     await waitFor(() => expect(frame).toHaveStyle({ visibility: 'visible' }))
 
+    expect(frame.closest('section')).toHaveClass('docx-preview')
     const controls = within(toolbar).getByRole('group', { name: 'Word 阅读控制' })
     await user.click(within(controls).getByRole('button', { name: '放大 Word 文档' }))
     expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'docx:command', command: 'zoom', channel, value: 1 })
     message(frame.contentWindow, { type: 'docx:scale-changed', channel, scale: 'not-a-number' })
     await user.click(within(controls).getByRole('button', { name: '缩小 Word 文档' }))
     expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ value: 0.64 })
+    await user.click(within(controls).getByRole('combobox', { name: 'Word 缩放' }))
+    fireEvent.click(await screen.findByText('25%'))
+    expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'docx:command', command: 'zoom', channel, value: '0.25' })
+    await user.click(within(controls).getByRole('button', { name: '重置 Word 缩放' }))
+    expect(postMessage.mock.calls.at(-1)?.[0]).toMatchObject({ type: 'docx:command', command: 'zoom', channel, value: 'fit' })
   })
 
   it('reads bytes from a supplied loader instead of the collaboration endpoint', async () => {

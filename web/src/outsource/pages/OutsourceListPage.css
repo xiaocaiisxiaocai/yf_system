@@ -26,11 +26,53 @@
   background-color: #fff7d1;
 }
 
-.outsource-table .arco-table-td.outsource-cell-changed,
-.outsource-table .outsource-row--normal > .arco-table-td.outsource-cell-changed,
-.outsource-table .outsource-row--paused > .arco-table-td.outsource-cell-changed,
-.outsource-table .outsource-row--cancelled > .arco-table-td.outsource-cell-changed {
-  background-color: #fff176 !important;
+/* 勾选态：保留各状态行底色并加深层次，首列左侧加主色指示条。 */
+.outsource-table.arco-table .arco-table-tr.arco-table-row-checked.outsource-row--normal > .arco-table-td,
+.outsource-table.arco-table .arco-table-tr.arco-table-tr-checked.outsource-row--normal > .arco-table-td {
+  background-color: #dcefe0;
+}
+
+.outsource-table.arco-table .arco-table-tr.arco-table-row-checked.outsource-row--paused > .arco-table-td,
+.outsource-table.arco-table .arco-table-tr.arco-table-tr-checked.outsource-row--paused > .arco-table-td {
+  background-color: #ffd5d5;
+}
+
+.outsource-table.arco-table .arco-table-tr.arco-table-row-checked.outsource-row--cancelled > .arco-table-td,
+.outsource-table.arco-table .arco-table-tr.arco-table-tr-checked.outsource-row--cancelled > .arco-table-td {
+  background-color: #fff1b8;
+}
+
+.outsource-table.arco-table .arco-table-tr.arco-table-row-checked > .arco-table-td:first-child,
+.outsource-table.arco-table .arco-table-tr.arco-table-tr-checked > .arco-table-td:first-child {
+  box-shadow: inset 3px 0 0 rgb(var(--primary-6));
+}
+
+/* 悬停态：以 (0,8,0) 权重覆盖 Arco 默认 (0,7,0) 灰底及固定列 ::before，保留状态语义并提供清晰悬停反馈。 */
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--normal:not(.arco-table-empty-row):hover > .arco-table-td,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--normal.arco-table-tr-hover > .arco-table-td,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--normal:not(.arco-table-empty-row):hover > .arco-table-td.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--normal:not(.arco-table-empty-row):hover > .arco-table-td.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--normal.arco-table-tr-hover > .arco-table-td.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--normal.arco-table-tr-hover > .arco-table-td.arco-table-col-fixed-right::before {
+  background-color: #d7ecd9;
+}
+
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--paused:not(.arco-table-empty-row):hover > .arco-table-td,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--paused.arco-table-tr-hover > .arco-table-td,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--paused:not(.arco-table-empty-row):hover > .arco-table-td.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--paused:not(.arco-table-empty-row):hover > .arco-table-td.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--paused.arco-table-tr-hover > .arco-table-td.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--paused.arco-table-tr-hover > .arco-table-td.arco-table-col-fixed-right::before {
+  background-color: #ffd0d0;
+}
+
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--cancelled:not(.arco-table-empty-row):hover > .arco-table-td,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--cancelled.arco-table-tr-hover > .arco-table-td,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--cancelled:not(.arco-table-empty-row):hover > .arco-table-td.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--cancelled:not(.arco-table-empty-row):hover > .arco-table-td.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--cancelled.arco-table-tr-hover > .arco-table-td.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.outsource-row--cancelled.arco-table-tr-hover > .arco-table-td.arco-table-col-fixed-right::before {
+  background-color: #ffefad;
 }
 
 .outsource-table .arco-table-tr > .arco-table-td.outsource-cell-handed-off {
@@ -39,8 +81,34 @@
   font-weight: 600;
 }
 
+.outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before {
+  background-color: rgb(var(--arcoblue-3));
+}
+
+.outsource-table .arco-table-td.outsource-cell-changed,
+.outsource-table .outsource-row--normal > .arco-table-td.outsource-cell-changed,
+.outsource-table .outsource-row--paused > .arco-table-td.outsource-cell-changed,
+.outsource-table .outsource-row--cancelled > .arco-table-td.outsource-cell-changed,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-changed,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-changed,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-changed.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-changed.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-changed.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-changed.arco-table-col-fixed-right::before {
+  background-color: #fff176 !important;
+}
+
+.outsource-table .arco-table-tr > .arco-table-td.outsource-cell-handed-off--changed {
+  box-shadow: inset 3px 0 0 rgb(var(--arcoblue-6));
+}
+
 .outsource-due-changed {
-  color: rgb(var(--orange-6));
+  color: var(--app-warning-text, #b54708);
   font-weight: 600;
   text-decoration: underline dotted;
   cursor: help;
@@ -71,8 +139,8 @@
   }
 }
 
-@media (max-width: 1000px) {
-  /* 窄屏让左侧列随表格滚动，给其余栏位留出可读空间。 */
+@media (max-width: 1280px) {
+  /* 窄屏与 1280px 笔记本让左侧列随表格滚动，给其余栏位留出可读空间。 */
   .outsource-table .arco-table-col-fixed-left {
     position: static;
   }
@@ -84,7 +152,7 @@
 }
 
 .outsource-table .outsource-row--closed > .arco-table-td {
-  color: var(--color-text-3);
+  color: var(--color-text-2);
 }
 
 .outsource-files-light {

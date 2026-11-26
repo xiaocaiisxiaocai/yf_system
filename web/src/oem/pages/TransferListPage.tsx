@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Spin, Table, Tabs, TreeSelect, Typography } from '@arco-design/web-react'
+import { Alert, Button, Card, Checkbox, DatePicker, Form, Input, Message, Modal, Radio, Select, Space, Spin, Table, Tabs, Tooltip, TreeSelect, Typography } from '@arco-design/web-react'
 import { IconDownload, IconEye, IconSearch, IconUpload } from '@arco-design/web-react/icon'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { fmtSize, fmtTime } from '../../api/types'
@@ -327,7 +327,7 @@ function DownloadPicker({ title, files, onPreview, onClose }: {
         pagination={false}
         data={files}
         columns={[
-          { key: 'name', title: '文件名', dataIndex: 'originalName', ellipsis: true },
+          { key: 'name', title: '文件名', dataIndex: 'originalName', align: 'left' as const, ellipsis: true },
           { key: 'size', title: '大小', width: 96, render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
           {
             key: 'actions', title: '操作', width: 176,
@@ -404,11 +404,27 @@ export default function TransferListPage() {
   }
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
+  const [searchText, setSearchText] = useState('')
   const [mine, setMine] = useState(false)
   const [toMe, setToMe] = useState(false)
   const [scope, setScope] = useState<'latest' | 'purged'>('latest')
   const [sender, setSender] = useState('')
+  const [senderDraft, setSenderDraft] = useState('')
   const [sentRange, setSentRange] = useState<[string, string] | undefined>()
+  const hasActiveFilters = Boolean(direction || status || keyword || searchText || departmentId || sentRange || mine || toMe || sender)
+  const resetFilters = () => {
+    setDirection('')
+    setStatus(undefined)
+    setSearchText('')
+    setKeyword('')
+    if (departmentId) changeDepartment(undefined)
+    setSentRange(undefined)
+    setMine(false)
+    setToMe(false)
+    setSenderDraft('')
+    setSender('')
+    setPage(1)
+  }
   const [creating, setCreating] = useState(false)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
   const [busyAction, setBusyAction] = useState<'download' | 'preview'>('download')
@@ -513,14 +529,14 @@ export default function TransferListPage() {
   }, [api, selectedIds])
   const transferColumns = useMemo(() => [
     {
-      key: 'title', title: '文件', dataIndex: 'title', ellipsis: true,
+      key: 'title', title: '文件', dataIndex: 'title', align: 'left' as const, ellipsis: true,
       render: (value: string, row: TransferSummary) => (
         <Link className="table-link" to={`${base}/transfers/${row.id}`} title={value} onClick={(event) => event.stopPropagation()}>{value}</Link>
       ),
     },
-    { key: 'workOrderNo', title: '工令', dataIndex: 'workOrderNo', ellipsis: true, render: (value?: string | null) => value || '—' },
+    { key: 'workOrderNo', title: '工令', dataIndex: 'workOrderNo', ellipsis: true, render: (value?: string | null) => value || '-' },
     {
-      key: 'counterpart', title: realm === 'internal' ? '往来厂商' : '往来',
+      key: 'counterpart', title: realm === 'internal' ? '往来厂商' : '往来', align: 'left' as const,
       render: (_: unknown, row: TransferSummary) => <Counterpart direction={row.direction} companyName={row.companyName} recipientNames={row.recipientNames}
         senderName={row.sender.realm === 'internal' ? row.sender.realName : undefined} realm={realm} />,
     },
@@ -532,9 +548,10 @@ export default function TransferListPage() {
       filterIcon: <IconSearch />,
       filterDropdown: ({ confirm }: { confirm?: Function }) => (
         <div className="oem-sender-filter" style={{ padding: 8 }}>
-          <Input.Search allowClear autoFocus aria-label="筛选发送人" placeholder="输入发送人姓名或账号" defaultValue={sender} style={{ width: 200 }}
-            onSearch={(value) => { setSender(value.trim()); setPage(1); confirm?.() }}
-            onClear={() => { setSender(''); setPage(1); confirm?.() }} />
+          <Input.Search allowClear autoFocus aria-label="筛选发送人" placeholder="输入发送人姓名或账号" value={senderDraft} style={{ width: 200 }}
+            onChange={(value) => { setSenderDraft(value); if (!value) { setSender(''); setPage(1) } }}
+            onSearch={(value) => { const next = value.trim(); setSenderDraft(next); setSender(next); setPage(1); confirm?.() }}
+            onClear={() => { setSenderDraft(''); setSender(''); setPage(1); confirm?.() }} />
         </div>
       ),
     },
@@ -552,23 +569,43 @@ export default function TransferListPage() {
     { key: 'purgeDueAt', title: '到期时间', render: (_: unknown, row: TransferSummary) => (row.purgeDueAt ? fmtTime(row.purgeDueAt) : '-') },
     { key: 'sentAt', title: '提交时间', render: (_: unknown, row: TransferSummary) => (row.sentAt ? fmtTime(row.sentAt) : '-') },
     {
-      key: 'actions', title: '操作',
-      render: (_: unknown, row: TransferSummary) => (
-        <div className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}>
-          {/* Every row shows both buttons; one that cannot be used is greyed out, so the column lines up. */}
-          {actionSlots([
-            <Button key="preview" size="mini" icon={<IconEye />} aria-label={`预览 ${row.title}`}
-              loading={downloadingId === row.id && busyAction === 'preview'} disabled={row.previewableCount === 0 || downloadingId !== null}
-              onClick={() => void openRow(row, 'preview')}>预览</Button>,
-            <Button key="download" size="mini" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
-              loading={downloadingId === row.id && busyAction === 'download'}
-              disabled={row.downloadableCount === 0 || (downloadingId !== null && downloadingId !== row.id)}
-              onClick={() => void openRow(row, 'download')}>下载</Button>,
-          ], 'oem-file')}
-        </div>
-      ),
+      key: 'actions', title: '操作', fixed: 'right' as const,
+      render: (_: unknown, row: TransferSummary) => {
+        const previewDisabled = row.previewableCount === 0 || downloadingId !== null
+        const previewReason = row.previewableCount === 0
+          ? (row.downloadableCount === 0 ? '当前没有可预览的文件' : '该文件类型不支持在线预览')
+          : '正在处理其他文件，请稍候'
+        const downloadDisabled = row.downloadableCount === 0 || (downloadingId !== null && downloadingId !== row.id)
+        const downloadReason = row.downloadableCount === 0
+          ? '当前没有可下载的文件'
+          : '正在处理其他文件，请稍候'
+        const previewBtn = (
+          <Button key="preview" size="mini" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+            loading={downloadingId === row.id && busyAction === 'preview'} disabled={previewDisabled}
+            onClick={() => void openRow(row, 'preview')}>预览</Button>
+        )
+        const downloadBtn = (
+          <Button key="download" size="mini" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
+            loading={downloadingId === row.id && busyAction === 'download'}
+            disabled={downloadDisabled}
+            onClick={() => void openRow(row, 'download')}>下载</Button>
+        )
+        return (
+          <div className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}>
+            {/* Every row shows both buttons; one that cannot be used is greyed out, so the column lines up. */}
+            {actionSlots([
+              previewDisabled
+                ? <Tooltip key="preview" content={previewReason}><span style={{ display: 'inline-flex' }}>{previewBtn}</span></Tooltip>
+                : previewBtn,
+              downloadDisabled
+                ? <Tooltip key="download" content={downloadReason}><span style={{ display: 'inline-flex' }}>{downloadBtn}</span></Tooltip>
+                : downloadBtn,
+            ], 'oem-file')}
+          </div>
+        )
+      },
     },
-  ], [base, realm, downloadingId, busyAction, openRow, sender])
+  ], [base, realm, downloadingId, busyAction, openRow, sender, senderDraft])
   const tableId = realm === 'oem' ? 'oem-portal-transfers' : 'oem-transfers'
   const columnSpecs = realm === 'internal' ? OEM_TRANSFER_COLUMNS : PORTAL_TRANSFER_COLUMNS
   const table = useAdjustableColumns(tableId, userId, columnSpecs, transferColumns, 'title', tableHostRef, true, false, SELECTION_COLUMN_WIDTH)
@@ -605,7 +642,15 @@ export default function TransferListPage() {
           )}
           <Select allowClear placeholder="状态" style={{ width: 140 }} value={status} options={LIFECYCLE_OPTIONS}
             onChange={(value) => { setStatus(value); setPage(1) }} />
-          <Input.Search allowClear placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'} style={{ width: 220 }} onSearch={(value) => { setKeyword(value); setPage(1) }} />
+          <Input.Search
+            allowClear
+            placeholder={realm === 'internal' ? '搜索文件或厂商' : '搜索传递记录'}
+            style={{ width: 220 }}
+            value={searchText}
+            onChange={(value) => { setSearchText(value); if (!value) { setKeyword(''); setPage(1) } }}
+            onSearch={(value) => { setSearchText(value); setKeyword(value); setPage(1) }}
+            onClear={() => { setSearchText(''); setKeyword(''); setPage(1) }}
+          />
           {realm === 'internal' && <TreeSelect
             allowClear showSearch aria-label="发送人组织" placeholder="发送人组织" style={{ width: 190 }}
             treeData={departmentOptions} loading={departments.isFetching}
@@ -614,6 +659,7 @@ export default function TransferListPage() {
             onChange={changeDepartment}
           />}
           <DatePicker.RangePicker aria-label="提交时间" style={{ width: 240 }} placeholder={['提交时间起', '提交时间止']}
+            value={sentRange}
             onChange={(value) => { setSentRange(value?.length === 2 ? [value[0], value[1]] : undefined); setPage(1) }} />
           <Checkbox checked={mine} onChange={(value) => {
             setMine(value)
@@ -627,6 +673,11 @@ export default function TransferListPage() {
               setPage(1)
             }}>只看发给我的</Checkbox>
           )}
+          {hasActiveFilters && (
+            <Button onClick={resetFilters}>重置筛选</Button>
+          )}
+        </Space>
+        <Space wrap>
           <Button icon={<IconDownload />} disabled={selectedIds.length === 0} loading={batching} onClick={() => void downloadSelected()}>
             批量下载{selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
           </Button>

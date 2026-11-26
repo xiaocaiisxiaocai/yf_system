@@ -7,6 +7,7 @@ import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import { useAuth } from '../../store/auth'
 import { fmtTime } from '../../api/types'
 import type { ApiResponses, PageResp, SupplierContact } from '../../api/types'
@@ -402,7 +403,7 @@ export default function SupplierList() {
           data={data.list}
           scroll={{ x: 740, y: 'var(--page-table-scroll-y)' }}
           columns={[
-            { title: '名称', dataIndex: 'name', width: 240, ellipsis: true },
+            { title: '名称', dataIndex: 'name', width: 240, align: 'left' as const, ellipsis: true },
             {
               title: '状态',
               dataIndex: 'status',
@@ -437,29 +438,47 @@ export default function SupplierList() {
                 >
                   编辑
                 </Button>,
-                canManageSuppliers && <Popconfirm
-                  key="status"
-                  title={supplier.status === 'ACTIVE' ? '停用后其所有账号无法登录，确认？' : '确认启用？'}
-                  onOk={() => toggleStatus(supplier)}
-                >
-                  <Button
-                    size="mini"
-                    type="text"
-                    status={supplier.status === 'ACTIVE' ? 'danger' : 'success'}
-                    loading={togglingSupplierIds.has(supplier.id)}
-                    disabled={togglingSupplierIds.has(supplier.id)}
+                canManageSuppliers && (supplier.status === 'ACTIVE' ? (
+                  <DangerPopconfirm
+                    key="status"
+                    title="停用后其所有账号无法登录，确认？"
+                    onOk={() => toggleStatus(supplier)}
                   >
-                    {supplier.status === 'ACTIVE' ? '停用' : '启用'}
-                  </Button>
-                </Popconfirm>,
-                canManageSuppliers && canDelete && (
+                    <Button
+                      size="mini"
+                      type="text"
+                      status="danger"
+                      loading={togglingSupplierIds.has(supplier.id)}
+                      disabled={togglingSupplierIds.has(supplier.id)}
+                    >
+                      停用
+                    </Button>
+                  </DangerPopconfirm>
+                ) : (
                   <Popconfirm
+                    key="status"
+                    title="确认启用？"
+                    onOk={() => toggleStatus(supplier)}
+                  >
+                    <Button
+                      size="mini"
+                      type="text"
+                      status="success"
+                      loading={togglingSupplierIds.has(supplier.id)}
+                      disabled={togglingSupplierIds.has(supplier.id)}
+                    >
+                      启用
+                    </Button>
+                  </Popconfirm>
+                )),
+                canManageSuppliers && canDelete && (
+                  <DangerPopconfirm
                     key="delete"
                     title="删除后不可恢复；存在任何供应商账号或关联项目时无法删除。确认？"
                     onOk={() => remove(supplier)}
                   >
                     <Button size="mini" type="text" status="danger">删除</Button>
-                  </Popconfirm>
+                  </DangerPopconfirm>
                 ),
               ], 'supplier'),
             },

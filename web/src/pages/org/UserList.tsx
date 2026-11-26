@@ -2,13 +2,14 @@ import { optionalTextLengthRule, textLengthRule } from '../../utils/textRules'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import {
-  Button, Card, Form, Input, Message, Modal, Popconfirm, Result, Select, Space, Tag, TreeSelect, Typography,
+  Button, Card, Form, Input, Message, Modal, Popconfirm, Result, Select, Space, Tag, Tooltip, TreeSelect, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { createSessionQueryScope, queryClient } from '../../api/queryClient'
 import { actionSlots } from '../../components/ActionSlots'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import PasswordInput from '../../components/PasswordInput'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../../store/auth'
@@ -153,6 +154,7 @@ export default function UserList() {
   )
   const me = auth.user
   const [keyword, setKeyword] = useState('')
+  const [searchText, setSearchText] = useState('')
   const [departmentId, setDepartmentId] = useState<number>()
   const [status, setStatus] = useState<string>()
   const [page, setPage] = useState(1)
@@ -520,6 +522,8 @@ export default function UserList() {
             allowClear
             placeholder="账号 / 姓名 / 邮箱"
             style={{ width: 260 }}
+            value={searchText}
+            onChange={setSearchText}
             onSearch={(v) => {
               const sameQuery = page === 1 && keyword === v
               setPage(1)
@@ -530,6 +534,7 @@ export default function UserList() {
               const sameQuery = page === 1 && keyword === ''
               setPage(1)
               setKeyword('')
+              setSearchText('')
               if (sameQuery) void usersQuery.refetch()
             }}
           />
@@ -567,33 +572,46 @@ export default function UserList() {
             <Select.Option value="ACTIVE">启用</Select.Option>
             <Select.Option value="DISABLED">停用</Select.Option>
           </Select>
+          {(keyword || departmentId || status) && (
+            <Button onClick={() => {
+              setSearchText('')
+              setKeyword('')
+              setDepartmentId(undefined)
+              setStatus(undefined)
+              setPage(1)
+            }}>
+              重置筛选
+            </Button>
+          )}
         </Space>
-        <Space>
-          {optionsError && <Button size="small" onClick={() => { void optionsQuery.refetch() }}>重试加载组织和角色</Button>}
-          {!optionsLoading && !optionsError && roles.length === 0 && <Typography.Text type="warning">暂无启用的角色</Typography.Text>}
-          <Button size="small" disabled={optionsLoading || optionsError || roles.length === 0} onClick={() => setImportOpen(true)}>
-            导入 Excel
-          </Button>
-          <Button size="small" loading={exporting} disabled={!canManageUsers || optionsLoading || optionsError} onClick={() => void exportUsers()}>
-            导出 Excel
-          </Button>
-          <Button
-            type="primary"
-            icon={<IconPlus />}
-            disabled={!canManageUsers || optionsLoading || optionsError || roles.length === 0}
-            onClick={() => {
-              setEditing(null)
-              setScopeValues({})
-              setScopeOriginal({})
-              setScopeEffective({})
-              setScopeLoadedFor(null)
-              form.resetFields()
-              setEditOpen(true)
-            }}
-          >
-            新增用户
-          </Button>
-        </Space>
+        {canManageUsers && (
+          <Space>
+            {optionsError && <Button size="small" onClick={() => { void optionsQuery.refetch() }}>重试加载组织和角色</Button>}
+            {!optionsLoading && !optionsError && roles.length === 0 && <Typography.Text type="warning">暂无启用的角色</Typography.Text>}
+            <Button disabled={optionsLoading || optionsError || roles.length === 0} onClick={() => setImportOpen(true)}>
+              导入 Excel
+            </Button>
+            <Button loading={exporting} disabled={optionsLoading || optionsError} onClick={() => void exportUsers()}>
+              导出 Excel
+            </Button>
+            <Button
+              type="primary"
+              icon={<IconPlus />}
+              disabled={optionsLoading || optionsError || roles.length === 0}
+              onClick={() => {
+                setEditing(null)
+                setScopeValues({})
+                setScopeOriginal({})
+                setScopeEffective({})
+                setScopeLoadedFor(null)
+                form.resetFields()
+                setEditOpen(true)
+              }}
+            >
+              新增用户
+            </Button>
+          </Space>
+        )}
       </div>
       {refreshError && (
         <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 8 }}>
@@ -613,11 +631,12 @@ export default function UserList() {
           scroll={{ x: 1060, y: 'var(--page-table-scroll-y)' }}
           columns={[
           { title: '账号', dataIndex: 'employeeNo', width: 110, ellipsis: true },
-          { title: '姓名', dataIndex: 'realName', width: 110, ellipsis: true },
+          { title: '姓名', dataIndex: 'realName', width: 110, align: 'left' as const, ellipsis: true },
           {
             title: '组织',
             dataIndex: 'departmentName',
             width: 140,
+            align: 'left' as const,
             render: (v?: string) => <span className="table-cell-wrap">{v || '-'}</span>,
           },
           {
@@ -626,7 +645,7 @@ export default function UserList() {
             width: 150,
             render: (v?: string) => (v ? <Tag size="small" className="table-cell-wrap">{v}</Tag> : '-'),
           },
-          { title: '邮箱', dataIndex: 'email', width: 220, ellipsis: true, render: (v?: string) => v || '-' },
+          { title: '邮箱', dataIndex: 'email', width: 220, align: 'left' as const, ellipsis: true, render: (v?: string) => v || '-' },
           {
             title: '状态',
             dataIndex: 'status',
@@ -667,18 +686,35 @@ export default function UserList() {
                   重置密码
                 </Button>,
                 // 内置管理员和自己的账号不能停用或删除：按钮保留但不可用，各行操作上下对齐。
-                canManageUsers && <Popconfirm key="status" disabled={r.employeeNo === 'admin' || r.id === me?.id}
-                  title={r.status === 'ACTIVE' ? '停用后立即无法登录，确认？' : '确认启用？'} onOk={() => toggle(r)}>
-                  <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled={r.employeeNo === 'admin' || r.id === me?.id}>
-                    {r.status === 'ACTIVE' ? '停用' : '启用'}
-                  </Button>
-                </Popconfirm>,
-                canDelete && (
-                  <Popconfirm key="delete" disabled={r.employeeNo === 'admin' || r.id === me?.id}
-                    title="删除后不可恢复；存在历史业务记录时请改为停用。确认删除该用户？" onOk={() => remove(r)}>
-                    <Button size="mini" type="text" status="danger" disabled={r.employeeNo === 'admin' || r.id === me?.id}>删除</Button>
+                canManageUsers && ((r.employeeNo === 'admin' || r.id === me?.id) ? (
+                  <Tooltip key="status" content={r.employeeNo === 'admin' ? '内置管理员不可停用' : '当前登录账号不可停用'}>
+                    <span>
+                      <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled>
+                        {r.status === 'ACTIVE' ? '停用' : '启用'}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                ) : r.status === 'ACTIVE' ? (
+                  <DangerPopconfirm key="status" title="停用后立即无法登录，确认？" onOk={() => toggle(r)}>
+                    <Button size="mini" type="text" status="danger">停用</Button>
+                  </DangerPopconfirm>
+                ) : (
+                  <Popconfirm key="status" title="确认启用？" onOk={() => toggle(r)}>
+                    <Button size="mini" type="text" status="success">启用</Button>
                   </Popconfirm>
-                ),
+                )),
+                canDelete && ((r.employeeNo === 'admin' || r.id === me?.id) ? (
+                  <Tooltip key="delete" content={r.employeeNo === 'admin' ? '内置管理员不可删除' : '当前登录账号不可删除'}>
+                    <span>
+                      <Button size="mini" type="text" status="danger" disabled>删除</Button>
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <DangerPopconfirm key="delete"
+                    title="删除后不可恢复；存在历史业务记录时请改为停用。确认删除该用户？" onOk={() => remove(r)}>
+                    <Button size="mini" type="text" status="danger">删除</Button>
+                  </DangerPopconfirm>
+                )),
               ], 'user'),
           },
           ]}
@@ -715,6 +751,7 @@ export default function UserList() {
         className="form-dialog"
         title={editing ? '编辑用户' : '新增用户'}
         visible={editOpen}
+        unmountOnExit
         confirmLoading={saving}
         closable={!saving}
         maskClosable={!saving}
@@ -801,6 +838,7 @@ export default function UserList() {
         className="form-dialog"
         title={`重置密码 · ${resetTarget?.employeeNo ?? ''}`}
         visible={!!resetTarget}
+        unmountOnExit
         confirmLoading={resettingPassword}
         closable={!resettingPassword}
         maskClosable={!resettingPassword}

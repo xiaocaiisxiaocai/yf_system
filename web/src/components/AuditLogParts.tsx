@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { Button, Collapse, Drawer, Message, Tag, Typography } from '@arco-design/web-react'
 import ResizableTable from './ResizableTable'
-import { IconCheck, IconCopy, IconEye, IconRefresh } from '@arco-design/web-react/icon'
+import { IconCheck, IconCopy, IconEye, IconRefresh, IconRight } from '@arco-design/web-react/icon'
 import { actionSlots } from './ActionSlots'
 import { fmtTime } from '../api/types'
 import {
@@ -173,7 +173,7 @@ function AuditDetail({ row, presenter }: { row: AuditLogRow; presenter: AuditPre
         </div>
       </section>
 
-      <Collapse className="audit-raw-collapse" defaultActiveKey={[]}>
+      <Collapse className="audit-raw-collapse" defaultActiveKey={[]} expandIcon={<IconRight />}>
         <Collapse.Item name="raw" header="原始数据">
           <div className="audit-raw-toolbar">
             <span>敏感字段会隐藏后再显示和复制</span>
@@ -255,7 +255,7 @@ function auditColumns(presenter: AuditPresenter, onView: (row: AuditLogRow) => v
       },
     },
     {
-      title: '内容摘要', key: 'summary', width: 300,
+      title: '内容摘要', key: 'summary', width: 300, align: 'left' as const,
       render: (_: unknown, row?: AuditLogRow) => {
         const summary = row ? presenter.summary(row) : '-'
         return summary === '-'
@@ -300,7 +300,7 @@ export function AuditTable({
       data={rows}
       scroll={{ x: AUDIT_TABLE_SCROLL_X, y: 'var(--page-table-scroll-y)' }}
       columns={auditColumns(presenter, onView)}
-      pagination={{ total, current: page, pageSize, onChange: onPageChange }}
+      pagination={{ total, current: page, pageSize, showTotal: false, onChange: onPageChange }}
     />
   )
 }

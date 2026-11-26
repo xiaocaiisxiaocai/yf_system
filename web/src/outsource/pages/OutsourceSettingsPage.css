@@ -19,17 +19,13 @@
   flex: 0 0 auto;
 }
 
-.outsource-drawer-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 12px;
-}
-
 .outsource-sync-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 760px;
 }
 
 .outsource-sync-error {
@@ -37,9 +33,11 @@
 }
 
 .outsource-sync-section {
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  max-width: 760px;
 }
 
 .outsource-sync-section + .outsource-sync-section {
@@ -77,10 +75,10 @@
 }
 
 .mes-mirror-panel__ok {
-  color: rgb(var(--success-6));
+  color: var(--app-success-text, #007a21);
 }
 
-.outsource-muted {
+.outsource-settings-page .outsource-muted {
   color: var(--color-text-3);
 }
 
@@ -92,5 +90,9 @@
   .outsource-settings-toolbar .arco-space,
   .outsource-settings-toolbar .arco-select {
     width: 100% !important;
+  }
+
+  .ipms-connection-form {
+    grid-template-columns: 1fr;
   }
 }

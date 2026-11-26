@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Popconfirm, Select, Space, Switch, Tabs, Tag, TimePicker,
+  Button, Card, Checkbox, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Tabs, Tag, TimePicker,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus, IconSync } from '@arco-design/web-react/icon'
@@ -10,6 +10,7 @@ import { useAuth } from '../../store/auth'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
 import MesMirrorPanel from './MesMirrorPanel'
@@ -150,9 +151,9 @@ function TypesTab({ types, vendors, loading, reload }: {
   })
 
   const columns = [
-    { title: '外发类型', width: 260, ellipsis: true, render: (_: unknown, type: OutsourceType) => typeLabel(type) },
+    { title: '外发类型', width: 260, align: 'left' as const, ellipsis: true, render: (_: unknown, type: OutsourceType) => typeLabel(type) },
     {
-      title: '可用厂商', width: 360, render: (_: unknown, type: OutsourceType) => type.vendorIds.length
+      title: '可用厂商', width: 360, align: 'left' as const, render: (_: unknown, type: OutsourceType) => type.vendorIds.length
         ? <Space wrap size={4}>{type.vendorIds.map((id) => <Tag key={id}>{vendorName.get(id) ?? id}</Tag>)}</Space>
         : <span className="outsource-muted">未设置，任何厂商都无法匹配</span>,
     },
@@ -167,8 +168,11 @@ function TypesTab({ types, vendors, loading, reload }: {
       title: '操作', width: 200, align: 'center' as const, render: (_: unknown, type: OutsourceType) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(type)}>编辑</Button>,
         <Button key="vendors" type="text" size="mini" onClick={() => { setSelected(type.vendorIds); setMapping(type) }}>可用厂商</Button>,
-        <Button key="status" type="text" size="mini" status={type.status === ACTIVE ? 'danger' : undefined} disabled={saving}
-          onClick={() => void toggle(type)}>{type.status === ACTIVE ? '停用' : '启用'}</Button>,
+        type.status === ACTIVE
+          ? <DangerPopconfirm key="status" title={`确认停用外发类型“${typeLabel(type)}”？`} disabled={saving} onOk={() => toggle(type)}>
+            <Button type="text" size="mini" status="danger" disabled={saving}>停用</Button>
+          </DangerPopconfirm>
+          : <Button key="status" type="text" size="mini" status="success" disabled={saving} onClick={() => void toggle(type)}>启用</Button>,
       ], 'outsource'),
     },
   ]
@@ -183,8 +187,8 @@ function TypesTab({ types, vendors, loading, reload }: {
       noDataElement={loading ? <span /> : <Empty description="暂无外发类型" />} scroll={{ x: 1030, y: 'var(--page-table-scroll-y)' }}
       columns={columns as TableColumnProps<OutsourceType>[]} />
     <Modal className="form-dialog" title={editing ? '编辑外发类型' : '新增外发类型'} visible={open} onOk={save}
-      onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
-      okText={editing ? '保存' : '创建'} cancelText="取消">
+      onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
+      cancelButtonProps={{ disabled: saving }} okText={editing ? '保存' : '创建'} cancelText="取消" unmountOnExit>
       <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
         <Form.Item field="code" label="类型代码" extra="与 IPMS 中的外发类型一致，例如 OEMA"
           rules={[{ required: true, message: '请输入类型代码' }, { match: /^[A-Za-z0-9_-]{1,32}$/, message: '1–32 位字母、数字、连字符或下划线' }]}>
@@ -199,7 +203,8 @@ function TypesTab({ types, vendors, loading, reload }: {
       </Form>
     </Modal>
     <Modal className="form-dialog" title={mapping ? `${typeLabel(mapping)} · 可用厂商` : '可用厂商'} visible={mapping !== null}
-      onOk={saveMapping} onCancel={() => { if (!saving) setMapping(null) }} confirmLoading={saving} okText="保存" cancelText="取消">
+      onOk={saveMapping} onCancel={() => { if (!saving) setMapping(null) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
+      escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText="保存" cancelText="取消" unmountOnExit>
       {mappingOptions.length
         ? <Checkbox.Group direction="vertical" value={selected} onChange={(value) => setSelected(value as number[])}
           options={mappingOptions.map((vendor) => ({ label: vendor.status === ACTIVE ? vendor.name : `${vendor.name}（已停用）`, value: vendor.id }))} />
@@ -244,9 +249,9 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
   const columns: TableColumnProps<CcUser>[] = [
     { title: '姓名', dataIndex: 'realName', width: 140, ellipsis: true },
     { title: '账号', dataIndex: 'employeeNo', width: 140, ellipsis: true },
-    { title: '邮箱', dataIndex: 'email', width: 260, ellipsis: true },
+    { title: '邮箱', dataIndex: 'email', width: 260, align: 'left', ellipsis: true },
     {
-      title: '适用模块', width: 240,
+      title: '适用模块', width: 240, align: 'left',
       render: (_, row) => <div role="group" aria-label={`${row.realName}的适用模块`}>
         <Space>
           {DEFAULT_CC_MODULES.map(({ label, value }) => {
@@ -265,10 +270,10 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
     { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, row: CcUser) => <StatusTag status={row.status} /> },
     {
       title: '操作', width: 100, align: 'center' as const, render: (_: unknown, row: CcUser) => actionSlots([
-        <Popconfirm key="remove" title={`将“${row.realName}”移出默认抄送？`}
+        <DangerPopconfirm key="remove" title={`将“${row.realName}”移出默认抄送？`} disabled={busy}
           onOk={() => replace(entries.filter((item) => item.userId !== row.userId), '已移出默认抄送')}>
           <Button type="text" size="mini" status="danger" disabled={busy}>移除</Button>
-        </Popconfirm>,
+        </DangerPopconfirm>,
       ], 'single'),
     },
   ]
@@ -339,8 +344,8 @@ function SyncTab() {
   })
 
   if (error) return <LoadError message="同步状态加载失败" onRetry={load} />
-  if (!status) return null
-  const trigger = status.lastTrigger === 'SCHEDULED' ? '定时' : status.lastTrigger === 'MANUAL' ? '手动' : '—'
+  if (!status) return <Spin style={{ display: 'block', padding: '48px 0' }} />
+  const trigger = status.lastTrigger === 'SCHEDULED' ? '定时' : status.lastTrigger === 'MANUAL' ? '手动' : '-'
   return <div className="outsource-sync-tab">
     <MesMirrorPanel />
     <section className="outsource-sync-section">

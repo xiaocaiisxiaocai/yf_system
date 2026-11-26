@@ -3,12 +3,16 @@
 .oem-flow-node--skipped { color: var(--color-text-3); }
 
 /* 往来对象：方向箭头 + 动词 + 加粗名称，发出为蓝色、收到为绿色。 */
-.oem-counterpart { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; }
+.oem-counterpart { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; font-size: 14px; font-weight: 400; line-height: 22px; }
 .oem-counterpart > .arco-icon { flex-shrink: 0; }
 .oem-counterpart-verb { flex-shrink: 0; color: var(--color-text-3); }
 .oem-counterpart-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--color-text-1); }
 .oem-counterpart--out > .arco-icon { color: rgb(var(--primary-6)); }
 .oem-counterpart--in > .arco-icon { color: rgb(var(--green-6)); }
+
+.oem-shell .oem-account-button { height: auto; padding: 4px 8px; }
+.oem-row-actions .action-slot .arco-btn,
+.oem-transfer-files-card .action-slot .arco-btn { min-width: 0; padding-left: 2px; padding-right: 2px; }
 
 /* 传递单详情固定在视口内：摘要与审批流程按内容高度，附件卡占满剩余空间，表头固定、只滚表体。
    窗口矮到放不下三张卡片的最小高度时，改为在本容器内整体滚动，避免各卡片被压成一条缝。
@@ -24,15 +28,11 @@
 .oem-transfer-meta .arco-descriptions-item-label { width: 112px; min-width: 112px; background: var(--color-fill-1); color: var(--color-text-2); font-size: 13px; white-space: nowrap; }
 .oem-transfer-meta .arco-descriptions-item-value { min-width: 0; color: var(--color-text-1); font-size: 14px; overflow-wrap: anywhere; }
 .oem-transfer-detail .page-table .arco-table-body { max-height: none !important; }
-.oem-transfer-detail > .oem-transfer-approval-card { display: flex; flex: 0 1 auto; flex-direction: column; box-sizing: border-box; max-height: 40%; min-height: 140px; }
-.oem-transfer-approval-card > .arco-card-body { flex: 1; min-height: 0; overflow: auto; }
 @media (max-width: 720px), (max-height: 480px) {
   .oem-transfer-detail { height: auto; overflow: visible; }
   .oem-transfer-detail > .oem-transfer-files-card { flex: 0 0 auto; min-height: 0; }
-  .oem-transfer-detail > .oem-transfer-approval-card { max-height: none; }
-  .oem-transfer-approval-card > .arco-card-body { overflow: visible; }
 }
 
 /* 设置类页面（文件与下载、审批模板）：页签和工具栏固定在卡片上方，内容区在卡片内滚动，“保存更改”贴在滚动区底部。 */
 .oem-settings-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.oem-settings-actions { position: sticky; bottom: 0; z-index: 1; padding: 12px 0 4px; background: var(--color-bg-2, #fff); border-top: 1px solid var(--app-border); }
+.oem-settings-actions { position: sticky; bottom: 0; z-index: 5; padding: 12px 0 4px; background: var(--color-bg-2, #fff); border-top: 1px solid var(--app-border); }

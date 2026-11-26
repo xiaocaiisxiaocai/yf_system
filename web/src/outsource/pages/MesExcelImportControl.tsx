@@ -31,8 +31,8 @@ const existingColumns: TableColumnProps<Existing>[] = [
     title,
     width,
     render: (_, row) => <div className="outsource-ipms-import-comparison">
-      <span>现有 {row.current[key] ?? '—'}</span>
-      <span>Excel {row.excel[key] ?? '—'}</span>
+      <span>现有 {row.current[key] ?? '-'}</span>
+      <span>Excel {row.excel[key] ?? '-'}</span>
     </div>,
   })),
   { title: '差异字段数', dataIndex: 'changedFields', width: 105 },
@@ -173,8 +173,10 @@ function MesExcelImportDialog({ onClose, onImported }: { onClose: () => void; on
     onOk={() => void confirm()} onCancel={() => { if (!reading.current && !writing.current) onClose() }}>
     <Space wrap style={{ marginBottom: 12 }}>
       <Button size="small" onClick={() => void downloadTemplate()}>下载模板</Button>
-      <Button size="small" loading={parsing} disabled={busy} onClick={() => inputRef.current?.click()}>
-        {fileName || '选择 .xlsx 文件'}
+      <Button size="small" loading={parsing} disabled={busy} title={fileName || undefined} onClick={() => inputRef.current?.click()}>
+        <span style={{ display: 'inline-block', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>
+          {fileName || '选择 .xlsx 文件'}
+        </span>
       </Button>
       {draft && !submitting && <Button size="small" type="text" onClick={() => resetFile()}>重新选择</Button>}
     </Space>

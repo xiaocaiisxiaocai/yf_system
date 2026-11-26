@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Button, InputNumber, Select, Spin } from '@arco-design/web-react'
+import { Button, InputNumber, Result, Select, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
 import { init } from '../../vendor/vue-office-pdf/src/main'
 import type { PdfPreviewInstance, PdfZoom } from '../../vendor/vue-office-pdf/src/main'
@@ -10,8 +10,12 @@ const LOAD_FAILED_MESSAGE = 'PDF 加载失败，文件可能损坏或网络暂�
 
 function PreviewError({ message, onRetry }: { message: string; onRetry: () => void }) {
   return <div className="pdf-preview-status" role="alert">
-    <span>{message}</span>
-    <Button onClick={onRetry} aria-label="重试 PDF 预览">重试</Button>
+    <Result
+      status="error"
+      title="PDF 预览失败"
+      subTitle={message}
+      extra={<Button type="primary" onClick={onRetry} aria-label="重试 PDF 预览">重试预览</Button>}
+    />
   </div>
 }
 

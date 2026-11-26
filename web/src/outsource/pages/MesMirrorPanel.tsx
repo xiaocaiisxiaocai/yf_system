@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Descriptions, Input, InputNumber, Message, Modal, Space, Switch, Tag, TimePicker } from '@arco-design/web-react'
+import { Button, Descriptions, Input, InputNumber, Message, Modal, Space, Spin, Switch, Tag, TimePicker } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
+import PasswordInput from '../../components/PasswordInput'
 import ResizableTable from '../../components/ResizableTable'
 import LoadError from '../../components/LoadError'
 
@@ -192,10 +193,10 @@ export default function MesMirrorPanel() {
   })
 
   if (error) return <LoadError message="IPMS 设定加载失败" onRetry={load} />
-  if (!status || !settings) return null
+  if (!status || !settings) return <Spin style={{ display: 'block', padding: '48px 0' }} />
 
   const canStart = !busy && phase !== 'AWAITING_CONFIRM' && !working
-  const trigger = status.lastTrigger === 'SCHEDULED' ? '定时' : status.lastTrigger === 'MANUAL' ? '手动' : '—'
+  const trigger = status.lastTrigger === 'SCHEDULED' ? '定时' : status.lastTrigger === 'MANUAL' ? '手动' : '-'
   const dirty = address.trim() !== settings.baseUrl || account.trim() !== settings.account || password !== '' || fetchTime !== settings.syncTime
   const pending = phase === 'AWAITING_CONFIRM'
   const pendingText = status.pendingReason === 'PAGE_FETCHED' ? `第 ${status.page} 页` : '已停止'
@@ -214,7 +215,7 @@ export default function MesMirrorPanel() {
       <label htmlFor="ipms-account">账号</label>
       <Input id="ipms-account" aria-label="IPMS 账号" value={account} onChange={setAccount} allowClear autoComplete="off" disabled={!canStart} />
       <label htmlFor="ipms-password">密码</label>
-      <Input.Password id="ipms-password" aria-label="IPMS 密码" value={password} onChange={setPassword} autoComplete="new-password"
+      <PasswordInput id="ipms-password" aria-label="IPMS 密码" value={password} onChange={setPassword} autoComplete="new-password"
         placeholder={settings.passwordSet ? '已设定，留空不修改' : '请输入密码'} disabled={!canStart} />
       <span>每日抓取时间</span>
       <TimePicker aria-label="每日抓取时间" format="HH:mm" value={fetchTime} allowClear={false}
@@ -243,7 +244,7 @@ export default function MesMirrorPanel() {
         onClick={() => void start({ mode: 'PAGE', page: page as number })}>抓取指定页</Button>
       {busy && !scheduledRun && <Button status="danger" disabled={phase === 'STOPPING' || working} onClick={() => void stop()}>停止</Button>}
     </Space>
-    {busy && <div role="status">{scheduledRun ? '定时抓取中，' : ''}已抓取 {status.fetched} / {status.total ?? '—'} 笔，第 {status.pages} 页{phase === 'STOPPING' ? '，正在停止' : ''}</div>}
+    {busy && <div role="status">{scheduledRun ? '定时抓取中，' : ''}已抓取 {status.fetched} / {status.total ?? '-'} 笔，第 {status.pages} 页{phase === 'STOPPING' ? '，正在停止' : ''}</div>}
     <Descriptions column={1} border className="outsource-sync-descriptions" data={[
       { label: '资料笔数', value: String(status.mirrorCount) },
       { label: '最近成功', value: fmtTime(status.lastSuccessAt) },

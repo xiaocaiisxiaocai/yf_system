@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, Checkbox, Empty, Form, Input, Message, Modal } from '@arco-design/web-react'
+import { Button, Card, Checkbox, Empty, Form, Input, Message, Modal, Space } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconDownload, IconSearch } from '@arco-design/web-react/icon'
 import type { ApiResponses } from '../../api/types'
@@ -114,7 +114,7 @@ export default function PortalOutsourcePage() {
       title: column.title, key: column.key, width: WIDTHS[column.key] ?? 110, ellipsis: true,
       fixed: FIXED.has(column.key) ? 'left' as const : undefined,
       align: CENTERED.has(column.key) ? 'center' as const : undefined,
-      render: (_: unknown, row: Row) => row.values[column.key] ?? (column.key === 'electricalHandoff' ? '—' : ''),
+      render: (_: unknown, row: Row) => row.values[column.key] ?? (column.key === 'electricalHandoff' ? '-' : ''),
     }),
     {
       title: '操作', width: 112, align: 'center', fixed: 'right',
@@ -130,10 +130,12 @@ export default function PortalOutsourcePage() {
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外协清单</h1>
     <div className="page-toolbar responsive-toolbar">
-      <Input allowClear prefix={<IconSearch />} placeholder="工令、客户或机型" style={{ width: 260 }} value={keyword}
-        onChange={(value) => { setKeyword(value); if (!value) { setPage(1); setApplied('') } }}
-        onPressEnter={() => { setPage(1); setApplied(keyword.trim()) }} />
-      <Checkbox checked={includeClosed} onChange={(value) => { setPage(1); setIncludeClosed(value) }}>显示已完成</Checkbox>
+      <Space wrap>
+        <Input allowClear prefix={<IconSearch />} placeholder="工令、客户或机型" style={{ width: 260 }} value={keyword}
+          onChange={(value) => { setKeyword(value); if (!value) { setPage(1); setApplied('') } }}
+          onPressEnter={() => { setPage(1); setApplied(keyword.trim()) }} />
+        <Checkbox checked={includeClosed} onChange={(value) => { setPage(1); setIncludeClosed(value) }}>显示已完成</Checkbox>
+      </Space>
       <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
     </div>
     {error ? <LoadError message="外协清单加载失败" onRetry={load} />
@@ -148,7 +150,8 @@ export default function PortalOutsourcePage() {
     <Modal className="form-dialog" title={changing ? `${handoffLabel(changing.electricalHandoff)} · 工令 ${changing.values.workOrderNo ?? ''}` : ''}
       visible={changing !== null} onOk={() => void saveHandoff()}
       onCancel={() => { if (!writeLock.current) { setChanging(null); setSignerDraft({ itemId: 0, name: '' }) } }}
-      confirmLoading={saving} closable={!saving} maskClosable={!saving} okButtonProps={{ disabled: !signatureValid }}
+      confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
+      cancelButtonProps={{ disabled: saving }} okButtonProps={{ disabled: !signatureValid }}
       okText="确认" cancelText="取消" unmountOnExit>
       <Form layout="vertical">
         <Form.Item label="签名" required validateStatus={signerTooLong ? 'error' : undefined}

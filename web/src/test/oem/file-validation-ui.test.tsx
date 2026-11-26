@@ -1,5 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import { createAppQueryClient } from '../../api/queryClient'
@@ -85,6 +86,43 @@ describe('ODM/OEMA 文件校验界面', () => {
     expect(screen.getByText('按需设置文件类型、上传容量及下载限制。')).toBeInTheDocument()
     expect(screen.queryByText(/病毒|扫描|压缩包/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '保存更改' })).toBeDisabled()
+  })
+
+  it('文件大小上限在界面中以 MB 编辑，保存时按字节提交给服务端', async () => {
+    const user = userEvent.setup()
+    const settings: SettingItem[] = [
+      {
+        key: 'oem.upload.max_file_size',
+        label: 'ODM/OEMA 单文件大小上限（字节）',
+        kind: 'integer',
+        value: String(2 * 1024 * 1024 * 1024),
+        min: 1024 * 1024,
+        max: 10 * 1024 * 1024 * 1024,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
+      },
+    ]
+    const updateSettings = vi.fn().mockResolvedValue(undefined)
+    const api = {
+      settings: vi.fn().mockResolvedValue(settings),
+      updateSettings,
+    }
+
+    renderWithOem(<MemoryRouter><SettingsHub /></MemoryRouter>, api, ['oem:file_policy_manage'])
+
+    const input = await screen.findByLabelText('ODM/OEMA 单文件大小上限（MB）')
+    expect(input).toHaveValue('2048')
+    expect(screen.getByText('约 2.00 GB')).toBeInTheDocument()
+
+    await user.clear(input)
+    await user.type(input, '512')
+    expect(screen.getByText('约 512.0 MB')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '保存更改' }))
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith('file', [
+      { key: 'oem.upload.max_file_size', value: String(512 * 1024 * 1024) },
+    ]))
   })
 
   it('详情的状态列显示校验失败及服务端返回的原因', async () => {

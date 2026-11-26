@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom'
 import { actionSlots } from '../../components/ActionSlots'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popconfirm, Popover, Result, Space, Spin, Table, Typography,
+  Alert, Button, Card, Descriptions, Empty, Input, Message, Modal, Popover, Result, Space, Spin, Table, Tooltip, Typography,
 } from '@arco-design/web-react'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import { IconDownload, IconEye, IconLeft } from '@arco-design/web-react/icon'
 import { useNavigate, useParams } from 'react-router-dom'
 import { downloadOemFile } from '../components/downloadOemFile'
@@ -40,6 +41,7 @@ function promptText(title: string, placeholder: string, initial = ''): Promise<s
     Modal.confirm({
       title,
       content: <Input.TextArea autoFocus defaultValue={initial} placeholder={placeholder} maxLength={512} onChange={(value) => { text = value }} />,
+      okButtonProps: { status: 'danger' },
       onOk: () => {
         if (!text.trim()) {
           Message.warning('请填写原因')
@@ -142,7 +144,7 @@ function ApprovalProgress({ approval, status }: { approval: ApprovalInfo; status
   if (approval.nodes.length === 0) return content
   return (
     <Popover
-      trigger="hover"
+      trigger={['hover', 'focus', 'click']}
       content={
         <div style={{ maxWidth: 320, fontSize: 13 }}>
           {approval.nodes.map((node) => (
@@ -178,7 +180,7 @@ function TransferFilesTable({ files, approval, approvalStatus, canEdit, onDownlo
   const tableHostRef = useRef<HTMLDivElement>(null)
   const columns = [
     {
-      key: 'name', title: '文件名', dataIndex: 'originalName', ellipsis: true,
+      key: 'name', title: '文件名', dataIndex: 'originalName', align: 'left' as const, ellipsis: true,
       render: (value: string) => <span title={value}>{value}</span>,
     },
     { key: 'size', title: '大小', render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
@@ -204,15 +206,37 @@ function TransferFilesTable({ files, approval, approvalStatus, canEdit, onDownlo
     },
     {
       key: 'actions', title: '操作',
-      // 只有可编辑时才有“移除”位。下载、预览不可用时按钮保留但置灰，各行上下对齐。
-      render: (_: unknown, file: TransferFile) => actionSlots([
-        <Button key="download" size="small" icon={<IconDownload />} disabled={!file.downloadable} onClick={() => onDownload(file)}>下载</Button>,
-        <Button key="preview" size="small" icon={<IconEye />}
-          disabled={!(file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES)} onClick={() => onPreview(file)}>预览</Button>,
-        ...(canEdit ? [
-          <Popconfirm key="remove" title="移除该附件？" onOk={() => onRemove(file)}><Button size="small" status="danger">移除</Button></Popconfirm>,
-        ] : []),
-      ], 'oem-file'),
+      // 只有可编辑时才有“移除”位。预览、下载不可用时按钮保留但置灰，各行上下对齐。
+      render: (_: unknown, file: TransferFile) => {
+        const previewable = Boolean(file.downloadable && oemPreviewKind(file.ext) && file.sizeBytes <= OEM_PREVIEW_MAX_BYTES)
+        const previewReason = !file.downloadable
+          ? (file.purgedAt ? '文件已删除，无法预览' : '当前状态暂不可预览')
+          : !oemPreviewKind(file.ext)
+            ? '该文件类型不支持在线预览'
+            : file.sizeBytes > OEM_PREVIEW_MAX_BYTES
+              ? '文件过大，请下载后查看'
+              : ''
+        const downloadReason = !file.downloadable
+          ? (file.purgedAt ? '文件已删除，无法下载' : '当前状态暂不可下载')
+          : ''
+        const previewBtn = (
+          <Button key="preview" type="text" size="mini" icon={<IconEye />}
+            disabled={!previewable} onClick={() => onPreview(file)}>预览</Button>
+        )
+        const downloadBtn = (
+          <Button key="download" type="text" size="mini" icon={<IconDownload />}
+            disabled={!file.downloadable} onClick={() => onDownload(file)}>下载</Button>
+        )
+        return actionSlots([
+          previewable ? previewBtn : <Tooltip key="preview" content={previewReason}><span style={{ display: 'inline-flex' }}>{previewBtn}</span></Tooltip>,
+          file.downloadable ? downloadBtn : <Tooltip key="download" content={downloadReason}><span style={{ display: 'inline-flex' }}>{downloadBtn}</span></Tooltip>,
+          ...(canEdit ? [
+            <DangerPopconfirm key="remove" title="移除该附件？" onOk={() => onRemove(file)}>
+              <Button type="text" size="mini" status="danger">移除</Button>
+            </DangerPopconfirm>,
+          ] : []),
+        ], 'oem-file')
+      },
     },
     ...(approval ? [{
       key: 'approval', title: '审批',
@@ -408,13 +432,13 @@ export default function TransferDetailPage() {
   return (
     <div className="oem-transfer-detail">
       <Card
-        title={<Space><Button type="text" icon={<IconLeft />} onClick={() => navigate(`${base}/transfers`)} />{summary.title}
+        title={<Space wrap><Tooltip content="返回传递单列表"><Button type="text" icon={<IconLeft />} aria-label="返回传递单列表" onClick={() => navigate(`${base}/transfers`)} /></Tooltip>{summary.title}
           <Counterpart direction={summary.direction} companyName={summary.companyName} recipientNames={summary.recipientNames}
             senderName={summary.sender.realm === 'internal' ? summary.sender.realName : undefined} realm={realm} />
           <LifecycleTag value={summary.lifecycleStatus} />
           {summary.direction === 'INTERNAL_TO_OEM' && realm === 'internal' && <ApprovalTag value={summary.approvalStatus} />}</Space>}
         extra={
-          <Space>
+          <Space wrap>
             {caps.canSend && realm === 'oem' && recipientChoices.isSuccess && (recipientChoices.data?.length ?? 0) > 0 && (
               <RecipientChoiceSelect choices={recipientChoices.data ?? []} value={notifyUserIds} onChange={setNotifyUserIds}
                 disabled={sending} style={{ width: 260 }} />
@@ -423,14 +447,24 @@ export default function TransferDetailPage() {
               <Input aria-label="签名" placeholder="签名（提供人姓名）" maxLength={32} value={signerName} onChange={setSignerName}
                 disabled={sending} style={{ width: 180 }} />
             )}
-            {caps.canSend && (
-              <Button type="primary" loading={sending} disabled={detail.files.length === 0 || failedFiles || uploadBusy}
-                onClick={() => void send().catch(() => undefined)}>{summary.direction === 'INTERNAL_TO_OEM' ? '提交审批' : '发送文件'}</Button>
-            )}
+            {caps.canSend && (() => {
+              const sendDisabledReason = uploadBusy
+                ? '附件仍在上传，完成后可提交'
+                : detail.files.length === 0
+                  ? '请先上传至少一个附件'
+                  : failedFiles
+                    ? '请先移除校验未通过的附件'
+                    : ''
+              const sendBtn = (
+                <Button type="primary" loading={sending} disabled={Boolean(sendDisabledReason)}
+                  onClick={() => void send().catch(() => undefined)}>{summary.direction === 'INTERNAL_TO_OEM' ? '提交审批' : '发送文件'}</Button>
+              )
+              return sendDisabledReason ? <Tooltip content={sendDisabledReason}><span>{sendBtn}</span></Tooltip> : sendBtn
+            })()}
             {caps.canDelete && (
-              <Popconfirm title="删除草稿后附件将被清理，确定删除？" onOk={remove}>
+              <DangerPopconfirm title="删除草稿后附件将被清理，确定删除？" onOk={remove}>
                 <Button status="danger">删除草稿</Button>
-              </Popconfirm>
+              </DangerPopconfirm>
             )}
             {can.recover && summary.lifecycleStatus === 'SEALED' && <Button status="danger" loading={cancelling} onClick={() => void cancel()}>终止传递</Button>}
           </Space>
@@ -453,7 +487,7 @@ export default function TransferDetailPage() {
           size="small"
           column={{ xs: 1, md: 2, xl: 3 }}
           data={[
-            { label: '工令', value: summary.workOrderNo || '—' },
+            { label: '工令', value: summary.workOrderNo || '-' },
             {
               label: '发送人',
               value: summary.signerName ? `${summary.signerName}（${summary.sender.realName}）`

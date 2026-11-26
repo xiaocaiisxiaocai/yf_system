@@ -97,7 +97,7 @@ describe('外协清单页面', () => {
     expect(await screen.findByRole('button', { name: '编辑工令 21089901' })).toBeEnabled()
     await user.click(within(screen.getByText('21089901').closest('tr')!).getByRole('checkbox'))
     expect(screen.getByRole('button', { name: /批量修改 \(1\)/ })).toBeInTheDocument()
-    for (const name of ['汇入', '删除', '标记完成', /立即同步|同步所选/, /发送邮件/]) {
+    for (const name of ['导入', '删除', '标记完成', /立即同步|同步所选/, /发送邮件/]) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
     }
   })
@@ -111,8 +111,9 @@ describe('外协清单页面', () => {
     expect(paused).toHaveClass('outsource-row--paused')
     const mismatch = screen.getByText('21089961').closest('tr')!
     expect(within(mismatch).getByText('不符')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /汇入/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^导入$/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /编辑工令/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
 
     expect(screen.queryByRole('tab')).not.toBeInTheDocument()
     expect(get).not.toHaveBeenCalledWith('/outsource/items/summary', expect.anything())
@@ -122,6 +123,13 @@ describe('外协清单页面', () => {
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: 2, page: 1 }),
     })))
+    const reset = screen.getByRole('button', { name: '重置筛选' })
+    get.mockClear()
+    await user.click(reset)
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ vendorId: undefined, page: 1 }),
+    })))
+    expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
   })
 
   it('采购编辑时带上版本，厂商只能选该类型允许的厂商', async () => {
@@ -275,7 +283,7 @@ describe('外协清单页面', () => {
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
     await screen.findByText('21089901') // the toolbar keeps changing until the list has loaded
-    await user.click(screen.getByRole('button', { name: '汇入' }))
+    await user.click(screen.getByRole('button', { name: '导入' }))
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText(/填写外发日期、工令、外发类型和外发厂商/)).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
@@ -430,5 +438,22 @@ describe('外协清单页面', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/skip-notice', {
       items: [{ id: 1, expectedUpdatedAt: '2026-11-10T01:02:03.456Z' }],
     }))
+  })
+
+  it('转迅得电控单元格同时有变更时，保留黄色变更高亮与电控标记', async () => {
+    setSession([])
+    const changedHandoff = { ...items[1], changedFields: ['electricalHandoff'] }
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url === '/outsource/items' ? { list: [changedHandoff], total: 1, page: 1, pageSize: 20 }
+        : url === '/outsource/fields' ? readOnlyLayout : url === '/outsource/sync-status' ? syncStatus
+          : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+    } as never))
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    const row = within((await screen.findByText('21089961')).closest('tr')!)
+    const td = row.getByText('是').closest('td')!
+    expect(td).toHaveClass('outsource-cell-changed')
+    expect(td).toHaveClass('outsource-cell-handed-off')
+    expect(td).toHaveClass('outsource-cell-handed-off--changed')
   })
 })

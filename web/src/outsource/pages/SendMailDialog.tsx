@@ -94,7 +94,8 @@ export default function SendMailDialog({ itemIds, onClose, onSent }: {
   const notices = preview?.mails.filter((mail) => mail.kind === 'NOTICE').length ?? 0
   const withdrawals = (preview?.mails.length ?? 0) - notices
   return <Modal title="确认发送邮件" visible={visible} style={{ width: 860, maxWidth: 'calc(100vw - 32px)' }}
-    onCancel={() => { if (!sending) onClose() }} closable={!sending} maskClosable={false}
+    onCancel={() => { if (!sending) onClose() }} closable={!sending} maskClosable={false} escToExit={!sending}
+    cancelButtonProps={{ disabled: sending }} unmountOnExit
     footer={<Space>
       <Button disabled={sending} onClick={onClose}>取消</Button>
       <Button type="primary" loading={sending} disabled={!preview} onClick={() => void send()}>
@@ -158,29 +159,32 @@ function DraftCard({ draft, extra, onChange, disabled }: {
     </div>
     <div className="outsource-mail-row">
       <span className="outsource-mail-label" />
-      <Space wrap size={8}>
-        <Select aria-label={`${draft.vendorName} 另加内部抄送`} placeholder="另加内部人员" showSearch filterOption={false} allowClear
-          disabled={disabled} style={{ width: 220 }} value={undefined} onSearch={(value) => void search(value)}
-          onFocus={() => { if (!options.length) void search('') }}
-          onChange={(value: number | undefined) => {
-            const user = options.find((option) => option.userId === value)
-            const userEmail = user?.email?.trim()
-            if (user && userEmail && !taken.has(userEmail.toLowerCase()) && !extra.users.some((item) => item.userId === user.userId))
-              onChange({ ...extra, users: [...extra.users, user] })
-          }}
-          options={options.map((option) => {
-            const optionEmail = option.email?.trim() ?? ''
-            return {
-              label: `${option.realName}（${optionEmail || '未填写邮箱'}）`,
-              value: option.userId,
-              disabled: !optionEmail,
-            }
-          })} />
-        <Input aria-label={`${draft.vendorName} 另加外部抄送`} placeholder="外部邮箱，例如客户" disabled={disabled} style={{ width: 220 }}
-          value={email} status={emailError ? 'error' : undefined} onChange={(value) => { setEmail(value); setEmailError(false) }}
-          onPressEnter={addEmail} />
-        <Button disabled={disabled || !email.trim()} onClick={addEmail}>加入</Button>
-      </Space>
+      <div>
+        <Space wrap size={8}>
+          <Select aria-label={`${draft.vendorName} 另加内部抄送`} placeholder="另加内部人员" showSearch filterOption={false} allowClear
+            disabled={disabled} style={{ width: 220 }} value={undefined} onSearch={(value) => void search(value)}
+            onFocus={() => { if (!options.length) void search('') }}
+            onChange={(value: number | undefined) => {
+              const user = options.find((option) => option.userId === value)
+              const userEmail = user?.email?.trim()
+              if (user && userEmail && !taken.has(userEmail.toLowerCase()) && !extra.users.some((item) => item.userId === user.userId))
+                onChange({ ...extra, users: [...extra.users, user] })
+            }}
+            options={options.map((option) => {
+              const optionEmail = option.email?.trim() ?? ''
+              return {
+                label: `${option.realName}（${optionEmail || '未填写邮箱'}）`,
+                value: option.userId,
+                disabled: !optionEmail,
+              }
+            })} />
+          <Input aria-label={`${draft.vendorName} 另加外部抄送`} placeholder="外部邮箱，例如客户" disabled={disabled} style={{ width: 220 }}
+            value={email} status={emailError ? 'error' : undefined} aria-invalid={emailError || undefined}
+            onChange={(value) => { setEmail(value); setEmailError(false) }} onPressEnter={addEmail} />
+          <Button disabled={disabled || !email.trim()} onClick={addEmail}>加入</Button>
+        </Space>
+        {emailError && <div className="outsource-mail-inline-error" role="alert">请输入有效的邮箱地址</div>}
+      </div>
     </div>
     <Collapse bordered={false} className="outsource-mail-body">
       <Collapse.Item name="body" header={draft.subject}>

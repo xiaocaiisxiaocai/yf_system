@@ -5,6 +5,7 @@ import { IconArrowDown, IconArrowUp } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import type { ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
 import ResizableTable from '../../components/ResizableTable'
@@ -73,14 +74,14 @@ export default function OutsourceFieldsTab() {
   const movable = (data?.fields ?? []).filter((item) => !item.pinned)
   const columns: TableColumnProps<Field>[] = [
     {
-      title: '栏位', width: 200, ellipsis: true,
+      title: '栏位', width: 200, align: 'left', ellipsis: true,
       render: (_, field) => <Space size={4}>
         <span>{field.label}</span>
         {field.pinned && <Tag size="small">固定在左</Tag>}
       </Space>,
     },
     {
-      title: '类型', width: 200, ellipsis: true,
+      title: '类型', width: 200, align: 'left', ellipsis: true,
       render: (_, field) => field.dataType === 'SELECT' && field.options.length
         ? `${FIELD_TYPE_LABEL.SELECT}：${field.options.join('、')}` : FIELD_TYPE_LABEL[field.dataType] ?? field.dataType,
     },
@@ -90,8 +91,8 @@ export default function OutsourceFieldsTab() {
         disabled={saving || field.vendorVisibleLocked} onChange={(value) => void update(field, { vendorVisible: value })} />,
     },
     {
-      title: '内部填写', width: 260, ellipsis: true,
-      render: (_, field) => !field.editorScopeAllowed ? <span className="outsource-muted">—</span>
+      title: '内部填写', width: 260, align: 'left', ellipsis: true,
+      render: (_, field) => !field.editorScopeAllowed ? <span className="outsource-muted">-</span>
         : field.editorScope === 'ROLES' ? `指定角色：${field.editorRoleIds.map((id) => roleName.get(id) ?? id).join('、')}`
           : field.editorScope === 'USERS' ? `指定人员：${(field.editorUserIds ?? []).map((id) => userName.get(id) ?? id).join('、')}`
           : SCOPE_OPTIONS.find((option) => option.value === field.editorScope)?.label,
@@ -108,9 +109,14 @@ export default function OutsourceFieldsTab() {
             disabled={saving || field.pinned || index < 0 || index >= movable.length - 1} onClick={() => move(field, 1)} />,
           <Button key="edit" type="text" size="mini" disabled={saving || (field.builtIn && !field.editorScopeAllowed)}
             onClick={() => setEditing(field)}>编辑</Button>,
-          <Button key="status" type="text" size="mini" status={field.status === 'ACTIVE' ? 'danger' : undefined}
-            disabled={saving || field.builtIn} onClick={() => void toggleStatus(field)}>{field.status === 'ACTIVE' ? '停用' : '启用'}</Button>,
-        ], 'outsource')
+          field.status === 'ACTIVE'
+            ? <DangerPopconfirm key="status" title={`确认停用栏位“${field.label}”？`} disabled={saving || field.builtIn}
+              onOk={async () => { await toggleStatus(field) }}>
+              <Button type="text" size="mini" status="danger" disabled={saving || field.builtIn}>停用</Button>
+            </DangerPopconfirm>
+            : <Button key="status" type="text" size="mini" status="success" disabled={saving || field.builtIn}
+              onClick={() => void toggleStatus(field)}>启用</Button>,
+        ], 'outsource-field')
       },
     },
   ]
@@ -163,8 +169,8 @@ function FieldDialog({ field, roles, users, saving, onClose, onSave }: {
     await onSave(field, body)
   }
   return <Modal className="form-dialog" title={`编辑栏位 ${field?.label ?? ''}`} visible={field !== null} onOk={() => void save()}
-    onCancel={() => { if (!saving) onClose() }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
-    okText="保存" cancelText="取消" unmountOnExit>
+    onCancel={() => { if (!saving) onClose() }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
+    cancelButtonProps={{ disabled: saving }} okText="保存" cancelText="取消" unmountOnExit>
     <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
       {custom && <>
         <Form.Item field="label" label="栏位名称" rules={[{ required: true, message: '请填写栏位名称' }, { maxLength: 32, message: '最多 32 个字符' }]}>

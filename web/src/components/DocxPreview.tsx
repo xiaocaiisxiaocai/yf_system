@@ -109,12 +109,13 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
     <Select size="small" aria-label="Word 缩放" value={zoom} onChange={changeZoom} style={{ width: 120 }}
       getPopupContainer={trigger => trigger.closest<HTMLElement>('.file-preview-modal') ?? trigger.parentElement ?? trigger}
       options={[{ value: 'fit', label: '适合宽度' },
-        ...[...new Set([0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, ...(Number.isFinite(Number(zoom)) ? [Number(zoom)] : [])])]
+        ...[...new Set([0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, ...(Number.isFinite(Number(zoom)) ? [Number(zoom)] : [])])]
           .sort((a, b) => a - b).map(value => ({ value: String(value), label: `${Math.round(value * 100)}%` }))]} />
     <Button size="small" aria-label="放大 Word 文档" disabled={scale >= 4} onClick={() => stepZoom(1)}>放大</Button>
+    <Button size="small" aria-label="重置 Word 缩放" onClick={() => changeZoom('fit')}>重置</Button>
   </div>
 
-  return <section className="pptx-preview" aria-label="Word 预览">
+  return <section className="pptx-preview docx-preview" aria-label="Word 预览">
     {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
     <div className="pptx-preview-viewport">
       <iframe ref={frameRef} className="pptx-preview-frame" title="Word 预览内容"

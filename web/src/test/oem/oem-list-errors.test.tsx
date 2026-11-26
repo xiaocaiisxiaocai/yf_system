@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { AxiosError } from 'axios'
@@ -187,6 +187,7 @@ describe('ODM/OEMA 列表加载失败', () => {
     expect(await within(drawer).findByText('OEM_0031')).toBeVisible()
 
     await user.click(within(drawer).getByRole('button', { name: '停用' }))
+    fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
     expect(await within(drawer).findByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
     expect(within(drawer).getByText('OEM_0031')).toBeVisible()
   })

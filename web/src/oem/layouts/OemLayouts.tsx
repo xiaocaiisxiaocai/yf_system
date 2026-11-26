@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Button, Dropdown, Menu, Result, Space, Spin } from '@arco-design/web-react'
+import { Avatar, Button, Dropdown, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
-  IconCheckCircle, IconDown, IconFile, IconHistory, IconList, IconPoweroff, IconSettings, IconUserGroup,
+  IconCheckCircle, IconDown, IconFile, IconHistory, IconList, IconLock, IconPoweroff, IconSettings, IconUserGroup,
 } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -74,7 +74,14 @@ export function PortalLayout() {
     userId: account?.id ?? null,
     queryScope,
   }), [permissions, account?.id, queryScope])
-  if (!booted) return <Spin style={{ display: 'block', marginTop: 120 }} tip="正在恢复登录状态…" />
+  if (!booted) {
+    return (
+      <div className="app-boot">
+        <img src="/saa-logo.svg" alt="SAA" />
+        <Spin tip="正在恢复登录状态…" />
+      </div>
+    )
+  }
   if (!token && bootUnavailable) {
     return (
       <div className="app-boot">
@@ -121,11 +128,19 @@ export function PortalLayout() {
               if (key === 'password') navigate(`${PORTAL_BASE}/change-password`)
               if (key === 'logout') confirmUploadLeave(() => void portalLogout())
             }}>
-              <Menu.Item key="password">修改密码</Menu.Item>
+              <Menu.Item key="password"><IconLock style={{ marginRight: 8 }} />修改密码</Menu.Item>
               <Menu.Item key="logout"><IconPoweroff style={{ marginRight: 8 }} />退出登录</Menu.Item>
             </Menu>
           }>
-            <Button className="oem-account-button" type="text" style={{ color: 'inherit' }} title={account?.employeeNo}><span className="oem-account-name">{account?.employeeNo}</span><IconDown /></Button>
+            <Button className="oem-account-button" type="text" style={{ color: 'inherit' }} title={account?.employeeNo}>
+              <span aria-hidden="true" style={{ display: 'inline-flex', flexShrink: 0 }}>
+                <Avatar size={30} style={{ background: 'rgb(var(--primary-6))' }}>
+                  {account?.employeeNo?.slice(0, 1)}
+                </Avatar>
+              </span>
+              <span className="oem-account-name">{account?.employeeNo}</span>
+              <IconDown />
+            </Button>
           </Dropdown>
         } />
       </OemProvider>

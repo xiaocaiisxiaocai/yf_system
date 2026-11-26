@@ -17,14 +17,14 @@
 }
 
 @media (max-width: 480px) {
-  .layout-header .layout-logo > span { display: none; }
+  .layout-shell:not(.oem-shell) .layout-header .layout-logo > span { display: none; }
 }
 
 .collaboration-poll-status {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  color: rgb(var(--orange-6));
+  color: var(--app-warning-text);
   font-size: 12px;
   white-space: nowrap;
 }
