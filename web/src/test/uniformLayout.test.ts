@@ -57,4 +57,13 @@ describe('全站统一的表格与侧边栏', () => {
     })
     expect(offenders).toEqual([])
   })
+
+  it('Tooltip 包裹禁用按钮时直接放 Button，不手写中间 span（由 Arco Trigger 自动处理）', () => {
+    const wrappedButton = /<span\b[^>]*>\s*(?:<[Bb]utton\b|\{[^}]*(?:Button|Btn|\bbutton\b|\bbtn\b)\b)/
+    const offenders = files.flatMap(({ path, text }) => {
+      const matches = text.match(/<Tooltip\b[\s\S]*?<\/Tooltip>/g) ?? []
+      return matches.filter((block) => wrappedButton.test(block)).map(() => path)
+    })
+    expect(offenders).toEqual([])
+  })
 })

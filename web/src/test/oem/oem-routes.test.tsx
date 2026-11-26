@@ -197,6 +197,23 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(await screen.findByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/approvals')
   })
 
+  it('ODM/OEMA 根路径无权限时展示 403 并提供返回首页按钮', async () => {
+    const user = userEvent.setup()
+    setInternalSession([])
+    render(
+      <MemoryRouter initialEntries={['/oem']}>
+        <Routes>
+          <Route path="/oem" element={<OemLanding />} />
+          <Route path="/" element={<CurrentLocation />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('没有可用的 ODM/OEMA 功能')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '返回首页' }))
+    expect(await screen.findByRole('status', { name: '当前地址' })).toHaveTextContent(/^\/$/)
+  })
+
   it('旧的审批模板地址跳到合并后的设置页并选中对应标签', async () => {
     setInternalSession(['oem:flow_template_manage', 'oem:retention_template_manage'])
     vi.spyOn(http, 'get').mockResolvedValue({ data: [] } as never)
@@ -288,6 +305,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     )
 
     expect(await screen.findByText('ODM/OEMA 内部入口仅供公司员工使用')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '返回首页' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument()
   })
 

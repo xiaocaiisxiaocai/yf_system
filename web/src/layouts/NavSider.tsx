@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Badge, Layout, Menu } from '@arco-design/web-react'
+import { Badge, Layout, Menu, Tooltip } from '@arco-design/web-react'
 import { IconMenuFold, IconMenuUnfold } from '@arco-design/web-react/icon'
 
 const { Sider } = Layout
@@ -50,8 +50,10 @@ export default function NavSider({ items, selectedKey, onSelect }: {
   return <Sider className={`layout-sider${collapsed ? ' layout-sider--collapsed' : ''}`} width={200} collapsedWidth={64}
     collapsed={collapsed} collapsible trigger={null} theme="dark">
     <NavMenu items={items} selectedKey={selectedKey} onSelect={onSelect} collapsed={collapsed} />
-    <button className="layout-sider-toggle" type="button" aria-label={collapsed ? '展开侧边栏' : '折叠侧边栏'} onClick={toggle}>
-      {collapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}
-    </button>
+    <Tooltip content="展开侧边栏" position="right" disabled={!collapsed}>
+      <button className="layout-sider-toggle" type="button" aria-label={collapsed ? '展开侧边栏' : '折叠侧边栏'} aria-expanded={!collapsed} onClick={toggle}>
+        {collapsed ? <IconMenuUnfold /> : <><IconMenuFold /><span>收起导航</span></>}
+      </button>
+    </Tooltip>
   </Sider>
 }

@@ -41,7 +41,7 @@ export default function StorageLocationsPanel() {
   const [editing, setEditing] = useState<StorageLocation | null>(null)
   const [target, setTarget] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [acting, setActing] = useState<string | null>(null)
+  const [actingKey, setActingKey] = useState<string | null>(null)
   const active = useRef(true)
 
   const fetchLocations = useCallback(async (quiet: boolean) => (
@@ -101,8 +101,8 @@ export default function StorageLocationsPanel() {
   }
 
   const act = async (location: StorageLocation, action: 'cancel' | 'retry') => {
-    if (acting) return
-    setActing(location.kind)
+    if (actingKey) return
+    setActingKey(`${location.kind}:${action}`)
     try {
       if (action === 'cancel') {
         await http.post<ApiResponses['POST /admin/storage-locations/{kind}/cancel']>(`/admin/storage-locations/${location.kind}/cancel`)
@@ -112,11 +112,11 @@ export default function StorageLocationsPanel() {
       Message.success(action === 'cancel' ? '已取消，正在迁回原目录' : '已重新开始迁移')
       await load(true)
     } catch { /* 拦截器已提示。 */ }
-    finally { setActing(null) }
+    finally { setActingKey(null) }
   }
 
   if (loadError) return <LoadError onRetry={() => { setLoading(true); void load() }} />
-  if (loading) return <Spin loading style={{ width: '100%', minHeight: 120 }} />
+  if (loading) return <Spin loading style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 120 }} />
 
   const columns = [
     { title: '存储', dataIndex: 'label', width: 140 },
@@ -154,18 +154,24 @@ export default function StorageLocationsPanel() {
       title: '操作',
       width: 200,
       // 三个操作始终在固定位置；当前状态下不能用的置灰，不隐藏。
-      render: (_: unknown, row: StorageLocation) => actionSlots([
-        <Button key="edit" type="text" size="mini" disabled={busy || row.status !== 'IDLE' || Boolean(row.previousPath)} onClick={() => openEdit(row)}>
-          {row.path || row.pendingPath ? '更换路径' : '设置路径'}
-        </Button>,
-        <Button key="retry" type="text" size="mini" disabled={row.status !== 'FAILED'} loading={acting === row.kind} onClick={() => act(row, 'retry')}>重试</Button>,
-        row.kind !== 'LOG' && (
-          <DangerPopconfirm key="cancel" disabled={!row.previousPath || row.phase === 'DELETING'}
-            title="取消迁移？已写入新目录的内容将迁回原目录" onOk={() => act(row, 'cancel')}>
-            <Button type="text" size="mini" status="danger" disabled={!row.previousPath || row.phase === 'DELETING'} loading={acting === row.kind}>取消迁移</Button>
-          </DangerPopconfirm>
-        ),
-      ], 'storage'),
+      render: (_: unknown, row: StorageLocation) => {
+        const retryActing = actingKey === `${row.kind}:retry`
+        const cancelActing = actingKey === `${row.kind}:cancel`
+        const otherActing = actingKey !== null && !retryActing && !cancelActing
+        const cancelDisabled = !row.previousPath || row.phase === 'DELETING' || retryActing || otherActing
+        return actionSlots([
+          <Button key="edit" type="text" size="mini" disabled={busy || row.status !== 'IDLE' || Boolean(row.previousPath) || actingKey !== null} onClick={() => openEdit(row)}>
+            {row.path || row.pendingPath ? '更换路径' : '设置路径'}
+          </Button>,
+          <Button key="retry" type="text" size="mini" disabled={row.status !== 'FAILED' || cancelActing || otherActing} loading={retryActing} onClick={() => act(row, 'retry')}>重试</Button>,
+          row.kind !== 'LOG' && (
+            <DangerPopconfirm key="cancel" disabled={cancelDisabled || cancelActing}
+              title="取消迁移？已写入新目录的内容将迁回原目录" onOk={() => act(row, 'cancel')}>
+              <Button type="text" size="mini" status="danger" disabled={cancelDisabled} loading={cancelActing}>取消迁移</Button>
+            </DangerPopconfirm>
+          ),
+        ], 'storage')
+      },
     },
   ]
 

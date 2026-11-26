@@ -97,4 +97,44 @@ describe('StorageLocationsPanel', () => {
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith(
       '/admin/storage-locations/OEM/migrate', { path: 'D:\\YfData\\oem' }))
   })
+
+  it('spins only the clicked retry or cancel button while disabling the sibling action', async () => {
+    let resolvePost!: (value: { data: Record<string, unknown> }) => void
+    mocks.get.mockResolvedValue({
+      data: {
+        items: [
+          location({ previousPath: 'C:\\old', status: 'FAILED', phase: 'COPYING', lastError: '目标磁盘空间不足' }),
+          idle[1], idle[2],
+        ],
+      },
+    })
+    mocks.post.mockImplementation(() => new Promise<{ data: Record<string, unknown> }>((resolve) => {
+      resolvePost = resolve
+    }))
+    const user = userEvent.setup()
+    render(<StorageLocationsPanel />)
+
+    const failedRow = (await screen.findByText('协作文件存储')).closest('tr')!
+    const getRetryBtn = () => within(failedRow).getByRole('button', { name: '重试' })
+    const getCancelBtn = () => within(failedRow).getByRole('button', { name: '取消迁移' })
+
+    await user.click(getRetryBtn())
+    await waitFor(() => expect(getRetryBtn()).toHaveClass('arco-btn-loading'))
+    expect(getCancelBtn()).not.toHaveClass('arco-btn-loading')
+    expect(getCancelBtn()).toBeDisabled()
+
+    resolvePost({ data: {} })
+    await waitFor(() => expect(getRetryBtn()).not.toHaveClass('arco-btn-loading'))
+    expect(getCancelBtn()).toBeEnabled()
+
+    await user.click(getCancelBtn())
+    const popup = await screen.findByRole('tooltip')
+    fireEvent.click(within(popup).getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(getCancelBtn()).toHaveClass('arco-btn-loading'))
+    expect(getRetryBtn()).not.toHaveClass('arco-btn-loading')
+    expect(getRetryBtn()).toBeDisabled()
+
+    resolvePost({ data: {} })
+    await waitFor(() => expect(getCancelBtn()).not.toHaveClass('arco-btn-loading'))
+  })
 })

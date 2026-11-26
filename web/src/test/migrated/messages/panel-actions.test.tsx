@@ -493,4 +493,41 @@ describe('留言撰写、发送与分页', () => {
     expect(screen.getByText('厂商已撤回')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /恢复/ })).not.toBeInTheDocument()
   })
+
+  it('withdrawn restore button omits msg-secondary-action while active popconfirm triggers keep it and gain arco-popconfirm-open', async () => {
+    const previousUser = messageMocks.user
+    messageMocks.user = { id: 21, employeeNo: 'shared', realName: '共用账号', userType: 'SUPPLIER' }
+    try {
+      setMessagePermissions('message:create', 'message:delete_any')
+      messageMocks.get.mockResolvedValue(messagePage([
+        messageRow(8, { senderId: 21, senderType: 'SUPPLIER', status: 'WITHDRAWN', content: '', canRestore: true }),
+        messageRow(7, { senderId: 21, senderType: 'SUPPLIER', content: '正常留言', withdrawableUntil: new Date(Date.now() + 60_000).toISOString() }),
+      ]))
+      renderMessagePanel()
+      const restoreButton = await screen.findByRole('button', { name: /恢复/ })
+      const deleteButton = screen.getByRole('button', { name: /删除/ })
+      const withdrawButton = screen.getByRole('button', { name: /撤回/ })
+
+      expect(restoreButton).not.toHaveClass('msg-secondary-action')
+      expect(deleteButton).toHaveClass('msg-secondary-action')
+      expect(withdrawButton).toHaveClass('msg-secondary-action')
+
+      fireEvent.click(deleteButton)
+      await waitFor(() => expect(deleteButton).toHaveClass('arco-popconfirm-open'))
+      fireEvent.click(withdrawButton)
+      await waitFor(() => expect(withdrawButton).toHaveClass('arco-popconfirm-open'))
+    } finally {
+      messageMocks.user = previousUser
+    }
+  })
+
+  it('help icon tooltip triggers on keyboard focus', async () => {
+    messageMocks.get.mockResolvedValue(messagePage([]))
+    renderMessagePanel()
+    await screen.findByText('暂无留言')
+    const helpIcon = screen.getByLabelText('已读回执统计范围')
+    expect(helpIcon).toHaveAttribute('tabindex', '0')
+    fireEvent.focus(helpIcon)
+    expect(await screen.findByText('已读回执仅统计项目负责人和关联供应商的全部启用账号。')).toBeVisible()
+  })
 })

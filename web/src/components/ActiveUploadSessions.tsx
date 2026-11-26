@@ -109,8 +109,8 @@ export default function ActiveUploadSessions({
                 <Button size="mini" type="primary" onClick={onResume}>继续</Button>
               )}
               {item.canAbort && (
-                <DangerPopconfirm title="取消后已上传的分片会被丢弃，确认取消？" onOk={() => abort(item.sessionId)}>
-                  <Button size="mini" type="text" status="danger" loading={busyId === item.sessionId}>取消</Button>
+                <DangerPopconfirm title="取消后已上传的分片会被丢弃，确认取消？" disabled={busyId !== null} onOk={() => abort(item.sessionId)}>
+                  <Button size="mini" type="text" status="danger" loading={busyId === item.sessionId} disabled={busyId !== null && busyId !== item.sessionId}>取消</Button>
                 </DangerPopconfirm>
               )}
             </Space>

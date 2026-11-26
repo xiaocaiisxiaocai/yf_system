@@ -9,6 +9,7 @@ import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
 import EnterSubmit from '../../components/EnterSubmit'
 import StatusTag from '../../components/StatusTag'
+import { textLengthRule } from '../../utils/textRules'
 
 type OrgKind = 'DIVISION' | 'DEPARTMENT' | 'SECTION'
 
@@ -113,7 +114,7 @@ function toTreeData(nodes: DeptNode[], flagMissingLeader: boolean): DeptTreeData
           <span className="org-view-tree-name" title={n.name}>{n.name}</span>
           <span className="org-view-tree-kind">{ORG_KIND[kind].label}</span>
           {n.status === 'DISABLED' && <StatusTag status="DISABLED" size="small" />}
-          {flagMissingLeader && n.status === 'ACTIVE' && !n.leader && <Tag color="gold" size="small">未设负责人</Tag>}
+          {flagMissingLeader && n.status === 'ACTIVE' && !n.leader && <Tag bordered className="org-view-missing-leader" size="small">待设主管</Tag>}
         </span>
       ),
       children: n.children && n.children.length ? toTreeData(n.children, flagMissingLeader) : undefined,
@@ -334,11 +335,12 @@ export default function DeptManage() {
       const v = await form.validate().catch(() => null)
       if (!v) return
       setSaving(true)
+      const trimmedName = v.name.trim()
       if (editing) {
-        await http.put<ApiResponses['PUT /admin/departments/{id}']>(`/admin/departments/${editing.id}`, { name: v.name, parentId: editing.parentId ?? null, sortNo: v.sortNo ?? 0 })
+        await http.put<ApiResponses['PUT /admin/departments/{id}']>(`/admin/departments/${editing.id}`, { name: trimmedName, parentId: editing.parentId ?? null, sortNo: v.sortNo ?? 0 })
         Message.success(`${ORG_KIND[nodeKind(editing)].label}已更新`)
       } else {
-        await http.post<ApiResponses['POST /admin/departments']>('/admin/departments', { name: v.name, parentId: parentForNew?.id ?? null, sortNo: v.sortNo ?? 0 })
+        await http.post<ApiResponses['POST /admin/departments']>('/admin/departments', { name: trimmedName, parentId: parentForNew?.id ?? null, sortNo: v.sortNo ?? 0 })
         Message.success(`${ORG_KIND[creatingKind].label}已创建`)
       }
       setEditOpen(false)
@@ -573,10 +575,10 @@ export default function DeptManage() {
           )}
           {(!selected || selectedMeta?.childLabel) && <div className="org-view-children">
             <div className="org-view-children-heading"><h3>{selected ? `直属${selectedMeta?.childLabel}` : '事业部'}</h3><span>{selected ? selectedChildrenCount : tree.length} 个</span></div>
-            {loading ? <Spin /> : loadError ? <div className="org-view-tree-empty">组织加载失败<Button type="text" onClick={load}>重试</Button></div> : childNodes.length ? <div className="org-view-child-list">
+            {loading ? <div className="org-view-loading"><Spin /></div> : loadError ? <div className="org-view-tree-empty">组织加载失败<Button type="text" onClick={load}>重试</Button></div> : childNodes.length ? <div className="org-view-child-list">
               {childNodes.map((node) => <button type="button" className="org-view-child" key={node.id} onClick={() => navigateTo(node)}>
                 <span className="org-view-child-main"><strong>{node.name}</strong><small>{ORG_KIND[nodeKind(node)].label}{ORG_KIND[nodeKind(node)].childLabel ? ` · ${node.children?.length || 0} 个${ORG_KIND[nodeKind(node)].childLabel}` : ''}</small>{node.leader && <small className="org-view-child-leader">主管：{node.leader.realName}（{node.leader.employeeNo}）</small>}</span>
-                <span className={`org-view-child-status${node.status === 'DISABLED' ? ' is-disabled' : ''}`}>{node.status === 'ACTIVE' ? '启用' : '停用'}</span><IconRight />
+                <StatusTag status={node.status} size="small" /><IconRight />
               </button>)}
             </div> : <div className="org-view-tree-empty">{selected ? `暂无直属${selectedMeta?.childLabel}` : '暂无事业部'}</div>}
           </div>}
@@ -604,7 +606,7 @@ export default function DeptManage() {
       >
         <Form onSubmit={() => void submit()} form={form} layout="vertical">
           <div className="form-grid">
-            <Form.Item label={`${modalKindMeta.label}名称`} field="name" rules={[{ required: true, message: `请输入${modalKindMeta.label}名称` }]}>
+            <Form.Item label={`${modalKindMeta.label}名称`} field="name" rules={[{ required: true, message: `请输入${modalKindMeta.label}名称` }, textLengthRule(`${modalKindMeta.label}名称`, 64)]}>
               <Input autoFocus maxLength={64} placeholder={`请输入${modalKindMeta.label}名称`} />
             </Form.Item>
             <Form.Item label="排序号" field="sortNo">

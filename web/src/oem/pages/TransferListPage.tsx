@@ -54,6 +54,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   const [createOutcomeUnknown, setCreateOutcomeUnknown] = useState(false)
   const recipientChoices = useRecipientChoices()
   const choices = recipientChoices.data ?? []
+  const recipientsUnavailable = realm === 'oem' && (!recipientChoices.isSuccess || choices.length === 0)
 
   const workOrderNo = (Form.useWatch('workOrderNo', form) ?? '').trim()
   const workOrderTimer = useRef<number>()
@@ -103,7 +104,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
   }
 
   const submit = async () => {
-    if (submitLocked.current || createOutcomeUnknown || !canUseWorkOrder) return
+    if (submitLocked.current || createOutcomeUnknown || !canUseWorkOrder || recipientsUnavailable) return
     submitLocked.current = true
     setSaving(true)
     setSubmitError(null)
@@ -224,7 +225,7 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
       maskClosable={!busy}
       escToExit={!busy}
       cancelButtonProps={{ disabled: busy }}
-      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown || !canUseWorkOrder }}
+      okButtonProps={{ disabled: fileCount === 0 || createOutcomeUnknown || !canUseWorkOrder || recipientsUnavailable }}
       unmountOnExit
     >
       <Form onSubmit={() => void submit()} form={form} layout="vertical">
@@ -268,6 +269,9 @@ function CreateTransferModal({ visible, onClose }: { visible: boolean; onClose: 
             onChange={scheduleWorkOrderLookup}
           />
         </Form.Item>
+        {realm === 'oem' && recipientChoices.isPending && (
+          <div role="status" style={{ marginBottom: 12 }}><Spin size={14} /> 正在加载可通知人员…</div>
+        )}
         {realm === 'oem' && recipientChoices.isSuccess && (
           <Form.Item field="recipientUserIds" label="通知公司人员"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请选择要通知的公司人员' }]}>
@@ -331,16 +335,14 @@ function DownloadPicker({ title, files, onPreview, onClose }: {
           { key: 'size', title: '大小', width: 96, render: (_: unknown, file: TransferFile) => fmtSize(file.sizeBytes) },
           {
             key: 'actions', title: '操作', width: 176,
-            render: (_: unknown, file: TransferFile) => (
-              <Space size={8}>
-                {canPreview(file) && (
-                  <Button size="small" icon={<IconEye />} aria-label={`预览 ${file.originalName}`} onClick={() => onPreview(file)}>预览</Button>
-                )}
-                <Button size="small" icon={<IconDownload />} aria-label={`下载 ${file.originalName}`}
-                  loading={busyId === file.id} disabled={busyId !== null && busyId !== file.id}
-                  onClick={() => void download(file)}>下载</Button>
-              </Space>
-            ),
+            render: (_: unknown, file: TransferFile) => actionSlots([
+              canPreview(file) && (
+                <Button key="preview" size="mini" icon={<IconEye />} aria-label={`预览 ${file.originalName}`} onClick={() => onPreview(file)}>预览</Button>
+              ),
+              <Button key="download" size="mini" icon={<IconDownload />} aria-label={`下载 ${file.originalName}`}
+                loading={busyId === file.id} disabled={busyId !== null && busyId !== file.id}
+                onClick={() => void download(file)}>下载</Button>,
+            ], 'oem-file'),
           },
         ]}
       />
@@ -571,7 +573,7 @@ export default function TransferListPage() {
     {
       key: 'actions', title: '操作', fixed: 'right' as const,
       render: (_: unknown, row: TransferSummary) => {
-        const previewDisabled = row.previewableCount === 0 || downloadingId !== null
+        const previewDisabled = row.previewableCount === 0 || (downloadingId !== null && downloadingId !== row.id)
         const previewReason = row.previewableCount === 0
           ? (row.downloadableCount === 0 ? '当前没有可预览的文件' : '该文件类型不支持在线预览')
           : '正在处理其他文件，请稍候'
@@ -580,12 +582,12 @@ export default function TransferListPage() {
           ? '当前没有可下载的文件'
           : '正在处理其他文件，请稍候'
         const previewBtn = (
-          <Button key="preview" size="mini" icon={<IconEye />} aria-label={`预览 ${row.title}`}
+          <Button size="mini" icon={<IconEye />} aria-label={`预览 ${row.title}`}
             loading={downloadingId === row.id && busyAction === 'preview'} disabled={previewDisabled}
             onClick={() => void openRow(row, 'preview')}>预览</Button>
         )
         const downloadBtn = (
-          <Button key="download" size="mini" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
+          <Button size="mini" icon={<IconDownload />} aria-label={`下载 ${row.title}`}
             loading={downloadingId === row.id && busyAction === 'download'}
             disabled={downloadDisabled}
             onClick={() => void openRow(row, 'download')}>下载</Button>
@@ -594,12 +596,8 @@ export default function TransferListPage() {
           <div className="oem-row-actions" role="presentation" onClick={(event) => event.stopPropagation()}>
             {/* Every row shows both buttons; one that cannot be used is greyed out, so the column lines up. */}
             {actionSlots([
-              previewDisabled
-                ? <Tooltip key="preview" content={previewReason}><span style={{ display: 'inline-flex' }}>{previewBtn}</span></Tooltip>
-                : previewBtn,
-              downloadDisabled
-                ? <Tooltip key="download" content={downloadReason}><span style={{ display: 'inline-flex' }}>{downloadBtn}</span></Tooltip>
-                : downloadBtn,
+              <Tooltip key="preview" content={previewReason} disabled={!previewDisabled}>{previewBtn}</Tooltip>,
+              <Tooltip key="download" content={downloadReason} disabled={!downloadDisabled}>{downloadBtn}</Tooltip>,
             ], 'oem-file')}
           </div>
         )

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
@@ -123,6 +123,134 @@ describe('ODM/OEMA 文件校验界面', () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledWith('file', [
       { key: 'oem.upload.max_file_size', value: String(512 * 1024 * 1024) },
     ]))
+  })
+
+  it('清空容量输入或输入 - / . 时禁用保存并标记错误，不提交空值或 NaN', async () => {
+    const user = userEvent.setup()
+    const settings: SettingItem[] = [
+      {
+        key: 'oem.upload.max_file_size',
+        label: 'ODM/OEMA 单文件大小上限（字节）',
+        kind: 'integer',
+        value: String(2 * 1024 * 1024 * 1024),
+        min: 1024 * 1024,
+        max: 10 * 1024 * 1024 * 1024,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
+      },
+      {
+        key: 'oem.upload.chunk_size',
+        label: '上传分片大小（字节）',
+        kind: 'integer',
+        value: '1500000',
+        min: 1500000,
+        max: 64 * 1024 * 1024,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
+      },
+      {
+        key: 'oem.validation.max_retries',
+        label: '文件校验错误最大重试次数',
+        kind: 'integer',
+        value: '5',
+        min: 0,
+        max: 50,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
+      },
+    ]
+    const updateSettings = vi.fn().mockResolvedValue(undefined)
+    renderWithOem(<MemoryRouter><SettingsHub /></MemoryRouter>, {
+      settings: vi.fn().mockResolvedValue(settings),
+      updateSettings,
+    }, ['oem:file_policy_manage'])
+
+    const fileSizeInput = await screen.findByLabelText('ODM/OEMA 单文件大小上限（MB）')
+    const chunkSizeInput = screen.getByLabelText('上传分片大小（MB）')
+    const retriesInput = screen.getByLabelText('文件校验错误最大重试次数')
+    const saveButton = screen.getByRole('button', { name: '保存更改' })
+
+    // 未修改的非整 MB 字段聚焦后失焦不产生静默漂移。
+    fireEvent.focus(chunkSizeInput)
+    fireEvent.blur(chunkSizeInput)
+    expect(saveButton).toBeDisabled()
+
+    // 清空字节 MB 输入 -> 禁用保存并展示错误，无法提交空字符串。
+    await user.clear(fileSizeInput)
+    expect(saveButton).toBeDisabled()
+    expect(fileSizeInput.closest('.arco-input-inner-wrapper')).toHaveClass('arco-input-inner-wrapper-error')
+    expect(screen.getByText('请输入有效数值')).toBeInTheDocument()
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+
+    // 恢复有效值后，直接输入 '-' 和 '.' 触发 Arco InputNumber 传入 NaN -> 禁用保存且不提交 'NaN'。
+    await user.type(fileSizeInput, '256')
+    expect(saveButton).toBeEnabled()
+    fireEvent.change(fileSizeInput, { target: { value: '-' } })
+    expect(saveButton).toBeDisabled()
+    expect(fileSizeInput.closest('.arco-input-inner-wrapper')).toHaveClass('arco-input-inner-wrapper-error')
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+
+    await user.clear(fileSizeInput)
+    await user.type(fileSizeInput, '256')
+    expect(saveButton).toBeEnabled()
+    fireEvent.change(fileSizeInput, { target: { value: '.' } })
+    expect(saveButton).toBeDisabled()
+    expect(fileSizeInput.closest('.arco-input-inner-wrapper')).toHaveClass('arco-input-inner-wrapper-error')
+
+    // 非字节整型输入强制 precision={0}，小数四舍五入为整数。
+    await user.clear(retriesInput)
+    await user.type(retriesInput, '7.6')
+    fireEvent.blur(retriesInput)
+    expect(retriesInput).toHaveValue('8')
+    // fileSizeInput 仍无效，因此整体保存按钮仍保持禁用。
+    expect(saveButton).toBeDisabled()
+
+    // 修复 fileSizeInput 为合法小数 MB 后可保存，提交精确整数字节与整型重试次数，且未修改的 chunk_size 不被提交。
+    await user.clear(fileSizeInput)
+    await user.type(fileSizeInput, '1.5')
+    fireEvent.blur(fileSizeInput)
+    expect(fileSizeInput).toHaveValue('1.5')
+    expect(saveButton).toBeEnabled()
+    await user.click(saveButton)
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledWith('file', [
+      { key: 'oem.upload.max_file_size', value: String(Math.round(1.5 * 1024 * 1024)) },
+      { key: 'oem.validation.max_retries', value: '8' },
+    ]))
+  })
+
+  it('无下限的字节设置输入 0 或负数时禁用保存，不允许提交非正字节值', async () => {
+    const user = userEvent.setup()
+    const settings: SettingItem[] = [
+      {
+        key: 'oem.upload.max_storage_per_company',
+        label: '单厂商存储上限（字节）',
+        kind: 'integer',
+        value: String(10 * 1024 * 1024),
+        min: null,
+        max: null,
+        readOnly: false,
+        unsupportedReason: null,
+        hint: null,
+      },
+    ]
+    const updateSettings = vi.fn().mockResolvedValue(undefined)
+    renderWithOem(<MemoryRouter><SettingsHub /></MemoryRouter>, {
+      settings: vi.fn().mockResolvedValue(settings),
+      updateSettings,
+    }, ['oem:file_policy_manage'])
+
+    const storageInput = await screen.findByLabelText('单厂商存储上限（MB）')
+    const saveButton = screen.getByRole('button', { name: '保存更改' })
+
+    await user.clear(storageInput)
+    await user.type(storageInput, '0')
+    expect(saveButton).toBeDisabled()
+    expect(screen.getByText('数值必须大于 0')).toBeInTheDocument()
+    expect(updateSettings).not.toHaveBeenCalled()
   })
 
   it('详情的状态列显示校验失败及服务端返回的原因', async () => {

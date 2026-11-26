@@ -400,9 +400,7 @@ export default function RoleList() {
               </Button>,
               r.canManage !== false && r.status === 'ACTIVE' && r.assignedUserCount > 0 ? (
                 <Tooltip key="status" content={`该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能停用。`}>
-                  <span>
-                    <Button size="mini" type="text" status="danger" disabled>停用</Button>
-                  </span>
+                  <Button size="mini" type="text" status="danger" disabled>停用</Button>
                 </Tooltip>
               ) : r.status === 'ACTIVE' ? (
                 <DangerPopconfirm

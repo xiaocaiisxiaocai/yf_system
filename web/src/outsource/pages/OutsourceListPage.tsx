@@ -440,7 +440,7 @@ export default function OutsourceListPage() {
     { title: '修改人', dataIndex: 'modifiedBy', width: 100, ellipsis: true, render: (value: string | null) => value || '-' },
     { title: '修改时间', width: 130, render: (_, item) => item.modifiedAt ? fmtTime(item.modifiedAt).slice(0, 16) : '-' },
     {
-      title: '操作', width: editable.length > 0 ? 80 : 56, align: 'center', fixed: 'right',
+      title: '操作', width: editable.length > 0 ? 92 : 76, align: 'center', fixed: 'right',
       render: (_, item) => <Space size={0}>
         <Tooltip content="变更履历">
           <Button type="text" size="mini" icon={<IconHistory />} aria-label={`工令 ${item.workOrderNo} 变更履历`} onClick={() => setHistory(item)} />

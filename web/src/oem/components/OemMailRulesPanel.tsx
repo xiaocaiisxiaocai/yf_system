@@ -56,7 +56,11 @@ export default function OemMailRulesPanel({ api }: { api: Pick<OemApi, 'settings
     </div>
     {error && <Alert type="error" content={error} action={<Button size="small" disabled={saving} onClick={() => void load()}>重新加载</Button>} />}
     <div className="system-notification-grid oem-mail-rules-grid">
-      {loading ? <Spin loading /> : RULES.map(rule => <div className="system-notification-panel" key={rule.key}>
+      {loading ? (
+        <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 120 }}>
+          <Spin loading />
+        </div>
+      ) : RULES.map(rule => <div className="system-notification-panel" key={rule.key}>
         <div className="system-notification-row">
           <div><Typography.Text bold>{rule.label}</Typography.Text><Typography.Text type="secondary">{rule.description}</Typography.Text></div>
           <Switch aria-label={rule.label} disabled={readOnly(rule.key)} checked={values[rule.key] === 'true'} onChange={checked => setValues(previous => ({ ...previous, [rule.key]: String(checked) }))} />

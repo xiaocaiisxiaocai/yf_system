@@ -14,6 +14,17 @@ import EnterSubmit from './EnterSubmit'
 
 type WorkflowAction = 'start' | 'terminate' | 'materialApprove' | 'materialReturn' | 'reopen'
 
+function requiredTrimmedRule(message: string, label: string, maximum: number) {
+  return {
+    validator(value: string | undefined, callback: (error?: string) => void) {
+      const trimmed = (value ?? '').trim()
+      if (!trimmed) callback(message)
+      else if (Array.from(trimmed).length > maximum) callback(`${label}不能超过 ${maximum} 个字符`)
+      else callback()
+    },
+  }
+}
+
 /** 确认时涵盖的厂商回传资料：确认对话框打开时读取，帮助负责人核对看到的是哪一批。 */
 interface ApprovalScope {
   supplierFileId: number
@@ -179,6 +190,14 @@ export default function ProjectWorkflowPanel({
     }
   }
 
+  const openReturn = () => {
+    if (!project.latestSupplierFileId) {
+      Message.error('当前没有可退回的资料文件')
+      return
+    }
+    setReturnFileId(project.latestSupplierFileId)
+  }
+
   const closeReturn = () => {
     returnForm.resetFields()
     setReturnFileId(null)
@@ -288,7 +307,7 @@ export default function ProjectWorkflowPanel({
               status="warning"
               icon={<IconCloseCircle />}
               {...actionProps('materialReturn')}
-              onClick={() => setReturnFileId(project.latestSupplierFileId ?? null)}
+              onClick={openReturn}
             >
               退回资料
             </Button>
@@ -299,7 +318,7 @@ export default function ProjectWorkflowPanel({
             </Button>
           )}
           {canStatus && project.status === 'IN_PROGRESS' && (
-            <DangerPopconfirm title="终止项目后需要重新开始才能继续，确认终止？" onOk={() => changeStatus('TERMINATED')}>
+            <DangerPopconfirm title="终止项目后需要重新开始才能继续，确认终止？" disabled={busy} onOk={() => changeStatus('TERMINATED')}>
               <Button status="danger" icon={<IconStop />} {...actionProps('terminate')}>终止</Button>
             </DangerPopconfirm>
           )}
@@ -353,7 +372,7 @@ export default function ProjectWorkflowPanel({
         okButtonProps={{ status: 'warning' }}
       >
         <Form form={returnForm} layout="vertical" onSubmit={() => void returnMaterial()}>
-          <Form.Item label="退回原因（必填）" field="reason" rules={[{ required: true, message: '请填写退回原因' }]}>
+          <Form.Item label="退回原因（必填）" field="reason" rules={[{ required: true, message: '请填写退回原因' }, requiredTrimmedRule('请填写退回原因', '退回原因', 500)]}>
             <Input.TextArea rows={4} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="请说明需要厂商补充或修改的资料" />
           </Form.Item>
         <EnterSubmit /></Form>
@@ -378,7 +397,7 @@ export default function ProjectWorkflowPanel({
         okButtonProps={{ status: 'warning' }}
       >
         <Form form={reopenForm} layout="vertical" onSubmit={() => void reopen()}>
-          <Form.Item label="重开原因（必填）" field="reason" rules={[{ required: true, message: '请填写重开原因' }]}>
+          <Form.Item label="重开原因（必填）" field="reason" rules={[{ required: true, message: '请填写重开原因' }, requiredTrimmedRule('请填写重开原因', '重开原因', 500)]}>
             <Input.TextArea rows={4} maxLength={500} showWordLimit wordLimitPosition="outside" placeholder="请说明需要厂商返工的内容" />
           </Form.Item>
         <EnterSubmit /></Form>

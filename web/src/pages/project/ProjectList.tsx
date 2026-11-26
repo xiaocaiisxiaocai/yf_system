@@ -42,7 +42,7 @@ const PROJECT_LIST_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'robotOwnerName', title: 'Robot 负责人', defaultWidth: 124, minWidth: 116 },
   { key: 'sectionName', title: '课别', defaultWidth: 72, minWidth: 64 },
   { key: 'priorityName', title: '优先级', defaultWidth: 76, minWidth: 72 },
-  { key: 'expectedCompletionDate', title: '需求完成时间', defaultWidth: 116, minWidth: 108 },
+  { key: 'expectedCompletionDate', title: '需求完成时间', defaultWidth: 184, minWidth: 150 },
   { key: 'materialReviewStatus', title: '资料状态', defaultWidth: 112, minWidth: 96 },
   { key: 'status', title: '状态', defaultWidth: 96, minWidth: 88 },
   { key: 'unreadMessages', title: '未读留言', defaultWidth: 100, minWidth: 96 },
@@ -255,14 +255,11 @@ export default function ProjectList() {
       <Button key="enter" size="mini" type="text" onClick={() => navigate(`/projects/${row.id}`)}>进入</Button>,
       hasPerm('project:update') && (() => {
         const editDisabled = !row.canManage || row.status !== 'IN_PROGRESS'
-        const editButton = (
-          <Button key="edit" size="mini" type="text" disabled={editDisabled} onClick={() => openEdit(row)}>编辑</Button>
-        )
-        return editDisabled ? (
-          <Tooltip key="edit" content={!row.canManage ? '仅项目负责人可编辑' : '仅进行中的项目可编辑'}>
-            <span>{editButton}</span>
+        return (
+          <Tooltip key="edit" content={!row.canManage ? '仅项目负责人可编辑' : '仅进行中的项目可编辑'} disabled={!editDisabled}>
+            <Button size="mini" type="text" disabled={editDisabled} onClick={() => openEdit(row)}>编辑</Button>
           </Tooltip>
-        ) : editButton
+        )
       })(),
       row.canDelete ? (
         <DangerPopconfirm key="delete" title={`确认删除项目“${row.name}”？其中全部文件、留言和上传记录将一并永久删除，无法恢复。`} onOk={() => remove(row)}>
@@ -270,9 +267,7 @@ export default function ProjectList() {
         </DangerPopconfirm>
       ) : (
         <Tooltip key="delete" content={row.status !== 'TERMINATED' ? '仅已终止的项目可删除' : '无权删除此项目'}>
-          <span>
-            <Button size="mini" type="text" status="danger" disabled>删除</Button>
-          </span>
+          <Button size="mini" type="text" status="danger" disabled>删除</Button>
         </Tooltip>
       ),
     ], 'project-group') },

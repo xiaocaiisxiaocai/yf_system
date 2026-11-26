@@ -38,6 +38,7 @@ describe('video preview', () => {
     await vi.waitFor(() => expect(player).toHaveAttribute('src', '/api/v1/files/7/media'))
 
     expect(player).toHaveAttribute('controlsList', 'nodownload noremoteplayback')
+    expect(screen.getByRole('status')).toHaveClass('video-preview-status', 'video-preview-status--loading')
     expect(mocks.post).toHaveBeenCalledWith('/files/7/media-session', null, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     fireEvent.loadedMetadata(player)
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
@@ -165,7 +166,10 @@ describe('video preview', () => {
     await vi.waitFor(() => expect(player).toHaveAttribute('src', '/api/v1/files/7/media'))
 
     fireEvent.error(player)
-    expect(screen.getByRole('alert')).toHaveTextContent('视频无法播放')
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('视频无法播放')
+    expect(alert).toHaveClass('video-preview-status')
+    expect(alert).not.toHaveClass('video-preview-status--loading')
 
     await act(async () => { await vi.advanceTimersByTimeAsync(300_000) })
     expect(mocks.post).toHaveBeenCalledTimes(1)

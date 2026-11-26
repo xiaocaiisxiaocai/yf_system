@@ -139,7 +139,10 @@ function ProjectCopyRecord({
                   width: 240,
                   ellipsis: true,
                   render: (name: string, row: ProjectCopyFileMapping) => (
-                    <span className="copy-file-name" title={name}>{name}{row.sourceDeleted && <Tag color="gray">已删除</Tag>}</span>
+                    <span className="copy-file-name">
+                      <span className="table-cell-text" title={name}>{name}</span>
+                      {row.sourceDeleted && <Tag color="gray">已删除</Tag>}
+                    </span>
                   ),
                 },
                 {
@@ -148,7 +151,10 @@ function ProjectCopyRecord({
                   width: 240,
                   ellipsis: true,
                   render: (name: string, row: ProjectCopyFileMapping) => (
-                    <span className="copy-file-name" title={name}>{name}{row.targetDeleted && <Tag color="gray">已删除</Tag>}</span>
+                    <span className="copy-file-name">
+                      <span className="table-cell-text" title={name}>{name}</span>
+                      {row.targetDeleted && <Tag color="gray">已删除</Tag>}
+                    </span>
                   ),
                 },
               ]}

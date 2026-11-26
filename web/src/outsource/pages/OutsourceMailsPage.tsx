@@ -56,7 +56,7 @@ export default function OutsourceMailsPage() {
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
-  const [busy, setBusy] = useState<number | null>(null)
+  const [busy, setBusy] = useState<{ id: number; kind: 'download' | 'retry' } | null>(null)
   const [viewing, setViewing] = useState<Mail | null>(null)
   const sequence = useRef(0)
   const inFlight = useRef(0)
@@ -150,25 +150,29 @@ export default function OutsourceMailsPage() {
   }, [pending, load])
 
   const retry = async (mail: Mail) => {
-    setBusy(mail.id)
+    setBusy({ id: mail.id, kind: 'retry' })
     try {
       await http.post<ApiResponses['POST /outsource/mails/{id}/retry']>(`/outsource/mails/${mail.id}/retry`)
       Message.success('已重新排入发送'); await load()
-    } catch { /* 统一请求层提示 */ } finally { setBusy(null) }
+    } catch { /* 统一请求层提示 */ } finally {
+      setBusy((current) => (current?.id === mail.id && current.kind === 'retry' ? null : current))
+    }
   }
 
   const download = async (mail: Mail) => {
-    setBusy(mail.id)
+    setBusy({ id: mail.id, kind: 'download' })
     try {
       const response = await http.get<ApiResponses['GET /outsource/mails/{id}/attachment']>(`/outsource/mails/${mail.id}/attachment`, { responseType: 'blob' })
       saveBlob(response.data as Blob, mail.attachmentName ?? '外发清单.xlsx')
-    } catch { /* 统一请求层提示 */ } finally { setBusy(null) }
+    } catch { /* 统一请求层提示 */ } finally {
+      setBusy((current) => (current?.id === mail.id && current.kind === 'download' ? null : current))
+    }
   }
 
   const columns: TableColumnProps<Mail>[] = [
-    { title: '时间', width: 148, render: (_, mail) => fmtTime(mail.createdAt) },
+    { title: '时间', width: 176, render: (_, mail) => fmtTime(mail.createdAt) },
     {
-      title: '类型', width: 116, align: 'center',
+      title: '类型', width: 136, align: 'center',
       render: (_, mail) => <Tag color={MAIL_KIND[mail.kind]?.color}>{MAIL_KIND[mail.kind]?.label ?? mail.kind}</Tag>,
     },
     { title: '厂商', dataIndex: 'vendorName', width: 90, align: 'left', ellipsis: true },
@@ -192,12 +196,16 @@ export default function OutsourceMailsPage() {
         ? <Tooltip content={mail.createdByName}><span className="table-cell-text">{mail.createdByName}</span></Tooltip> : '-',
     },
     {
-      title: '操作', width: 168, align: 'center', fixed: 'right',
+      title: '操作', width: 192, align: 'center', fixed: 'right',
       render: (_, mail) => actionSlots([
         <Button key="detail" type="text" size="mini" onClick={() => setViewing(mail)}>详情</Button>,
-        <Button key="attachment" type="text" size="mini" loading={busy === mail.id} disabled={!mail.attachmentName}
+        <Button key="attachment" type="text" size="mini"
+          loading={busy?.id === mail.id && busy.kind === 'download'}
+          disabled={!mail.attachmentName || (busy?.id === mail.id && busy.kind === 'retry')}
           onClick={() => void download(mail)}>附件</Button>,
-        canSend && <Button key="retry" type="text" size="mini" disabled={mail.status !== 'FAILED' || busy === mail.id}
+        canSend && <Button key="retry" type="text" size="mini"
+          loading={busy?.id === mail.id && busy.kind === 'retry'}
+          disabled={mail.status !== 'FAILED' || (busy?.id === mail.id && busy.kind === 'download')}
           onClick={() => void retry(mail)}>重新发送</Button>,
       ], 'outsource-mail'),
     },
@@ -218,7 +226,7 @@ export default function OutsourceMailsPage() {
     </div>
     {error ? <LoadError message="发送记录加载失败" onRetry={() => void load()} />
       : <ResizableTable<Mail> tableId="outsource-mails" className="page-table" rowKey="id" loading={loading} data={mails} columns={columns}
-        noDataElement={loading ? <span /> : <Empty description="暂无发送记录" />} scroll={{ x: 1410, y: 'var(--page-table-scroll-y)' }}
+        noDataElement={loading ? <span /> : <Empty description="暂无发送记录" />} scroll={{ x: 1480, y: 'var(--page-table-scroll-y)' }}
         pagination={{ current: page, pageSize, total, onChange: (next, size) => { setPage(size === pageSize ? next : 1); setPageSize(size) } }} />}
     <Modal title="邮件发送详情" visible={viewing !== null} footer={null} onCancel={() => setViewing(null)} unmountOnExit>
       {viewing && (

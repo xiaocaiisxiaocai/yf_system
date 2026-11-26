@@ -59,7 +59,9 @@ describe('站内路由切换的上传确认', () => {
     fireEvent.click(screen.getByText('程序跳转'))
     expect(await screen.findByText(UPLOAD_ROUTE_LEAVE_TITLE)).toBeInTheDocument()
     expect(address()).toBe('/')
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '离开并中止' })) })
+    const leaveButton = screen.getByRole('button', { name: '离开并中止' })
+    expect(leaveButton).toHaveClass('arco-btn-status-danger')
+    await act(async () => { fireEvent.click(leaveButton) })
     await waitFor(() => expect(address()).toBe('/pushed'))
   })
 

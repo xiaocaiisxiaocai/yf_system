@@ -259,7 +259,7 @@ export default function Dashboard() {
                 <Button size="mini" onClick={() => { void refetchSummary() }}>重试</Button>
               </span>
             )}
-            <Button size="small" icon={<IconRefresh />} loading={dashboardRefreshing} onClick={refreshDashboard}>刷新工作台</Button>
+            <Button size="small" type="outline" icon={<IconRefresh />} loading={dashboardRefreshing} onClick={refreshDashboard}>刷新工作台</Button>
           </div>
         </div>
         {loading && !data ? (
@@ -343,7 +343,7 @@ export default function Dashboard() {
                     >
                       <List.Item.Meta
                         title={(
-                          <Link className="dashboard-pending-link" to={`/projects/${project.id}`} aria-label={project.name}>
+                          <Link className="dashboard-pending-link" to={`/projects/${project.id}`} aria-label={project.name} title={project.name}>
                             {project.name}
                           </Link>
                         )}
@@ -445,7 +445,7 @@ export default function Dashboard() {
                           title={(
                             <span className="dashboard-message-title">
                               {message.unread && <span className="dashboard-message-unread" aria-hidden="true" title="未读" />}
-                              <Tag color="arcoblue"><span className="dashboard-message-project" title={projectLabel}>{projectLabel}</span></Tag>
+                              <Tag className="table-cell-tag-ellipsis" color="arcoblue" title={projectLabel}><span className="dashboard-message-project">{projectLabel}</span></Tag>
                               <span className="dashboard-message-sender" title={message.senderName || '未知用户'}>{message.senderName || '未知用户'}</span>
                             </span>
                           )}

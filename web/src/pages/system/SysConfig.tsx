@@ -69,7 +69,7 @@ export default function SysConfig() {
       {state.loadError ? (
         <LoadError onRetry={state.load} />
       ) : state.loading ? (
-        <Spin loading style={{ width: '100%', minHeight: 120 }} />
+        <Spin loading style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 120 }} />
       ) : (
         <>
           <Tabs className="system-config-tabs" defaultActiveTab="system">

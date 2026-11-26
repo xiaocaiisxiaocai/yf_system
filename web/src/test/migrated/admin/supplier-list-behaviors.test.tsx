@@ -428,6 +428,71 @@ describe('供应商与分页列表行为', () => {
     expect(await screen.findByText('账号已停用')).toBeInTheDocument()
   })
 
+  it('disabled status toggle buttons do not reopen Popconfirm or DangerPopconfirm while a write is pending', async () => {
+    const activePending = deferred<{ data: Record<string, never> }>()
+    const disabledPending = deferred<{ data: Record<string, never> }>()
+    const accountPending = deferred<{ data: Record<string, never> }>()
+    installGet(async (url: string) => url.endsWith('/accounts')
+      ? { data: [account(12, 'supplier-12')] }
+      : { data: page([supplierRow({ id: 8, name: '启用厂商', status: 'ACTIVE' }), supplierRow({ id: 9, name: '停用厂商', status: 'DISABLED' })]) })
+    mocks.put.mockImplementation((url: string) => {
+      if (url.includes('/supplier-accounts/')) return accountPending.promise
+      if (url.includes('/suppliers/8/')) return activePending.promise
+      return disabledPending.promise
+    })
+    const user = userEvent.setup()
+    render(<SupplierList />)
+
+    const activeRow = (await screen.findByText('启用厂商')).closest('tr')!
+    const getDisableBtn = () => within(activeRow).getByRole('button', { name: '停用' })
+    await user.click(getDisableBtn())
+    let popup = await screen.findByRole('tooltip')
+    fireEvent.click(within(popup).getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(getDisableBtn()).toBeDisabled())
+    fireEvent.click(within(popup).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument())
+
+    const disabledDisableBtn = getDisableBtn()
+    fireEvent.click(disabledDisableBtn)
+    if (disabledDisableBtn.parentElement) fireEvent.click(disabledDisableBtn.parentElement)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    activePending.resolve({ data: {} })
+    await waitFor(() => expect(getDisableBtn()).toBeEnabled())
+
+    const disabledRow = screen.getByText('停用厂商').closest('tr')!
+    const getEnableBtn = () => within(disabledRow).getByRole('button', { name: '启用' })
+    await user.click(getEnableBtn())
+    popup = await screen.findByRole('tooltip')
+    fireEvent.click(within(popup).getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(getEnableBtn()).toBeDisabled())
+    fireEvent.click(within(popup).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument())
+
+    const disabledEnableBtn = getEnableBtn()
+    fireEvent.click(disabledEnableBtn)
+    if (disabledEnableBtn.parentElement) fireEvent.click(disabledEnableBtn.parentElement)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    disabledPending.resolve({ data: {} })
+    await waitFor(() => expect(getEnableBtn()).toBeEnabled())
+
+    await openAccounts(user, '启用厂商')
+    const accountRow = (await screen.findByText('supplier-12')).closest('tr')!
+    const getDisableAccount = () => within(accountRow).getByRole('button', { name: '停用' })
+    await user.click(getDisableAccount())
+    popup = await screen.findByRole('tooltip')
+    fireEvent.click(within(popup).getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(getDisableAccount()).toBeDisabled())
+    fireEvent.click(within(popup).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument())
+
+    const disabledAccountBtn = getDisableAccount()
+    fireEvent.click(disabledAccountBtn)
+    if (disabledAccountBtn.parentElement) fireEvent.click(disabledAccountBtn.parentElement)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    accountPending.resolve({ data: {} })
+    await waitFor(() => expect(getDisableAccount()).toBeEnabled())
+  })
+
   it('deleting the only row on a controlled last page reloads the last page allowed by the response total', async () => {
     let deleted = false
     installGet(async (url: string, config?: unknown) => {

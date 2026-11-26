@@ -21,7 +21,7 @@ describe('PasswordInput with Caps Lock detection', () => {
       getModifierState: (key: string) => key === 'CapsLock',
     })
 
-    expect(screen.getByLabelText('大写锁定已开启')).toBeVisible()
+    expect(screen.getByRole('status', { name: '大写锁定已开启' })).toBeVisible()
     expect(screen.getByText(/大写锁定已开启/)).toBeInTheDocument()
 
     // Simulate keyup with CapsLock disabled

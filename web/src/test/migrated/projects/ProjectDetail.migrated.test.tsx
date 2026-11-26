@@ -384,7 +384,14 @@ describe('ProjectDetail migrated behavior', () => {
         hasRestrictedRelations: true,
       } })
       if (url === '/project-copies/16/files') return Promise.resolve({ data: {
-        list: [{ sourceFileId: 1, sourceFileName: '规格.xlsx', sourceDeleted: false, targetFileId: 7, targetFileName: '规格.xlsx', targetDeleted: false }],
+        list: [{
+          sourceFileId: 1,
+          sourceFileName: '规格.xlsx',
+          sourceDeleted: true,
+          targetFileId: 7,
+          targetFileName: '规格.xlsx',
+          targetDeleted: false,
+        }],
         total: 21, page: config?.params?.page, pageSize: 20,
       } })
       throw new Error(`unexpected GET ${url}`)
@@ -396,7 +403,12 @@ describe('ProjectDetail migrated behavior', () => {
     const drawer = document.querySelector<HTMLElement>('.project-copy-history-drawer')!
     expect(await within(drawer).findByText(/部分复制关联项目当前无权查看/)).toBeInTheDocument()
     await user.click(within(drawer).getByRole('button', { name: '查看文件映射' }))
-    expect((await within(drawer).findAllByText('规格.xlsx', { selector: '.copy-file-name' })).length).toBe(2)
+    const fileNames = await within(drawer).findAllByText('规格.xlsx', { selector: '.copy-file-name .table-cell-text' })
+    expect(fileNames).toHaveLength(2)
+    expect(fileNames[0]).toHaveAttribute('title', '规格.xlsx')
+    expect(within(fileNames[0].closest<HTMLElement>('.copy-file-name')!).getByText('已删除')).toBeInTheDocument()
+    expect(fileNames[1]).toHaveAttribute('title', '规格.xlsx')
+    expect(within(fileNames[1].closest<HTMLElement>('.copy-file-name')!).queryByText('已删除')).not.toBeInTheDocument()
     expect(calls.find((call) => call.url === '/project-copies/16/files')?.config?.params).toEqual({ page: 1, pageSize: 20 })
   })
 })

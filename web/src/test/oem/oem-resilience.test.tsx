@@ -341,6 +341,22 @@ describe('ODM/OEMA 厂商门户登录页跳转', () => {
     await user.click(screen.getByRole('button', { name: '保存' }))
     expect(await screen.findByText('密码需 5-20 个字符，不能使用常见弱密码或简单重复序列')).toBeInTheDocument()
   })
+
+  it('PortalChangePasswordPage 按钮采用 large 尺寸，当前密码自动聚焦，无历史记录时返回门户列表', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState({ idx: 0 }, '', '/oem-portal/change-password')
+    usePortalAuth.setState({ token: 'portal-token', account, mustChangePassword: false, booted: true, generation: 1 })
+    renderPortal('/oem-portal/change-password')
+
+    expect(screen.getByLabelText('当前密码')).toHaveFocus()
+    const backBtn = screen.getByRole('button', { name: '返回' })
+    const saveBtn = screen.getByRole('button', { name: '保存' })
+    expect(backBtn).toHaveClass('arco-btn-size-large')
+    expect(saveBtn).toHaveClass('arco-btn-size-large')
+
+    await user.click(backBtn)
+    await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent('/oem-portal/transfers'))
+  })
 })
 
 describe('ODM/OEMA 管理列表的过期响应', () => {

@@ -55,15 +55,37 @@ describe('image preview', () => {
     const view = render(<ImagePreview fileId={1} name="test.png" />)
     const image = await loadImage()
 
+    const stage = view.container.querySelector('.image-preview-stage')
     expect(image).toHaveStyle({ width: '1000px' })
+    expect(stage).not.toHaveClass('is-pannable')
     await user.click(screen.getByRole('button', { name: '原始大小' }))
     expect(image).toHaveStyle({ width: '2000px' })
+    expect(stage).toHaveClass('is-pannable')
     await user.click(screen.getByRole('button', { name: '重置图片缩放' }))
     expect(image).toHaveStyle({ width: '1000px' })
+    expect(stage).not.toHaveClass('is-pannable')
     expect(screen.queryByRole('link')).not.toBeInTheDocument()
 
     view.unmount()
     expect(mocks.revokeObjectURL).toHaveBeenCalledWith('blob:fixture-1')
+  })
+
+  it('keeps small images non-pannable until zoomed past the viewport', async () => {
+    mocks.get.mockResolvedValue({ data: new Blob(['small']) })
+    const user = userEvent.setup()
+    const view = render(<ImagePreview fileId={11} name="small.png" />)
+    await loadImage(200, 100)
+
+    const stage = view.container.querySelector('.image-preview-stage')
+    expect(stage).not.toHaveClass('is-pannable')
+    await user.click(screen.getByRole('button', { name: '原始大小' }))
+    expect(stage).not.toHaveClass('is-pannable')
+    // Zoom in until scaled width (200 * 1.25^8 ≈ 1192) exceeds the 1032px viewport.
+    for (let step = 0; step < 8; step += 1) {
+      await user.click(screen.getByRole('button', { name: '放大图片' }))
+    }
+    expect(stage).toHaveClass('is-pannable')
+    view.unmount()
   })
 
   it('failed image decoding can retry and releases the failed object URL', async () => {

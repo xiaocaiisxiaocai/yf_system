@@ -385,7 +385,7 @@ export default function MessagePanel({
     <div className="message-panel">
       <div className="message-panel-heading">
         <h2>协作留言（{visibleTotal}）</h2>
-        <Tooltip content="已读回执仅统计项目负责人和关联供应商的全部启用账号。">
+        <Tooltip trigger={['hover', 'focus']} content="已读回执仅统计项目负责人和关联供应商的全部启用账号。">
           <IconQuestionCircle className="message-panel-help" aria-label="已读回执统计范围" tabIndex={0} />
         </Tooltip>
       </div>

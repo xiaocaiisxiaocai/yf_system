@@ -31,6 +31,10 @@ function expectArray<T>(value: unknown, label: string): T[] {
   return value as T[]
 }
 
+function prefixLabel(prefix: string, name: string): string {
+  return /^[A-Za-z0-9]/.test(name) ? `${prefix} ${name}` : `${prefix}${name}`
+}
+
 export default function Dictionaries() {
   const [type, setType] = useState<TabType>('ROBOT_TYPE')
   const [parts, setParts] = useState<RobotPart[]>([])
@@ -142,7 +146,7 @@ export default function Dictionaries() {
   const emptyContent = <div className="dictionary-empty">
     <Empty description={hasFilter ? '未找到匹配项' : `暂无${label}数据`} />
     <Typography.Text type="secondary">{hasFilter ? '请调整关键字或筛选条件' : type === 'ROBOT_PART' && !activeSuppliers.length ? '请先维护一个启用的供应商' : `创建后可在项目中选择${label}`}</Typography.Text>
-    {hasFilter ? <Button onClick={resetFilters}>清空筛选</Button> : <Button type="outline" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增{label}</Button>}
+    {hasFilter ? <Button onClick={resetFilters}>清空筛选</Button> : <Button type="outline" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>{prefixLabel('新增', label)}</Button>}
   </div>
 
   const columns = type === 'ROBOT_PART'
@@ -154,7 +158,7 @@ export default function Dictionaries() {
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: RobotPart) => <StatusTag status={item.enabled ? 'ACTIVE' : 'DISABLED'} /> },
       { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: RobotPart) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
-        canDeleteItems && (item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><span><Button type="text" size="mini" status="danger" disabled>删除</Button></span></Tooltip> : <DangerPopconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></DangerPopconfirm>),
+        canDeleteItems && (item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><Button type="text" size="mini" status="danger" disabled>删除</Button></Tooltip> : <DangerPopconfirm key="delete" title={`删除 Robot 料号“${item.partNumber}”？`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></DangerPopconfirm>),
       ], 'single') },
     ]
     : [
@@ -163,7 +167,7 @@ export default function Dictionaries() {
       { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => <StatusTag status={item.enabled ? 'ACTIVE' : 'DISABLED'} /> },
       { title: '操作', width: 140, align: 'center' as const, render: (_: unknown, item: ProjectDictionaryOption) => actionSlots([
         <Button key="edit" type="text" size="mini" onClick={() => startEdit(item)}>编辑</Button>,
-        canDeleteItems && <DangerPopconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></DangerPopconfirm>,
+        canDeleteItems && (item.inUse ? <Tooltip key="delete" content="已被项目引用，不能删除"><Button type="text" size="mini" status="danger" disabled>删除</Button></Tooltip> : <DangerPopconfirm key="delete" title={`删除“${item.name}”？已被引用的条目不能删除。`} onOk={() => remove(item)}><Button type="text" size="mini" status="danger">删除</Button></DangerPopconfirm>),
       ], 'single') },
     ]
 
@@ -176,10 +180,10 @@ export default function Dictionaries() {
         <Input.Search aria-label={`搜索${label}`} placeholder={type === 'ROBOT_PART' ? '搜索料号或型号' : '搜索名称'} value={keyword} onChange={setKeyword} allowClear style={{ width: 240 }} />
         {type === 'ROBOT_PART' && <Select aria-label="筛选 Robot 厂商" placeholder="全部厂商" value={supplierId} onChange={setSupplierId} allowClear showSearch style={{ width: 180 }} options={suppliers.map((item) => ({ label: item.name, value: item.id }))} />}
       </Space>
-      <Button className="dictionary-add" aria-label={`新增${label}`} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>新增{label}</Button>
+      <Button className="dictionary-add" aria-label={prefixLabel('新增', label)} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>{prefixLabel('新增', label)}</Button>
     </div>
     {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <ResizableTable<ManagedItem> tableId={`dictionaries-${type}`} className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20 }} noDataElement={emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
-    <Modal className="form-dialog" title={`${editing ? '编辑' : '新增'}${label}`} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={`${editing ? '保存' : '创建'}${label}`} cancelText="取消" unmountOnExit>
+    <Modal className="form-dialog" title={prefixLabel(editing ? '编辑' : '新增', label)} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={prefixLabel(editing ? '保存' : '创建', label)} cancelText="取消" unmountOnExit>
       <Form onSubmit={() => void save()} form={form} layout="vertical" disabled={saving}>
         {type === 'ROBOT_PART' ? <>
           <Form.Item field="supplierId" label="Robot 厂商" rules={[{ required: true, message: '请选择 Robot 厂商' }]} help={editingPart?.inUse ? '已被项目引用，厂商、料号和型号不可修改。' : undefined}><Select placeholder="选择 Robot 厂商" showSearch disabled={!!editingPart?.inUse} options={suppliers.filter((item) => item.status === 'ACTIVE' || item.id === editingPart?.supplierId).map((item) => ({ label: `${item.name}${item.status === 'ACTIVE' ? '' : '（已停用）'}`, value: item.id }))} /></Form.Item>

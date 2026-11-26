@@ -69,4 +69,44 @@ describe('统一删除策略', () => {
     expect(screen.getByRole('spinbutton')).toHaveValue('90')
     expect(screen.getByText('当前规则：发布 1 小时后删除')).toBeInTheDocument()
   })
+
+  it('enforces integer precision on both release TTL and receipt grace minute inputs', async () => {
+    const bothPolicy: RetentionTemplate = {
+      ...policy,
+      mode: 'FIRST_RECEIPT_OR_DEADLINE',
+      releaseTtlMinutes: 60,
+      receiptGraceMinutes: 30,
+      summary: '首次下载 30 分钟后或发布 1 小时后删除',
+    }
+    const updateRetention = vi.fn().mockResolvedValue({
+      ...bothPolicy,
+      releaseTtlMinutes: 61,
+      receiptGraceMinutes: 46,
+      version: 4,
+    })
+    const user = setup({ retentionTemplates: vi.fn().mockResolvedValue([bothPolicy]), updateRetention })
+    await screen.findByText('当前规则：首次下载 30 分钟后或发布 1 小时后删除')
+
+    const [releaseInput, graceInput] = screen.getAllByRole('spinbutton')
+    await user.clear(releaseInput)
+    await user.type(releaseInput, '60.6')
+    await user.tab()
+    expect(releaseInput).toHaveValue('61')
+
+    await user.clear(graceInput)
+    await user.type(graceInput, '45.8')
+    await user.tab()
+    expect(graceInput).toHaveValue('46')
+
+    await user.click(screen.getByRole('button', { name: '保存统一策略' }))
+    await user.click(await screen.findByRole('button', { name: '保存并应用' }))
+    await waitFor(() => expect(updateRetention).toHaveBeenCalledWith(1, {
+      name: bothPolicy.name,
+      mode: 'FIRST_RECEIPT_OR_DEADLINE',
+      releaseTtlMinutes: 61,
+      receiptGraceMinutes: 46,
+      status: 'ACTIVE',
+      version: 3,
+    }))
+  })
 })

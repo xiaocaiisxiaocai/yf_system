@@ -21,8 +21,11 @@ import './OemLayouts.css'
 
 export function OemLanding() {
   const permissions = useAuth((state) => state.permissions)
+  const navigate = useNavigate()
   const home = oemHome(permissions)
-  return home ? <Navigate to={home} replace /> : <Result status="403" title="没有可用的 ODM/OEMA 功能" />
+  return home
+    ? <Navigate to={home} replace />
+    : <Result status="403" title="没有可用的 ODM/OEMA 功能" extra={<Button type="primary" onClick={() => navigate('/')}>返回首页</Button>} />
 }
 
 /**
@@ -35,7 +38,9 @@ export function OemInternalLayout() {
   const oemValue = useInternalOem()
   const navigate = useNavigate()
   const has = (code: string) => oemValue.permissions.has(code)
-  if (user?.userType !== 'INTERNAL') return <Result status="403" title="ODM/OEMA 内部入口仅供公司员工使用" />
+  if (user?.userType !== 'INTERNAL') {
+    return <Result status="403" title="ODM/OEMA 内部入口仅供公司员工使用" extra={<Button type="primary" onClick={() => navigate('/')}>返回首页</Button>} />
+  }
   const menu: MenuEntry[] = [
     { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: has('oem:transfer_create') || has('oem:transfer_view') },
     { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: has('oem:flow_approve') || has('oem:approval_recover') },

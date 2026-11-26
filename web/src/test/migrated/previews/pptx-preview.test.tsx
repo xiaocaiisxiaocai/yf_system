@@ -148,6 +148,29 @@ describe('PPTX preview', () => {
     }
   })
 
+  it('PPTX preview does not re-invoke loadContent or re-post when rerendered with a new loader reference', async () => {
+    const firstRequest = deferred<ArrayBuffer>()
+    const loader1 = vi.fn(() => firstRequest.promise)
+    const loader2 = vi.fn(() => Promise.resolve(pptxBytes()))
+    const view = render(<PptxPreview fileId={51} loadContent={() => loader1()} />)
+    const frame = await screen.findByTitle('PPTX 预览内容') as HTMLIFrameElement
+    const postMessage = vi.spyOn(frame.contentWindow!, 'postMessage').mockImplementation(() => undefined)
+    fireEvent.load(frame)
+    firstRequest.resolve(pptxBytes())
+    await waitFor(() => expect(postMessage).toHaveBeenCalledOnce())
+    const channel = (postMessage.mock.calls[0][0] as { channel: string }).channel
+
+    message(frame.contentWindow, { type: 'pptx:rendered', channel, pageCount: 2, pageNumber: 1, scale: 1, zoom: 'page' })
+    await waitFor(() => expect(frame).toHaveStyle({ visibility: 'visible' }))
+
+    view.rerender(<PptxPreview fileId={51} loadContent={() => loader2()} />)
+    await Promise.resolve()
+    expect(loader1).toHaveBeenCalledOnce()
+    expect(loader2).not.toHaveBeenCalled()
+    expect(postMessage).toHaveBeenCalledOnce()
+    expect(frame).toHaveStyle({ visibility: 'visible' })
+  })
+
   it('PPTX viewer build is network isolated and embeds the local renderer protocol', async () => {
     const file = resolve(process.cwd(), 'generated/pptx-viewer.html')
     const html = await readFile(file, 'utf8')

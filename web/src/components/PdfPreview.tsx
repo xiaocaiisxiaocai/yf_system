@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, InputNumber, Result, Select, Spin } from '@arco-design/web-react'
 import http, { type QuietRequestConfig } from '../api/client'
@@ -127,6 +127,85 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
       Math.round(scaleRef.current * (direction > 0 ? 1.25 : 0.8) * 100) / 100))
     changeZoom(String(next))
   }
+  const handleViewportKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null
+    if (target && (
+      target.tagName === 'INPUT'
+      || target.tagName === 'TEXTAREA'
+      || target.tagName === 'SELECT'
+      || target.tagName === 'BUTTON'
+      || target.isContentEditable
+    )) return
+    if (!ready || error) return
+
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+      if (event.key === '+' || event.key === '=') {
+        event.preventDefault()
+        stepZoom(1)
+      } else if (event.key === '-' || event.key === '_') {
+        event.preventDefault()
+        stepZoom(-1)
+      } else if (event.key === '0') {
+        event.preventDefault()
+        changeZoom('page')
+      }
+      return
+    }
+    if (event.ctrlKey || event.metaKey || event.altKey) return
+
+    const scroller = viewportRef.current?.querySelector<HTMLElement>('.vue-office-pdf') ?? viewportRef.current
+    if (!scroller) return
+    const scrollByDelta = (delta: number) => {
+      if (typeof scroller.scrollBy === 'function') scroller.scrollBy({ top: delta })
+      else scroller.scrollTop = Math.max(0, scroller.scrollTop + delta)
+    }
+    const pageStep = Math.max(120, Math.round(scroller.clientHeight * 0.85))
+
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault()
+        scrollByDelta(80)
+        break
+      case 'ArrowUp':
+        event.preventDefault()
+        scrollByDelta(-80)
+        break
+      case 'PageDown':
+        event.preventDefault()
+        scrollByDelta(pageStep)
+        break
+      case 'PageUp':
+        event.preventDefault()
+        scrollByDelta(-pageStep)
+        break
+      case ' ':
+        event.preventDefault()
+        scrollByDelta(event.shiftKey ? -pageStep : pageStep)
+        break
+      case 'Home':
+        event.preventDefault()
+        scroller.scrollTop = 0
+        break
+      case 'End':
+        event.preventDefault()
+        scroller.scrollTop = scroller.scrollHeight
+        break
+      case 'ArrowLeft':
+        if (pageCount > 1) {
+          event.preventDefault()
+          if (pageNumber > 1) changePage(pageNumber - 1)
+        }
+        break
+      case 'ArrowRight':
+        if (pageCount > 1) {
+          event.preventDefault()
+          if (pageNumber < pageCount) changePage(pageNumber + 1)
+        }
+        break
+      default:
+        break
+    }
+  }
   const toolbar = ready && !error && <div className="pdf-preview-toolbar" role="group" aria-label="PDF 阅读控制">
       <Button size="small" aria-label="上一页" disabled={pageNumber <= 1} onClick={() => changePage(pageNumber - 1)}>上一页</Button>
       <InputNumber size="small" aria-label="PDF 页码" min={1} max={pageCount} precision={0} value={pageNumber} onChange={changePage} style={{ width: 76 }} />
@@ -144,7 +223,7 @@ function PdfDocument({ fileId, loadContent, onRetry, toolbarContainer }: {
 
   return <section className="pdf-preview" aria-label="PDF 预览">
     {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
-    <div className="pdf-preview-viewport" tabIndex={0} role="region" aria-label="PDF 页面内容" style={{ position: 'relative' }}>
+    <div className="pdf-preview-viewport" tabIndex={0} role="region" aria-label="PDF 页面内容" onKeyDown={handleViewportKeyDown} style={{ position: 'relative' }}>
       <div ref={viewportRef} style={{ height: '100%', minHeight: 0 }} />
       {error
         ? <div style={{ background: 'var(--color-fill-2)', inset: 0, position: 'absolute', zIndex: 1 }}><PreviewError message={error} onRetry={onRetry} /></div>

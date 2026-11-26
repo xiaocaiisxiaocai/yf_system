@@ -109,7 +109,7 @@ export default function OemFilePreview({ file, onClose }: { file: OemPreviewFile
             {kind === 'pptx' && <PptxPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
             {kind === 'docx' && <DocxPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
           </Suspense>
-          <PreviewWatermark employeeNo={employeeNo} realName={realName} />
+          <PreviewWatermark key={file.id} employeeNo={employeeNo} realName={realName} />
         </div>
       )}
     </Modal>

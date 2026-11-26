@@ -176,11 +176,13 @@ export default function UserList() {
   const usersQueryKey = useMemo(() => ['admin-users', sessionScope] as const, [sessionScope])
   const optionsQueryKey = useMemo(() => ['admin-user-options', sessionScope] as const, [sessionScope])
 
+  const effectiveDepartmentId = canManageUsers ? departmentId : undefined
+  const hasActiveFilters = Boolean(keyword || effectiveDepartmentId || status)
   const usersQuery = useQuery({
-    queryKey: [...usersQueryKey, { page, pageSize, keyword, departmentId, status }],
+    queryKey: [...usersQueryKey, { page, pageSize, keyword, departmentId: effectiveDepartmentId, status }],
     queryFn: async ({ signal }) => {
       const response = await http.get<ApiResponses['GET /admin/users']>('/admin/users', {
-        params: { page, pageSize, keyword: keyword || undefined, departmentId, status }, signal,
+        params: { page, pageSize, keyword: keyword || undefined, departmentId: effectiveDepartmentId, status }, signal,
       })
       return response.data as PageResp<UserRow>
     },
@@ -538,24 +540,26 @@ export default function UserList() {
               if (sameQuery) void usersQuery.refetch()
             }}
           />
-          <TreeSelect
-            allowClear
-            showSearch
-            placeholder="全部组织"
-            style={{ width: 180 }}
-            treeData={deptTreeData}
-            loading={optionsLoading}
-            disabled={optionsError}
-            filterTreeNode={(input, node) => String(node.props?.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
-            value={departmentId ? String(departmentId) : undefined}
-            onChange={(v) => {
-              const next = v ? Number(v) : undefined
-              const sameQuery = page === 1 && departmentId === next
-              setPage(1)
-              setDepartmentId(next)
-              if (sameQuery) void usersQuery.refetch()
-            }}
-          />
+          {canManageUsers && (
+            <TreeSelect
+              allowClear
+              showSearch
+              placeholder="全部组织"
+              style={{ width: 180 }}
+              treeData={deptTreeData}
+              loading={optionsLoading}
+              disabled={optionsError}
+              filterTreeNode={(input, node) => String(node.props?.title ?? '').toLowerCase().includes(input.trim().toLowerCase())}
+              value={departmentId ? String(departmentId) : undefined}
+              onChange={(v) => {
+                const next = v ? Number(v) : undefined
+                const sameQuery = page === 1 && departmentId === next
+                setPage(1)
+                setDepartmentId(next)
+                if (sameQuery) void usersQuery.refetch()
+              }}
+            />
+          )}
           <Select
             allowClear
             placeholder="全部状态"
@@ -572,7 +576,7 @@ export default function UserList() {
             <Select.Option value="ACTIVE">启用</Select.Option>
             <Select.Option value="DISABLED">停用</Select.Option>
           </Select>
-          {(keyword || departmentId || status) && (
+          {hasActiveFilters && (
             <Button onClick={() => {
               setSearchText('')
               setKeyword('')
@@ -688,11 +692,9 @@ export default function UserList() {
                 // 内置管理员和自己的账号不能停用或删除：按钮保留但不可用，各行操作上下对齐。
                 canManageUsers && ((r.employeeNo === 'admin' || r.id === me?.id) ? (
                   <Tooltip key="status" content={r.employeeNo === 'admin' ? '内置管理员不可停用' : '当前登录账号不可停用'}>
-                    <span>
-                      <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled>
-                        {r.status === 'ACTIVE' ? '停用' : '启用'}
-                      </Button>
-                    </span>
+                    <Button size="mini" type="text" status={r.status === 'ACTIVE' ? 'danger' : 'success'} disabled>
+                      {r.status === 'ACTIVE' ? '停用' : '启用'}
+                    </Button>
                   </Tooltip>
                 ) : r.status === 'ACTIVE' ? (
                   <DangerPopconfirm key="status" title="停用后立即无法登录，确认？" onOk={() => toggle(r)}>
@@ -705,9 +707,7 @@ export default function UserList() {
                 )),
                 canDelete && ((r.employeeNo === 'admin' || r.id === me?.id) ? (
                   <Tooltip key="delete" content={r.employeeNo === 'admin' ? '内置管理员不可删除' : '当前登录账号不可删除'}>
-                    <span>
-                      <Button size="mini" type="text" status="danger" disabled>删除</Button>
-                    </span>
+                    <Button size="mini" type="text" status="danger" disabled>删除</Button>
                   </Tooltip>
                 ) : (
                   <DangerPopconfirm key="delete"

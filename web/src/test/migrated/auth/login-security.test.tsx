@@ -181,6 +181,19 @@ describe('login security migration', () => {
     await waitFor(() => expect(mocks.httpPost).toHaveBeenCalledWith('/auth/logout', null, { quietNetworkError: true }))
   })
 
+  it('ChangePassword renders large buttons matching large password inputs', () => {
+    useAuth.setState({ ...loginPayload('cp-token-size'), token: 'cp-token-size', mustChangePassword: false, booted: true })
+    render(
+      <MemoryRouter initialEntries={['/change-password']}>
+        <ChangePassword />
+      </MemoryRouter>,
+    )
+    const backBtn = screen.getByRole('button', { name: '返回' })
+    const submitBtn = screen.getByRole('button', { name: '确认修改' })
+    expect(backBtn).toHaveClass('arco-btn-size-large')
+    expect(submitBtn).toHaveClass('arco-btn-size-large')
+  })
+
   it('Guard renders session recovery screen when bootUnavailable is true and lets user retry or re-login', async () => {
     const user = userEvent.setup()
     useAuth.setState({

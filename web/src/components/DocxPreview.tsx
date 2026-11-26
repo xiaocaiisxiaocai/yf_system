@@ -28,12 +28,17 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const frameLoaded = useRef(false)
   const sendBuffer = useRef<() => void>(() => {})
+  const loadContentRef = useRef(loadContent)
   const [channel] = useState(randomChannel)
   const [state, setState] = useState<PreviewState>('loading')
   const [message, setMessage] = useState('')
   const [zoom, setZoom] = useState('fit')
   const [scale, setScale] = useState(1)
   const html = useMemo(() => viewerHtml.replaceAll('YF_VIEWER_NONCE', channel), [channel])
+
+  useEffect(() => {
+    loadContentRef.current = loadContent
+  }, [loadContent])
 
   useEffect(() => {
     let active = true
@@ -49,6 +54,7 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
       controller.abort()
       if (active) fail('Word 文档加载或渲染超时，请重试。')
     }
+    const external = loadContentRef.current
     const deadline = createPreviewDeadline(timedOut)
     const receive = (event: MessageEvent) => {
       if (!active || event.source !== frameRef.current?.contentWindow || event.data?.channel !== channel) return
@@ -77,7 +83,7 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
       frameRef.current?.contentWindow?.postMessage({ type: 'docx:load', channel, buffer }, '*', [buffer])
       buffer = undefined
     }
-    void (loadContent ? loadContent(controller.signal, (loaded) => deadline.progress(loaded)) : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
+    void (external ? external(controller.signal, (loaded) => deadline.progress(loaded)) : http.get<ArrayBuffer>(`/files/${fileId}/content`, {
       responseType: 'arraybuffer',
       signal: controller.signal,
       quietNetworkError: true,
@@ -95,7 +101,7 @@ function DocxDocument({ fileId, loadContent, toolbarContainer, onRetry }: {
       window.removeEventListener('message', receive)
       sendBuffer.current = () => {}
     }
-  }, [fileId, channel, loadContent])
+  }, [fileId, channel])
 
   const changeZoom = (value: number | string) => {
     if (state !== 'ready') return
