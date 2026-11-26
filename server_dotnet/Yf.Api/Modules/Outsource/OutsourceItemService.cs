@@ -1,5 +1,6 @@
 using System.Data;
 using System.Globalization;
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MySqlConnector;
 using Yf.Api.Infrastructure;
@@ -49,7 +50,7 @@ internal static class OutsourceMatchStates
 /// <summary>List filters shared by the paged list and the export.</summary>
 public sealed record OutsourceItemQuery(
     ulong? VendorId, ulong? TypeId, string? Status, string? SendStatus, DateOnly? DateFrom, DateOnly? DateTo,
-    string? Keyword, bool IncludeClosed, bool SendQueue = false)
+    string? Keyword, bool IncludeClosed, bool SendQueue = false, IReadOnlyList<string>? WorkOrders = null)
 {
     public static OutsourceItemQuery From(HttpRequest request)
     {
@@ -77,10 +78,14 @@ public sealed record OutsourceItemQuery(
             _ => throw ApiException.BadRequest("请求参数错误: sendQueue"),
         };
         var keyword = request.Query["keyword"].ToString().Trim();
+        var workOrders = OutsourceFilterTerms.Split(request.Query["workOrders"].ToString())
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(101).ToArray();
+        if (workOrders.Length > 100 || workOrders.Any(term => term.Length > 64))
+            throw ApiException.BadRequest("请求参数错误: workOrders");
         return new(QueryValues.OptionalUInt64(request, "vendorId"), QueryValues.OptionalUInt64(request, "typeId"),
             status.Length == 0 ? null : status, sendStatus.Length == 0 ? null : sendStatus,
             Date(request, "dateFrom"), Date(request, "dateTo"), keyword.Length == 0 ? null : keyword[..Math.Min(keyword.Length, 64)],
-            includeClosed, sendQueue);
+            includeClosed, sendQueue, workOrders);
     }
 }
 
@@ -338,6 +343,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 && (x.SendStatus == OutsourceSendStatuses.Unsent || x.SendStatus == OutsourceSendStatuses.PendingNotice));
         if (query.DateFrom is { } from) items = items.Where(x => x.OutsourceDate >= from);
         if (query.DateTo is { } to) items = items.Where(x => x.OutsourceDate <= to);
+        if (query.WorkOrders is { Count: > 0 } workOrders)
+            items = items.Where(MatchWorkOrders(workOrders));
         if (query.Keyword is { } keyword)
         {
             var pattern = QueryValues.ContainsPattern(keyword);
@@ -349,6 +356,20 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 || EF.Functions.Like(x.MachineModel!, pattern, QueryValues.LikeEscape));
         }
         return items;
+    }
+
+    internal static Expression<Func<OutsourceItem, bool>> MatchWorkOrders(IReadOnlyList<string> terms)
+    {
+        // Compose SQL OR clauses so filtering still happens before counting and paging.
+        Expression<Func<OutsourceItem, bool>> matches = x => false;
+        foreach (var term in terms)
+        {
+            var pattern = QueryValues.ContainsPattern(term);
+            Expression<Func<OutsourceItem, bool>> like = x => EF.Functions.Like(x.WorkOrderNo, pattern, QueryValues.LikeEscape);
+            matches = Expression.Lambda<Func<OutsourceItem, bool>>(
+                Expression.OrElse(matches.Body, Expression.Invoke(like, matches.Parameters[0])), matches.Parameters);
+        }
+        return matches;
     }
 
     // ---- change history ----

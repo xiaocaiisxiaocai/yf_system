@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Card, Empty, Input, Message, Select, Space, Tag } from '@arco-design/web-react'
+import { Button, Card, Empty, Message, Space, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconSync } from '@arco-design/web-react/icon'
 import http from '../../api/client'
@@ -7,6 +7,8 @@ import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
 import ResizableTable from '../../components/ResizableTable'
 import { useAuth } from '../../store/auth'
+import ColumnFilterPanel from '../components/ColumnFilterPanel'
+import { filterTerms } from '../filterTerms'
 import { isGroup, MES_CODE_TEXT, MES_FIXED_COLUMNS, MES_LAYOUT, MES_PINNED_PROPS, type MesColumn } from '../mesColumns'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import MesExcelImportControl from './MesExcelImportControl'
@@ -29,13 +31,6 @@ const MES_COLUMN_LABELS: Record<string, string> = Object.fromEntries([
     : [[item.prop, item.label] as const]),
 ])
 
-/** 与服务端同一个切词规则：粘贴的多行每行是一个完整词，单行才按空格、逗号、分号拆开。 */
-function filterTerms(text: string): string[] {
-  return text.includes('\n')
-    ? text.split('\n').map((line) => line.trim()).filter(Boolean)
-    : text.split(/[\s,，;；、]+/).filter(Boolean)
-}
-
 function formatFilterValue(prop: string, rawValue: string): string {
   const words = MES_CODE_TEXT[prop]
   const terms = filterTerms(rawValue)
@@ -50,23 +45,6 @@ const cell = (column: MesColumn) => (_: unknown, order: Order) => {
 
 /** Room the header text needs: its characters (14px each), the cell padding and the filter icon. */
 const headerWidth = (label: string) => [...label].length * 14 + 32 + 28
-
-/** The header filter of one column: a word list for coded fields, otherwise "contains" text. */
-function FilterPanel({ column, value, onApply }: { column: MesColumn; value: string; onApply: (text: string) => void }) {
-  const [text, setText] = useState(value)
-  const words = MES_CODE_TEXT[column.prop]
-  return <div className="outsource-ipms-filter">
-    {words
-      ? <Select mode="multiple" allowClear placeholder="全部" value={text.split(/\s+/).filter(Boolean)} onChange={(next: string[]) => setText(next.join(' '))}
-        options={Object.entries(words).map(([code, label]) => ({ value: code, label }))} />
-      : <Input.TextArea autoFocus autoSize={{ minRows: 1, maxRows: 6 }} placeholder={`筛选${column.label}，可粘贴多个`} value={text} onChange={setText}
-        onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); onApply(text) } }} />}
-    <div className="outsource-ipms-filter-actions">
-      <Button size="mini" onClick={() => { setText(''); onApply('') }}>重置</Button>
-      <Button size="mini" type="primary" onClick={() => onApply(text)}>筛选</Button>
-    </div>
-  </div>
-}
 
 /** The IPMS MES monitoring table, filled from the mirrored data: same columns, same header groups. */
 export default function MesOrdersPage() {
@@ -170,7 +148,7 @@ export default function MesOrdersPage() {
     // The width IPMS gives a column fits its data; the header also holds the filter icon and the resize handle.
     title: column.label, key: column.prop, width: Math.max(column.width, headerWidth(column.label)), render: cell(column), ...(fixed ? { fixed } : {}),
     filteredValue: filters[column.prop] ? [filters[column.prop]] : [],
-    filterDropdown: ({ confirm }: { confirm?: Function }) => <FilterPanel key={filters[column.prop] ?? ''} column={column}
+    filterDropdown: ({ confirm }) => <ColumnFilterPanel key={filters[column.prop] ?? ''} label={column.label} words={MES_CODE_TEXT[column.prop]}
       value={filters[column.prop] ?? ''} onApply={(text) => { apply(column.prop, text); confirm?.() }} />,
   })
 

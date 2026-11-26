@@ -14,7 +14,9 @@ import { OemProvider } from '../../oem/OemContext'
 import { useInternalOem } from '../../oem/useInternalOem'
 import { useAuth } from '../../store/auth'
 import type { ExcelImportRow, ExcelWorkbookSheet } from '../../utils/excelWorkbook'
+import ColumnFilterPanel from '../components/ColumnFilterPanel'
 import ItemFilesPopover from '../components/ItemFilesPopover'
+import { filterTerms } from '../filterTerms'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { normalizeImportDate } from '../importDate'
 import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
@@ -78,6 +80,7 @@ const DATE_IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
 
 interface Filters {
   keyword: string
+  workOrders?: string
   vendorId?: number
   typeId?: number
   status?: string
@@ -134,6 +137,7 @@ export default function OutsourceListPage() {
     dateFrom: filters.dateRange?.[0],
     dateTo: filters.dateRange?.[1],
     keyword: filters.keyword || undefined,
+    workOrders: filters.workOrders,
     includeClosed: filters.includeClosed ? 'true' : undefined,
     sendQueue: filters.sendQueue ? 'true' : undefined,
   }), [filters])
@@ -180,7 +184,7 @@ export default function OutsourceListPage() {
 
   const changeFilters = (next: Partial<Filters>) => { setFilters((current) => ({ ...current, ...next })); setPage(1) }
   const hasActiveFilters = Boolean(
-    keywordDraft.trim() || filters.keyword || filters.vendorId !== undefined || filters.typeId !== undefined
+    keywordDraft.trim() || filters.keyword || filters.workOrders || filters.vendorId !== undefined || filters.typeId !== undefined
     || filters.status || filters.sendStatus || filters.dateRange || filters.includeClosed || filters.sendQueue,
   )
   const resetFilters = () => {
@@ -360,7 +364,15 @@ export default function OutsourceListPage() {
         ? <Tooltip content={`签名：${item.electricalHandoffSigner ?? '-'}　时间：${fmtTime(item.electricalHandoffAt)}`}><span tabIndex={0}>是</span></Tooltip>
         : '否',
     },
-    workOrderNo: { dataIndex: 'workOrderNo', width: 110 },
+    workOrderNo: {
+      dataIndex: 'workOrderNo', width: 110,
+      filteredValue: filters.workOrders ? [filters.workOrders] : [],
+      filterDropdown: ({ confirm }) => <ColumnFilterPanel key={filters.workOrders ?? ''} label="工令" value={filters.workOrders ?? ''}
+        onApply={(text) => {
+          changeFilters({ workOrders: filterTerms(text).length ? text : undefined })
+          confirm?.()
+        }} />,
+    },
     customer: {
       dataIndex: 'customer', width: 150, ellipsis: true,
       render: (_, item) => item.customerFullName && item.customerFullName !== item.customer
