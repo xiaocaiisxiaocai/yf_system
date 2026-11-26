@@ -302,6 +302,27 @@ describe('FileTable DOM contracts', () => {
     URL.revokeObjectURL = originalRevokeObjectURL
   })
 
+  it('switching previewed files without closing the modal resets the watermark openedAt timestamp', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date(2026, 10, 26, 9, 0, 0))
+      mocks.permissions.add('file:preview')
+      await renderTable([
+        row(101, 'first.pdf', 'pdf', 1),
+        row(102, 'second.pdf', 'pdf', 1),
+      ])
+
+      fireEvent.click(tableRow('first.pdf').getByRole('button', { name: '预览文件' }))
+      await waitFor(() => expect(document.querySelector('.preview-watermark')).toHaveTextContent('2026-11-26 09:00:00'))
+
+      vi.setSystemTime(new Date(2026, 10, 26, 9, 5, 30))
+      fireEvent.click(tableRow('second.pdf').getByRole('button', { name: '预览文件' }))
+      await waitFor(() => expect(document.querySelector('.preview-watermark')).toHaveTextContent('2026-11-26 09:05:30'))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('batch download uses a synchronous in-flight latch against repeated clicks', async () => {
     mocks.permissions.add('file:download')
     let release!: () => void

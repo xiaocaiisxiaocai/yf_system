@@ -92,7 +92,9 @@ describe('留言图片粘贴', () => {
 
     expect(screen.getAllByAltText('same.png').map(image => image.getAttribute('src')))
       .toEqual(['blob:first', 'blob:second'])
-    fireEvent.click(screen.getAllByRole('button', { name: '移除图片：same.png' })[0])
+    const removeButtons = screen.getAllByRole('button', { name: '移除图片：same.png' })
+    expect(removeButtons[0]).toHaveAttribute('title', '移除图片')
+    fireEvent.click(removeButtons[0])
 
     expect(screen.getByAltText('same.png')).toHaveAttribute('src', 'blob:second')
     expect(createObjectURL).toHaveBeenCalledTimes(2)

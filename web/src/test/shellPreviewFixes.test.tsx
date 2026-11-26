@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import http from '../api/client'
 import AdminLayout from '../layouts/AdminLayout'
 import AppRail from '../layouts/AppRail'
-import { NavMenu } from '../layouts/NavSider'
+import NavSider, { NavMenu } from '../layouts/NavSider'
 import NotFound from '../pages/NotFound'
 import { PreviewWatermark } from '../components/PreviewWatermark'
 import { useAuth, type UserBrief } from '../store/auth'
@@ -107,6 +107,35 @@ describe('壳层导航、404 与水印修复回归', () => {
       />,
     )
     expect(container.querySelector('.nav-menu-badge-dot .arco-badge-dot')).toBeInTheDocument()
+  })
+
+  it('NavSider 折叠按钮同步 aria-expanded 并在折叠态展示展开提示', async () => {
+    localStorage.removeItem('yf:sider-collapsed')
+    const user = userEvent.setup()
+    try {
+      render(
+        <NavSider
+          selectedKey="/outsource/items"
+          onSelect={() => undefined}
+          items={[{ key: '/outsource/items', label: '外协清单', icon: <span data-testid="nav-icon" /> }]}
+        />,
+      )
+      const collapseButton = screen.getByRole('button', { name: '折叠侧边栏' })
+      expect(collapseButton).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(collapseButton)
+      const expandButton = screen.getByRole('button', { name: '展开侧边栏' })
+      expect(expandButton).toHaveAttribute('aria-expanded', 'false')
+
+      await user.unhover(expandButton)
+      await user.hover(expandButton)
+      expect(await screen.findByText('展开侧边栏')).toBeVisible()
+
+      await user.click(expandButton)
+      expect(screen.getByRole('button', { name: '折叠侧边栏' })).toHaveAttribute('aria-expanded', 'true')
+    } finally {
+      localStorage.removeItem('yf:sider-collapsed')
+    }
   })
 
   it('AppRail 抽屉模式展示三条业务线和角标，并支持跨模块展示协作未读数', async () => {

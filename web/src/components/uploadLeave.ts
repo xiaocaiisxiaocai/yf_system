@@ -23,6 +23,7 @@ export function confirmUploadLeave(proceed: () => void) {
     title: UPLOAD_ROUTE_LEAVE_TITLE,
     content: UPLOAD_ROUTE_LEAVE_CONTENT,
     okText: '离开并中止',
+    okButtonProps: { status: 'danger' },
     cancelText: '继续上传',
     onOk: () => {
       confirming = false

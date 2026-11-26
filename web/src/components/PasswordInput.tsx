@@ -45,6 +45,7 @@ const PasswordInput = forwardRef<RefInputType, InputPasswordProps>(function Pass
 
   const capsLockIndicator = capsLock ? (
     <span
+      role="status"
       className="password-capslock-badge"
       title="大写锁定已开启"
       aria-label="大写锁定已开启"

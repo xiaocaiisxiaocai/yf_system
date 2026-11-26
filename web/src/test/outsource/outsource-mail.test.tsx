@@ -285,4 +285,52 @@ describe('外协邮件发送', () => {
     expect(mailGets).toBe(3)
     expect(screen.getByText('已寄出')).toBeInTheDocument()
   })
+
+  it('点击重新发送仅旋转重新发送按钮，不会误让附件按钮进入加载态', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:manage', 'outsource:send'])
+    const mail = {
+      id: 11, batchKey: 'k11', kind: 'NOTICE', vendorId: 1, vendorName: '鼎亚', subject: '【外发通知】鼎亚重发测试', status: 'FAILED',
+      recipients: [{ kind: 'TO', email: 'd1@vendor.test', name: null, source: 'VENDOR', rejected: true }],
+      workOrderNos: ['A1'], attachmentName: '外发清单_鼎亚_20261110.xlsx', attempts: 1, lastError: '发送失败',
+      createdByName: '采购', createdAt: '2026-11-10T01:00:00Z', sentAt: null,
+    }
+    const pendingDownload = deferred<{ data: Blob }>()
+    vi.spyOn(http, 'get').mockImplementation((url: string) => {
+      if (url === '/outsource/mails') return Promise.resolve({ data: { list: [mail], total: 1, page: 1, pageSize: 20 } } as never)
+      if (url === '/outsource/mails/11/attachment') return pendingDownload.promise as never
+      return Promise.resolve({ data: [] } as never)
+    })
+    const pendingRetry = deferred<{ data: typeof mail }>()
+    vi.spyOn(http, 'post').mockReturnValue(pendingRetry.promise as never)
+    render(<MemoryRouter><OutsourceMailsPage /></MemoryRouter>)
+
+    const row = (await screen.findByText('【外发通知】鼎亚重发测试')).closest('tr')!
+    const attachmentBtn = within(row).getByRole('button', { name: '附件' })
+    const retryBtn = within(row).getByRole('button', { name: '重新发送' })
+
+    await user.click(retryBtn)
+    expect(retryBtn).toHaveClass('arco-btn-loading')
+    expect(attachmentBtn).not.toHaveClass('arco-btn-loading')
+    expect(attachmentBtn).toBeDisabled()
+
+    await act(async () => {
+      pendingRetry.resolve({ data: mail })
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(retryBtn).not.toHaveClass('arco-btn-loading'))
+    expect(attachmentBtn).toBeEnabled()
+
+    await user.click(attachmentBtn)
+    expect(attachmentBtn).toHaveClass('arco-btn-loading')
+    expect(retryBtn).not.toHaveClass('arco-btn-loading')
+    expect(retryBtn).toBeDisabled()
+
+    await act(async () => {
+      pendingDownload.reject(new Error('abort'))
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(attachmentBtn).not.toHaveClass('arco-btn-loading'))
+    expect(retryBtn).toBeEnabled()
+  })
 })

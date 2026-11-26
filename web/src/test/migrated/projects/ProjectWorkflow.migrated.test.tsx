@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { Message } from '@arco-design/web-react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deferred } from './testUtils'
 
@@ -344,5 +345,72 @@ describe('ProjectWorkflowPanel migrated behavior', () => {
     rerender(<ProjectWorkflowPanel project={reviewProject(5, 'NO_MATERIAL')} onChanged={changed} />)
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(mocks.post).toHaveBeenCalledOnce()
+  })
+
+  it('clicking the disabled terminate button while another workflow action is busy does not open DangerPopconfirm', async () => {
+    mocks.auth.permissions = ['project:status']
+    const pending = deferred<{ data: unknown }>()
+    mocks.post.mockImplementation(() => pending.promise)
+    const user = userEvent.setup()
+    render(<ProjectWorkflowPanel project={reviewProject(5)} onChanged={() => undefined} />)
+
+    await user.click(screen.getByRole('button', { name: '资料确认 OK' }))
+    const dialog = await screen.findByRole('dialog')
+    await within(dialog).findByText(/厂商回传文件/)
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认并完成' }))
+
+    const getTerminate = () => screen.getByRole('button', { name: '终止' })
+    await waitFor(() => expect(getTerminate()).toBeDisabled())
+
+    // Arco Trigger wraps disabled buttons in a span; clicking either must not open the popconfirm bubble.
+    const disabledTerminate = getTerminate()
+    fireEvent.click(disabledTerminate)
+    if (disabledTerminate.parentElement) fireEvent.click(disabledTerminate.parentElement)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+    expect(screen.queryByText(/终止项目后需要重新开始才能继续/)).not.toBeInTheDocument()
+
+    pending.reject(new Error('offline'))
+    await waitFor(() => expect(getTerminate()).toBeEnabled())
+    await user.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(getTerminate())
+    expect(await screen.findByText(/终止项目后需要重新开始才能继续/)).toBeInTheDocument()
+  })
+
+  it('rejects whitespace-only return and reopen reasons and alerts when returning with no supplier file', async () => {
+    const errorSpy = vi.spyOn(Message, 'error').mockImplementation(() => () => undefined)
+    const user = userEvent.setup()
+    try {
+      const { rerender } = render(
+        <ProjectWorkflowPanel
+          project={{ id: 17, status: 'IN_PROGRESS', responsibleUserId: 1, materialReviewStatus: 'PENDING', latestSupplierFileId: null, canManage: true } as never}
+          onChanged={() => undefined}
+        />,
+      )
+      await user.click(screen.getByRole('button', { name: '退回资料' }))
+      expect(errorSpy).toHaveBeenCalledWith('当前没有可退回的资料文件')
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+      rerender(<ProjectWorkflowPanel project={reviewProject(5)} onChanged={() => undefined} />)
+      await user.click(screen.getByRole('button', { name: '退回资料' }))
+      let dialog = await screen.findByRole('dialog')
+      await user.type(within(dialog).getByPlaceholderText('请说明需要厂商补充或修改的资料'), '   ')
+      await user.click(within(dialog).getByRole('button', { name: '确认退回' }))
+      expect(await within(dialog).findByText('请填写退回原因')).toBeInTheDocument()
+      expect(mocks.post).not.toHaveBeenCalled()
+      await user.click(within(dialog).getByRole('button', { name: '取消' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+      rerender(<ProjectWorkflowPanel project={completedProject()} onChanged={() => undefined} />)
+      await user.click(screen.getByRole('button', { name: '重开' }))
+      dialog = await screen.findByRole('dialog')
+      await user.type(within(dialog).getByPlaceholderText('请说明需要厂商返工的内容'), '   ')
+      await user.click(within(dialog).getByRole('button', { name: '确认重开' }))
+      expect(await within(dialog).findByText('请填写重开原因')).toBeInTheDocument()
+      expect(mocks.post).not.toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 })

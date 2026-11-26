@@ -296,21 +296,13 @@ export default function FlowTemplatesPage() {
               size="small"
               hoverable
               style={{ cursor: 'pointer' }}
-              role="button"
-              tabIndex={0}
               onClick={() => setEditing(template)}
-              onKeyDown={(event) => {
-                if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
-                  event.preventDefault()
-                  setEditing(template)
-                }
-              }}
               title={
                 <Space wrap>{template.name}{template.isDefault && <Tag color="arcoblue">默认</Tag>}
                   <StatusTag status={template.status} /></Space>
               }
               extra={
-                <Button size="mini" type="text" onClick={(event) => { event.stopPropagation(); setEditing(template) }}>编辑</Button>
+                <Button size="mini" type="text" aria-label={`编辑模板 ${template.name}`} onClick={(event) => { event.stopPropagation(); setEditing(template) }}>编辑</Button>
               }
             >
               <div className="oem-flow-nodes">

@@ -194,9 +194,24 @@ export function AuditDetailDrawer({
   presenter: AuditPresenter
   onClose: () => void
 }) {
+  const [lastRow, setLastRow] = useState<AuditLogRow | null>(row)
+  if (row && row !== lastRow) {
+    setLastRow(row)
+  }
+  const displayRow = row ?? lastRow
+
   return (
-    <Drawer className="audit-detail-drawer" width="min(720px, 100vw)" title={title} visible={!!row} onCancel={onClose} footer={null}>
-      {row && <AuditDetail key={row.id} row={row} presenter={presenter} />}
+    <Drawer
+      className="audit-detail-drawer"
+      width="min(720px, 100vw)"
+      title={title}
+      visible={!!row}
+      unmountOnExit
+      afterClose={() => { if (!row) setLastRow(null) }}
+      onCancel={onClose}
+      footer={null}
+    >
+      {displayRow && <AuditDetail key={displayRow.id} row={displayRow} presenter={presenter} />}
     </Drawer>
   )
 }

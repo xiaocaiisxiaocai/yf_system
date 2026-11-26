@@ -109,12 +109,16 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer, 
     <Button size="small" aria-label="重置图片缩放" onClick={() => changeZoom('fit')}>重置</Button>
   </div>
 
+  const stageWidth = Math.max(size.width, natural.width * scale + 32)
+  const stageHeight = Math.max(size.height, natural.height * scale + 32)
+  const pannable = status === 'ready' && zoom !== 'fit' && (stageWidth > size.width || stageHeight > size.height)
+
   return <section className="image-preview">
     {toolbarContainer ? createPortal(toolbar, toolbarContainer) : toolbar}
     <div ref={viewport} className="image-preview-viewport" tabIndex={0} role="region" aria-label="图片预览内容"
       style={{ overflow: zoom === 'fit' ? 'hidden' : 'auto' }}
       onPointerDown={event => {
-        if (event.pointerType !== 'mouse' || event.button !== 0 || status !== 'ready') return
+        if (event.pointerType !== 'mouse' || event.button !== 0 || !pannable) return
         const element = event.currentTarget
         drag.current = { x: event.clientX, y: event.clientY, left: element.scrollLeft, top: element.scrollTop }
         element.setPointerCapture(event.pointerId); event.preventDefault()
@@ -124,8 +128,8 @@ function ImageDocument({ fileId, contentUrl, sourceUrl, name, toolbarContainer, 
         event.currentTarget.scrollTop = drag.current.top + drag.current.y - event.clientY
       }} onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}
       onLostPointerCapture={() => { drag.current = null }}>
-      {source && <div className="image-preview-stage" style={{
-        width: Math.max(size.width, natural.width * scale + 32), height: Math.max(size.height, natural.height * scale + 32),
+      {source && <div className={`image-preview-stage${pannable ? ' is-pannable' : ''}`} style={{
+        width: stageWidth, height: stageHeight,
       }}>
         <img key={attempt} ref={imageRef} src={source} alt={name} draggable={false} onContextMenu={event => event.preventDefault()}
           style={{ width: natural.width ? natural.width * scale : undefined, height: natural.height ? natural.height * scale : undefined, visibility: status === 'ready' ? 'visible' : 'hidden' }}

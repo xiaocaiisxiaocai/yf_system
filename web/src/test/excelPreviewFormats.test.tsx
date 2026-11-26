@@ -33,4 +33,62 @@ describe('Excel preview workbook formats', () => {
     await waitFor(() => expect(postMessage).toHaveBeenCalledOnce())
     expect(postMessage.mock.calls[0][0]).toMatchObject({ type: 'excel:load', xls: convert })
   })
+
+  it('does not re-invoke loadContent or re-post when rerendered with a new loadContent reference for the same fileId', async () => {
+    let resolveDownload!: (value: ArrayBuffer) => void
+    const loader1 = vi.fn(() => new Promise<ArrayBuffer>(resolve => { resolveDownload = resolve }))
+    const loader2 = vi.fn(() => Promise.resolve(new Uint8Array(ZIP).buffer))
+    const view = render(<ExcelPreview fileId={21} ext="xlsx" loadContent={() => loader1()} />)
+    const frame = screen.getByTitle('Excel 预览内容') as HTMLIFrameElement
+    const postMessage = vi.fn()
+    Object.defineProperty(frame, 'contentWindow', { configurable: true, value: { postMessage } })
+    fireEvent.load(frame)
+    await act(async () => { resolveDownload(new Uint8Array(ZIP).buffer) })
+    await waitFor(() => expect(postMessage).toHaveBeenCalledOnce())
+    const channel = (postMessage.mock.calls[0][0] as { channel: string }).channel
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow,
+      data: { type: 'excel:rendered', channel },
+    }))
+    await waitFor(() => expect(frame).toHaveStyle({ visibility: 'visible' }))
+
+    view.rerender(<ExcelPreview fileId={21} ext="xlsx" loadContent={() => loader2()} />)
+    await act(async () => { await Promise.resolve() })
+    expect(loader1).toHaveBeenCalledOnce()
+    expect(loader2).not.toHaveBeenCalled()
+    expect(postMessage).toHaveBeenCalledOnce()
+    expect(frame).toHaveStyle({ visibility: 'visible' })
+  })
+
+  it('remounts the iframe with a fresh channel on retry after a render error', async () => {
+    const pendingDownloads: Array<(value: ArrayBuffer) => void> = []
+    const loader = vi.fn(() => new Promise<ArrayBuffer>(resolve => { pendingDownloads.push(resolve) }))
+    render(<ExcelPreview fileId={22} ext="xlsx" loadContent={loader} />)
+    const firstFrame = screen.getByTitle('Excel 预览内容') as HTMLIFrameElement
+    const firstPostMessage = vi.fn()
+    Object.defineProperty(firstFrame, 'contentWindow', { configurable: true, value: { postMessage: firstPostMessage } })
+    await act(async () => { pendingDownloads.shift()?.(new Uint8Array(ZIP).buffer) })
+    if (firstPostMessage.mock.calls.length === 0) fireEvent.load(firstFrame)
+    await waitFor(() => expect(firstPostMessage).toHaveBeenCalledOnce())
+    const firstChannel = (firstPostMessage.mock.calls[0][0] as { channel: string }).channel
+
+    window.dispatchEvent(new MessageEvent('message', {
+      source: firstFrame.contentWindow,
+      data: { type: 'excel:error', channel: firstChannel },
+    }))
+    const retryButton = await screen.findByRole('button', { name: '重试预览' })
+    fireEvent.click(retryButton)
+
+    await waitFor(() => expect(loader).toHaveBeenCalledTimes(2))
+    const secondFrame = screen.getByTitle('Excel 预览内容') as HTMLIFrameElement
+    expect(secondFrame).not.toBe(firstFrame)
+    const secondPostMessage = vi.fn()
+    Object.defineProperty(secondFrame, 'contentWindow', { configurable: true, value: { postMessage: secondPostMessage } })
+    await act(async () => { pendingDownloads.shift()?.(new Uint8Array(ZIP).buffer) })
+    if (secondPostMessage.mock.calls.length === 0) fireEvent.load(secondFrame)
+    await waitFor(() => expect(secondPostMessage).toHaveBeenCalledOnce())
+    const secondChannel = (secondPostMessage.mock.calls[0][0] as { channel: string }).channel
+    expect(secondChannel).not.toBe(firstChannel)
+  })
 })

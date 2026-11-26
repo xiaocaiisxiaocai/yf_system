@@ -89,13 +89,13 @@ describe('Dictionaries migrated behavior', () => {
     const tabs = Array.from(document.querySelectorAll('.arco-tabs-header-title-text')).map((tab) => tab.textContent)
     expect(tabs).toEqual(['Robot 类型', 'Robot 料号', '优先级'])
     await waitFor(() => expect(document.querySelector<HTMLButtonElement>('.dictionary-add')).toBeEnabled())
-    expect(document.querySelector('.dictionary-add')).toHaveAccessibleName('新增Robot 类型')
+    expect(document.querySelector('.dictionary-add')).toHaveAccessibleName('新增 Robot 类型')
     expect(mocks.get).toHaveBeenCalledWith('/project-dictionaries', { params: { type: 'ROBOT_TYPE' } })
 
     await user.click(document.querySelector<HTMLButtonElement>('.dictionary-add')!)
     const dialog = await screen.findByRole('dialog')
     await user.type(within(dialog).getByPlaceholderText('Robot 类型'), ' 六轴 ')
-    await user.click(within(dialog).getByRole('button', { name: '创建Robot 类型' }))
+    await user.click(within(dialog).getByRole('button', { name: '创建 Robot 类型' }))
     await waitFor(() => expect(mocks.post).toHaveBeenCalledWith('/project-dictionaries', expect.objectContaining({
       type: 'ROBOT_TYPE',
       name: '六轴',
@@ -160,5 +160,40 @@ describe('Dictionaries migrated behavior', () => {
     fireEvent.keyDown(nameHandle, { key: 'ArrowRight' })
     expect(JSON.parse(localStorage.getItem('yf:table-columns:dictionaries-ROBOT_TYPE:0') ?? 'null')?.widths).toEqual({ name: 296 })
     expect(JSON.parse(localStorage.getItem('yf:table-columns:dictionaries-ROBOT_PART:0') ?? 'null')?.widths).toEqual({ partNumber: 186 })
+  })
+
+  it('referenced ROBOT_TYPE and PRIORITY rows disable delete while unused rows stay deletable', async () => {
+    mocks.get.mockImplementation((url: string, config?: { params?: { type?: string } }) => {
+      if (url === '/project-dictionaries' && config?.params?.type === 'ROBOT_TYPE') {
+        return Promise.resolve({
+          data: [
+            { id: 1, type: 'ROBOT_TYPE', name: '已引用机型', parentId: null, parentName: null, sortNo: 10, enabled: true, inUse: true },
+            { id: 2, type: 'ROBOT_TYPE', name: '空闲机型', parentId: null, parentName: null, sortNo: 20, enabled: true, inUse: false },
+          ],
+        })
+      }
+      if (url === '/project-dictionaries' && config?.params?.type === 'PRIORITY') {
+        return Promise.resolve({
+          data: [
+            { id: 3, type: 'PRIORITY', name: '已引用优先级', parentId: null, parentName: null, sortNo: 10, enabled: true, inUse: true },
+            { id: 4, type: 'PRIORITY', name: '空闲优先级', parentId: null, parentName: null, sortNo: 20, enabled: true, inUse: false },
+          ],
+        })
+      }
+      return successfulGet(url)
+    })
+    const user = userEvent.setup()
+    render(<Dictionaries />)
+
+    const usedTypeRow = await screen.findByRole('row', { name: /已引用机型/ })
+    const unusedTypeRow = screen.getByRole('row', { name: /空闲机型/ })
+    expect(within(usedTypeRow).getByRole('button', { name: '删除' })).toBeDisabled()
+    expect(within(unusedTypeRow).getByRole('button', { name: '删除' })).toBeEnabled()
+
+    await user.click(screen.getByText('优先级', { selector: '.arco-tabs-header-title-text' }))
+    const usedPriorityRow = await screen.findByRole('row', { name: /已引用优先级/ })
+    const unusedPriorityRow = screen.getByRole('row', { name: /空闲优先级/ })
+    expect(within(usedPriorityRow).getByRole('button', { name: '删除' })).toBeDisabled()
+    expect(within(unusedPriorityRow).getByRole('button', { name: '删除' })).toBeEnabled()
   })
 })

@@ -245,4 +245,65 @@ describe('PDF preview component', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('PDF 页面渲染失败')
     page.unmount()
   })
+
+  it('keyboard navigation on focused viewport scrolls .vue-office-pdf, flips pages and zooms', async () => {
+    const viewers = configureViewer()
+    const view = render(<PdfPreview fileId={29} />)
+    await waitFor(() => expect(viewers).toHaveLength(1))
+    await screen.findByRole('group', { name: 'PDF 阅读控制' })
+
+    const scroller = document.createElement('div')
+    scroller.className = 'vue-office-pdf'
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 2000 })
+    scroller.scrollTop = 0
+    viewers[0].container.append(scroller)
+
+    const viewport = screen.getByRole('region', { name: 'PDF 页面内容' })
+    viewport.focus()
+
+    fireEvent.keyDown(viewport, { key: 'ArrowDown' })
+    expect(scroller.scrollTop).toBe(80)
+    fireEvent.keyDown(viewport, { key: 'ArrowUp' })
+    expect(scroller.scrollTop).toBe(0)
+
+    fireEvent.keyDown(viewport, { key: 'PageDown' })
+    expect(scroller.scrollTop).toBe(425)
+    fireEvent.keyDown(viewport, { key: ' ' })
+    expect(scroller.scrollTop).toBe(850)
+    fireEvent.keyDown(viewport, { key: ' ', shiftKey: true })
+    expect(scroller.scrollTop).toBe(425)
+    fireEvent.keyDown(viewport, { key: 'PageUp' })
+    expect(scroller.scrollTop).toBe(0)
+
+    fireEvent.keyDown(viewport, { key: 'End' })
+    expect(scroller.scrollTop).toBe(2000)
+    fireEvent.keyDown(viewport, { key: 'Home' })
+    expect(scroller.scrollTop).toBe(0)
+
+    fireEvent.keyDown(viewport, { key: 'ArrowRight' })
+    expect(viewers[0].pages.at(-1)).toBe(2)
+    fireEvent.keyDown(viewport, { key: 'ArrowLeft' })
+    expect(viewers[0].pages.at(-1)).toBe(1)
+
+    fireEvent.keyDown(viewport, { key: '=', ctrlKey: true })
+    expect(viewers[0].zooms.at(-1)).toBe(0.94)
+    fireEvent.keyDown(viewport, { key: '-', ctrlKey: true })
+    expect(viewers[0].zooms.at(-1)).toBe(0.75)
+    fireEvent.keyDown(viewport, { key: '0', ctrlKey: true })
+    expect(viewers[0].zooms.at(-1)).toBe('page')
+
+    // Events originating from nested form controls should not scroll or flip pages.
+    const nestedInput = document.createElement('input')
+    viewport.append(nestedInput)
+    const zoomsBeforeInput = viewers[0].zooms.length
+    fireEvent.keyDown(nestedInput, { key: 'ArrowDown' })
+    fireEvent.keyDown(nestedInput, { key: 'ArrowRight' })
+    fireEvent.keyDown(nestedInput, { key: '=', ctrlKey: true })
+    expect(scroller.scrollTop).toBe(0)
+    expect(viewers[0].pages.at(-1)).toBe(1)
+    expect(viewers[0].zooms).toHaveLength(zoomsBeforeInput)
+
+    view.unmount()
+  })
 })

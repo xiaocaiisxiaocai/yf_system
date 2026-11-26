@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button, Checkbox, Popover } from '@arco-design/web-react'
 import { IconDragDotVertical, IconPushpin, IconSettings } from '@arco-design/web-react/icon'
 import type { ColumnLayoutSpec } from './tableColumnLayout'
@@ -105,13 +105,28 @@ export function ColumnResizeProvider({ actions, picker, children }: {
 
 function ColumnVisibilityPicker({ picker }: { picker: ColumnPickerState }) {
   const [dragging, setDragging] = useState<string | null>(null)
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+  const handleRefs = useRef(new Map<string, HTMLButtonElement | null>())
+  const focusFrameRef = useRef<number | null>(null)
+  useEffect(() => () => {
+    if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current)
+  }, [])
   const hiddenKeys = new Set(picker.hidden)
   const optional = picker.entries.filter((entry) => !entry.locked)
   const visibleOptional = optional.filter((entry) => !hiddenKeys.has(entry.key)).length
   const movable = picker.entries.filter((entry) => entry.movable)
+  const movableByKey = new Map(movable.map((entry) => [entry.key, entry]))
+  const canReorderBetween = (sourceKey: string | null, target: ColumnPickerEntry) => {
+    if (!sourceKey || !target.movable || sourceKey === target.key) return false
+    const source = movableByKey.get(sourceKey)
+    return Boolean(source && source.pinned === target.pinned)
+  }
   const neighbour = (key: string, step: -1 | 1) => {
-    const index = movable.findIndex((entry) => entry.key === key)
-    return movable[index + step]?.key
+    const current = movableByKey.get(key)
+    if (!current) return undefined
+    const group = movable.filter((entry) => entry.pinned === current.pinned)
+    const index = group.findIndex((entry) => entry.key === key)
+    return group[index + step]?.key
   }
   return (
     <Popover
@@ -134,25 +149,50 @@ function ColumnVisibilityPicker({ picker }: { picker: ColumnPickerState }) {
                   'table-column-picker-item',
                   entry.pinned && 'is-pinned',
                   dragging === entry.key && 'is-dragging',
+                  dragOverKey === entry.key && 'is-drag-over',
                 ].filter(Boolean).join(' ')}
                 draggable={entry.movable}
                 onDragStart={(event) => {
+                  if (!entry.movable) return
                   setDragging(entry.key)
+                  setDragOverKey(null)
                   event.dataTransfer.effectAllowed = 'move'
                   event.dataTransfer.setData('text/plain', entry.key)
                 }}
-                onDragEnd={() => setDragging(null)}
-                onDragOver={(event) => { if (entry.movable) event.preventDefault() }}
+                onDragEnd={() => {
+                  setDragging(null)
+                  setDragOverKey(null)
+                }}
+                onDragOver={(event) => {
+                  if (!canReorderBetween(dragging, entry)) {
+                    if (dragOverKey !== null) setDragOverKey(null)
+                    return
+                  }
+                  event.preventDefault()
+                  if (dragOverKey !== entry.key) setDragOverKey(entry.key)
+                }}
+                onDragLeave={(event) => {
+                  if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+                  setDragOverKey((current) => (current === entry.key ? null : current))
+                }}
                 onDrop={(event) => {
                   event.preventDefault()
                   const key = dragging ?? event.dataTransfer.getData('text/plain')
-                  if (key && entry.movable) picker.move(key, entry.key)
+                  if (canReorderBetween(key || null, entry)) picker.move(key, entry.key)
                   setDragging(null)
+                  setDragOverKey(null)
                 }}
               >
                 {entry.movable
                   ? (
-                    <button type="button" className="table-column-picker-handle" aria-label={`移动${entry.title}列`}
+                    <button
+                      ref={(node) => {
+                        if (node) handleRefs.current.set(entry.key, node)
+                        else handleRefs.current.delete(entry.key)
+                      }}
+                      type="button"
+                      className="table-column-picker-handle"
+                      aria-label={`移动${entry.title}列`}
                       title="拖动或用上下方向键调整顺序"
                       onKeyDown={(event) => {
                         const step = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0
@@ -160,6 +200,11 @@ function ColumnVisibilityPicker({ picker }: { picker: ColumnPickerState }) {
                         if (!target) return
                         event.preventDefault()
                         picker.move(entry.key, target)
+                        if (focusFrameRef.current !== null) cancelAnimationFrame(focusFrameRef.current)
+                        focusFrameRef.current = requestAnimationFrame(() => {
+                          focusFrameRef.current = null
+                          handleRefs.current.get(entry.key)?.focus()
+                        })
                       }}
                     ><IconDragDotVertical /></button>
                   )

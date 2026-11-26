@@ -6,14 +6,23 @@ import { createPreviewDeadline } from './previewDeadline'
 
 export type ExcelContentLoader = (signal: AbortSignal, onProgress?: (loaded: number) => void) => Promise<ArrayBuffer>
 
-function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: ExcelContentLoader }) {
+function ExcelDocument({ fileId, ext, loadContent, onRetry }: {
+  fileId: number
+  ext?: string
+  loadContent?: ExcelContentLoader
+  onRetry: () => void
+}) {
   const frame = useRef<HTMLIFrameElement>(null)
   const [channel] = useState(() => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join(''))
-  const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
   const send = useRef<() => void>(() => {})
   const frameLoaded = useRef(false)
+  const loadContentRef = useRef(loadContent)
   const html = useMemo(() => viewerHtml.replaceAll('YF_VIEWER_NONCE', channel), [channel])
+
+  useEffect(() => {
+    loadContentRef.current = loadContent
+  }, [loadContent])
 
   useEffect(() => {
     let active = true
@@ -22,7 +31,7 @@ function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: str
     const controller = new AbortController()
     const timedOut = () => { controller.abort(); if (active) setState('error') }
     // 下载按“无进度”计时、渲染另计时。
-    const external = loadContent
+    const external = loadContentRef.current
     const deadline = createPreviewDeadline(timedOut)
     const receive = (event: MessageEvent) => {
       if (!active || event.source !== frame.current?.contentWindow || event.data?.channel !== channel) return
@@ -52,20 +61,21 @@ function ExcelDocument({ fileId, ext, loadContent }: { fileId: number; ext?: str
       .then(data => { if (active) { deadline.downloaded(); buffer = data; send.current() } })
       .catch(() => { if (active) { deadline.clear(); setState('error') } })
     return () => { active = false; deadline.clear(); controller.abort(); window.removeEventListener('message', receive); send.current = () => {} }
-  }, [fileId, ext, channel, attempt, loadContent])
+  }, [fileId, ext, channel])
 
   return <div className="excel-source-preview">
-    <iframe key={attempt} ref={frame} className="excel-source-frame" title="Excel 预览内容"
+    <iframe ref={frame} className="excel-source-frame" title="Excel 预览内容"
       sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={html}
       onLoad={() => { frameLoaded.current = true; send.current() }}
       style={{ visibility: state === 'ready' ? 'visible' : 'hidden' }} />
     {state === 'loading' && <div className="excel-source-status" role="status"><Spin />正在渲染工作簿…</div>}
     {state === 'error' && <div className="excel-source-status" role="alert"><Result status="error" title="Excel 预览失败"
       subTitle="文件可能损坏、受密码保护，或包含暂不支持的内容。"
-      extra={<Button onClick={() => { frameLoaded.current = false; setState('loading'); setAttempt(value => value + 1) }}>重试预览</Button>} /></div>}
+      extra={<Button onClick={onRetry}>重试预览</Button>} /></div>}
   </div>
 }
 
 export default function ExcelPreview({ fileId, ext, loadContent }: { fileId: number; ext?: string; loadContent?: ExcelContentLoader }) {
-  return <ExcelDocument key={fileId} fileId={fileId} ext={ext} loadContent={loadContent} />
+  const [attempt, setAttempt] = useState(0)
+  return <ExcelDocument key={`${fileId}:${attempt}`} fileId={fileId} ext={ext} loadContent={loadContent} onRetry={() => setAttempt(value => value + 1)} />
 }

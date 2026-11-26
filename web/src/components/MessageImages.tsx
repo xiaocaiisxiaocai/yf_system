@@ -126,6 +126,7 @@ function LocalImageThumbnail({ file, onRemove, disabled }: {
       size="mini"
       shape="circle"
       icon={<IconDelete />}
+      title="移除图片"
       aria-label={`移除图片：${file.name}`}
       disabled={disabled}
       onClick={onRemove}

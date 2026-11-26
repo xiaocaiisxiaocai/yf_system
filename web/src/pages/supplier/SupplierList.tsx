@@ -76,7 +76,9 @@ export default function SupplierList() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [accTarget, setAccTarget] = useState<Supplier | null>(null)
+  const [accDrawerKey, setAccDrawerKey] = useState(0)
   const [contactTarget, setContactTarget] = useState<Supplier | null>(null)
+  const [contactDrawerKey, setContactDrawerKey] = useState(0)
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [contactImportOpen, setContactImportOpen] = useState(false)
   const [accountExporting, setAccountExporting] = useState(false)
@@ -345,6 +347,7 @@ export default function SupplierList() {
     await http.delete<ApiResponses['DELETE /admin/suppliers/{id}']>(`/admin/suppliers/${supplier.id}`)
     Message.success('供应商已删除')
     if (accTarget?.id === supplier.id) setAccTarget(null)
+    if (contactTarget?.id === supplier.id) setContactTarget(null)
     load()
   }
 
@@ -419,11 +422,15 @@ export default function SupplierList() {
               render: (_: unknown, supplier: Supplier) => actionSlots([
                 canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={(event) => {
                   accountTrigger.current = (event?.currentTarget as HTMLButtonElement | undefined) ?? null
+                  setAccDrawerKey(supplier.id)
                   setAccTarget(supplier)
                 }}>
                   账号管理
                 </Button>,
-                canManageSuppliers && <Button key="contacts" size="mini" type="text" onClick={() => setContactTarget(supplier)}>
+                canManageSuppliers && <Button key="contacts" size="mini" type="text" onClick={() => {
+                  setContactDrawerKey(supplier.id)
+                  setContactTarget(supplier)
+                }}>
                   联络人
                 </Button>,
                 canManageSuppliers && <Button
@@ -442,6 +449,7 @@ export default function SupplierList() {
                   <DangerPopconfirm
                     key="status"
                     title="停用后其所有账号无法登录，确认？"
+                    disabled={togglingSupplierIds.has(supplier.id)}
                     onOk={() => toggleStatus(supplier)}
                   >
                     <Button
@@ -458,6 +466,7 @@ export default function SupplierList() {
                   <Popconfirm
                     key="status"
                     title="确认启用？"
+                    disabled={togglingSupplierIds.has(supplier.id)}
                     onOk={() => toggleStatus(supplier)}
                   >
                     <Button
@@ -501,8 +510,8 @@ export default function SupplierList() {
         onCancel={() => { if (!saving) setEditOpen(false) }}
       />
 
-      {canManageAccounts && <SupplierAccountsDrawer key={accTarget?.id} supplier={accTarget} onClose={() => setAccTarget(null)} />}
-      {canManageSuppliers && <SupplierContactsDrawer key={contactTarget?.id} supplier={contactTarget} onClose={() => setContactTarget(null)} />}
+      {canManageAccounts && <SupplierAccountsDrawer key={`acc-${accDrawerKey}`} supplier={accTarget} onClose={() => setAccTarget(null)} />}
+      {canManageSuppliers && <SupplierContactsDrawer key={`contact-${contactDrawerKey}`} supplier={contactTarget} onClose={() => setContactTarget(null)} />}
       <ExcelImportDialog<SupplierAccountWorkbookRow>
         visible={accountImportOpen}
         title="导入 Robot 供应商账号"

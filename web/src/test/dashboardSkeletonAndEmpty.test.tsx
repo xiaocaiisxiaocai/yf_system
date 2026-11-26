@@ -83,4 +83,38 @@ describe('Dashboard Skeleton and Empty State Actions', () => {
     // For supplier, pending empty should guide to "查看全部项目"
     expect(await screen.findByRole('button', { name: '查看全部项目' })).toBeVisible()
   })
+
+  it('uses outline refresh button and adds tooltips/ellipsis to pending links and message project tags', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url === '/dashboard/summary') {
+        return { data: { projectCount: 1, activeProjectCount: 1, pendingTasks: 1, unreadMessages: 1, recentMessages: [] } }
+      }
+      if (url === '/dashboard/pending-projects') {
+        return {
+          data: {
+            list: [{ id: 10, name: '超长待审核项目名称示例', materialReviewStatus: 'PENDING', updatedAt: '2026-09-10T01:00:00Z' }],
+            total: 1, page: 1, pageSize: 10,
+          },
+        }
+      }
+      return {
+        data: {
+          list: [{ id: 20, projectId: 10, projectName: '超长留言项目名称示例', content: '测试留言', senderName: '张三', createdAt: '2026-09-10T01:00:00Z', unread: true }],
+          total: 1, page: 1, pageSize: 10,
+        },
+      }
+    })
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('link', { name: '超长待审核项目名称示例' })).toHaveAttribute('title', '超长待审核项目名称示例')
+    expect(screen.getByRole('button', { name: '刷新工作台' })).toHaveClass('arco-btn-outline')
+    const tag = (await screen.findByText('超长留言项目名称示例')).closest('.arco-tag')
+    expect(tag).toHaveClass('table-cell-tag-ellipsis')
+    expect(tag).toHaveAttribute('title', '超长留言项目名称示例')
+  })
 })

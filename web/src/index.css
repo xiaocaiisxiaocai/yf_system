@@ -1,6 +1,7 @@
 /* 应用统一使用本地字体；正文、辅助说明与数据各自保持清晰层级。 */
 :root {
   --app-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  --app-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
   --app-canvas: #f3f5f9;
   --app-border: #e5e9f0;
   --app-radius: 10px;
@@ -24,6 +25,20 @@ body {
 .drawer-close-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
 .drawer-close-button:hover { background: var(--color-fill-2); }
 :where(button, a, [tabindex]):focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 3px; }
+.arco-table-expand-icon-cell button:focus-visible,
+.arco-table-cell-expand-icon button:focus-visible,
+.arco-alert-close-btn:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 1px; }
+.arco-pagination,
+.arco-pagination-total-text,
+.arco-badge-number,
+.arco-progress-line-text,
+.pdf-preview-toolbar > span,
+.dashboard-message-extra,
+.smtp-diagnosis-time,
+.file-selected-summary,
+.project-activity-summary-value,
+.project-activity-time,
+.arco-timeline-item-label { font-variant-numeric: tabular-nums; }
 
 html, body, #root {
   height: 100%;
@@ -202,7 +217,7 @@ html, body, #root {
 .mobile-nav-drawer .arco-drawer-header-title { min-width: 0; padding-right: 28px; color: #f5f9ff; }
 .mobile-nav-drawer .arco-drawer-close-icon { color: #c3cddd; }
 .mobile-nav-drawer .arco-drawer-close-icon:hover { color: #fff; }
-.mobile-nav-drawer .arco-drawer-close-icon.arco-icon-hover:hover::before { background: rgb(255 255 255 / 12%); }
+.mobile-nav-drawer .drawer-close-button:hover { background: rgb(255 255 255 / 12%); color: #fff; }
 .mobile-nav-drawer .arco-drawer-content { padding: 0; background: #17243a; }
 .mobile-nav-drawer .arco-menu { min-height: 100%; }
 /* 抽屉内的宽表交给 Table 自身滚动，保留窄屏操作列的可达性。 */
@@ -423,6 +438,7 @@ html, body, #root {
 }
 
 /* 表头右缘可拖动列宽，默认不画竖线。把手落在单元格内边距上，避免被省略样式裁掉。 */
+.arco-table-th:not(.arco-table-col-fixed-left):not(.arco-table-col-fixed-right) .arco-table-th-item { isolation: isolate; }
 .table-col-resize {
   position: absolute;
   top: 0;
@@ -456,6 +472,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .table-column-picker-item { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 2px; border-radius: 4px; }
 .table-column-picker-item:hover { background: var(--color-fill-2); }
 .table-column-picker-item.is-dragging { opacity: 0.4; }
+.table-column-picker-item.is-drag-over { box-shadow: inset 0 -2px 0 rgb(var(--primary-6)); }
 .table-column-picker-item > .arco-checkbox { flex: 1 1 auto; min-width: 0; }
 .table-column-picker-handle { display: inline-flex; flex: 0 0 18px; align-items: center; justify-content: center; height: 24px; padding: 0; border: 0; background: transparent; color: var(--color-text-3); cursor: grab; }
 .table-column-picker-handle.is-static { cursor: default; }
@@ -503,24 +520,30 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 /* 控件使用一致的轻边框、圆角和键盘聚焦反馈，保留各状态色。 */
 .arco-btn { border-radius: 6px; font-weight: 500; }
 .arco-input, .arco-input-inner-wrapper, .arco-textarea, .arco-textarea-wrapper,
-.arco-select-view, .arco-picker, .arco-input-number { border-radius: 6px; }
-.arco-input:not(.arco-input-disabled),
-.arco-input-inner-wrapper:not(.arco-input-inner-wrapper-disabled),
-.arco-textarea:not(.arco-textarea-disabled),
-.arco-textarea-wrapper:not(.arco-textarea-disabled),
-.arco-select-view:not(.arco-select-view-disabled),
-.arco-picker:not(.arco-picker-disabled),
-.arco-input-number:not(.arco-input-number-disabled) .arco-input-inner-wrapper { background-color: #fff; }
-.arco-input, .arco-input-inner-wrapper, .arco-textarea, .arco-textarea-wrapper,
-.arco-select .arco-select-view, .arco-picker { border-color: var(--color-border-2); }
+.arco-select-view, .arco-tree-select-view, .arco-picker, .arco-input-number { border-radius: 6px; }
+.arco-input:where(:not(.arco-input-disabled):not(.arco-input-error):not(.arco-input-warning):not(.arco-input-focus):not(:focus)),
+.arco-input-inner-wrapper:where(:not(.arco-input-inner-wrapper-disabled):not(.arco-input-inner-wrapper-error):not(.arco-input-inner-wrapper-warning):not(.arco-input-inner-wrapper-focus):not(:focus)),
+.arco-textarea:where(:not(.arco-textarea-disabled):not(.arco-textarea-error):not(.arco-textarea-warning):not(.arco-textarea-focus):not(:focus)),
+.arco-select:where(:not(.arco-select-disabled):not(.arco-select-error):not(.arco-select-warning):not(.arco-select-focused)) .arco-select-view,
+.arco-tree-select:where(:not(.arco-tree-select-disabled):not(.arco-tree-select-error):not(.arco-tree-select-warning):not(.arco-tree-select-focused)) .arco-tree-select-view,
+.arco-picker:where(:not(.arco-picker-disabled):not(.arco-picker-error):not(.arco-picker-warning):not(.arco-picker-focused)) {
+  background-color: #fff;
+  border-color: var(--color-border-2);
+}
+.arco-input:hover:where(:not(.arco-input-disabled):not(.arco-input-error):not(.arco-input-warning):not(.arco-input-focus):not(:focus)),
+.arco-input-inner-wrapper:hover:where(:not(.arco-input-inner-wrapper-disabled):not(.arco-input-inner-wrapper-error):not(.arco-input-inner-wrapper-warning):not(.arco-input-inner-wrapper-focus):not(:focus)),
+.arco-textarea:hover:where(:not(.arco-textarea-disabled):not(.arco-textarea-error):not(.arco-textarea-warning):not(.arco-textarea-focus):not(:focus)),
+.arco-select:hover:where(:not(.arco-select-disabled):not(.arco-select-error):not(.arco-select-warning):not(.arco-select-focused)) .arco-select-view,
+.arco-tree-select:hover:where(:not(.arco-tree-select-disabled):not(.arco-tree-select-error):not(.arco-tree-select-warning):not(.arco-tree-select-focused)) .arco-tree-select-view,
+.arco-picker:hover:where(:not(.arco-picker-disabled):not(.arco-picker-error):not(.arco-picker-warning):not(.arco-picker-focused)) {
+  background-color: #fff;
+  border-color: var(--color-border-3);
+}
 .arco-input-inner-wrapper .arco-input { border: 0; background: transparent; }
 .arco-input:read-only:not(.arco-input-disabled):not(.arco-select-view-input):not(.arco-picker-start-time):not(.arco-picker-end-time),
 .arco-input-inner-wrapper:not(.arco-input-inner-wrapper-disabled):has(> .arco-input:read-only),
-.arco-textarea:read-only:not(.arco-textarea-disabled),
-.arco-textarea-wrapper:not(.arco-textarea-disabled):has(> .arco-textarea:read-only) { background-color: var(--color-fill-2); color: var(--color-text-2); cursor: default; }
+.arco-textarea:read-only:not(.arco-textarea-disabled) { background-color: var(--color-fill-2); color: var(--color-text-2); cursor: default; }
 .arco-input-group > .arco-input-inner-wrapper:only-child { border-radius: 6px; }
-.arco-tree-select .arco-tree-select-view { border-radius: 6px; border-color: var(--color-border-2); }
-.arco-tree-select:not(.arco-tree-select-disabled) .arco-tree-select-view { background-color: #fff; }
 .arco-form-label-item > label { color: var(--color-text-1); font-weight: 500; }
 .arco-tag { border-radius: 4px; }
 
@@ -626,6 +649,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .dashboard-message-item--unread:hover, .dashboard-message-item--unread:focus-visible { background: #eaf2ff; }
 .dashboard-message-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dashboard-message-title .arco-tag { flex: 0 1 auto; min-width: 0; max-width: 65%; margin: 0; overflow: hidden; white-space: nowrap; }
+.dashboard-message-title .arco-tag > .arco-tag-content { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-message-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dashboard-message-unread { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: rgb(var(--primary-6)); box-shadow: 0 0 0 3px rgb(var(--primary-2)); }
 .dashboard-message-sender { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -757,13 +781,13 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .system-config-dirty { color: rgb(var(--primary-6)); font-size: 13px; white-space: nowrap; }
 .system-config-param { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .system-config-param > strong { color: var(--app-text); font-size: 14px; font-weight: 500; }
-.system-config-param > code { overflow: hidden; color: var(--app-text-muted); font-family: Consolas, 'SFMono-Regular', monospace; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.system-config-param > code { overflow: hidden; color: var(--app-text-muted); font-family: var(--app-mono); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .system-config-editor { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .system-config-editor > .arco-select,
 .system-config-editor > .arco-input-number,
 .system-config-editor > .arco-input-wrapper { width: 100%; }
-.system-config-editor > span { color: var(--app-text-muted); font-size: 12px; line-height: 18px; }
-.system-config-description { display: flex; flex-direction: column; gap: 4px; color: var(--app-text); font-size: 13px; line-height: 20px; }
+.system-config-editor > span { color: var(--app-text-muted); font-size: 12px; line-height: 18px; white-space: normal; overflow-wrap: anywhere; }
+.system-config-description { display: flex; flex-direction: column; gap: 4px; color: var(--app-text); font-size: 13px; line-height: 20px; white-space: normal; overflow-wrap: anywhere; }
 .system-config-description > small { color: var(--app-text-muted); font-size: 12px; }
 .system-config-row--dirty > td { background: #f2f7ff !important; }
 
@@ -786,7 +810,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
   align-items: center;
   justify-content: center;
 }
-.action-slot > .arco-btn {
+.action-slot .arco-btn {
   min-width: 0;
   padding-left: 2px;
   padding-right: 2px;
@@ -912,6 +936,7 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .video-preview { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; background: #111; }
 .video-preview video { display: block; width: 100%; height: 100%; min-height: 0; object-fit: contain; }
 .video-preview-status { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; background: var(--color-bg-1); }
+.video-preview-status--loading { background: #111; color: #e5e6eb; }
 .file-preview-modal { display: flex; flex-direction: column; }
 /* Arco's focus lock adds a wrapper around the header and content. */
 .file-preview-modal > div:has(> .arco-modal-content) { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -977,7 +1002,8 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .pdf-preview-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 12px; }
 .pdf-preview-toolbar > span { white-space: nowrap; color: var(--color-text-2); }
 /* The modal title's icon size/margin must not bleed into its embedded controls. */
-.file-preview-controls .arco-select .arco-icon { font-size: 12px; margin: 0; }
+.file-preview-controls .arco-icon { font-size: inherit; margin: 0; vertical-align: middle; }
+.file-preview-controls .arco-select .arco-icon { font-size: 12px; }
 .pdf-preview-viewport { flex: 1; min-height: 0; overflow: hidden; background: var(--color-fill-2); }
 .pdf-preview-viewport:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: -2px; }
 .pdf-preview-viewport canvas { margin: 0 auto; background: #fff; box-shadow: 0 1px 8px rgb(0 0 0 / 12%); }
@@ -989,11 +1015,12 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .msg-avatar { flex: 0 0 auto; background: rgb(var(--primary-6)); }
 .msg-avatar--supplier { background: rgb(var(--purple-6)); }
 .msg-mine-badge { padding: 0 6px; border-radius: 4px; background: var(--color-fill-2); color: var(--color-text-2); font-size: 12px; line-height: 18px; }
-/* 次要操作只在悬停或键盘聚焦时出现；触屏设备始终显示。 */
+/* 次要操作只在悬停、键盘聚焦或确认气泡打开时出现；触屏设备始终显示。 */
 @media (hover: hover) {
   .msg-item .msg-secondary-action { opacity: 0; transition: opacity .15s ease; }
   .msg-item:hover .msg-secondary-action,
-  .msg-item:focus-within .msg-secondary-action { opacity: 1; }
+  .msg-item:focus-within .msg-secondary-action,
+  .msg-item .msg-secondary-action.arco-popconfirm-open { opacity: 1; }
 }
 .msg-item:last-child { border-bottom: none; }
 .msg-item > .arco-space { display: flex; width: 100%; }
@@ -1009,7 +1036,6 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
   .system-notification-heading { align-items: flex-start; flex-direction: column; }
   .system-notification-grid { grid-template-columns: 1fr; }
   .system-notification-panel--events { grid-template-columns: 1fr; }
-  .system-smtp-grid { grid-template-columns: 1fr; }
   .layout-content .arco-table-col-fixed-left,
   .arco-drawer .arco-table-col-fixed-left,
   .layout-content .arco-table-col-fixed-right,
@@ -1218,15 +1244,13 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 
 .smtp-security-popup .arco-select-option { height: auto; line-height: 20px; padding-top: 8px; padding-bottom: 8px; white-space: normal; }
 .system-smtp-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-@media (max-width: 1280px) { .system-smtp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .system-notification-grid { grid-template-columns: 1fr; } }
-@media (max-width: 768px) { .system-smtp-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1280px) { .system-notification-grid { grid-template-columns: 1fr; } }
 .system-smtp-grid > label, .system-smtp-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--color-text-2); }
 .system-smtp-test { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--app-border); }
 .system-mail-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 20px; height: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .system-page.page-card--table { height: calc(100dvh - 88px); min-height: 0; overflow: hidden; }
 .system-config-tabs .system-mail-workspace > .system-mail-log { border-left: 1px solid var(--app-border); padding-left: 20px; }
 .system-mail-editor .system-smtp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.system-mail-log .arco-table-header { position: sticky; top: 0; z-index: 3; }
 /* 日志表占满卡片剩余高度并在内部滚动，筛选和分页保持可见。 */
 .system-config-tabs .system-mail-log > .arco-card-body { display: flex; flex-direction: column; }
 .system-config-tabs .system-mail-log .system-mail-body { flex: 1; min-height: 0; }
@@ -1251,19 +1275,60 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 .oem-mail-rules .system-notification-grid { flex: 1; min-height: 0; overflow: auto; align-content: start; }
 .oem-mail-rules .system-notification-heading, .oem-mail-rules > .arco-space { flex-shrink: 0; }
 .oem-mail-rules-card.page-card--table { height: calc(100dvh - 88px); min-height: 0; overflow: hidden; }
-@media (max-width: 1100px) {
-  .system-mail-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
-  .system-config-tabs .system-mail-workspace > .system-mail-log { border-left: 0; border-top: 1px solid var(--app-border); padding-left: 0; padding-top: 12px; }
-}
-@media (max-width: 720px) {
+@media (max-width: 1200px) {
   .oem-mail-rules-grid { grid-template-columns: minmax(0, 1fr); }
-  .oem-mail-rules-card.page-card--table,
-  .system-page.page-card--table { height: auto; overflow: visible; }
-  .system-mail-workspace { height: auto; grid-template-rows: auto auto; overflow: visible; }
-  .system-config-tabs > .arco-tabs-content,
-  .system-config-tabs .system-reminder-card > .arco-card-body { overflow: visible; }
+  .system-page.page-card--table { height: auto; min-height: calc(100dvh - 88px); overflow: visible; }
+  .system-page > .arco-card-body { flex: 1 0 auto; }
+  .system-config-tabs { flex: 1 0 auto; height: auto; }
+  .system-config-tabs > .arco-tabs-content { flex: 1 0 auto; overflow: visible; }
+  .system-config-tabs > .arco-tabs-content > .arco-tabs-content-inner,
+  .system-config-tabs .arco-tabs-content-item-active,
+  .system-config-tabs .arco-tabs-pane { height: auto; }
   .system-config-tabs .system-config-card,
   .system-config-tabs .system-mail-card { height: auto; overflow: visible; }
+  .system-config-tabs .system-config-card > .arco-card-body,
+  .system-config-tabs .system-mail-card > .arco-card-body { flex: none; overflow: visible; }
+  .system-config-tabs .system-reminder-card > .arco-card-body { flex-direction: column; overflow: visible; }
+  .system-rule-business-pane { flex-direction: column; height: auto; }
+  .system-reminder-card .oem-mail-rules,
+  .system-reminder-card .oem-mail-rules .system-notification-grid,
+  .system-reminder-card .system-notification-grid { flex: none; overflow: visible; }
+  .system-page .page-table-host,
+  .system-page .page-table { flex: 1 0 auto; }
+  .system-mail-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto; height: auto; gap: 16px; overflow: visible; }
+  .system-config-tabs .system-mail-workspace > .system-mail-log { border-left: 0; border-top: 1px solid var(--app-border); padding-left: 0; padding-top: 12px; }
+  .system-mail-log-table { flex: 1 0 auto; min-height: 320px; overflow: visible; }
+}
+@media (max-height: 480px) {
+  .oem-mail-rules-card.page-card--table,
+  .system-page.page-card--table { height: auto; min-height: calc(100dvh - 88px); overflow: visible; }
+}
+@media (max-width: 720px) {
+  .oem-mail-rules-card.page-card--table,
+  .system-page.page-card--table { height: auto; min-height: calc(100dvh - 76px); overflow: visible; }
+}
+@media (max-width: 720px), (max-height: 480px) {
+  .oem-mail-rules-grid { grid-template-columns: minmax(0, 1fr); }
+  .system-page > .arco-card-body,
+  .oem-mail-rules-card > .arco-card-body { flex: 1 0 auto; }
+  .system-config-tabs { flex: 1 0 auto; height: auto; }
+  .system-config-tabs > .arco-tabs-content { flex: 1 0 auto; overflow: visible; }
+  .system-config-tabs > .arco-tabs-content > .arco-tabs-content-inner,
+  .system-config-tabs .arco-tabs-content-item-active,
+  .system-config-tabs .arco-tabs-pane { height: auto; }
+  .system-config-tabs .system-config-card,
+  .system-config-tabs .system-mail-card { height: auto; overflow: visible; }
+  .system-config-tabs .system-config-card > .arco-card-body,
+  .system-config-tabs .system-mail-card > .arco-card-body { flex: none; overflow: visible; }
+  .system-config-tabs .system-reminder-card > .arco-card-body { flex-direction: column; overflow: visible; }
+  .system-rule-business-pane { flex-direction: column; height: auto; }
+  .system-page .page-table-host,
+  .system-page .page-table { flex: 1 0 auto; }
+  .system-mail-workspace { height: auto; grid-template-rows: auto auto; overflow: visible; }
+  .system-mail-log-table { flex: 1 0 auto; overflow: visible; }
+  .oem-mail-rules,
+  .oem-mail-rules .system-notification-grid,
+  .system-reminder-card .system-notification-grid { flex: none; overflow: visible; }
 }
 @media (max-width: 600px) { .system-mail-editor .system-smtp-grid { grid-template-columns: minmax(0, 1fr); } }
 
@@ -1453,3 +1518,12 @@ body.table-col-resizing * { cursor: col-resize !important; user-select: none !im
 [data-select-col="148"] .arco-table-tr > .arco-table-td:not(:nth-child(148)) { user-select: none; }
 [data-select-col="149"] .arco-table-tr > .arco-table-td:not(:nth-child(149)) { user-select: none; }
 [data-select-col="150"] .arco-table-tr > .arco-table-td:not(:nth-child(150)) { user-select: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

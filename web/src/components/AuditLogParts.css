@@ -340,7 +340,9 @@
 
 .audit-source-grid > code {
   color: var(--color-text-2);
-  font: 13px/22px Consolas, monospace;
+  font-family: var(--app-mono);
+  font-size: 13px;
+  line-height: 22px;
 }
 
 .audit-detail-title .arco-tag {
@@ -393,7 +395,9 @@
   border-radius: 6px;
   background: #f7f8fa;
   color: var(--color-text-2);
-  font: 12px/1.65 Consolas, 'Courier New', monospace;
+  font-family: var(--app-mono);
+  font-size: 12px;
+  line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
 }

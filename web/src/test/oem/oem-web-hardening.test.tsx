@@ -357,4 +357,29 @@ describe('D. ODM/OEMA 预览带水印', () => {
     render(<OemProvider value={context({ previewBlob: vi.fn() }, 'oem')}><OemFilePreview file={file(ext)} onClose={() => undefined} /></OemProvider>)
     expect(document.querySelector('.file-preview-modal')).toBeNull()
   })
+
+  it('不关闭弹窗直接切换预览文件时重置水印打开时间', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date(2026, 10, 1, 10, 0, 0))
+      usePortalAuth.setState({ account, token: 't' })
+      const previewBlob = vi.fn().mockResolvedValue(new Blob(['%PDF']))
+      const first = { id: 88, originalName: '图纸1.pdf', ext: 'pdf', sizeBytes: 3 } as TransferFile
+      const second = { id: 89, originalName: '图纸2.pdf', ext: 'pdf', sizeBytes: 3 } as TransferFile
+      const view = render(<OemProvider value={context({ previewBlob }, 'oem')}><OemFilePreview file={first} onClose={() => undefined} /></OemProvider>)
+
+      expect(await screen.findByTestId('pdf-preview')).toBeInTheDocument()
+      expect(document.querySelector('.file-preview-surface .preview-watermark')?.textContent).toContain('2026-11-01 10:00:00')
+
+      vi.setSystemTime(new Date(2026, 10, 1, 10, 5, 30))
+      view.rerender(<OemProvider value={context({ previewBlob }, 'oem')}><OemFilePreview file={second} onClose={() => undefined} /></OemProvider>)
+
+      const text = document.querySelector('.file-preview-surface .preview-watermark')?.textContent
+      expect(text).toContain('2026-11-01 10:05:30')
+      expect(text).not.toContain('2026-11-01 10:00:00')
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import http from '../../api/client'
 import AppRail from '../../layouts/AppRail'
+import OutsourceLayout from '../../outsource/OutsourceLayout'
+import OutsourceCustomersTab from '../../outsource/pages/OutsourceCustomersTab'
 import OutsourceSettingsPage from '../../outsource/pages/OutsourceSettingsPage'
 import { useAuth } from '../../store/auth'
 
@@ -422,5 +424,177 @@ describe('外协清单入口与设定', () => {
     fireEvent.click(await screen.findByRole('button', { name: '确定' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/settings/fields/6/status', { status: 'DISABLED' }))
     expect(await within(screen.getByText('是否有RobotV').closest('tr')!).findByRole('button', { name: '启用' })).toHaveClass('arco-btn-status-success')
+  })
+})
+
+describe('外协设定与入口回归保护', () => {
+  const originalHidden = Object.getOwnPropertyDescriptor(document, 'hidden')
+  const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+
+  const baseSyncStatus = {
+    syncTime: '03:30', scheduleEnabled: true, ipmsConfigured: true, running: false, lastStartedAt: null, lastFinishedAt: null,
+    lastSuccessAt: null, lastError: null, lastTrigger: null, lastProcessed: 0, lastChanged: 0, lastClosed: 0, lastMissing: 0,
+  }
+  const baseMirrorSettings = {
+    baseUrl: 'http://183.238.37.108:6001', configBaseUrl: null, saved: true, account: 'reader', passwordSet: true,
+    accountConfigured: true, syncTime: '03:00', scheduleEnabled: true,
+  }
+  const baseMirrorStatus = {
+    phase: 'IDLE', runMode: null, page: null, pageSize: 100, fetched: 0, pages: 0, total: null, pendingReason: null, startedAt: null,
+    lastFinishedAt: null, lastSuccessAt: null, lastError: null, lastTrigger: null, lastCount: 0, mirrorCount: 0, preview: [],
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    if (originalHidden) Object.defineProperty(document, 'hidden', originalHidden)
+    else delete (document as unknown as Record<string, unknown>).hidden
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
+    else delete (document as unknown as Record<string, unknown>).visibilityState
+    useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
+  })
+
+  it('非内部员工访问外协清单 403 页面提供返回首页按钮并可跳回首页', async () => {
+    const user = userEvent.setup()
+    setInternalSession([])
+    useAuth.setState({ user: { ...useAuth.getState().user!, userType: 'SUPPLIER', supplierId: 3 } })
+    render(
+      <MemoryRouter initialEntries={['/outsource/items']}>
+        <Routes>
+          <Route path="/outsource/*" element={<OutsourceLayout />} />
+          <Route path="/" element={<CurrentLocation />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('外协清单仅供公司员工使用')).toBeInTheDocument()
+    const homeBtn = screen.getByRole('button', { name: '返回首页' })
+    await user.click(homeBtn)
+    expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/')
+  })
+
+  it('父级设定加载失败仅阻断依赖页签，客户简称与 IPMS 同步等独立页签仍可正常加载', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings', 'outsource:manage'])
+    vi.spyOn(http, 'get').mockImplementation((url: string) => {
+      if (url.endsWith('/vendors') || url.endsWith('/types') || url.endsWith('/default-cc')) {
+        return Promise.reject(new Error('parent failed'))
+      }
+      if (url.endsWith('/customers')) return Promise.resolve({ data: aliases } as never)
+      if (url.endsWith('/customers/missing')) return Promise.resolve({ data: [] } as never)
+      if (url.endsWith('/sync-status')) return Promise.resolve({ data: baseSyncStatus } as never)
+      if (url.endsWith('/mes-mirror/settings')) return Promise.resolve({ data: baseMirrorSettings } as never)
+      if (url.endsWith('/mes-mirror/status')) return Promise.resolve({ data: baseMirrorStatus } as never)
+      return Promise.resolve({ data: [] } as never)
+    })
+
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+    expect(await screen.findByText('设定加载失败')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '默认抄送' }))
+    expect(screen.getByText('设定加载失败')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '外协邮箱' }))
+    expect(screen.getByText('设定加载失败')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: '客户简称' }))
+    expect(screen.queryByText('设定加载失败')).not.toBeInTheDocument()
+    expect(await screen.findByText('庆鼎精密电子(淮安)有限公司')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: 'IPMS 同步' }))
+    expect(screen.queryByText('设定加载失败')).not.toBeInTheDocument()
+    expect(await screen.findByRole('switch', { name: '定时同步' })).toBeInTheDocument()
+  })
+
+  it('IPMS 未配置时立即同步按钮不可点击且不发起同步请求', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings', 'outsource:manage'])
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/sync-status') ? { ...baseSyncStatus, ipmsConfigured: false, running: false }
+        : url.endsWith('/mes-mirror/settings') ? baseMirrorSettings
+          : url.endsWith('/mes-mirror/status') ? baseMirrorStatus
+            : url.endsWith('/vendors') ? vendors : [],
+    } as never))
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: baseSyncStatus } as never)
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+
+    await user.click(await screen.findByRole('tab', { name: 'IPMS 同步' }))
+    const syncButton = await screen.findByRole('button', { name: /立即同步/ })
+    expect(syncButton).toBeDisabled()
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('同步运行中定时轮询状态，切后台暂停、恢复刷新并在结束后停止轮询', async () => {
+    vi.useFakeTimers()
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    setInternalSession(['outsource:settings', 'outsource:manage'])
+    let syncStatusCalls = 0
+    const get = vi.spyOn(http, 'get').mockImplementation((url: string) => {
+      if (url === '/outsource/sync-status') {
+        syncStatusCalls += 1
+        if (syncStatusCalls === 1) return Promise.resolve({ data: { ...baseSyncStatus, running: true } } as never)
+        if (syncStatusCalls === 2) return Promise.resolve({ data: { ...baseSyncStatus, running: true, lastProcessed: 5 } } as never)
+        return Promise.resolve({ data: { ...baseSyncStatus, running: false, lastProcessed: 12, lastChanged: 3 } } as never)
+      }
+      if (url.endsWith('/mes-mirror/settings')) return Promise.resolve({ data: baseMirrorSettings } as never)
+      if (url.endsWith('/mes-mirror/status')) return Promise.resolve({ data: baseMirrorStatus } as never)
+      return Promise.resolve({ data: [] } as never)
+    })
+
+    render(<MemoryRouter><OutsourceSettingsPage /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('tab', { name: 'IPMS 同步' }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(syncStatusCalls).toBe(1)
+    expect(screen.getByRole('button', { name: /立即同步/ })).toHaveClass('arco-btn-loading')
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+    expect(syncStatusCalls).toBe(2)
+    expect(get).toHaveBeenCalledWith('/outsource/sync-status', expect.objectContaining({ quietNetworkError: true }))
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    fireEvent(document, new Event('visibilitychange'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
+    expect(syncStatusCalls).toBe(2)
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false })
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    fireEvent(document, new Event('visibilitychange'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(10) })
+    expect(syncStatusCalls).toBe(3)
+    expect(screen.getByText(/处理 12，变更 3/)).toBeInTheDocument()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(9000) })
+    expect(syncStatusCalls).toBe(3)
+  })
+
+  it('客户简称搜索关键字时将分页重置回第 1 页', async () => {
+    const user = userEvent.setup()
+    setInternalSession(['outsource:settings'])
+    const manyAliases = Array.from({ length: 25 }, (_, index) => ({
+      id: index + 1,
+      fullName: `测试客户全称${String(index + 1).padStart(2, '0')}`,
+      shortName: `简${String(index + 1).padStart(2, '0')}`,
+      manual: false,
+      updatedAt: '2026-11-17T06:00:00.000Z',
+    }))
+    vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
+      data: url.endsWith('/customers') ? manyAliases : [],
+    } as never))
+
+    const { container } = render(<MemoryRouter><OutsourceCustomersTab /></MemoryRouter>)
+    expect(await screen.findByText('测试客户全称01')).toBeInTheDocument()
+    expect(screen.queryByText('测试客户全称21')).not.toBeInTheDocument()
+
+    const page2 = container.querySelector('.arco-pagination-item[aria-label="2"]') ?? within(container.querySelector('.arco-pagination') as HTMLElement).getByText('2')
+    await user.click(page2)
+    expect(await screen.findByText('测试客户全称21')).toBeInTheDocument()
+    expect(screen.queryByText('测试客户全称01')).not.toBeInTheDocument()
+    expect(container.querySelector('.arco-pagination-item-active')).toHaveTextContent('2')
+
+    await user.type(screen.getByPlaceholderText('客户全称或简称'), '测试客户全称01')
+    expect(await screen.findByText('测试客户全称01')).toBeInTheDocument()
+    expect(container.querySelector('.arco-pagination-item-active')).toHaveTextContent('1')
   })
 })

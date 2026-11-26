@@ -75,7 +75,13 @@
   background-color: #ffefad;
 }
 
-.outsource-table .arco-table-tr > .arco-table-td.outsource-cell-handed-off {
+.outsource-table.arco-table .arco-table-tr > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table .arco-table-tr.arco-table-row-checked > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table .arco-table-tr.arco-table-tr-checked > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table .arco-table-tr.arco-table-row-checked > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left,
+.outsource-table.arco-table .arco-table-tr.arco-table-row-checked > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right,
+.outsource-table.arco-table .arco-table-tr.arco-table-tr-checked > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left,
+.outsource-table.arco-table .arco-table-tr.arco-table-tr-checked > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right {
   background-color: rgb(var(--arcoblue-2));
   color: rgb(var(--arcoblue-8));
   font-weight: 600;
@@ -83,10 +89,22 @@
 
 .outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off,
 .outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-row-checked:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-checked:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-row-checked.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-checked.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off,
 .outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
 .outsource-table.arco-table.arco-table-hover .arco-table-tr:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before,
 .outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
-.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before {
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-row-checked:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-row-checked:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-checked:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-checked:not(.arco-table-empty-row):hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-row-checked.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-row-checked.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-checked.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-left::before,
+.outsource-table.arco-table.arco-table-hover .arco-table-tr.arco-table-tr-checked.arco-table-tr-hover > .arco-table-td.outsource-cell-handed-off.arco-table-col-fixed-right::before {
   background-color: rgb(var(--arcoblue-3));
 }
 

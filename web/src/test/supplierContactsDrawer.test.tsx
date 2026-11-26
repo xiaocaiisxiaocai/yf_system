@@ -72,4 +72,27 @@ describe('SupplierContactsDrawer failures', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '启用' })).not.toBeDisabled())
     expect(screen.getByText('该供应商所有联络人均已停用，不能被选为新建项目的供应商负责人。')).toBeInTheDocument()
   })
+
+  it('clicking a disabled contact deactivate button while toggling does not reopen DangerPopconfirm', async () => {
+    let resolvePut!: (value: { data: Record<string, never> }) => void
+    mocks.put.mockReturnValue(new Promise<{ data: Record<string, never> }>((resolve) => { resolvePut = resolve }))
+    render(<SupplierContactsDrawer supplier={supplier} onClose={() => undefined} />)
+    await screen.findByText('张三')
+
+    const getDisableBtn = () => screen.getByRole('button', { name: '停用' })
+    fireEvent.click(getDisableBtn())
+    const popup = await screen.findByRole('tooltip')
+    fireEvent.click(within(popup).getByRole('button', { name: '确定' }))
+    await waitFor(() => expect(getDisableBtn()).toBeDisabled())
+    fireEvent.click(within(popup).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument())
+
+    const disabledBtn = getDisableBtn()
+    fireEvent.click(disabledBtn)
+    if (disabledBtn.parentElement) fireEvent.click(disabledBtn.parentElement)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    resolvePut({ data: {} })
+    await waitFor(() => expect(getDisableBtn()).toBeEnabled())
+  })
 })

@@ -95,10 +95,10 @@ export default function ChangePassword() {
             <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />
           </Form.Item>
           <div className="auth-actions">
-            <Button long disabled={loading} onClick={mustChangePassword ? exitLogin : () => nav(-1)}>
+            <Button size="large" long disabled={loading} onClick={mustChangePassword ? exitLogin : () => nav(-1)}>
               {mustChangePassword ? '退出登录' : '返回'}
             </Button>
-            <Button type="primary" long htmlType="submit" loading={loading}>确认修改</Button>
+            <Button type="primary" size="large" long htmlType="submit" loading={loading}>确认修改</Button>
           </div>
         </Form>
     </AuthShell>

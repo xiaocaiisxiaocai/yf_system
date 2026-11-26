@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Tabs, Tag, TimePicker,
+  Button, Card, Checkbox, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Tabs, Tag, TimePicker, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus, IconSync } from '@arco-design/web-react/icon'
-import http from '../../api/client'
+import http, { type QuietRequestConfig } from '../../api/client'
 import type { OutsourceDefaultCcEntry, OutsourceDefaultCcRequest } from '../../api/generated/api-types'
 import { useAuth } from '../../store/auth'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
@@ -87,13 +87,13 @@ export default function OutsourceSettingsPage() {
       <Tabs.TabPane key="sync" title="IPMS 同步" />
       <Tabs.TabPane key="fields" title="栏位设定" />
     </Tabs>
-    {tab === 'fields' ? <OutsourceFieldsTab />
+    {tab === 'customers' ? <OutsourceCustomersTab />
+      : tab === 'sync' ? <SyncTab />
+      : tab === 'fields' ? <OutsourceFieldsTab />
       : error ? <LoadError message="设定加载失败" onRetry={load} />
       : tab === 'types' ? <TypesTab types={types} vendors={vendors} loading={loading} reload={load} />
-          : tab === 'customers' ? <OutsourceCustomersTab />
-          : tab === 'cc' ? <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />
-          : tab === 'emails' ? <OutsourceVendorEmailsTab vendors={vendors} />
-            : <SyncTab />}
+      : tab === 'cc' ? <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />
+      : <OutsourceVendorEmailsTab vendors={vendors} />}
   </Card>
 }
 
@@ -302,6 +302,7 @@ function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolea
   </>
 }
 
+const SYNC_POLL_MS = 3000
 const syncTime = (value?: string | null) => fmtTime(value)
 
 function SyncTab() {
@@ -312,13 +313,36 @@ function SyncTab() {
   // Manual sync of the open items is the list page's "立即同步" and needs the same permission.
   const canSync = useAuth((state) => state.permissions.includes(OUTSOURCE_PERMISSIONS.manage))
   const { saving: syncing, run: runSync } = useSaving()
+  const mounted = useRef(true)
+  const refreshInFlight = useRef(false)
+
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
+
+  const refreshStatus = useCallback(async (quiet = false) => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true
+    try {
+      const response = await http.get<ApiResponses['GET /outsource/sync-status']>(
+        '/outsource/sync-status',
+        quiet ? ({ quietNetworkError: true } as QuietRequestConfig) : undefined,
+      )
+      if (!mounted.current) return
+      setStatus(response.data)
+    } finally {
+      refreshInFlight.current = false
+    }
+  }, [])
 
   const load = useCallback(async () => {
     setError(false)
     try {
       const response = await http.get<ApiResponses['GET /outsource/sync-status']>('/outsource/sync-status')
+      if (!mounted.current) return
       setStatus(response.data); setTime(response.data.syncTime)
-    } catch { setError(true) }
+    } catch { if (mounted.current) setError(true) }
   }, [])
   useEffect(() => {
     let active = true
@@ -326,19 +350,75 @@ function SyncTab() {
     return () => { active = false }
   }, [load])
 
+  const running = Boolean(status?.running)
+  useEffect(() => {
+    if (!running) return
+    let active = true
+    let polling = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const isHidden = () => document.hidden || document.visibilityState === 'hidden'
+    const clearTimer = () => {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+    }
+    const schedule = () => {
+      clearTimer()
+      if (!active || isHidden() || polling) return
+      timer = setTimeout(() => {
+        timer = undefined
+        void tick()
+      }, SYNC_POLL_MS)
+    }
+    const tick = async () => {
+      if (!active || isHidden() || polling) return
+      polling = true
+      try {
+        await refreshStatus(true)
+      } catch {
+        // 后台轮询静默忽略单次失败，等待下一轮重试。
+      } finally {
+        polling = false
+        if (active && !isHidden()) schedule()
+      }
+    }
+    const onVisibility = () => {
+      if (isHidden()) {
+        clearTimer()
+        return
+      }
+      if (!polling) {
+        clearTimer()
+        void tick()
+      }
+    }
+    schedule()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      active = false
+      clearTimer()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [running, refreshStatus])
+
   const setSchedule = (enabled: boolean) => run(async () => {
     const response = await http.put<ApiResponses['PUT /outsource/settings/sync-schedule']>('/outsource/settings/sync-schedule', { enabled })
+    if (!mounted.current) return
     setStatus(response.data); Message.success(enabled ? '定时同步已开启' : '定时同步已停止')
   })
 
   const save = () => run(async () => {
     if (!time) return
     const response = await http.put<ApiResponses['PUT /outsource/settings/sync-time']>('/outsource/settings/sync-time', { syncTime: time })
+    if (!mounted.current) return
     setStatus(response.data); setTime(response.data.syncTime); Message.success('同步时间已保存')
   })
 
   const syncNow = () => runSync(async () => {
+    if (!status?.ipmsConfigured) return
     const response = await http.post<ApiResponses['POST /outsource/items/sync']>('/outsource/items/sync', { itemIds: null })
+    if (!mounted.current) return
     setStatus(response.data)
     Message.success(`已同步 ${response.data.lastProcessed} 条，${response.data.lastChanged} 条有变更`)
   })
@@ -357,8 +437,12 @@ function SyncTab() {
       <span>定时同步</span>
       <Switch aria-label="定时同步" checkedText="开启" uncheckedText="停止" checked={status.scheduleEnabled} disabled={saving}
         onChange={(value) => void setSchedule(value)} />
-      {canSync && <Button icon={<IconSync />} loading={syncing || status.running}
-        onClick={() => void syncNow()}>立即同步</Button>}
+      {canSync && (
+        <Tooltip content="IPMS 未配置，暂不可同步" disabled={Boolean(status.ipmsConfigured)}>
+          <Button icon={<IconSync />} loading={syncing || status.running} disabled={!status.ipmsConfigured}
+            onClick={() => void syncNow()}>立即同步</Button>
+        </Tooltip>
+      )}
     </Space>
     <Descriptions column={1} border className="outsource-sync-descriptions" data={[
       { label: '最近成功', value: syncTime(status.lastSuccessAt) },

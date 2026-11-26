@@ -83,6 +83,23 @@ describe('Word preview', () => {
     expect(mocks.get).not.toHaveBeenCalled()
   })
 
+  it('does not re-invoke loadContent or re-post when rerendered with a new loader reference for the same fileId', async () => {
+    const loader1 = vi.fn(gated(zipBytes))
+    const loader2 = vi.fn(gated(zipBytes))
+    const view = render(<DocxPreview fileId={52} loadContent={() => loader1()} />)
+    const { frame, postMessage, channel } = await loadedFrame()
+
+    message(frame.contentWindow, { type: 'docx:rendered', channel, scale: 1, zoom: 'fit' })
+    await waitFor(() => expect(frame).toHaveStyle({ visibility: 'visible' }))
+
+    view.rerender(<DocxPreview fileId={52} loadContent={() => loader2()} />)
+    await Promise.resolve()
+    expect(loader1).toHaveBeenCalledOnce()
+    expect(loader2).not.toHaveBeenCalled()
+    expect(postMessage).toHaveBeenCalledOnce()
+    expect(frame).toHaveStyle({ visibility: 'visible' })
+  })
+
   it('times out a stalled external loadContent', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {

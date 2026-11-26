@@ -106,6 +106,7 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
       closable={!editOpen}
       maskClosable={!editOpen}
       escToExit={!editOpen}
+      unmountOnExit
       onCancel={() => { if (!editOpen) onClose() }}
       footer={null}
     >
@@ -173,7 +174,7 @@ export function SupplierContactsDrawer({ supplier, onClose }: SupplierContactsDr
                 编辑
               </Button>,
               contact.status === 'ACTIVE' ? (
-                <DangerPopconfirm key="status" title="停用后不能再被选为 Robot 负责人或接收通知邮件，确认停用？" onOk={() => toggle(contact)}>
+                <DangerPopconfirm key="status" title="停用后不能再被选为 Robot 负责人或接收通知邮件，确认停用？" disabled={togglingIds.has(contact.id)} onOk={() => toggle(contact)}>
                   <Button size="mini" type="text" status="danger" loading={togglingIds.has(contact.id)} disabled={togglingIds.has(contact.id)}>停用</Button>
                 </DangerPopconfirm>
               ) : (

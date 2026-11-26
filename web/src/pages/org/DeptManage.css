@@ -25,7 +25,7 @@
 .org-view-page-title h1 { font-size: 20px; line-height: 30px; font-weight: 600; margin: 0; }
 .org-view-summary { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px; font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
 .org-view-summary > span { display: inline-flex; gap: 4px; align-items: baseline; white-space: nowrap; }
-.org-view-summary b { display: inline; font: inherit; color: var(--app-text); }
+.org-view-summary b { display: inline; font-family: inherit; font-size: inherit; font-weight: 600; color: var(--app-text); }
 .org-view-workspace { display: grid; flex: 1; grid-template-columns: 320px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 20px; align-items: start; min-height: 0; }
 .org-view-tree-panel { display: flex; flex-direction: column; min-width: 0; max-height: 100%; border: 1px solid var(--app-border); border-radius: 8px; background: #fff; overflow: hidden; }
 .org-view-panel-head { padding: 16px; border-bottom: 1px solid var(--app-border); }
@@ -41,6 +41,7 @@
 .org-view-page .arco-tree-node-title { min-width: 0; padding: 6px 8px; border-radius: 4px; }
 .org-view-page .arco-tree-node-title-text { display: block; min-width: 0; }
 .org-view-tree-node > .arco-tag { flex-shrink: 0; margin: 0; }
+.org-view-missing-leader.arco-tag { color: var(--app-warning-text); background: #fff7e8; border: 1px solid #ffd591; }
 .org-view-page .arco-tree-node-title:hover { background: var(--color-fill-1); }
 .org-view-page .arco-tree-node-selected .arco-tree-node-title { background: rgb(var(--primary-1)); color: rgb(var(--primary-6)); font-weight: 500; }
 .org-view-tree-empty { padding: 24px 16px; text-align: center; color: var(--app-text-muted); font-size: 14px; line-height: 22px; }
@@ -82,8 +83,8 @@
 .org-view-child-main strong { font-size: 14px; line-height: 22px; font-weight: 500; color: var(--app-text); overflow-wrap: anywhere; }
 .org-view-child-main small { font-size: 12px; line-height: 20px; color: var(--app-text-muted); }
 .org-view-child-main .org-view-child-leader { color: var(--color-text-2); }
-.org-view-child-status { flex-shrink: 0; font-size: 12px; line-height: 20px; color: var(--app-success-text, #007a21); }
-.org-view-child-status.is-disabled { color: var(--app-text-muted); }
+.org-view-loading { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 120px; }
+.org-view-child > .arco-tag { flex-shrink: 0; margin: 0; }
 .org-view-child > svg { flex-shrink: 0; font-size: 14px; color: var(--color-text-3); }
 .org-view-child:focus-visible, .org-view-breadcrumb button:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: 2px; }
 .org-view-leaf-info dl { margin: 16px 0 0; }

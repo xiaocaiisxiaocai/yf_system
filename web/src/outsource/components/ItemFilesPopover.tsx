@@ -65,9 +65,6 @@ export default function ItemFilesPopover({ fileCount, purgedFileCount, loadFiles
                 : file.sizeBytes > OEM_PREVIEW_MAX_BYTES
                   ? `文件超过 ${fmtSize(OEM_PREVIEW_MAX_BYTES)}，请下载查看`
                   : undefined
-              const previewButton = <Button type="text" size="mini" aria-label={`预览 ${file.name}`}
-                disabled={Boolean(previewDisabledReason)}
-                onClick={() => setPreview({ id: file.fileId, originalName: file.name, ext })}>预览</Button>
               return <li key={file.fileId} className="outsource-files-row">
                 <div className="outsource-files-summary">
                   <span className={file.state === 'PURGED' ? 'outsource-files-name--purged' : undefined}>{file.name}</span>
@@ -77,7 +74,11 @@ export default function ItemFilesPopover({ fileCount, purgedFileCount, loadFiles
                 <div className="outsource-files-details">
                   <span>{fmtSize(file.sizeBytes)}</span><span>{file.vendorName}</span><span>{fmtTime(file.sentAt)}</span>
                   {load.response.canOpen === true && file.state === 'AVAILABLE' && <Space size={4} className="outsource-files-actions">
-                    {previewDisabledReason ? <Tooltip content={previewDisabledReason}><span>{previewButton}</span></Tooltip> : previewButton}
+                    <Tooltip content={previewDisabledReason} disabled={!previewDisabledReason}>
+                      <Button type="text" size="mini" aria-label={`预览 ${file.name}`}
+                        disabled={Boolean(previewDisabledReason)}
+                        onClick={() => setPreview({ id: file.fileId, originalName: file.name, ext })}>预览</Button>
+                    </Tooltip>
                     <Button type="text" size="mini" aria-label={`下载 ${file.name}`}
                       onClick={() => void downloadOemFile(api, file.fileId).catch(() => undefined)}>下载</Button>
                   </Space>}

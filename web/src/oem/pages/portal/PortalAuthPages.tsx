@@ -75,6 +75,13 @@ export function PortalChangePasswordPage() {
   const submitting = useRef(false)
   useEffect(() => { void bootPortalSession() }, [])
 
+  const goBack = () => {
+    const state = window.history.state as { idx?: unknown } | null
+    const hasPriorEntry = typeof state?.idx === 'number' ? state.idx > 0 : window.history.length > 1
+    if (hasPriorEntry) navigate(-1)
+    else navigate(`${PORTAL_BASE}/transfers`, { replace: true })
+  }
+
   const exitLogin = async () => {
     if (submitting.current) return
     submitting.current = true
@@ -158,7 +165,7 @@ export function PortalChangePasswordPage() {
     <AuthShell brand={OEM_BRAND} title={mustChangePassword ? '首次登录请修改密码' : '修改密码'}>
       <Form className="auth-form" form={form} layout="vertical" onSubmit={submit}>
         <Form.Item field="oldPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
-          <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入当前密码" aria-label="当前密码" autoComplete="current-password" disabled={loading} />
+          <PasswordInput autoFocus size="large" prefix={<IconLock />} placeholder="请输入当前密码" aria-label="当前密码" autoComplete="current-password" disabled={loading} />
         </Form.Item>
         <Form.Item field="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }, passwordRule]}>
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请输入新密码（5-20 位）" aria-label="新密码" autoComplete="new-password" disabled={loading} />
@@ -167,10 +174,10 @@ export function PortalChangePasswordPage() {
           <PasswordInput size="large" prefix={<IconLock />} placeholder="请再次输入新密码" aria-label="确认新密码" autoComplete="new-password" disabled={loading} />
         </Form.Item>
         <div className="auth-actions">
-          <Button long disabled={loading} onClick={mustChangePassword ? () => void exitLogin() : () => navigate(-1)}>
+          <Button size="large" long disabled={loading} onClick={mustChangePassword ? () => void exitLogin() : goBack}>
             {mustChangePassword ? '退出登录' : '返回'}
           </Button>
-          <Button type="primary" long htmlType="submit" loading={loading}>保存</Button>
+          <Button type="primary" size="large" long htmlType="submit" loading={loading}>保存</Button>
         </div>
       </Form>
     </AuthShell>

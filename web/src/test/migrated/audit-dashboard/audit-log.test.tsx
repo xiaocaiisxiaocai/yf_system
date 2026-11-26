@@ -158,4 +158,18 @@ describe('操作日志真实界面', () => {
     await waitFor(() => expect(pages.slice(-2)).toEqual([2, 1]))
     expect(screen.queryByText('2')).not.toBeInTheDocument()
   })
+
+  it('keeps detail drawer content mounted while closing instead of flashing empty', async () => {
+    const row = loginRow({ id: 205 })
+    mocks.get.mockResolvedValue({ data: page([row]) })
+    const user = userEvent.setup()
+    await renderLoaded()
+
+    await user.click(screen.getByRole('button', { name: '查看' }))
+    expect(await screen.findByText('日志 #205')).toBeVisible()
+
+    const closeBtn = document.querySelector<HTMLElement>('.audit-detail-drawer .arco-drawer-close-icon')!
+    fireEvent.click(closeBtn)
+    expect(screen.getByText('日志 #205')).toBeInTheDocument()
+  })
 })

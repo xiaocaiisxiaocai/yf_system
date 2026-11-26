@@ -48,4 +48,40 @@ describe('ProjectCopyJobsPanel', () => {
     await user.click(screen.getByRole('button', { name: '进入副本' }))
     expect(openResult).toHaveBeenCalledWith(88)
   })
+
+  it('renders LoadError instead of Empty when initial load fails with no jobs', async () => {
+    const onRetry = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <ProjectCopyJobsPanel
+        jobs={[]}
+        loading={false}
+        error={true}
+        onRetry={onRetry}
+        onOpenResult={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('复制任务加载失败')).toBeInTheDocument()
+    expect(screen.queryByText('暂无复制任务')).not.toBeInTheDocument()
+    expect(screen.queryByText('复制任务刷新失败，当前显示上次状态。')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the stale warning banner when refresh fails with existing jobs', () => {
+    render(
+      <ProjectCopyJobsPanel
+        jobs={[job()]}
+        loading={false}
+        error={true}
+        onRetry={vi.fn()}
+        onOpenResult={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('复制任务刷新失败，当前显示上次状态。')).toBeInTheDocument()
+    expect(screen.getByText('后台副本')).toBeInTheDocument()
+    expect(screen.queryByText('复制任务加载失败')).not.toBeInTheDocument()
+  })
 })

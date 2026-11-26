@@ -586,4 +586,45 @@ describe('组织、角色与权限行为', () => {
     await waitFor(() => expect(mocks.put).toHaveBeenCalledWith('/admin/roles/4/status', { status: 'DISABLED' }))
     expect(await screen.findByText('角色已停用')).toBeInTheDocument()
   })
+
+  it('read-only user:view hides the organization filter TreeSelect while keeping search, status and reset working', async () => {
+    mocks.permissions = ['user:view']
+    mocks.users = [{
+      id: 12, employeeNo: 'viewer01', realName: '只读查看对象', email: 'viewer@example.invalid',
+      departmentId: 4, departmentName: '研发部', roleId: 7, roleName: '内部成员', status: 'ACTIVE', createdAt: '',
+    }]
+    const user = userEvent.setup()
+    const view = render(<UserList />)
+    expect(await screen.findByText('只读查看对象')).toBeInTheDocument()
+
+    expect(screen.queryByPlaceholderText('全部组织')).not.toBeInTheDocument()
+    expect(screen.queryByText('全部组织')).not.toBeInTheDocument()
+    expect(mocks.get.mock.calls.some(([url]) => url === '/departments' || url === '/admin/user-role-options')).toBe(false)
+
+    // Keyword filter and reset still work cleanly without organization filter.
+    const search = screen.getByPlaceholderText('账号 / 姓名 / 邮箱')
+    await user.type(search, 'viewer')
+    fireEvent.keyDown(search, { key: 'Enter', keyCode: 13 })
+    expect(await screen.findByRole('button', { name: '重置筛选' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '重置筛选' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument())
+    expect(search).toHaveValue('')
+
+    // Status filter also triggers and clears via reset for read-only users.
+    const statusCombobox = screen.getByPlaceholderText('全部状态').closest<HTMLElement>('[role="combobox"]')!
+    fireEvent.click(statusCombobox)
+    const activeOption = (await screen.findAllByText('启用')).find((element) => element.closest('li'))!
+    fireEvent.click(activeOption.closest('li')!)
+    expect(await screen.findByRole('button', { name: '重置筛选' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '重置筛选' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument())
+    view.unmount()
+
+    // With user:manage, the organization TreeSelect is rendered.
+    mocks.permissions = ['user:view', 'user:manage']
+    mocks.departments = [{ id: 4, name: '研发部', kind: 'DEPARTMENT', status: 'ACTIVE', sortNo: 1, children: [] }]
+    render(<UserList />)
+    expect(await screen.findByText('只读查看对象')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('全部组织')).toBeInTheDocument()
+  })
 })

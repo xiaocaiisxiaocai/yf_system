@@ -187,7 +187,7 @@ function InternalRecipientsDrawer({ open, onClose }: InternalRecipientsDrawerPro
         />
       </Modal>
       <ResizableTable tableId="oem-internal-recipients" rowKey="userId" size="small" loading={loading} data={shown}
-        scroll={{ y: 'calc(100vh - 330px)' }}
+        scroll={{ y: 'calc(100dvh - 330px)' }}
         pagination={{ total: shown.length, current: page, pageSize, 
           onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
         noDataElement={<Empty description="没有具备 ODM/OEMA 查看和下载权限的人员" />}
@@ -284,12 +284,12 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
             <Button type="primary" size="small" icon={<IconPlus />} disabled={company?.status !== 'ACTIVE'} onClick={() => { setEditingContact(null); form.resetFields(); setAdding(true) }}>新增联络人</Button>
           </Space>
         </div>
-        <ResizableTable tableId="oem-company-contacts" rowKey="id" size="small" loading={loading} data={rows} pagination={false} scroll={{ x: 640 }} columns={[
+        <ResizableTable tableId="oem-company-contacts" rowKey="id" size="small" loading={loading} data={rows} pagination={false} scroll={{ x: 660 }} columns={[
           { title: '姓名', dataIndex: 'name', width: 150 },
           { title: '邮箱', dataIndex: 'email', width: 220, render: (value: string | null) => value || '-' },
           { title: '排序', dataIndex: 'sortNo', width: 64, align: 'center' as const },
           { title: '状态', width: 64, align: 'center' as const, render: (_: unknown, row: CompanyContact) => <StatusTag status={row.status} /> },
-          { title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: CompanyContact) => <Space size={4}>
+          { title: '操作', width: 144, fixed: 'right' as const, render: (_: unknown, row: CompanyContact) => <Space size={4}>
             <Button size="mini" type="text" onClick={() => { setEditingContact(row); form.setFieldsValue(row); setAdding(true) }}>编辑</Button>
             {row.status === 'ACTIVE' ? (
               <DangerPopconfirm title="确认停用该联络人？" onOk={async () => { await api.setContactStatus(row.id, 'DISABLED'); await load(); onChanged() }}>
@@ -454,7 +454,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     },
     { key: 'lastLoginAt', title: '最近登录', render: (_: unknown, row: VendorAccount) => (row.lastLoginAt ? fmtTime(row.lastLoginAt) : '-') },
     {
-      key: 'actions', title: '操作', fixed: 'right' as const,
+      key: 'actions', title: '操作', width: 216, fixed: 'right' as const,
       render: (_: unknown, row: VendorAccount) => (can.manageAccounts ? (
         <Space size={4}>
           <Button size="mini" type="text" onClick={() => reset(row)}>重置密码</Button>
@@ -936,7 +936,7 @@ export default function CompaniesPage() {
     { key: 'status', title: '状态', width: 70, align: 'center' as const, render: (_: unknown, row: Company) => <StatusTag status={row.status} /> },
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
     {
-      key: 'actions', title: '操作', width: 260, fixed: 'right' as const,
+      key: 'actions', title: '操作', width: 316, fixed: 'right' as const,
       render: (_: unknown, row: Company) => (
         <Space size={4}>
           {can.viewTransfers && <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers?companyId=${row.id}`)}>传递记录</Button>}
@@ -1014,7 +1014,7 @@ export default function CompaniesPage() {
             loading={listLoading}
             data={rows}
             columns={companyColumns}
-            scroll={{ x: 750, y: 'var(--page-table-scroll-y)' }}
+            scroll={{ x: 806, y: 'var(--page-table-scroll-y)' }}
             pagination={{ current: page, total, pageSize, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
           />
 

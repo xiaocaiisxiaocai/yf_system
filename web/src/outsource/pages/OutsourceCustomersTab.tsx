@@ -24,6 +24,8 @@ export default function OutsourceCustomersTab() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [keyword, setKeyword] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [syncing, setSyncing] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
@@ -120,13 +122,23 @@ export default function OutsourceCustomersTab() {
     },
   ]
 
+  const pagination = {
+    current: page,
+    pageSize,
+    onChange: (next: number, size: number) => {
+      setPage(size === pageSize ? next : 1)
+      setPageSize(size)
+    },
+  }
+
   if (error) return <LoadError message="客户简称加载失败" onRetry={load} />
   return <>
     <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">
       <Space wrap>
-        <Radio.Group type="button" value={view} onChange={(value) => setView(value as View)}
+        <Radio.Group type="button" value={view} onChange={(value) => { setView(value as View); setPage(1) }}
           options={[{ label: `已有简称 ${rows.length}`, value: 'aliases' }, { label: `缺少简称 ${missing.length}`, value: 'missing' }]} />
-        <Input allowClear prefix={<IconSearch />} placeholder="客户全称或简称" style={{ width: 240 }} value={keyword} onChange={setKeyword} />
+        <Input allowClear prefix={<IconSearch />} placeholder="客户全称或简称" style={{ width: 240 }} value={keyword}
+          onChange={(value) => { setKeyword(value); setPage(1) }} />
       </Space>
       <Space>
         <Button icon={<IconPlus />} onClick={() => setDraft({ fullName: '', shortName: '' })}>新增</Button>
@@ -135,10 +147,10 @@ export default function OutsourceCustomersTab() {
     </div>
     {view === 'aliases'
       ? <ResizableTable<Alias> tableId="outsource-customer-aliases" className="page-table" rowKey="id" loading={loading} data={shownAliases}
-          pagination={{ defaultPageSize: 20 }} noDataElement={loading ? <span /> : <Empty description="暂无客户简称" />}
+          pagination={pagination} noDataElement={loading ? <span /> : <Empty description="暂无客户简称" />}
           scroll={{ x: 880, y: 'var(--page-table-scroll-y)' }} columns={aliasColumns} />
       : <ResizableTable<Missing> tableId="outsource-customer-missing" className="page-table" rowKey="fullName" loading={loading}
-          data={shownMissing} pagination={{ defaultPageSize: 20 }} noDataElement={loading ? <span /> : <Empty description="所有客户都有简称" />}
+          data={shownMissing} pagination={pagination} noDataElement={loading ? <span /> : <Empty description="所有客户都有简称" />}
           scroll={{ x: 710, y: 'var(--page-table-scroll-y)' }} columns={missingColumns} />}
     <Modal className="form-dialog" title={draft?.id ? '编辑客户简称' : '新增客户简称'} visible={draft !== null} onOk={() => void save()}
       onCancel={() => { if (!saving) setDraft(null) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}

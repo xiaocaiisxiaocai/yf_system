@@ -231,4 +231,19 @@ describe('ODM/OEMA 审批模板', () => {
     expect(await screen.findByRole('button', { name: '重试' })).toBeVisible()
     expect(screen.getByText('默认审批')).toBeVisible()
   })
+
+  it('模板卡片不嵌套交互控件，点击编辑按钮可打开编辑弹窗', async () => {
+    const user = userEvent.setup()
+    renderPage({ flowTemplates: vi.fn().mockResolvedValue([template()]) })
+
+    const title = await screen.findByText('默认审批')
+    const card = title.closest('.arco-card')!
+    expect(card).not.toHaveAttribute('role', 'button')
+    expect(card).not.toHaveAttribute('tabindex')
+    expect(document.querySelector('[role="button"] button')).toBeNull()
+
+    const editButton = screen.getByRole('button', { name: '编辑模板 默认审批' })
+    await user.click(editButton)
+    expect(await screen.findByRole('dialog')).toHaveTextContent('编辑审批模板：默认审批')
+  })
 })

@@ -468,9 +468,31 @@ describe('ODM/OEMA 一键发送文件', () => {
     await enterWorkOrder(dialog, user, 'oem')
     await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
     await user.type(within(dialog).getByLabelText('签名'), '李四')
-    await user.click(within(dialog).getByRole('button', { name: '发送文件' }))
-    expect(await within(dialog).findByText('请选择要通知的公司人员')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '发送文件' })).toBeDisabled()
     expect(api.createTransfer).not.toHaveBeenCalled()
+  })
+
+  it('可通知人员仍在加载时门户发送按钮保持禁用，加载完成后可用', async () => {
+    const user = userEvent.setup()
+    let resolveChoices!: (value: { userId: number; realName: string }[]) => void
+    const transferRecipientChoices = vi.fn().mockImplementation(
+      () => new Promise<{ userId: number; realName: string }[]>((resolve) => { resolveChoices = resolve }),
+    )
+    const api = createApi({ transferRecipientChoices } as Partial<OemApi>)
+    renderList(api, 'oem')
+
+    await user.click(await screen.findByRole('button', { name: '发送文件' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('正在加载可通知人员…')).toBeInTheDocument()
+    await enterWorkOrder(dialog, user, 'oem')
+    await user.upload(within(dialog).getByLabelText('选择文件'), new File(['abc'], '回传.pdf'))
+    await user.type(within(dialog).getByLabelText('签名'), '李四')
+    const submitBtn = within(dialog).getByRole('button', { name: '发送文件' })
+    expect(submitBtn).toBeDisabled()
+
+    await act(async () => resolveChoices([{ userId: 51, realName: '王五' }]))
+    await waitFor(() => expect(submitBtn).toBeEnabled())
+    expect(within(dialog).queryByText('正在加载可通知人员…')).not.toBeInTheDocument()
   })
 
   it('创建结果未知时阻止盲目重试，并提示回列表确认', async () => {

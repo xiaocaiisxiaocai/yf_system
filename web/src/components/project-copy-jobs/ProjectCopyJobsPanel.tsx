@@ -1,6 +1,7 @@
 import { Button, Empty, Progress, Space, Spin, Tag, Typography } from '@arco-design/web-react'
 import type { ProjectCopyJob } from '../../api/types'
 import { fmtSize } from '../../api/types'
+import LoadError from '../LoadError'
 import './ProjectCopyJobsPanel.css'
 
 const STATUS_META: Record<ProjectCopyJob['status'], { text: string; color: string }> = {
@@ -43,14 +44,16 @@ export default function ProjectCopyJobsPanel({
         <Typography.Text type="secondary">后台任务会继续执行，关闭弹窗或刷新页面不会取消复制。</Typography.Text>
         <Button size="small" loading={loading} onClick={onRetry}>刷新任务</Button>
       </div>
-      {error && (
+      {error && jobs.length > 0 && (
         <div className="page-load-error" role="alert">
-          <Typography.Text type="warning">复制任务刷新失败，当前显示上次状态。</Typography.Text>
+          <Typography.Text style={{ color: 'var(--app-warning-text)' }}>复制任务刷新失败，当前显示上次状态。</Typography.Text>
           <Button size="small" onClick={onRetry}>重试</Button>
         </div>
       )}
       {loading && jobs.length === 0 ? (
         <div className="project-copy-jobs-loading"><Spin size={24} /></div>
+      ) : error && jobs.length === 0 ? (
+        <LoadError message="复制任务加载失败" onRetry={onRetry} />
       ) : jobs.length === 0 ? (
         <Empty description="暂无复制任务" />
       ) : (

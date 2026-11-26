@@ -111,12 +111,12 @@ export function RetentionPage() {
           <Form.Item field="mode" label="删除方式" rules={[{ required: true }]}><Select options={MODES} /></Form.Item>
           {(mode === 'AFTER_RELEASE' || mode === 'FIRST_RECEIPT_OR_DEADLINE') && (
             <Form.Item field="releaseTtlMinutes" label="发布后最长保留（分钟）" rules={[{ required: true }]}>
-              <InputNumber style={{ width: '100%' }} min={1} max={5256000} />
+              <InputNumber style={{ width: '100%' }} min={1} max={5256000} precision={0} />
             </Form.Item>
           )}
           {(mode === 'AFTER_FIRST_RECEIPT' || mode === 'FIRST_RECEIPT_OR_DEADLINE') && (
             <Form.Item field="receiptGraceMinutes" label="首次下载后保留（分钟）" rules={[{ required: true }]}>
-              <InputNumber style={{ width: '100%' }} min={1} max={5256000} />
+              <InputNumber style={{ width: '100%' }} min={1} max={5256000} precision={0} />
             </Form.Item>
           )}
           {mode === 'AFTER_FIRST_RECEIPT' && <Typography.Text type="warning">注意：无人下载的文件在此策略下不会自动删除。</Typography.Text>}
@@ -139,8 +139,37 @@ const BYTE_SETTING_KEYS = new Set([
 
 const bytesToMb = (bytes: number) => Number((bytes / BYTES_PER_MB).toFixed(2))
 const mbToBytes = (mb: number) => Math.round(mb * BYTES_PER_MB)
+const formatMb = (value: number | string, { userTyping }: { userTyping: boolean }) => {
+  const text = String(value)
+  if (userTyping || !text.includes('.')) return text
+  return text.replace(/\.?0+$/, '')
+}
+const isIncompleteNumericInput = (raw: string) => {
+  const trimmed = raw.trim().replace(/。/g, '.')
+  return trimmed === '' || trimmed === '-' || trimmed === '.'
+}
 const displaySettingLabel = (item: SettingItem) =>
   BYTE_SETTING_KEYS.has(item.key) ? item.label.replace(/（字节）|\(字节\)/g, '（MB）') : item.label
+
+function validateIntegerSetting(item: SettingItem, rawValue: string | undefined): string | null {
+  if (item.kind !== 'integer' || item.readOnly) return null
+  if (rawValue === undefined || rawValue.trim() === '') return '请输入有效数值'
+  const n = Number(rawValue)
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return '请输入有效整数'
+  const isByteSetting = BYTE_SETTING_KEYS.has(item.key)
+  if (item.min != null && n < item.min) {
+    return isByteSetting
+      ? `不能小于 ${formatMb((Math.ceil((item.min / BYTES_PER_MB) * 100) / 100).toFixed(2), { userTyping: false })} MB`
+      : `不能小于 ${item.min}`
+  }
+  if (item.max != null && n > item.max) {
+    return isByteSetting
+      ? `不能大于 ${formatMb((Math.floor((item.max / BYTES_PER_MB) * 100) / 100).toFixed(2), { userTyping: false })} MB`
+      : `不能大于 ${item.max}`
+  }
+  if (isByteSetting && n <= 0 && (item.min == null || item.min > 0)) return '数值必须大于 0'
+  return null
+}
 
 export function SettingsForm({ group }: { group: 'file' | 'notify' }) {
   const { api } = useOem()
@@ -174,12 +203,20 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
   }, [api, group, beginRequest])
   useLoadEffect(load)
 
+  const fieldErrors = Object.fromEntries(
+    items.map((item) => [item.key, validateIntegerSetting(item, values[item.key])]),
+  )
+  const hasInvalid = items.some((item) => Boolean(fieldErrors[item.key]))
+
   const save = async () => {
-    const changed = items.filter((item) => !item.readOnly && values[item.key] !== item.value).map((item) => ({ key: item.key, value: values[item.key] }))
-    if (changed.length === 0) return
+    if (hasInvalid) return
+    const changedItems = items
+      .filter((item) => !item.readOnly && values[item.key] !== item.value && !validateIntegerSetting(item, values[item.key]))
+      .map((item) => ({ key: item.key, value: values[item.key] }))
+    if (changedItems.length === 0) return
     setSaving(true)
     try {
-      await api.updateSettings(group, changed)
+      await api.updateSettings(group, changedItems)
       Message.success('已保存')
       await load()
     } catch {
@@ -203,23 +240,47 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
           const isByteSetting = BYTE_SETTING_KEYS.has(item.key)
           const label = displaySettingLabel(item)
           const rawValue = values[item.key]
-          const numericBytes = Number(rawValue)
+          const fieldError = fieldErrors[item.key]
+          const numericBytes = rawValue === undefined || rawValue.trim() === '' ? NaN : Number(rawValue)
           return (
             <Space key={item.key} align="start" wrap style={{ width: '100%', padding: '8px 0' }}>
               <span style={{ display: 'inline-block', width: 260, lineHeight: '32px' }}>{label}</span>
               {item.kind === 'boolean'
                 ? <Switch aria-label={label} disabled={item.readOnly} checked={rawValue === 'true'} onChange={(checked) => setValues((v) => ({ ...v, [item.key]: String(checked) }))} />
                 : item.kind === 'integer' && isByteSetting
-                  ? <InputNumber style={{ width: 220 }} suffix="MB"
-                      value={rawValue === '' ? undefined : bytesToMb(numericBytes)}
-                      min={item.min != null ? Math.ceil((item.min / BYTES_PER_MB) * 100) / 100 : undefined}
-                      max={item.max != null ? Math.floor((item.max / BYTES_PER_MB) * 100) / 100 : undefined}
-                      aria-label={label} disabled={item.readOnly}
-                      onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(mbToBytes(value)) }))} />
+                  ? <span onChange={(event) => {
+                      if (event.target instanceof HTMLInputElement && isIncompleteNumericInput(event.target.value)) {
+                        setValues((prev) => (prev[item.key] === '' ? prev : { ...prev, [item.key]: '' }))
+                      }
+                    }}>
+                      <InputNumber style={{ width: 220 }} suffix="MB" precision={2} formatter={formatMb} error={Boolean(fieldError)}
+                        value={Number.isFinite(numericBytes) ? bytesToMb(numericBytes) : undefined}
+                        min={item.min != null ? Math.ceil((item.min / BYTES_PER_MB) * 100) / 100 : undefined}
+                        max={item.max != null ? Math.floor((item.max / BYTES_PER_MB) * 100) / 100 : undefined}
+                        aria-label={label} disabled={item.readOnly}
+                        onChange={(value, reason) => setValues((prev) => {
+                          if (reason === 'outOfRange' && prev[item.key] === item.value) return prev
+                          if (value === undefined || !Number.isFinite(value)) return { ...prev, [item.key]: '' }
+                          const nextBytes = String(mbToBytes(value))
+                          return prev[item.key] === nextBytes ? prev : { ...prev, [item.key]: nextBytes }
+                        })} />
+                    </span>
                 : item.kind === 'integer'
-                  ? <InputNumber style={{ width: 220 }} value={rawValue === '' ? undefined : numericBytes}
-                      min={item.min ?? undefined} max={item.max ?? undefined} aria-label={label} disabled={item.readOnly}
-                      onChange={(value) => setValues((v) => ({ ...v, [item.key]: value === undefined ? '' : String(value) }))} />
+                  ? <span onChange={(event) => {
+                      if (event.target instanceof HTMLInputElement && isIncompleteNumericInput(event.target.value)) {
+                        setValues((prev) => (prev[item.key] === '' ? prev : { ...prev, [item.key]: '' }))
+                      }
+                    }}>
+                      <InputNumber style={{ width: 220 }} precision={0} error={Boolean(fieldError)}
+                        value={Number.isFinite(numericBytes) ? numericBytes : undefined}
+                        min={item.min ?? undefined} max={item.max ?? undefined} aria-label={label} disabled={item.readOnly}
+                        onChange={(value, reason) => setValues((prev) => {
+                          if (reason === 'outOfRange' && prev[item.key] === item.value) return prev
+                          if (value === undefined || !Number.isFinite(value)) return { ...prev, [item.key]: '' }
+                          const nextValue = String(value)
+                          return prev[item.key] === nextValue ? prev : { ...prev, [item.key]: nextValue }
+                        })} />
+                    </span>
                 : item.kind === 'extensions'
                   ? <Input.TextArea style={{ width: 520, maxWidth: '100%' }} autoSize={{ minRows: 2, maxRows: 8 }} value={rawValue}
                       aria-label={label} disabled={item.readOnly}
@@ -227,7 +288,8 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
                   : <Input style={{ width: 220 }} value={rawValue}
                       aria-label={label} disabled={item.readOnly}
                       onChange={(value) => setValues((v) => ({ ...v, [item.key]: value }))} />}
-              {isByteSetting && numericBytes > 0 && (
+              {fieldError && <Typography.Text type="error">{fieldError}</Typography.Text>}
+              {isByteSetting && !fieldError && Number.isFinite(numericBytes) && numericBytes > 0 && (
                 <Typography.Text type="secondary" className="oem-setting-size">约 {fmtSize(numericBytes)}</Typography.Text>
               )}
               {item.unsupportedReason && <Typography.Text type="warning">{item.unsupportedReason}</Typography.Text>}
@@ -237,7 +299,7 @@ function PolicySettingsForm({ group }: { group: 'file' | 'notify' }) {
         })}
       </Spin>
       <div className="oem-settings-actions">
-        <Button type="primary" disabled={!changed || loading} loading={saving} onClick={() => void save()}>保存更改</Button>
+        <Button type="primary" disabled={!changed || hasInvalid || loading} loading={saving} onClick={() => void save()}>保存更改</Button>
       </div>
     </Space>
   )

@@ -181,4 +181,50 @@ describe('ODM/OEMA 传递单列表直接下载', () => {
     await user.click(screen.getByRole('tab', { name: '历史（已删除）' }))
     expect(await screen.findByRole('button', { name: /^批量下载$/ })).toBeDisabled()
   })
+
+  it('点击预览加载中时自身不置灰且其他行置灰，禁用按钮由 Tooltip 直接包裹不套额外 span', async () => {
+    const user = userEvent.setup()
+    const first = summary(71, '甲图纸.pdf', 1, 1)
+    const second = summary(72, '乙图纸.pdf', 1, 1)
+    const unpreviewable = summary(73, '模型.step', 1, 0)
+    let resolveDetail!: (value: TransferDetail) => void
+    const pendingDetail = new Promise<TransferDetail>((resolve) => { resolveDetail = resolve })
+    const api = {
+      listTransfers: vi.fn().mockResolvedValue({ list: [first, second, unpreviewable], total: 3, page: 1, pageSize: 20 }),
+      transfer: vi.fn().mockReturnValue(pendingDetail),
+      startDownload: vi.fn(),
+    } as unknown as OemApi
+
+    render(
+      <QueryClientProvider client={createAppQueryClient()}>
+        <MemoryRouter initialEntries={['/oem-portal/transfers']}>
+          <OemProvider value={{ api, realm: 'oem', base: '/oem-portal', permissions: new Set(), userId: 3, queryScope: ['list-preview-busy'] }}>
+            <Routes>
+              <Route path="/oem-portal/transfers" element={<TransferListPage />} />
+            </Routes>
+          </OemProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const firstPreview = await screen.findByRole('button', { name: '预览 甲图纸.pdf' })
+    const disabledPreview = screen.getByRole('button', { name: '预览 模型.step' })
+
+    // 禁用按钮直接由 Arco Trigger 包裹（cursor: not-allowed + 按钮 pointer-events: none），无手动 inline-flex span。
+    expect(disabledPreview).toBeDisabled()
+    expect(disabledPreview.style.pointerEvents).toBe('none')
+    expect(disabledPreview.parentElement?.style.cursor).toBe('not-allowed')
+    expect(disabledPreview.closest('span[style*="inline-flex"]')).toBeNull()
+
+    await user.click(firstPreview)
+    expect(screen.getByRole('button', { name: '预览 甲图纸.pdf' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '预览 甲图纸.pdf' })).toHaveClass('arco-btn-loading')
+    expect(screen.getByRole('button', { name: '预览 乙图纸.pdf' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '下载 乙图纸.pdf' })).toBeDisabled()
+
+    resolveDetail(detail(first, [file(701, '甲图纸.pdf')]))
+    expect(await screen.findByRole('region', { name: '文件预览' })).toHaveTextContent('甲图纸.pdf')
+    expect(screen.getByRole('button', { name: '预览 乙图纸.pdf' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '下载 乙图纸.pdf' })).toBeEnabled()
+  })
 })

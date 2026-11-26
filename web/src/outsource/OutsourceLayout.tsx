@@ -1,6 +1,6 @@
-import { Result } from '@arco-design/web-react'
+import { Button, Result } from '@arco-design/web-react'
 import { IconEmail, IconList, IconSettings, IconStorage } from '@arco-design/web-react/icon'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import AccountMenu from '../components/AccountMenu'
@@ -14,11 +14,15 @@ export function OutsourceLanding() {
 
 /** Outsourcing list section for internal staff; shares only the internal login with the other business lines. */
 export default function OutsourceLayout() {
+  const navigate = useNavigate()
   const { permissions, user } = useAuth(useShallow((state) => ({ permissions: state.permissions, user: state.user })))
   const canSend = user?.userType === 'INTERNAL' && permissions.includes(OUTSOURCE_PERMISSIONS.send)
   useSendQueuePolling(canSend)
   const queued = useSendQueue((state) => state.count)
-  if (user?.userType !== 'INTERNAL') return <Result status="403" title="外协清单仅供公司员工使用" />
+  if (user?.userType !== 'INTERNAL') {
+    return <Result status="403" title="外协清单仅供公司员工使用"
+      extra={<Button type="primary" onClick={() => navigate('/')}>返回首页</Button>} />
+  }
   const menu: MenuEntry[] = [
     {
       path: '/outsource/items', label: '外协清单', icon: <IconList />, visible: true,

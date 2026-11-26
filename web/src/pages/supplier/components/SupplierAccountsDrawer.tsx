@@ -203,6 +203,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
       closable={!childDialogOpen}
       maskClosable={!childDialogOpen}
       escToExit={!childDialogOpen}
+      unmountOnExit
       onCancel={() => { if (!childDialogOpen) onClose() }}
       footer={null}
     >
@@ -218,19 +219,12 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
       <div className="drawer-toolbar responsive-toolbar">
         <Typography.Text type="secondary">{loading ? '账号加载中…' : accountsFailed ? '账号列表暂不可用' : `共 ${accounts.length} 个账号`}</Typography.Text>
         <Space wrap>
-          {supplier?.status === 'DISABLED' ? (
-            <Tooltip content="供应商已停用，无法新增账号">
-              <span>
-                <Button type="primary" size="small" icon={<IconPlus />} disabled>
-                  新增账号
-                </Button>
-              </span>
-            </Tooltip>
-          ) : (
+          <Tooltip content="供应商已停用，无法新增账号" disabled={supplier?.status !== 'DISABLED'}>
             <Button
               type="primary"
               size="small"
               icon={<IconPlus />}
+              disabled={supplier?.status === 'DISABLED'}
               onClick={() => {
                 form.resetFields()
                 setEditOpen(true)
@@ -239,7 +233,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
             >
               新增账号
             </Button>
-          )}
+          </Tooltip>
         </Space>
       </div>
       {!accountsFailed && <ResizableTable tableId="supplier-accounts"
@@ -261,7 +255,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
             align: 'center' as const,
             render: (value: string) => <StatusTag status={value} />,
           },
-          { title: '最近登录', dataIndex: 'lastLoginAt', width: 140, align: 'center' as const, render: fmtTime },
+          { title: '最近登录', dataIndex: 'lastLoginAt', width: 176, align: 'center' as const, ellipsis: true, render: fmtTime },
           {
             title: '操作',
             width: 216,
@@ -271,7 +265,7 @@ export function SupplierAccountsDrawer({ supplier, onClose }: SupplierAccountsDr
                 重置密码
               </Button>,
               account.status === 'ACTIVE' ? (
-                <DangerPopconfirm key="status" title="停用后该账号立即无法登录，确认停用？" onOk={() => toggle(account)}>
+                <DangerPopconfirm key="status" title="停用后该账号立即无法登录，确认停用？" disabled={togglingAccountIds.has(account.id)} onOk={() => toggle(account)}>
                   <Button
                     size="mini"
                     type="text"

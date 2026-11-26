@@ -5,6 +5,7 @@
 .image-preview-viewport { flex: 1; min-height: 0; min-width: 0; overflow: auto; background: var(--color-fill-2); }
 .image-preview-viewport:focus-visible { outline: 2px solid rgb(var(--primary-6)); outline-offset: -2px; }
 .image-preview-stage { display: grid; place-items: center; }
-.image-preview-stage img { display: block; max-width: none; max-height: none; object-fit: contain; cursor: grab; user-select: none; }
-.image-preview-stage img:active { cursor: grabbing; }
+.image-preview-stage img { display: block; max-width: none; max-height: none; object-fit: contain; cursor: default; user-select: none; }
+.image-preview-stage.is-pannable img { cursor: grab; }
+.image-preview-stage.is-pannable img:active { cursor: grabbing; }
 .image-preview-status { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: var(--color-bg-1); }

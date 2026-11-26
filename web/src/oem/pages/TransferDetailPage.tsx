@@ -220,16 +220,16 @@ function TransferFilesTable({ files, approval, approvalStatus, canEdit, onDownlo
           ? (file.purgedAt ? '文件已删除，无法下载' : '当前状态暂不可下载')
           : ''
         const previewBtn = (
-          <Button key="preview" type="text" size="mini" icon={<IconEye />}
+          <Button type="text" size="mini" icon={<IconEye />}
             disabled={!previewable} onClick={() => onPreview(file)}>预览</Button>
         )
         const downloadBtn = (
-          <Button key="download" type="text" size="mini" icon={<IconDownload />}
+          <Button type="text" size="mini" icon={<IconDownload />}
             disabled={!file.downloadable} onClick={() => onDownload(file)}>下载</Button>
         )
         return actionSlots([
-          previewable ? previewBtn : <Tooltip key="preview" content={previewReason}><span style={{ display: 'inline-flex' }}>{previewBtn}</span></Tooltip>,
-          file.downloadable ? downloadBtn : <Tooltip key="download" content={downloadReason}><span style={{ display: 'inline-flex' }}>{downloadBtn}</span></Tooltip>,
+          <Tooltip key="preview" content={previewReason} disabled={previewable}>{previewBtn}</Tooltip>,
+          <Tooltip key="download" content={downloadReason} disabled={file.downloadable}>{downloadBtn}</Tooltip>,
           ...(canEdit ? [
             <DangerPopconfirm key="remove" title="移除该附件？" onOk={() => onRemove(file)}>
               <Button type="text" size="mini" status="danger">移除</Button>
@@ -323,6 +323,7 @@ export default function TransferDetailPage() {
   const summary = detail.summary
   const caps = detail.capabilities
   const failedFiles = detail.files.some((file) => ['INVALID', 'ERROR'].includes(file.validationStatus))
+  const choices = recipientChoices.data ?? []
 
   const handleNoLongerDraft = (next: TransferDetail) => {
     setDetail(next)
@@ -439,8 +440,13 @@ export default function TransferDetailPage() {
           {summary.direction === 'INTERNAL_TO_OEM' && realm === 'internal' && <ApprovalTag value={summary.approvalStatus} />}</Space>}
         extra={
           <Space wrap>
-            {caps.canSend && realm === 'oem' && recipientChoices.isSuccess && (recipientChoices.data?.length ?? 0) > 0 && (
-              <RecipientChoiceSelect choices={recipientChoices.data ?? []} value={notifyUserIds} onChange={setNotifyUserIds}
+            {caps.canSend && realm === 'oem' && recipientChoices.isPending && (
+              <span role="status" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Spin size={14} /> 正在加载可通知人员…
+              </span>
+            )}
+            {caps.canSend && realm === 'oem' && recipientChoices.isSuccess && choices.length > 0 && (
+              <RecipientChoiceSelect choices={choices} value={notifyUserIds} onChange={setNotifyUserIds}
                 disabled={sending} style={{ width: 260 }} />
             )}
             {caps.canSend && realm === 'oem' && (
@@ -454,12 +460,19 @@ export default function TransferDetailPage() {
                   ? '请先上传至少一个附件'
                   : failedFiles
                     ? '请先移除校验未通过的附件'
-                    : ''
+                    : realm === 'oem' && recipientChoices.isPending
+                      ? '正在加载可通知人员，请稍候'
+                      : realm === 'oem' && recipientChoices.isError
+                        ? '可通知人员加载失败，请重试'
+                        : realm === 'oem' && recipientChoices.isSuccess && choices.length === 0
+                          ? '没有可通知的公司人员，暂时无法发送'
+                          : ''
+              const sendDisabled = Boolean(sendDisabledReason)
               const sendBtn = (
-                <Button type="primary" loading={sending} disabled={Boolean(sendDisabledReason)}
+                <Button type="primary" loading={sending} disabled={sendDisabled}
                   onClick={() => void send().catch(() => undefined)}>{summary.direction === 'INTERNAL_TO_OEM' ? '提交审批' : '发送文件'}</Button>
               )
-              return sendDisabledReason ? <Tooltip content={sendDisabledReason}><span>{sendBtn}</span></Tooltip> : sendBtn
+              return <Tooltip content={sendDisabledReason} disabled={!sendDisabled}>{sendBtn}</Tooltip>
             })()}
             {caps.canDelete && (
               <DangerPopconfirm title="删除草稿后附件将被清理，确定删除？" onOk={remove}>
@@ -475,6 +488,21 @@ export default function TransferDetailPage() {
         )}
         {summary.lifecycleStatus === 'DRAFT' && uploadBusy && (
           <Alert type="info" style={{ marginBottom: 12 }} content="附件仍在上传，完成后才能提交。" />
+        )}
+        {caps.canSend && realm === 'oem' && recipientChoices.isError && (
+          <Alert
+            type="error"
+            style={{ marginBottom: 12 }}
+            content="可通知人员加载失败"
+            action={<Button size="mini" loading={recipientChoices.isFetching} onClick={() => void recipientChoices.refetch()}>重试</Button>}
+          />
+        )}
+        {caps.canSend && realm === 'oem' && recipientChoices.isSuccess && choices.length === 0 && (
+          <Alert
+            type="warning"
+            style={{ marginBottom: 12 }}
+            content="没有可通知的公司人员，暂时无法发送，请联系公司管理员。"
+          />
         )}
         {summary.approvalBlockedReason && realm === 'internal' && (
           <Alert type="warning" style={{ marginBottom: 12 }} content={`审批异常：${summary.approvalBlockedReason}`} />

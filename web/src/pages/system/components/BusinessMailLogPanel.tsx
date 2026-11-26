@@ -116,7 +116,7 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
     {visibleScope !== 'oem' && <Button size="small" onClick={onViewLogs}>{visibleScope === 'all' ? 'Robot 日志' : '全部日志'}</Button>}
     {visibleScope !== 'collaboration' && canViewOemLogs && <Button size="small" onClick={() => navigate('/oem/admin/audit')}>ODM/OEMA 日志</Button>}
   </Space>}>
-    {error ? <Alert type="error" content={error} action={<Button size="small" onClick={() => void load()}>重试</Button>} /> : loading || !data ? <Spin loading style={{ width: '100%', minHeight: 100 }} /> : <div className="system-mail-body">
+    {error ? <Alert type="error" content={error} action={<Button size="small" onClick={() => void load()}>重试</Button>} /> : loading || !data ? <Spin loading style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 120 }} /> : <div className="system-mail-body">
       <Space wrap size={20}>
         <Typography.Text bold>{QUEUE_LABELS[visibleScope]}</Typography.Text>
         <Typography.Text type="secondary">SMTP {data.configured ? `${data.host || '-'}:${data.port || '-'}` : '未配置'}</Typography.Text>
@@ -130,8 +130,8 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
       <Space wrap size={20}><Typography.Text type="secondary">最近成功：{formatTime(data.latestSentAt)}</Typography.Text><Typography.Text type={failure ? 'error' : 'secondary'}>最近失败：{formatTime(data.latestFailedAt)}</Typography.Text></Space>
       {failure && <Alert type="error" className="system-mail-failure" content={`${formatTime(failure.createdAt)} 发送失败：${mailFailureCause(failure)}。${data.queue.pending + data.queue.sending} 封待发送，恢复后自动补发`}
         action={<Button size="mini" type="primary" status="danger" loading={retrying} onClick={() => void retryNow()}>立即重试</Button>} />}
-      {visibleScope !== 'oem' && data.missingEmailCount > 0 && <Typography.Text type="warning">{data.missingEmailCount} 个启用内部账号未填写邮箱，相关通知不会入队。示例：{data.missingEmailAccounts.map(account => `${account.realName}（${account.employeeNo}）`).join('、')}</Typography.Text>}
-      {visibleScope !== 'collaboration' && (data.missingOemContactCompanyCount ?? 0) > 0 && <Space wrap><Typography.Text type="warning">{data.missingOemContactCompanyCount} 家启用的 ODM/OEMA 厂商没有启用联络人邮箱，无法接收厂商邮件。</Typography.Text>{auth.hasPerm('oem:company_manage') && <Button size="mini" type="text" onClick={() => navigate('/oem/admin/companies')}>维护联络人</Button>}</Space>}
+      {visibleScope !== 'oem' && data.missingEmailCount > 0 && <Typography.Text style={{ color: 'var(--app-warning-text)' }}>{data.missingEmailCount} 个启用内部账号未填写邮箱，相关通知不会入队。示例：{data.missingEmailAccounts.map(account => `${account.realName}（${account.employeeNo}）`).join('、')}</Typography.Text>}
+      {visibleScope !== 'collaboration' && (data.missingOemContactCompanyCount ?? 0) > 0 && <Space wrap><Typography.Text style={{ color: 'var(--app-warning-text)' }}>{data.missingOemContactCompanyCount} 家启用的 ODM/OEMA 厂商没有启用联络人邮箱，无法接收厂商邮件。</Typography.Text>{auth.hasPerm('oem:company_manage') && <Button size="mini" type="text" onClick={() => navigate('/oem/admin/companies')}>维护联络人</Button>}</Space>}
       <div className="system-mail-log-toolbar">
         <Select aria-label="邮件日志结果" size="small" style={{ width: 130 }} value={result} onChange={(value: MailLogResult) => { setResult(value); setPage(1) }}>
           {MAIL_LOG_RESULTS.map(item => <Select.Option key={item.value} value={item.value}>{item.label}</Select.Option>)}

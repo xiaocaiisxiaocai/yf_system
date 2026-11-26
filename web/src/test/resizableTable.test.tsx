@@ -137,6 +137,107 @@ describe('ResizableTable', () => {
     expect(headers()).toEqual(['姓名', '邮箱', '部门', '操作'])
     expect(screen.getByRole('columnheader', { name: /姓名/ })).toHaveClass('arco-table-col-fixed-left')
   })
+
+  it('列排序不跨固定/未固定分组，方向键移动后句柄保持焦点', async () => {
+    type Person = { id: number; name: string; dept: string; email: string; role: string }
+    const people: Person[] = [{ id: 1, name: '甲', dept: '采购', email: 'a@example.test', role: '成员' }]
+    render(<ResizableTable<Person> tableId="pinned-boundary-kbd" rowKey="id" data={people} pagination={false}
+      columns={[
+        { title: '姓名', dataIndex: 'name', width: 120 },
+        { title: '部门', dataIndex: 'dept', width: 120 },
+        { title: '邮箱', dataIndex: 'email', width: 180 },
+        { title: '角色', dataIndex: 'role', width: 120 },
+        { title: '操作', width: 80, fixed: 'right', render: () => null },
+      ]} />)
+    const headers = () => screen.getAllByRole('columnheader').map((cell) => cell.textContent)
+    await userEvent.setup().click(screen.getByRole('button', { name: '显示列' }))
+    const picker = await screen.findByRole('group', { name: '显示列' })
+
+    // Pin 姓名 and 部门 so pinned=[姓名, 部门], unpinned=[邮箱, 角色].
+    fireEvent.click(within(picker).getByRole('button', { name: '固定姓名列' }))
+    fireEvent.click(within(picker).getByRole('button', { name: '固定部门列' }))
+    await waitFor(() => expect(headers()).toEqual(['姓名', '部门', '邮箱', '角色', '操作']))
+
+    // Boundary checks: first unpinned ArrowUp and last pinned ArrowDown do not cross groups.
+    const emailHandle = within(picker).getByRole('button', { name: '移动邮箱列' })
+    emailHandle.focus()
+    fireEvent.keyDown(emailHandle, { key: 'ArrowUp' })
+    expect(headers()).toEqual(['姓名', '部门', '邮箱', '角色', '操作'])
+
+    const deptHandle = within(picker).getByRole('button', { name: '移动部门列' })
+    deptHandle.focus()
+    fireEvent.keyDown(deptHandle, { key: 'ArrowDown' })
+    expect(headers()).toEqual(['姓名', '部门', '邮箱', '角色', '操作'])
+
+    // Moving within pinned columns works and restores focus even if DOM reorder blurs the button.
+    fireEvent.keyDown(deptHandle, { key: 'ArrowUp' })
+    deptHandle.blur()
+    await waitFor(() => expect(headers()).toEqual(['部门', '姓名', '邮箱', '角色', '操作']))
+    await waitFor(() => expect(within(picker).getByRole('button', { name: '移动部门列' })).toHaveFocus())
+
+    // Moving within unpinned columns restores focus and allows consecutive ArrowDown presses.
+    const roleHandle = within(picker).getByRole('button', { name: '移动角色列' })
+    roleHandle.focus()
+    fireEvent.keyDown(roleHandle, { key: 'ArrowUp' })
+    roleHandle.blur()
+    await waitFor(() => expect(headers()).toEqual(['部门', '姓名', '角色', '邮箱', '操作']))
+    await waitFor(() => expect(within(picker).getByRole('button', { name: '移动角色列' })).toHaveFocus())
+
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' })
+    await waitFor(() => expect(headers()).toEqual(['部门', '姓名', '邮箱', '角色', '操作']))
+    await waitFor(() => expect(within(picker).getByRole('button', { name: '移动角色列' })).toHaveFocus())
+  })
+
+  it('拖动排序仅在同分组内显示 is-drag-over 指示并落位，跨固定分组忽略', async () => {
+    type Person = { id: number; name: string; dept: string; email: string; role: string }
+    const people: Person[] = [{ id: 1, name: '甲', dept: '采购', email: 'a@example.test', role: '成员' }]
+    render(<ResizableTable<Person> tableId="pinned-boundary-dnd" rowKey="id" data={people} pagination={false}
+      columns={[
+        { title: '姓名', dataIndex: 'name', width: 120 },
+        { title: '部门', dataIndex: 'dept', width: 120 },
+        { title: '邮箱', dataIndex: 'email', width: 180 },
+        { title: '角色', dataIndex: 'role', width: 120 },
+        { title: '操作', width: 80, fixed: 'right', render: () => null },
+      ]} />)
+    const headers = () => screen.getAllByRole('columnheader').map((cell) => cell.textContent)
+    await userEvent.setup().click(screen.getByRole('button', { name: '显示列' }))
+    const picker = await screen.findByRole('group', { name: '显示列' })
+    const items = () => within(picker).getAllByRole('listitem')
+    const transfer = { data: '', setData(_: string, value: string) { this.data = value }, getData() { return this.data }, effectAllowed: '' }
+
+    fireEvent.click(within(picker).getByRole('button', { name: '固定姓名列' }))
+    fireEvent.click(within(picker).getByRole('button', { name: '固定部门列' }))
+    await waitFor(() => expect(headers()).toEqual(['姓名', '部门', '邮箱', '角色', '操作']))
+
+    // Cross-boundary drag (unpinned 角色 over pinned 姓名) does not show indicator or reorder.
+    fireEvent.dragStart(items()[3], { dataTransfer: transfer })
+    fireEvent.dragOver(items()[0], { dataTransfer: transfer })
+    expect(items()[0]).not.toHaveClass('is-drag-over')
+    fireEvent.drop(items()[0], { dataTransfer: transfer })
+    expect(headers()).toEqual(['姓名', '部门', '邮箱', '角色', '操作'])
+
+    // Same-group unpinned drag shows is-drag-over, clears on dragLeave, and reorders on drop.
+    fireEvent.dragStart(items()[3], { dataTransfer: transfer })
+    fireEvent.dragOver(items()[2], { dataTransfer: transfer })
+    expect(items()[2]).toHaveClass('is-drag-over')
+    fireEvent.dragLeave(items()[2])
+    expect(items()[2]).not.toHaveClass('is-drag-over')
+    fireEvent.dragOver(items()[2], { dataTransfer: transfer })
+    expect(items()[2]).toHaveClass('is-drag-over')
+    fireEvent.drop(items()[2], { dataTransfer: transfer })
+    await waitFor(() => expect(headers()).toEqual(['姓名', '部门', '角色', '邮箱', '操作']))
+    for (const item of items()) {
+      expect(item).not.toHaveClass('is-drag-over')
+      expect(item).not.toHaveClass('is-dragging')
+    }
+
+    // Same-group pinned drag reorders within pinned columns.
+    fireEvent.dragStart(items()[1], { dataTransfer: transfer })
+    fireEvent.dragOver(items()[0], { dataTransfer: transfer })
+    expect(items()[0]).toHaveClass('is-drag-over')
+    fireEvent.drop(items()[0], { dataTransfer: transfer })
+    await waitFor(() => expect(headers()).toEqual(['部门', '姓名', '角色', '邮箱', '操作']))
+  })
   it('分组表头的叶子列同样可拖宽、在「显示列」里隐藏，分组表头随显示的列重新合并', async () => {
     type Order = { id: number; a: string; b: string; c: string }
     const data: Order[] = [{ id: 1, a: 'A1', b: 'B1', c: 'C1' }]

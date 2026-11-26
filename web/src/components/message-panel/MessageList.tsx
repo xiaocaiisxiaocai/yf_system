@@ -98,7 +98,7 @@ const MessageRow = memo(function MessageRow({
         {mine ? '你' : m.senderName}撤回了一条留言 · {fmtTime(m.createdAt)}
       </Typography.Text>
       {m.canRestore && <Popconfirm title="恢复这条留言？恢复后双方都能再次看到。" onOk={() => onRestore(m.id)}>
-        <Button className="msg-secondary-action" size="mini" type="text" icon={<IconRedo />}>恢复</Button>
+        <Button size="mini" type="text" icon={<IconRedo />}>恢复</Button>
       </Popconfirm>}
     </div>
   }
