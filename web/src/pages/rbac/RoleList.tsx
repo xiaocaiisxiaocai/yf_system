@@ -536,7 +536,8 @@ export default function RoleList() {
                   const next = new Set(checked)
                   const key = String(extra.node.key)
                   const permission = perms.find((p) => String(p.id) === key)
-                  const group = permTree.find((item) => item.key === key)
+                  // 过滤搜索时只对可见的子项做整组勾选/取消，避免连带改动被过滤隐藏的同级权限。
+                  const group = displayedPermTree.find((item) => item.key === key)
                   if (!mutablePermissionIds.has(key)) {
                     if (!extra.checked && removablePermissionIds.has(key)) {
                       next.delete(key)

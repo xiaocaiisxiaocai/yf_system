@@ -58,6 +58,7 @@ describe('RoleList permission tree enhancements and user impact indicator', () =
             { id: 1, name: '项目协作', type: 'MENU', parentId: null, grantable: true },
             { id: 2, name: '项目查看', type: 'ACTION', parentId: 1, grantable: true },
             { id: 3, name: '项目删除', type: 'ACTION', parentId: 1, grantable: true },
+            { id: 4, name: '项目导出', type: 'ACTION', parentId: 1, grantable: true },
           ],
         }
       }
@@ -78,5 +79,25 @@ describe('RoleList permission tree enhancements and user impact indicator', () =
     expect(screen.getByText('8 位用户')).toBeVisible()
     expect(screen.getByText(/修改后将即时影响已绑定的用户权限/)).toBeVisible()
     expect(screen.getByText('项目查看')).toBeVisible()
+  })
+
+  it('limits a parent toggle to the children left visible by the permission filter', async () => {
+    render(<RoleList />)
+
+    const row = (await screen.findByText('工程主管')).closest('tr')!
+    fireEvent.click(within(row).getByRole('button', { name: /分配权限/ }))
+    expect(await screen.findByText(/分配权限 · 工程主管/)).toBeVisible()
+
+    fireEvent.change(screen.getByPlaceholderText('筛选权限名称或标识'), { target: { value: '项目删除' } })
+    expect(screen.queryByText('项目查看')).not.toBeInTheDocument()
+    const parentNode = screen.getByText('项目协作').closest('.arco-tree-node')!
+    fireEvent.click(parentNode.querySelector('.arco-checkbox')!)
+    fireEvent.click(screen.getByRole('button', { name: /保存权限/ }))
+
+    await vi.waitFor(() => expect(mocks.put).toHaveBeenCalled())
+    const [, body] = mocks.put.mock.calls[0] as [string, { permissionIds: number[] | null }]
+    // 项目删除 (id 3) is the only visible child that is added; the hidden 项目导出 (id 4) must stay ungranted.
+    expect(body.permissionIds).toEqual(expect.arrayContaining([1, 2, 3]))
+    expect(body.permissionIds).not.toContain(4)
   })
 })
