@@ -8825,7 +8825,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OutsourceTypeUpsert"
+                "$ref": "#/components/schemas/OutsourceTypeCreate"
               }
             }
           },
@@ -16851,6 +16851,43 @@
         },
         "additionalProperties": false
       },
+      "OutsourceTypeCreate": {
+        "required": [
+          "code",
+          "name",
+          "sortNo",
+          "vendorIds"
+        ],
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "sortNo": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "allowElectricalHandoff": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "vendorIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "OutsourceTypeResponse": {
         "required": [
           "allowElectricalHandoff",
@@ -16897,7 +16934,9 @@
         "required": [
           "code",
           "name",
-          "sortNo"
+          "sortNo",
+          "status",
+          "vendorIds"
         ],
         "type": "object",
         "properties": {
@@ -16916,6 +16955,18 @@
           },
           "allowElectricalHandoff": {
             "type": "boolean",
+            "nullable": true
+          },
+          "vendorIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
             "nullable": true
           }
         },

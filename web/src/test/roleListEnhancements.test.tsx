@@ -59,6 +59,9 @@ describe('RoleList permission tree enhancements and user impact indicator', () =
             { id: 2, name: '项目查看', type: 'ACTION', parentId: 1, grantable: true },
             { id: 3, name: '项目删除', type: 'ACTION', parentId: 1, grantable: true },
             { id: 4, name: '项目导出', type: 'ACTION', parentId: 1, grantable: true },
+            { id: 200, code: 'oem', name: 'ODM/OEMA 文件传递', type: 'MENU', parentId: null, grantable: true },
+            { id: 217, code: 'outsource', name: '外协清单', type: 'MENU', parentId: null, grantable: true },
+            { id: 220, code: 'outsource:manage', name: '管理外协清单', type: 'ACTION', parentId: 217, grantable: true },
           ],
         }
       }
@@ -79,6 +82,17 @@ describe('RoleList permission tree enhancements and user impact indicator', () =
     expect(screen.getByText('8 位用户')).toBeVisible()
     expect(screen.getByText(/修改后将即时影响已绑定的用户权限/)).toBeVisible()
     expect(screen.getByText('项目查看')).toBeVisible()
+  })
+
+  it('shows and filters work-order permissions by their current UI names', async () => {
+    render(<RoleList />)
+    fireEvent.click(await screen.findByRole('button', { name: '分配权限' }))
+    expect(await screen.findByText('ODM/OEM工令协作')).toBeVisible()
+    const filter = screen.getByPlaceholderText('筛选权限名称或标识')
+    fireEvent.change(filter, { target: { value: '管理外发工令' } })
+    expect(screen.getByText('外发工令')).toBeVisible()
+    expect(screen.getByText('管理外发工令')).toBeVisible()
+    expect(screen.queryByText('项目协作')).not.toBeInTheDocument()
   })
 
   it('limits a parent toggle to the children left visible by the permission filter', async () => {

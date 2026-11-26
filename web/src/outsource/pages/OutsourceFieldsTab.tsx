@@ -18,7 +18,7 @@ const FIELD_TYPE_LABEL: Record<string, string> = {
   TEXT: '文字', BOOLEAN: '是/否', DATE: '日期', NUMBER: '数字', SELECT: '下拉选项',
 }
 const SCOPE_OPTIONS = [
-  { label: '有管理外协清单权限的人员', value: 'ALL' },
+  { label: '有管理外发工令权限的人员', value: 'ALL' },
   { label: '指定角色', value: 'ROLES' },
   { label: '指定人员', value: 'USERS' },
   { label: '内部不填写', value: 'NONE' },

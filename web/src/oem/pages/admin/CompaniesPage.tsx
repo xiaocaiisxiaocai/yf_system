@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Card, Drawer, Dropdown, Empty, Form, Input, InputNumber, Menu, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
+  Alert, Button, Drawer, Dropdown, Empty, Form, Input, InputNumber, Menu, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconDown, IconPlus } from '@arco-design/web-react/icon'
@@ -977,8 +977,7 @@ export default function CompaniesPage() {
   ]
 
   return (
-    <Card className="page-card page-card--table">
-      <h1 className="visually-hidden">ODM/OEMA 厂商与账号</h1>
+    <>
       <div className="page-toolbar responsive-toolbar">
         <Space>
           <Input.Search allowClear placeholder="厂商名称" style={{ width: 260 }} onSearch={(value) => { setKeyword(value); setPage(1) }} onClear={() => { setKeyword(''); setPage(1) }} />
@@ -1087,6 +1086,6 @@ export default function CompaniesPage() {
         onChanged={() => void load().catch(() => undefined)}
       />
       <InternalRecipientsDrawer open={recipientsOpen} onClose={() => setRecipientsOpen(false)} />
-    </Card>
+    </>
   )
 }

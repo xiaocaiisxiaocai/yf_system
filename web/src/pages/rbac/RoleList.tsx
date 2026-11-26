@@ -32,6 +32,14 @@ interface Role {
 // Permission points from the API, with type narrowed to the two kinds the tree distinguishes.
 type Perm = Omit<PermissionResponse, 'type'> & { type: 'MENU' | 'ACTION' }
 
+const WORK_ORDER_PERMISSION_NAMES: Record<string, string> = {
+  oem: 'ODM/OEM工令协作',
+  outsource: '外发工令',
+  'outsource:manage': '管理外发工令',
+  'outsource:settings': '外发工令设定',
+  'outsource:send': '发送外发工令邮件',
+}
+
 // 数据范围是独立维度：角色只给默认值，管理员可在用户上覆盖。
 const SCOPE_DOMAINS = [
   { domain: 'project', label: '项目范围' },
@@ -158,15 +166,19 @@ export default function RoleList() {
 
   const permTree = useMemo(() => {
     const menus = perms.filter((p) => p.type === 'MENU')
+    const title = (permission: Perm) => {
+      const name = WORK_ORDER_PERMISSION_NAMES[permission.code] ?? permission.name
+      return removablePermissionIds.has(String(permission.id)) ? `${name}（仅可移除）` : name
+    }
     return menus.map((m) => ({
       key: String(m.id),
-      title: removablePermissionIds.has(String(m.id)) ? `${m.name}（仅可移除）` : m.name,
+      title: title(m),
       disabled: !mutablePermissionIds.has(String(m.id)) && !removablePermissionIds.has(String(m.id)),
       children: perms
         .filter((p) => p.parentId === m.id)
         .map((p) => ({
           key: String(p.id),
-          title: removablePermissionIds.has(String(p.id)) ? `${p.name}（仅可移除）` : p.name,
+          title: title(p),
           disabled: !mutablePermissionIds.has(String(p.id)) && !removablePermissionIds.has(String(p.id)),
         })),
     }))

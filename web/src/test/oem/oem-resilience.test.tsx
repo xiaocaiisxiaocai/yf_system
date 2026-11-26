@@ -230,7 +230,7 @@ describe('ODM/OEMA 厂商门户登录页跳转', () => {
     usePortalAuth.setState({ token: null, account: null, mustChangePassword: false, booted: true, bootUnavailable: false, generation: 0 })
     renderPortal('/oem-portal/change-password')
     await waitFor(() => expect(screen.getByLabelText('当前路径')).toHaveTextContent('/oem-portal/login'))
-    expect(screen.getByLabelText('SAA ODM/OEMA 文件传递')).toBeInTheDocument()
+    expect(screen.getByLabelText('SAA ODM/OEM工令协作')).toBeInTheDocument()
   })
 
   it('已登录用户访问登录页时直接进入门户，并校验安全且属于门户的回跳地址', async () => {

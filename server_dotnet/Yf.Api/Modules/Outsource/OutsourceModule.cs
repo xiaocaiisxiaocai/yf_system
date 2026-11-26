@@ -61,7 +61,7 @@ public static class OutsourceModule
 
         settings.MapGet("/types", (HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.TypesAsync(AccessService.GetCurrent(c), ct));
-        settings.MapPost("/types", (OutsourceTypeUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
+        settings.MapPost("/types", (OutsourceTypeCreate r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.CreateTypeAsync(AccessService.GetCurrent(c), r, ct));
         settings.MapPut("/types/{id:long}", (ulong id, OutsourceTypeUpsert r, HttpContext c, OutsourceSettingsService s, CancellationToken ct) =>
             s.UpdateTypeAsync(AccessService.GetCurrent(c), id, r, ct));

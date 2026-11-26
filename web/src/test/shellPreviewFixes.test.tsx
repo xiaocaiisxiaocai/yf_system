@@ -103,7 +103,7 @@ describe('壳层导航、404 与水印修复回归', () => {
         collapsed
         selectedKey="/outsource/items"
         onSelect={() => undefined}
-        items={[{ key: '/outsource/items', label: '外协清单', icon: <span data-testid="nav-icon" />, badge: 5 }]}
+        items={[{ key: '/outsource/items', label: '外发工令', icon: <span data-testid="nav-icon" />, badge: 5 }]}
       />,
     )
     expect(container.querySelector('.nav-menu-badge-dot .arco-badge-dot')).toBeInTheDocument()
@@ -117,7 +117,7 @@ describe('壳层导航、404 与水印修复回归', () => {
         <NavSider
           selectedKey="/outsource/items"
           onSelect={() => undefined}
-          items={[{ key: '/outsource/items', label: '外协清单', icon: <span data-testid="nav-icon" /> }]}
+          items={[{ key: '/outsource/items', label: '外发工令', icon: <span data-testid="nav-icon" /> }]}
         />,
       )
       const collapseButton = screen.getByRole('button', { name: '折叠侧边栏' })
@@ -138,7 +138,7 @@ describe('壳层导航、404 与水印修复回归', () => {
     }
   })
 
-  it('AppRail 抽屉模式展示三条业务线和角标，并支持跨模块展示协作未读数', async () => {
+  it('AppRail 展示两个模块，在侧栏和抽屉中保留跨模块未读数和工令队列角标', async () => {
     useSendQueue.setState({ count: 4 })
     vi.spyOn(http, 'get').mockImplementation(async (url: string) => {
       if (url === '/collaboration/summary') return { data: { unreadCount: 7, latestId: 12, revision: '12:7' } } as never
@@ -148,26 +148,26 @@ describe('壳层导航、404 与水印修复回归', () => {
 
     const { rerender } = render(
       <MemoryRouter initialEntries={['/oem/transfers']}>
-        <AppRail active="oem" variant="rail" />
+        <AppRail active="workOrder" variant="rail" />
       </MemoryRouter>,
     )
     const collabRailBtn = await screen.findByRole('button', { name: 'Robot仿真协作' })
     expect(await within(collabRailBtn).findByText('7')).toBeInTheDocument()
+    expect(within(screen.getByRole('button', { name: 'ODM/OEM工令协作' })).getByText('4')).toBeInTheDocument()
 
     rerender(
       <MemoryRouter initialEntries={['/oem/transfers']}>
-        <AppRail active="oem" variant="drawer" />
+        <AppRail active="workOrder" variant="drawer" />
       </MemoryRouter>,
     )
     const nav = screen.getByRole('navigation', { name: '业务切换' })
     expect(nav).toHaveClass('app-rail--drawer')
     expect(within(nav).getAllByRole('button').map((button) => button.getAttribute('aria-label'))).toEqual([
       'Robot仿真协作',
-      '外协清单',
-      'ODM/OEMA 文件传递',
+      'ODM/OEM工令协作',
     ])
     expect(within(within(nav).getByRole('button', { name: 'Robot仿真协作' })).getByText('7')).toBeInTheDocument()
-    expect(within(within(nav).getByRole('button', { name: '外协清单' })).getByText('4')).toBeInTheDocument()
+    expect(within(within(nav).getByRole('button', { name: 'ODM/OEM工令协作' })).getByText('4')).toBeInTheDocument()
   })
 
   it('AdminLayout 移动导航抽屉同步 aria-expanded 并在 Escape 关闭后恢复焦点', async () => {

@@ -3,7 +3,8 @@ import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Button, Result, Space, Spin } from '@arco-design/web-react'
 import { useAuth } from './store/auth'
 import { bootAuth, isOemPortalPath, isSafeLoginReturnPath, retryBootAuth } from './api/client'
-import { OEM_SETTINGS_PERMISSIONS } from './oem/oemNavigation'
+import { OEM_SETTINGS_PERMISSIONS, OUTSOURCE_MANAGEMENT_PATH, OUTSOURCE_MANAGEMENT_PERMISSIONS } from './oem/oemNavigation'
+import { OUTSOURCE_PERMISSIONS } from './outsource/outsourceNavigation'
 import { OEM_UI_ENABLED } from './features'
 import { decideAuthStorageSync } from './store/authStorageSync'
 import RouteErrorBoundary from './components/RouteErrorBoundary'
@@ -26,8 +27,7 @@ const RoleList = lazy(() => import('./pages/rbac/RoleList'))
 const AuditLog = lazy(() => import('./pages/system/AuditLog'))
 const SysConfig = lazy(() => import('./pages/system/SysConfig'))
 const Dictionaries = lazy(() => import('./pages/system/Dictionaries'))
-// OEM is kept as a separate business line: internal staff reuse their current
-// session, while vendor accounts use the isolated /oem-portal session.
+// Internal work order routes share navigation. Vendor accounts use the isolated /oem-portal session.
 const OemInternalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.OemInternalLayout })))
 const OemLanding = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.OemLanding })))
 const PortalLayout = lazy(() => import('./oem/layouts/OemLayouts').then((m) => ({ default: m.PortalLayout })))
@@ -35,7 +35,7 @@ const OemTransferList = lazy(() => import('./oem/pages/TransferListPage'))
 const OemTransferDetail = lazy(() => import('./oem/pages/TransferDetailPage'))
 const PortalOutsource = lazy(() => import('./oem/pages/PortalOutsourcePage'))
 const OemApprovals = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.ApprovalsHub })))
-const OemCompanies = lazy(() => import('./oem/pages/admin/CompaniesPage'))
+const OutsourceManagement = lazy(() => import('./oem/pages/admin/OutsourceManagementPage'))
 const OemSettings = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.SettingsHub })))
 const OemAudit = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.AuditPage })))
 const OutsourceLayout = lazy(() => import('./outsource/OutsourceLayout'))
@@ -186,7 +186,8 @@ export default function App() {
             <Route path="transfers/:id" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create', 'oem:flow_approve', 'oem:approval_recover']}><OemTransferDetail /></Guard>} />
             <Route path="approvals" element={<Guard anyPermission={['oem:flow_approve', 'oem:approval_recover']}><OemApprovals /></Guard>} />
             <Route path="recovery" element={<Navigate to="/oem/approvals?tab=blocked" replace />} />
-            <Route path="admin/companies" element={<Guard anyPermission={['oem:company_manage', 'oem:account_manage', 'oem:directory_view']}><OemCompanies /></Guard>} />
+            <Route path="admin/companies" element={<Navigate to={`${OUTSOURCE_MANAGEMENT_PATH}?tab=companies`} replace />} />
+            <Route path={OUTSOURCE_MANAGEMENT_PATH} element={<Guard anyPermission={OUTSOURCE_MANAGEMENT_PERMISSIONS}><OutsourceManagement /></Guard>} />
             <Route path="admin/flow-templates" element={<Navigate to="/oem/admin/settings?tab=flow" replace />} />
             <Route path="admin/retention" element={<Navigate to="/oem/admin/settings?tab=retention" replace />} />
             <Route path="admin/settings" element={<Guard anyPermission={OEM_SETTINGS_PERMISSIONS}><OemSettings /></Guard>} />
@@ -204,9 +205,9 @@ export default function App() {
         <Route path="/outsource" element={<Guard><OutsourceLayout /></Guard>}>
           <Route index element={<OutsourceLanding />} />
           <Route path="items" element={<OutsourceList />} />
-          <Route path="mails" element={<Guard permission="outsource:send"><OutsourceMails /></Guard>} />
-          <Route path="ipms-data" element={<Guard permission="outsource:settings"><OutsourceIpmsData /></Guard>} />
-          <Route path="settings" element={<Guard permission="outsource:settings"><OutsourceSettings /></Guard>} />
+          <Route path="mails" element={<Guard permission={OUTSOURCE_PERMISSIONS.send}><OutsourceMails /></Guard>} />
+          <Route path="ipms-data" element={<Guard permission={OUTSOURCE_PERMISSIONS.settings}><OutsourceIpmsData /></Guard>} />
+          <Route path="settings" element={<Guard permission={OUTSOURCE_PERMISSIONS.settings}><OutsourceSettings /></Guard>} />
         </Route>
         <Route
           path="/"

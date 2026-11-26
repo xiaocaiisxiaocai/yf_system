@@ -100,13 +100,13 @@ describe('RouteErrorBoundary', () => {
     render(
       <MemoryRouter initialEntries={['/oem/transfers']}>
         <Routes>
-          <Route path="/oem" element={<SectionShell title="ODM/OEMA 文件传递" menu={[{ path: '/oem/transfers', label: '传递记录', icon: null, visible: true }]} account={<span>账号</span>} />}>
+          <Route path="/oem" element={<SectionShell title="ODM/OEM工令协作" menu={[{ path: '/oem/transfers', label: '传递记录', icon: null, visible: true }]} account={<span>账号</span>} />}>
             <Route path="transfers" element={<Boom />} />
           </Route>
         </Routes>
       </MemoryRouter>,
     )
-    expect(screen.getByText('ODM/OEMA 文件传递')).toBeInTheDocument()
+    expect(screen.getByText('ODM/OEM工令协作')).toBeInTheDocument()
     expect(screen.getByText('页面出错')).toBeInTheDocument()
   })
 })

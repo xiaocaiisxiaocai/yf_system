@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Avatar, Button, Dropdown, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
-  IconCheckCircle, IconDown, IconFile, IconHistory, IconList, IconLock, IconPoweroff, IconSettings, IconUserGroup,
+  IconDown, IconFile, IconList, IconLock, IconPoweroff,
 } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -11,47 +11,24 @@ import {
   bootPortalSession, createPortalQueryScope, portalHttp, portalLogout, portalQueryClient, PORTAL_BASE,
   retryBootPortalSession, usePortalAuth, usePortalSessionSync,
 } from '../api/portalSession'
-import { OEM_SETTINGS_PERMISSIONS, oemHome } from '../oemNavigation'
 import { OemProvider } from '../OemContext'
 import { useInternalOem } from '../useInternalOem'
-import Shell, { type MenuEntry } from '../../layouts/SectionShell'
-import AccountMenu from '../../components/AccountMenu'
+import Shell from '../../layouts/SectionShell'
+import WorkOrderLayout, { WorkOrderUnavailable } from '../../layouts/WorkOrderLayout'
+import { workOrderHome, WORK_ORDER_TITLE } from '../../layouts/navigation'
 import { confirmUploadLeave } from '../../components/uploadLeave'
 import './OemLayouts.css'
 
 export function OemLanding() {
-  const permissions = useAuth((state) => state.permissions)
-  const navigate = useNavigate()
-  const home = oemHome(permissions)
-  return home
-    ? <Navigate to={home} replace />
-    : <Result status="403" title="没有可用的 ODM/OEMA 功能" extra={<Button type="primary" onClick={() => navigate('/')}>返回首页</Button>} />
+  const home = useAuth(workOrderHome)
+  return home ? <Navigate to={home} replace /> : <WorkOrderUnavailable />
 }
 
-/**
- * OEM section for internal staff: a separate entry with its own navigation, sharing
- * only the internal login with the collaboration platform. Nothing from the
- * collaboration line is shown here, and nothing from here appears there.
- */
 export function OemInternalLayout() {
-  const user = useAuth((state) => state.user)
   const oemValue = useInternalOem()
-  const navigate = useNavigate()
-  const has = (code: string) => oemValue.permissions.has(code)
-  if (user?.userType !== 'INTERNAL') {
-    return <Result status="403" title="ODM/OEMA 内部入口仅供公司员工使用" extra={<Button type="primary" onClick={() => navigate('/')}>返回首页</Button>} />
-  }
-  const menu: MenuEntry[] = [
-    { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: has('oem:transfer_create') || has('oem:transfer_view') },
-    { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: has('oem:flow_approve') || has('oem:approval_recover') },
-    { path: '/oem/admin/companies', label: '厂商与账号', icon: <IconUserGroup />, visible: has('oem:company_manage') || has('oem:account_manage') || has('oem:directory_view'), admin: true },
-    { path: '/oem/admin/settings', label: '设置', icon: <IconSettings />, visible: OEM_SETTINGS_PERMISSIONS.some(has), admin: true },
-    { path: '/oem/admin/audit', label: '审计日志', icon: <IconHistory />, visible: has('oem:audit_view'), admin: true },
-  ]
-  if (!menu.some((item) => item.visible)) return <Result status="403" title="没有 ODM/OEMA 文件传递权限" extra={<Button onClick={() => navigate('/')}>返回</Button>} />
   return (
     <OemProvider value={oemValue}>
-      <Shell title="ODM/OEMA 文件传递" menu={menu} line="oem" account={<AccountMenu />} />
+      <WorkOrderLayout />
     </OemProvider>
   )
 }
@@ -124,9 +101,9 @@ export function PortalLayout() {
   return (
     <QueryClientProvider client={portalQueryClient}>
       <OemProvider value={oemValue}>
-        <Shell title="ODM/OEMA 文件传递" subtitle={account?.companyName} menu={[
+        <Shell title={WORK_ORDER_TITLE} subtitle={account?.companyName} menu={[
           { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
-          { path: `${PORTAL_BASE}/outsource`, label: '外协清单', icon: <IconList />, visible: true },
+          { path: `${PORTAL_BASE}/outsource`, label: '外发工令', icon: <IconList />, visible: true },
         ]} account={
           <Dropdown trigger="click" droplist={
             <Menu onClickMenuItem={(key) => {

@@ -6,7 +6,7 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
  const detail=f.uiProjects?.a?.id;assert(detail,'Run business before layout to cover a real detail route');
  const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','Robot仿真协作'],['detail','/projects/'+detail,f.uiProjects.a.name],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];
  routes.push(['dictionaries','/system/dictionaries','数据字典']);
- routes.push(['oem-transfers','/oem/transfers','文件传递单'],['oem-approvals','/oem/approvals','审批'],['oem-companies','/oem/admin/companies','厂商与账号'],['oem-audit','/oem/admin/audit','审计日志']);
+ routes.push(['oem-transfers','/oem/transfers','文件传递单'],['oem-approvals','/oem/approvals','审批'],['oem-companies','/oem/admin/outsource-settings?tab=companies','厂商与账号'],['oem-audit','/oem/admin/audit','审计日志']);
  const listPages=new Set(['projects','suppliers','users','roles','logs','dictionaries','oem-transfers','oem-approvals','oem-companies','oem-audit']);
  const results=[];
  // 整页 scrollWidth 查不到卡片内部的裁切（卡片 overflow 会把溢出藏起来）：窄屏下逐个核对标题、表格和操作按钮没有超出所在容器。
@@ -37,7 +37,7 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
     if(width<=720&&name==='detail')assert.deepStrictEqual(await clippedInNarrowCards(name),[],name+' has content clipped inside its cards at '+width+'px');
     // 列表页：筛选栏贴卡片顶部，分页贴卡片底部，即使只有几行数据也不跟着表格内容上移。
     if(width>720&&height>700&&listPages.has(name)){
-     const pinned=await p.evaluate(()=>{const card=document.querySelector('.page-card--table');const pager=card?.querySelector('.arco-table-pagination');const bar=card?.querySelector('.oem-vendor-tabs,.project-status-tabs,.page-toolbar,.audit-filter-panel,.dictionary-tabs');const empty=Boolean(card?.querySelector('.arco-table-no-data'));if(!card||!bar||(!pager&&!empty))return {missing:true};const c=card.getBoundingClientRect(),t=bar.getBoundingClientRect();return {bottomGap:pager?Math.round(c.bottom-pager.getBoundingClientRect().bottom):null,topGap:Math.round(t.top-c.top)}});
+     const pinned=await p.evaluate(()=>{const card=document.querySelector('.page-card--table');const pager=card?.querySelector('.arco-table-pagination');const bar=card?.querySelector('.outsource-management-tabs > .arco-tabs-header,.oem-vendor-tabs,.project-status-tabs,.page-toolbar,.audit-filter-panel,.dictionary-tabs');const empty=Boolean(card?.querySelector('.arco-table-no-data'));if(!card||!bar||(!pager&&!empty))return {missing:true};const c=card.getBoundingClientRect(),t=bar.getBoundingClientRect();return {bottomGap:pager?Math.round(c.bottom-pager.getBoundingClientRect().bottom):null,topGap:Math.round(t.top-c.top)}});
      assert(!pinned.missing,name+' list page lost its toolbar or pagination');
      // An empty list renders no pagination; only the toolbar position applies then.
      if(pinned.bottomGap!==null)assert(pinned.bottomGap<=40,name+' pagination is not pinned to the card bottom (gap '+pinned.bottomGap+'px)');

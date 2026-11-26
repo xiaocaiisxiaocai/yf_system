@@ -123,7 +123,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     window.history.replaceState({}, '', '/')
   })
 
-  it('只向有 ODM/OEMA 权限的内部员工显示入口，并导航到其首个可用页面', async () => {
+  it('工令协作入口导航到首个获授权的 OEM 页面', async () => {
     const user = userEvent.setup()
     setInternalSession(['oem:audit_view'])
     render(
@@ -134,7 +134,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
       </MemoryRouter>,
     )
 
-    await user.click(screen.getByRole('button', { name: 'ODM/OEMA 文件传递' }))
+    await user.click(screen.getByRole('button', { name: 'ODM/OEM工令协作' }))
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/admin/audit')
   })
 
@@ -145,25 +145,27 @@ describe('ODM/OEMA 前端入口与路由', () => {
     render(
       <MemoryRouter initialEntries={['/oem/transfers']}>
         <Routes>
-          <Route path="*" element={<><AppRail active="oem" /><CurrentLocation /></>} />
+          <Route path="*" element={<><AppRail active="workOrder" /><CurrentLocation /></>} />
         </Routes>
       </MemoryRouter>,
     )
 
-    expect(screen.getByRole('button', { name: 'ODM/OEMA 文件传递' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('button', { name: 'ODM/OEM工令协作' })).toHaveAttribute('aria-current', 'page')
     await user.click(screen.getByRole('button', { name: 'Robot仿真协作' }))
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent(/^\/$/)
   })
 
-  it('没有任何 ODM/OEMA 权限时不显示内部入口', () => {
-    render(<MemoryRouter><AppRail active="collaboration" /></MemoryRouter>)
-    expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument()
+  it('没有任何 ODM/OEMA 权限的内部员工通过工令协作入口进入外发工令', async () => {
+    const user = userEvent.setup()
+    render(<MemoryRouter><AppRail active="collaboration" /><CurrentLocation /></MemoryRouter>)
+    await user.click(screen.getByRole('button', { name: 'ODM/OEM工令协作' }))
+    expect(screen.getByLabelText('当前地址')).toHaveTextContent('/outsource/items')
   })
 
-  it('仅维护组织主管不再显示 ODM/OEMA 入口', () => {
-    setInternalSession(['dept:leader_manage'])
+  it('厂商账号没有内部工令协作入口', () => {
+    useAuth.setState({ user: { ...internalUser, userType: 'SUPPLIER', supplierId: 2 } })
     render(<MemoryRouter><AppRail active="collaboration" /></MemoryRouter>)
-    expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'ODM/OEM工令协作' })).not.toBeInTheDocument()
   })
 
   it.each(['/org/depts', '/oem/admin/leaders'])('主管维护权限可经 %s 进入统一组织架构', async (path) => {
@@ -179,7 +181,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(await screen.findByRole('heading', { name: '组织架构' })).toBeInTheDocument()
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/org/depts')
     expect(screen.queryByRole('button', { name: '新增事业部' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ODM/OEM工令协作' })).toBeInTheDocument()
     await waitFor(() => expect(get).toHaveBeenCalledWith('/departments'))
   })
 
@@ -197,9 +199,21 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(await screen.findByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/approvals')
   })
 
-  it('ODM/OEMA 根路径无权限时展示 403 并提供返回首页按钮', async () => {
+  it('内部员工在 OEM 根路径无 OEM 权限时进入外发工令', async () => {
+    render(
+      <MemoryRouter initialEntries={['/oem']}>
+        <Routes>
+          <Route path="/oem" element={<OemLanding />} />
+          <Route path="/outsource/items" element={<CurrentLocation />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByLabelText('当前地址')).toHaveTextContent('/outsource/items')
+  })
+
+  it('没有任何可用工令菜单时展示 403 并提供返回首页按钮', async () => {
     const user = userEvent.setup()
-    setInternalSession([])
+    useAuth.setState({ user: { ...internalUser, userType: 'SUPPLIER', supplierId: 2 } })
     render(
       <MemoryRouter initialEntries={['/oem']}>
         <Routes>
@@ -209,7 +223,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
       </MemoryRouter>,
     )
 
-    expect(screen.getByText('没有可用的 ODM/OEMA 功能')).toBeInTheDocument()
+    expect(screen.getByText('没有 ODM/OEM工令协作 的可用功能')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '返回首页' }))
     expect(await screen.findByRole('status', { name: '当前地址' })).toHaveTextContent(/^\/$/)
   })
@@ -304,9 +318,9 @@ describe('ODM/OEMA 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByText('ODM/OEMA 内部入口仅供公司员工使用')).toBeInTheDocument()
+    expect(await screen.findByText('没有 ODM/OEM工令协作 的可用功能')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '返回首页' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'ODM/OEMA 文件传递' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'ODM/OEM工令协作' })).not.toBeInTheDocument()
   })
 
   it('ODM/OEMA 厂商门户会话不能用于内部异常恢复路由', async () => {
@@ -445,7 +459,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
       </QueryClientProvider>,
     )
 
-    expect(await screen.findByLabelText('SAA ODM/OEMA 文件传递')).toBeInTheDocument()
+    expect(await screen.findByLabelText('SAA ODM/OEM工令协作')).toBeInTheDocument()
     expect(screen.getByLabelText('登录账号')).toBeInTheDocument()
     expect(screen.queryByText('账号由公司管理员开通。公司内部员工请通过公司门户登录。')).not.toBeInTheDocument()
   })
@@ -489,6 +503,8 @@ describe('ODM/OEMA 前端入口与路由', () => {
     )
 
     expect(await screen.findByPlaceholderText('搜索传递记录')).toBeInTheDocument()
+    expect(screen.getByText('ODM/OEM工令协作')).toBeInTheDocument()
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['文件传递单', '外发工令'])
     expect(screen.getByRole('checkbox', { name: '只看我发送的' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: '只看发给我的' })).not.toBeInTheDocument()
     expect(internalRefresh).not.toHaveBeenCalled()

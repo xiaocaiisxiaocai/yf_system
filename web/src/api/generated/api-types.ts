@@ -1548,6 +1548,14 @@ export interface OutsourceSyncTimeRequest {
   syncTime?: string | null
 }
 
+export interface OutsourceTypeCreate {
+  code?: string | null
+  name?: string | null
+  sortNo?: number | null
+  allowElectricalHandoff?: boolean | null
+  vendorIds?: Array<number> | null
+}
+
 export interface OutsourceTypeResponse {
   id: number
   code: string
@@ -1563,6 +1571,8 @@ export interface OutsourceTypeUpsert {
   name?: string | null
   sortNo?: number | null
   allowElectricalHandoff?: boolean | null
+  vendorIds?: Array<number> | null
+  status?: string | null
 }
 
 export interface OutsourceTypeVendorsRequest {

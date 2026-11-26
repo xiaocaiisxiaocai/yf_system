@@ -32,7 +32,7 @@ function renderPortal(api: Pick<OemApi, 'outsourceItems'> & Partial<Pick<OemApi,
   )
 }
 
-describe('ODM/OEMA 门户外协清单', () => {
+describe('ODM/OEMA 门户外发工令', () => {
   it('显示本厂商的记录，按状态着色，可搜索和显示已完成', async () => {
     const user = userEvent.setup()
     const outsourceItems = vi.fn().mockResolvedValue(page([row(1, 'A1', 'NORMAL', '正常'), row(2, 'A2', 'PAUSED', '暂停')]))

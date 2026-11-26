@@ -72,9 +72,9 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         return types.Select(type => Json(type, mapping[type.Id])).ToArray();
     }
 
-    public async Task<OutsourceTypeResponse> CreateTypeAsync(CurrentUser actor, OutsourceTypeUpsert request, CancellationToken ct)
+    public async Task<OutsourceTypeResponse> CreateTypeAsync(CurrentUser actor, OutsourceTypeCreate request, CancellationToken ct)
     {
-        var input = NormalizeType(request);
+        var input = NormalizeType(request.Code, request.Name, request.SortNo);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, ct);
@@ -85,20 +85,28 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         };
         context.OutsourceTypes.Add(type);
         await SaveUniqueAsync(context, "已有相同代码的外发类型", ct);
+        var changes = new List<AuditChange>
+        {
+            new("code", "类型代码", null, type.Code),
+            new("name", "中文名称", null, type.Name),
+            new("allowElectricalHandoff", "允许转迅得电控", null, type.AllowElectricalHandoff),
+        };
+        if (request.VendorIds is { } vendorIds && await ApplyTypeVendorsAsync(context, type.Id, vendorIds, allowAddingDisabled: false, ct) is { } vendorsChange)
+            changes.Add(vendorsChange);
         await WriteAuditAsync(context, actor, "OUTSOURCE_TYPE_CREATE", "outsource_type", type.Id, new
         {
             targetName = Label(type.Code, type.Name),
-            changes = AuditChange.OnlyChanged(new AuditChange("code", "类型代码", null, type.Code),
-                new AuditChange("name", "中文名称", null, type.Name),
-                new AuditChange("allowElectricalHandoff", "允许转迅得电控", null, type.AllowElectricalHandoff)),
+            changes = AuditChange.OnlyChanged(changes.ToArray()),
         }, ct);
+        var result = await TypeJsonAsync(context, type.Id, ct);
         await transaction.CommitAsync(ct);
-        return Json(await context.OutsourceTypes.AsNoTracking().SingleAsync(x => x.Id == type.Id, ct), []);
+        return result;
     }
 
     public async Task<OutsourceTypeResponse> UpdateTypeAsync(CurrentUser actor, ulong id, OutsourceTypeUpsert request, CancellationToken ct)
     {
-        var input = NormalizeType(request);
+        var input = NormalizeType(request.Code, request.Name, request.SortNo);
+        var status = request.Status is null ? null : AdminValidation.Status(request.Status);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, ct);
@@ -114,13 +122,21 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
                 .SetProperty(x => x.AllowElectricalHandoff, allowElectricalHandoff), ct);
         }
         catch (MySqlException error) when (error.Number == 1062) { throw ApiException.Conflict("已有相同代码的外发类型"); }
+        var changes = new List<AuditChange>
+        {
+            new("code", "类型代码", before.Code, input.Code),
+            new("name", "中文名称", before.Name, input.Name),
+            new("sortNo", "排序", before.SortNo, input.SortNo),
+            new("allowElectricalHandoff", "允许转迅得电控", before.AllowElectricalHandoff, allowElectricalHandoff),
+        };
+        if (status is not null && await ApplyTypeStatusAsync(context, before, status, ct) is { } statusChange)
+            changes.Add(statusChange);
+        if (request.VendorIds is { } vendorIds && await ApplyTypeVendorsAsync(context, id, vendorIds, allowAddingDisabled: false, ct) is { } vendorsChange)
+            changes.Add(vendorsChange);
         await WriteAuditAsync(context, actor, "OUTSOURCE_TYPE_UPDATE", "outsource_type", id, new
         {
             targetName = Label(input.Code, input.Name),
-            changes = AuditChange.OnlyChanged(new AuditChange("code", "类型代码", before.Code, input.Code),
-                new AuditChange("name", "中文名称", before.Name, input.Name),
-                new AuditChange("sortNo", "排序", before.SortNo, input.SortNo),
-                new AuditChange("allowElectricalHandoff", "允许转迅得电控", before.AllowElectricalHandoff, allowElectricalHandoff)),
+            changes = AuditChange.OnlyChanged(changes.ToArray()),
         }, ct);
         var result = await TypeJsonAsync(context, id, ct);
         await transaction.CommitAsync(ct);
@@ -134,13 +150,12 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, ct);
         var before = await LockTypeAsync(context, id, ct);
-        if (before.Status != status)
+        if (await ApplyTypeStatusAsync(context, before, status, ct) is { } change)
         {
-            await context.OutsourceTypes.Where(x => x.Id == id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
             await WriteAuditAsync(context, actor, "OUTSOURCE_TYPE_STATUS", "outsource_type", id, new
             {
                 targetName = Label(before.Code, before.Name),
-                changes = AuditChange.OnlyChanged(new AuditChange("status", "类型状态", before.Status, status)),
+                changes = AuditChange.OnlyChanged(change),
             }, ct);
         }
         var result = await TypeJsonAsync(context, id, ct);
@@ -152,32 +167,52 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
     public async Task<OutsourceTypeResponse> SetTypeVendorsAsync(
         CurrentUser actor, ulong id, OutsourceTypeVendorsRequest request, CancellationToken ct)
     {
-        var vendorIds = (request.VendorIds ?? []).Distinct().ToArray();
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, ct);
         var type = await LockTypeAsync(context, id, ct);
-        var vendors = await context.OemCompanies.AsNoTracking().Where(x => vendorIds.Contains(x.Id))
-            .Select(x => new { x.Id, x.Name }).ToArrayAsync(ct);
-        if (vendors.Length != vendorIds.Length) throw ApiException.BadRequest("所选厂商不存在");
-        var before = await context.OutsourceTypeVendors.Where(x => x.TypeId == id).Select(x => x.VendorId).ToArrayAsync(ct);
-        var names = await context.OemCompanies.AsNoTracking().Where(x => before.Contains(x.Id) || vendorIds.Contains(x.Id))
-            .ToDictionaryAsync(x => x.Id, x => x.Name, ct);
-        if (!before.ToHashSet().SetEquals(vendorIds))
+        // The standalone endpoint historically accepts any existing company, including disabled ones.
+        if (await ApplyTypeVendorsAsync(context, id, request.VendorIds ?? [], allowAddingDisabled: true, ct) is { } change)
         {
-            await context.OutsourceTypeVendors.Where(x => x.TypeId == id).ExecuteDeleteAsync(ct);
-            context.OutsourceTypeVendors.AddRange(vendorIds.Select(vendorId => new OutsourceTypeVendor { TypeId = id, VendorId = vendorId }));
-            await context.SaveChangesAsync(ct);
-            string Joined(IEnumerable<ulong> ids) => string.Join("、", ids.Select(x => names[x]).Order(StringComparer.Ordinal));
             await WriteAuditAsync(context, actor, "OUTSOURCE_TYPE_VENDORS", "outsource_type", id, new
             {
                 targetName = Label(type.Code, type.Name),
-                changes = AuditChange.OnlyChanged(new AuditChange("vendors", "可用厂商", Joined(before), Joined(vendorIds))),
+                changes = AuditChange.OnlyChanged(change),
             }, ct);
         }
         var result = await TypeJsonAsync(context, id, ct);
         await transaction.CommitAsync(ct);
         return result;
+    }
+
+    // Call with the type row locked (or newly inserted) in the caller's write transaction.
+    private static async Task<AuditChange?> ApplyTypeVendorsAsync(YfDbContext context, ulong id, ulong[] requestedIds,
+        bool allowAddingDisabled, CancellationToken ct)
+    {
+        var vendorIds = requestedIds.Distinct().ToArray();
+        var before = await context.OutsourceTypeVendors.Where(x => x.TypeId == id).Select(x => x.VendorId).ToArrayAsync(ct);
+        if (before.ToHashSet().SetEquals(vendorIds)) return null;
+
+        var affectedIds = before.Union(vendorIds).ToArray();
+        var vendors = await context.OemCompanies.AsNoTracking().Where(x => affectedIds.Contains(x.Id))
+            .Select(x => new { x.Id, x.Name, x.Status }).ToDictionaryAsync(x => x.Id, ct);
+        if (vendorIds.Any(vendorId => !vendors.ContainsKey(vendorId))) throw ApiException.BadRequest("所选厂商不存在");
+        if (!allowAddingDisabled && vendorIds.Except(before).Any(vendorId => vendors[vendorId].Status != AccountStatuses.Active))
+            throw ApiException.BadRequest("所选厂商已停用");
+
+        await context.OutsourceTypeVendors.Where(x => x.TypeId == id).ExecuteDeleteAsync(ct);
+        context.OutsourceTypeVendors.AddRange(vendorIds.Select(vendorId => new OutsourceTypeVendor { TypeId = id, VendorId = vendorId }));
+        await context.SaveChangesAsync(ct);
+
+        string Joined(IEnumerable<ulong> ids) => string.Join("、", ids.Select(x => vendors[x].Name).Order(StringComparer.Ordinal));
+        return new("vendors", "可用厂商", Joined(before), Joined(vendorIds));
+    }
+
+    private static async Task<AuditChange?> ApplyTypeStatusAsync(YfDbContext context, OutsourceType before, string status, CancellationToken ct)
+    {
+        if (before.Status == status) return null;
+        await context.OutsourceTypes.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.Status, status), ct);
+        return new("status", "类型状态", before.Status, status);
     }
 
     // ---- customer short names (客户全称 → 简称) ----
@@ -538,13 +573,13 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
     private static int SortNo(int? value) => value is null or (>= 0 and <= 9999)
         ? value ?? 0 : throw ApiException.BadRequest("排序需为 0~9999");
 
-    private static (string Code, string Name, int SortNo) NormalizeType(OutsourceTypeUpsert request)
+    private static (string Code, string Name, int SortNo) NormalizeType(string? code, string? name, int? sortNo)
     {
-        var code = request.Code?.Trim() ?? "";
+        code = code?.Trim() ?? "";
         if (code.Length is < 1 or > 32 || !code.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_'))
             throw ApiException.BadRequest("类型代码需为 1~32 位字母、数字、连字符或下划线");
-        var name = request.Name?.Trim() ?? "";
+        name = name?.Trim() ?? "";
         if (name.Length == 0 || name.EnumerateRunes().Count() > 64) throw ApiException.BadRequest("中文名称需为 1~64 个字符");
-        return (code, name, SortNo(request.SortNo));
+        return (code, name, SortNo(sortNo));
     }
 }

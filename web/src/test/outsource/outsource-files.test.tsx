@@ -47,7 +47,7 @@ function renderList(items: OutsourceItemResponse[], loadFiles: () => Promise<Out
 
 const fileActions = () => screen.queryAllByRole('button', { name: /^(预览|下载)/ })
 
-describe('外协清单档案', () => {
+describe('外发工令档案', () => {
   afterEach(() => {
     document.querySelectorAll('iframe.native-download-frame').forEach((frame) => frame.remove())
     vi.restoreAllMocks()

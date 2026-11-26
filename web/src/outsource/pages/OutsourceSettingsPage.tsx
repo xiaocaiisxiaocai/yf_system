@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, Descriptions, Empty, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Tabs, Tag, TimePicker, Tooltip,
+  Button, Card, Checkbox, Descriptions, Empty, Message, Select, Space, Spin, Switch, Tabs, TimePicker, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus, IconSync } from '@arco-design/web-react/icon'
@@ -8,10 +8,10 @@ import http, { type QuietRequestConfig } from '../../api/client'
 import type { OutsourceDefaultCcEntry, OutsourceDefaultCcRequest } from '../../api/generated/api-types'
 import { useAuth } from '../../store/auth'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
+import useOutsourceSaving from '../useOutsourceSaving'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
 import DangerPopconfirm from '../../components/DangerPopconfirm'
-import EnterSubmit from '../../components/EnterSubmit'
 import LoadError from '../../components/LoadError'
 import MesMirrorPanel from './MesMirrorPanel'
 import OutsourceCustomersTab from './OutsourceCustomersTab'
@@ -22,33 +22,21 @@ import ResizableTable from '../../components/ResizableTable'
 import StatusTag from '../../components/StatusTag'
 
 type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
-type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type CcUser = ApiResponses['GET /outsource/settings/default-cc'][number]
 type CcUserOption = ApiResponses['GET /outsource/settings/cc-user-options'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
-type TabKey = 'types' | 'customers' | 'cc' | 'emails' | 'sync' | 'fields'
+type TabKey = 'customers' | 'cc' | 'emails' | 'sync' | 'fields'
 
-const ACTIVE = 'ACTIVE'
-const DISABLED = 'DISABLED'
 const DEFAULT_CC_MODULES = [
   { label: '外发邮件', value: 'OUTSOURCE_NOTICE' },
   { label: '转迅得电控', value: 'ELECTRICAL_HANDOFF' },
 ]
-const nextSortNo = (rows: { sortNo: number }[]) => Math.min(9999, Math.max(0, ...rows.map((row) => row.sortNo)) + 10)
-const typeLabel = (type: OutsourceType) => `${type.code}【${type.name}】`
-const lengthRule = (label: string, max: number, required = true) => ({
-  validator: (value: string | undefined, callback: (error?: string) => void) => {
-    const length = Array.from(value?.trim() ?? '').length
-    callback((required && length === 0) || length > max ? `${label}需为 ${required ? 1 : 0}–${max} 个字符` : undefined)
-  },
-})
 
 /** Purchasing-maintained reference data of the outsourcing list (外协清单契约 → 设定维护). */
 export default function OutsourceSettingsPage() {
   // The route guard requires outsource:settings, which covers every tab here (field settings included).
-  const [tab, setTab] = useState<TabKey>('types')
+  const [tab, setTab] = useState<TabKey>('customers')
   const [vendors, setVendors] = useState<Vendor[]>([])
-  const [types, setTypes] = useState<OutsourceType[]>([])
   const [cc, setCc] = useState<CcUser[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -58,12 +46,11 @@ export default function OutsourceSettingsPage() {
     const seq = ++sequence.current
     setLoading(true); setError(false)
     try {
-      const [vendorResponse, typeResponse, ccResponse] = await Promise.all([
+      const [vendorResponse, ccResponse] = await Promise.all([
         http.get<ApiResponses['GET /outsource/settings/vendors']>('/outsource/settings/vendors'),
-        http.get<ApiResponses['GET /outsource/settings/types']>('/outsource/settings/types'),
         http.get<ApiResponses['GET /outsource/settings/default-cc']>('/outsource/settings/default-cc'),
       ])
-      if (seq === sequence.current) { setVendors(vendorResponse.data); setTypes(typeResponse.data); setCc(ccResponse.data) }
+      if (seq === sequence.current) { setVendors(vendorResponse.data); setCc(ccResponse.data) }
     } catch {
       if (seq === sequence.current) setError(true)
     } finally {
@@ -78,9 +65,8 @@ export default function OutsourceSettingsPage() {
   }, [load])
 
   return <Card className="page-card page-card--table outsource-settings-page">
-    <h1 className="visually-hidden">外协清单设定</h1>
+    <h1 className="visually-hidden">外发工令设定</h1>
     <Tabs className="outsource-settings-tabs" activeTab={tab} onChange={(value) => setTab(value as TabKey)}>
-      <Tabs.TabPane key="types" title="外发类型" />
       <Tabs.TabPane key="customers" title="客户简称" />
       <Tabs.TabPane key="cc" title="默认抄送" />
       <Tabs.TabPane key="emails" title="外协邮箱" />
@@ -91,133 +77,16 @@ export default function OutsourceSettingsPage() {
       : tab === 'sync' ? <SyncTab />
       : tab === 'fields' ? <OutsourceFieldsTab />
       : error ? <LoadError message="设定加载失败" onRetry={load} />
-      : tab === 'types' ? <TypesTab types={types} vendors={vendors} loading={loading} reload={load} />
       : tab === 'cc' ? <DefaultCcTab cc={cc} loading={loading} onChange={setCc} />
       : <OutsourceVendorEmailsTab vendors={vendors} />}
   </Card>
-}
-
-function useSaving() {
-  const [saving, setSaving] = useState(false)
-  const lock = useRef(false)
-  const run = async (action: () => Promise<void>) => {
-    if (lock.current) return
-    lock.current = true; setSaving(true)
-    try { await action() } catch { /* 统一请求层展示具体错误，保留表单供修正。 */ } finally { lock.current = false; setSaving(false) }
-  }
-  return { saving, run }
-}
-
-const toggled = (status: string) => ({ status: status === ACTIVE ? DISABLED : ACTIVE })
-
-function TypesTab({ types, vendors, loading, reload }: {
-  types: OutsourceType[]; vendors: Vendor[]; loading: boolean; reload: () => Promise<void>
-}) {
-  const [editing, setEditing] = useState<OutsourceType | null>(null)
-  const [open, setOpen] = useState(false)
-  const [mapping, setMapping] = useState<OutsourceType | null>(null)
-  const [selected, setSelected] = useState<number[]>([])
-  const [form] = Form.useForm()
-  const { saving, run } = useSaving()
-  const vendorName = new Map(vendors.map((vendor) => [vendor.id, vendor.name]))
-
-  const startEdit = (type?: OutsourceType) => {
-    setEditing(type ?? null); form.resetFields()
-    form.setFieldsValue({
-      code: type?.code ?? '', name: type?.name ?? '', sortNo: type?.sortNo ?? nextSortNo(types),
-      allowElectricalHandoff: type?.allowElectricalHandoff ?? true,
-    })
-    setOpen(true)
-  }
-  const save = () => run(async () => {
-    const values = await form.validate().catch(() => null)
-    if (!values) return
-    const body = {
-      code: values.code.trim(), name: values.name.trim(), sortNo: values.sortNo ?? 0,
-      allowElectricalHandoff: values.allowElectricalHandoff,
-    }
-    if (editing) await http.put<ApiResponses['PUT /outsource/settings/types/{id}']>(`/outsource/settings/types/${editing.id}`, body)
-    else await http.post<ApiResponses['POST /outsource/settings/types']>('/outsource/settings/types', body)
-    Message.success('外发类型已保存'); setOpen(false); await reload()
-  })
-  const saveMapping = () => run(async () => {
-    if (!mapping) return
-    await http.put<ApiResponses['PUT /outsource/settings/types/{id}/vendors']>(`/outsource/settings/types/${mapping.id}/vendors`, { vendorIds: selected })
-    Message.success('可用厂商已保存'); setMapping(null); await reload()
-  })
-  const toggle = (type: OutsourceType) => run(async () => {
-    await http.put<ApiResponses['PUT /outsource/settings/types/{id}/status']>(`/outsource/settings/types/${type.id}/status`, toggled(type.status))
-    await reload()
-  })
-
-  const columns = [
-    { title: '外发类型', width: 260, align: 'left' as const, ellipsis: true, render: (_: unknown, type: OutsourceType) => typeLabel(type) },
-    {
-      title: '可用厂商', width: 360, align: 'left' as const, render: (_: unknown, type: OutsourceType) => type.vendorIds.length
-        ? <Space wrap size={4}>{type.vendorIds.map((id) => <Tag key={id}>{vendorName.get(id) ?? id}</Tag>)}</Space>
-        : <span className="outsource-muted">未设置，任何厂商都无法匹配</span>,
-    },
-    {
-      title: '转迅得电控', dataIndex: 'allowElectricalHandoff', width: 120, align: 'center' as const,
-      render: (_: unknown, type: OutsourceType) => <Tag color={type.allowElectricalHandoff ? 'green' : 'gray'}>
-        {type.allowElectricalHandoff ? '是' : '否'}
-      </Tag>,
-    },
-    { title: '状态', width: 90, align: 'center' as const, render: (_: unknown, type: OutsourceType) => <StatusTag status={type.status} /> },
-    {
-      title: '操作', width: 200, align: 'center' as const, render: (_: unknown, type: OutsourceType) => actionSlots([
-        <Button key="edit" type="text" size="mini" onClick={() => startEdit(type)}>编辑</Button>,
-        <Button key="vendors" type="text" size="mini" onClick={() => { setSelected(type.vendorIds); setMapping(type) }}>可用厂商</Button>,
-        type.status === ACTIVE
-          ? <DangerPopconfirm key="status" title={`确认停用外发类型“${typeLabel(type)}”？`} disabled={saving} onOk={() => toggle(type)}>
-            <Button type="text" size="mini" status="danger" disabled={saving}>停用</Button>
-          </DangerPopconfirm>
-          : <Button key="status" type="text" size="mini" status="success" disabled={saving} onClick={() => void toggle(type)}>启用</Button>,
-      ], 'outsource'),
-    },
-  ]
-  const mappingOptions = vendors.filter((vendor) => vendor.status === ACTIVE || mapping?.vendorIds.includes(vendor.id))
-
-  return <>
-    <div className="page-toolbar responsive-toolbar outsource-settings-toolbar">
-      <span />
-      <Button type="primary" icon={<IconPlus />} disabled={loading} onClick={() => startEdit()}>新增外发类型</Button>
-    </div>
-    <ResizableTable<OutsourceType> tableId="outsource-types" className="page-table" rowKey="id" loading={loading} data={types} pagination={false}
-      noDataElement={loading ? <span /> : <Empty description="暂无外发类型" />} scroll={{ x: 1030, y: 'var(--page-table-scroll-y)' }}
-      columns={columns as TableColumnProps<OutsourceType>[]} />
-    <Modal className="form-dialog" title={editing ? '编辑外发类型' : '新增外发类型'} visible={open} onOk={save}
-      onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving}
-      cancelButtonProps={{ disabled: saving }} okText={editing ? '保存' : '创建'} cancelText="取消" unmountOnExit>
-      <Form form={form} layout="vertical" disabled={saving} onSubmit={() => void save()}>
-        <Form.Item field="code" label="类型代码" extra="与 IPMS 中的外发类型一致，例如 OEMA"
-          rules={[{ required: true, message: '请输入类型代码' }, { match: /^[A-Za-z0-9_-]{1,32}$/, message: '1–32 位字母、数字、连字符或下划线' }]}>
-          <Input autoFocus maxLength={32} />
-        </Form.Item>
-        <Form.Item field="name" label="中文名称" rules={[lengthRule('中文名称', 64)]}><Input maxLength={64} /></Form.Item>
-        <Form.Item field="sortNo" label="排序号"><InputNumber min={0} max={9999} precision={0} style={{ width: '100%' }} /></Form.Item>
-        <Form.Item field="allowElectricalHandoff" label="允许转迅得电控" triggerPropName="checked">
-          <Switch aria-label="允许转迅得电控" />
-        </Form.Item>
-        <EnterSubmit />
-      </Form>
-    </Modal>
-    <Modal className="form-dialog" title={mapping ? `${typeLabel(mapping)} · 可用厂商` : '可用厂商'} visible={mapping !== null}
-      onOk={saveMapping} onCancel={() => { if (!saving) setMapping(null) }} confirmLoading={saving} closable={!saving} maskClosable={!saving}
-      escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText="保存" cancelText="取消" unmountOnExit>
-      {mappingOptions.length
-        ? <Checkbox.Group direction="vertical" value={selected} onChange={(value) => setSelected(value as number[])}
-          options={mappingOptions.map((vendor) => ({ label: vendor.status === ACTIVE ? vendor.name : `${vendor.name}（已停用）`, value: vendor.id }))} />
-        : <Empty description="请先新增外协厂商" />}
-    </Modal>
-  </>
 }
 
 function DefaultCcTab({ cc, loading, onChange }: { cc: CcUser[]; loading: boolean; onChange: (rows: CcUser[]) => void }) {
   const [options, setOptions] = useState<CcUserOption[]>([])
   const [picked, setPicked] = useState<number>()
   const [pickedModules, setPickedModules] = useState(['OUTSOURCE_NOTICE'])
-  const { saving, run } = useSaving()
+  const { saving, run } = useOutsourceSaving()
   const busy = loading || saving
   const [optionsLoading, setOptionsLoading] = useState(false)
   const optionsLoaded = useRef(false)
@@ -309,10 +178,10 @@ function SyncTab() {
   const [status, setStatus] = useState<SyncStatus | null>(null)
   const [time, setTime] = useState<string>()
   const [error, setError] = useState(false)
-  const { saving, run } = useSaving()
+  const { saving, run } = useOutsourceSaving()
   // Manual sync of the open items is the list page's "立即同步" and needs the same permission.
   const canSync = useAuth((state) => state.permissions.includes(OUTSOURCE_PERMISSIONS.manage))
-  const { saving: syncing, run: runSync } = useSaving()
+  const { saving: syncing, run: runSync } = useOutsourceSaving()
   const mounted = useRef(true)
   const refreshInFlight = useRef(false)
 
@@ -429,7 +298,7 @@ function SyncTab() {
   return <div className="outsource-sync-tab">
     <MesMirrorPanel />
     <section className="outsource-sync-section">
-    <h2 className="outsource-sync-section__title">更新外协清单</h2>
+    <h2 className="outsource-sync-section__title">更新外发工令</h2>
     <Space wrap>
       <span>每日同步时间</span>
       <TimePicker aria-label="每日同步时间" format="HH:mm" value={time} allowClear={false} onChange={(value) => setTime(value)} style={{ width: 120 }} />

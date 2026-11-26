@@ -2,6 +2,8 @@ import { OEM_UI_ENABLED } from '../features'
 import { oemHome } from '../oem/oemNavigation'
 import { OUTSOURCE_HOME } from '../outsource/outsourceNavigation'
 
+export const WORK_ORDER_TITLE = 'ODM/OEM工令协作'
+
 interface NavigationGrants {
   menus: readonly string[]
   permissions: readonly string[]
@@ -45,12 +47,14 @@ export function collaborationPages({ menus, permissions, user }: NavigationGrant
       || page.anyPermission.some(permission => permissions.includes(permission)))))
 }
 
+export function workOrderHome({ permissions, user }: Pick<NavigationGrants, 'permissions' | 'user'>) {
+  if (user?.userType !== 'INTERNAL') return null
+  return (OEM_UI_ENABLED && oemHome(permissions)) || OUTSOURCE_HOME
+}
+
 export function businessHomes(grants: NavigationGrants) {
-  const internal = grants.user?.userType === 'INTERNAL'
   return {
     collaboration: collaborationPages(grants)[0]?.path ?? null,
-    oem: OEM_UI_ENABLED && internal ? oemHome(grants.permissions) : null,
-    // Every internal account sees the outsourcing list (外协清单契约 → 权限).
-    outsource: internal ? OUTSOURCE_HOME : null,
+    workOrder: workOrderHome(grants),
   }
 }
