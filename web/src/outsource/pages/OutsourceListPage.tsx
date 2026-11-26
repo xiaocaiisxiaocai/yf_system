@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip,
+  Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Tabs, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
@@ -456,14 +456,20 @@ export default function OutsourceListPage() {
 
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外发工令</h1>
+    <Tabs className="oem-vendor-tabs" aria-label="外发厂商" activeTab={String(filters.vendorId ?? 'all')}
+      onChange={(key) => {
+        changeFilters({ vendorId: key === 'all' ? undefined : Number(key) })
+        setSelected([])
+      }}>
+      <Tabs.TabPane key="all" title="全部" />
+      {vendors.map((vendor) => <Tabs.TabPane key={String(vendor.id)}
+        title={vendor.status === 'ACTIVE' ? vendor.name : `${vendor.name}（已停用）`} />)}
+    </Tabs>
     <div className="page-toolbar responsive-toolbar outsource-list-toolbar">
       <Space wrap>
         <Input.Search aria-label="搜索工令、客户或机型" placeholder="工令、客户或机型" value={keywordDraft} allowClear style={{ width: 200 }}
           onChange={setKeywordDraft} onSearch={(value) => changeFilters({ keyword: value.trim() })}
           onClear={() => changeFilters({ keyword: '' })} />
-        <Select aria-label="外发厂商" placeholder="外发厂商" allowClear showSearch style={{ width: 180 }} value={filters.vendorId}
-          onChange={(value) => { changeFilters({ vendorId: value }); setSelected([]) }}
-          options={vendors.map((vendor) => ({ label: vendor.status === 'ACTIVE' ? vendor.name : `${vendor.name}（已停用）`, value: vendor.id }))} />
         <Select aria-label="外发类型" placeholder="外发类型" allowClear showSearch style={{ width: 200 }} value={filters.typeId}
           onChange={(value) => changeFilters({ typeId: value })}
           options={types.map((type) => ({ label: `${type.code}【${type.name}】`, value: type.id }))} />

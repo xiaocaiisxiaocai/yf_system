@@ -353,7 +353,7 @@ export function AuditPage() {
   const resetFilters = () => { setDraft(EMPTY_AUDIT_FILTERS); setFilters(EMPTY_AUDIT_FILTERS); setPage(1) }
 
   return (
-    <Card className="page-card page-card--table audit-page" title={<h1 className="visually-hidden">审计日志</h1>}>
+    <Card className="page-card page-card--table audit-page" title={<h1 className="visually-hidden">操作日志</h1>}>
       <div className="audit-filter-panel audit-filter-panel--compact">
         <Input allowClear value={draft.keyword} placeholder="搜索账号或详情" prefix={<IconSearch />} onChange={(value) => setDraft((state) => ({ ...state, keyword: value }))} onPressEnter={applyFilters} />
         <Select allowClear showSearch value={draft.action} placeholder="具体操作" onChange={(value) => setDraft((state) => ({ ...state, action: value as string | undefined }))}>
@@ -382,7 +382,7 @@ export function AuditPage() {
         />
       )}
 
-      <AuditDetailDrawer title="审计日志详情" row={selected} presenter={OEM_AUDIT_PRESENTER} onClose={() => setSelected(null)} />
+      <AuditDetailDrawer title="操作日志详情" row={selected} presenter={OEM_AUDIT_PRESENTER} onClose={() => setSelected(null)} />
     </Card>
   )
 }

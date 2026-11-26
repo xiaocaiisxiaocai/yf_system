@@ -104,7 +104,7 @@ describe('外发工令页面', () => {
     }
   })
 
-  it('不分厂商页签，可按厂商筛选，暂停整行标红，类型与厂商不符时提示', async () => {
+  it('按厂商页签筛选并导出，暂停整行标红，类型与厂商不符时提示', async () => {
     setSession([])
     const get = mockApi(readOnlyLayout)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -117,17 +117,21 @@ describe('外发工令页面', () => {
     expect(screen.queryByRole('button', { name: /编辑工令/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
 
-    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['全部', '鼎亚', '元控'])
+    expect(screen.getByRole('tab', { name: '全部', selected: true })).toBeVisible()
+    vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
     expect(get).not.toHaveBeenCalledWith('/outsource/items/summary', expect.anything())
     const user = userEvent.setup()
-    await user.click(screen.getByRole('combobox', { name: '外发厂商' }))
-    fireEvent.click(await screen.findByRole('option', { name: '元控' }))
+    await user.click(screen.getByRole('tab', { name: '元控' }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: 2, page: 1 }),
     })))
-    const reset = screen.getByRole('button', { name: '重置筛选' })
+    await user.click(screen.getByRole('button', { name: '导出' }))
+    expect(get).toHaveBeenCalledWith('/outsource/items/export', expect.objectContaining({
+      params: expect.objectContaining({ vendorId: 2 }),
+    }))
     get.mockClear()
-    await user.click(reset)
+    await user.click(screen.getByRole('tab', { name: '全部' }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: undefined, page: 1 }),
     })))

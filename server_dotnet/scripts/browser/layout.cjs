@@ -6,7 +6,7 @@ const {fs,assert,OUT,s,f,record,login,track}=require(process.env.YF_BROWSER_SUPP
  const detail=f.uiProjects?.a?.id;assert(detail,'Run business before layout to cover a real detail route');
  const routes=[['dashboard','/','工作台'],['profile','/profile','个人资料'],['projects','/projects','Robot仿真协作'],['detail','/projects/'+detail,f.uiProjects.a.name],['suppliers','/suppliers','供应商管理'],['users','/org/users','用户管理'],['depts','/org/depts','组织架构'],['roles','/rbac/roles','角色与权限'],['logs','/logs','操作日志'],['config','/system/config','系统参数'],['password','/change-password','确认修改'],['not-found','/does-not-exist','页面不存在或已被移除']];
  routes.push(['dictionaries','/system/dictionaries','数据字典']);
- routes.push(['oem-transfers','/oem/transfers','文件传递单'],['oem-approvals','/oem/approvals','审批'],['oem-companies','/oem/admin/outsource-settings?tab=companies','厂商与账号'],['oem-audit','/oem/admin/audit','审计日志']);
+ routes.push(['oem-transfers','/oem/transfers','文件传递单'],['oem-approvals','/oem/approvals','审批'],['oem-companies','/oem/admin/outsource-settings?tab=companies','厂商与账号'],['oem-audit','/oem/admin/audit','操作日志']);
  const listPages=new Set(['projects','suppliers','users','roles','logs','dictionaries','oem-transfers','oem-approvals','oem-companies','oem-audit']);
  const results=[];
  // 整页 scrollWidth 查不到卡片内部的裁切（卡片 overflow 会把溢出藏起来）：窄屏下逐个核对标题、表格和操作按钮没有超出所在容器。
