@@ -59,6 +59,7 @@ describe('UI 事件失败保护', () => {
   })
 
   it('role permission save failure resolves the click handler, keeps selections, and unlocks retry', async () => {
+    mocks.permissions = ['role:manage']
     const role = {
       id: 7, name: '质量角色', description: '', isBuiltIn: false, status: 'ACTIVE',
       permissionIds: [1], assignedUserCount: 0, canManage: true, supplierRestricted: false,
@@ -103,6 +104,7 @@ describe('UI 事件失败保护', () => {
   })
 
   it('empty permission catalog disables saving but an intentionally cleared role remains saveable', async () => {
+    mocks.permissions = ['role:manage']
     const role = { id: 7, name: '测试角色', isBuiltIn: false, status: 'ACTIVE', permissionIds: [1], assignedUserCount: 0, canManage: true }
     for (const catalogAvailable of [false, true]) {
       const writes: Array<{ permissionIds: number[]; scopes?: unknown }> = []

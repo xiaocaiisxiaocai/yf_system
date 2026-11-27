@@ -73,7 +73,7 @@ function installDefaultGet() {
     if (url === '/departments') return { data: mocks.departments }
     if (url === '/admin/department-leader-options') return { data: [] }
     if (url === '/permissions') return { data: mocks.permissionCatalog }
-    if (url === '/admin/roles') return { data: page(mocks.roles, 20) }
+    if (url === '/admin/roles') return { data: page(mocks.roles.map((role) => ({ canManage: true, ...role })), 20) }
     if (url === '/admin/user-role-options') return { data: mocks.roles.filter((role) => role.status === 'ACTIVE').map((role) => ({ id: role.id, name: role.name })) }
     if (url === '/admin/users') return { data: page(mocks.users) }
     if (url === '/admin/suppliers') return { data: page(mocks.suppliers) }
@@ -306,6 +306,15 @@ describe('组织、角色与权限行为', () => {
     await user.click(screen.getByRole('button', { name: '保存主管' }))
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /设置主管/ })).not.toBeInTheDocument())
+  })
+
+  it('有用户查看权和删除权但没有管理权时，只能查看用户', async () => {
+    mocks.permissions = ['user:view', 'user:delete']
+    mocks.users = [{ id: 2, employeeNo: 'staff', realName: '普通员工', status: 'ACTIVE' }]
+    render(<UserList />)
+
+    const row = (await screen.findByText('普通员工')).closest('tr')!
+    expect(within(row).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
   })
 
   it('hard delete actions require their dedicated delete permission', async () => {

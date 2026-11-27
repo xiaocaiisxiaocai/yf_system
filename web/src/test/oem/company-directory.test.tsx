@@ -56,8 +56,8 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function renderDirectory(api: Partial<OemApi>, permissions: string[]) {
-  return render(
+function directoryElement(api: Partial<OemApi>, permissions: string[]) {
+  return (
     <OemProvider value={{
       api: api as OemApi,
       realm: 'internal',
@@ -67,8 +67,12 @@ function renderDirectory(api: Partial<OemApi>, permissions: string[]) {
       queryScope: ['test'],
     }}>
       <MemoryRouter><CompaniesPage /></MemoryRouter>
-    </OemProvider>,
+    </OemProvider>
   )
+}
+
+function renderDirectory(api: Partial<OemApi>, permissions: string[]) {
+  return render(directoryElement(api, permissions))
 }
 
 function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
@@ -106,6 +110,44 @@ async function openRowMore(user: ReturnType<typeof userEvent.setup>, row: HTMLEl
 }
 
 describe('ODM/OEMA 厂商与账号目录', () => {
+  it('仅厂商管理可维护厂商及联络人，不能打开账号列表', async () => {
+    const api = baseApi()
+    renderDirectory(api, ['oem:company_manage'])
+    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
+    expect(within(row).getByRole('button', { name: '联络人' })).toBeVisible()
+    expect(within(row).queryByRole('button', { name: '账号管理' })).not.toBeInTheDocument()
+    expect(api.accounts).not.toHaveBeenCalled()
+  })
+
+  it.each(['oem:account_manage', 'oem:directory_view'])('%s 单独可以读取账号，撤权即关闭已打开的账号列表', async (permission) => {
+    const api = baseApi()
+    const view = renderDirectory(api, [permission])
+    const drawer = await openAccounts(userEvent.setup())
+    expect(within(drawer).getByRole('button', { name: '新增账号' }).hasAttribute('disabled')).toBe(permission === 'oem:directory_view')
+    expect(api.accounts).toHaveBeenCalledWith(7)
+    view.rerender(directoryElement(api, ['oem:company_manage']))
+    expect(screen.queryByText('OEM_0031')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '账号管理' })).not.toBeInTheDocument()
+    view.rerender(directoryElement(api, [permission]))
+    expect(screen.getByRole('button', { name: '账号管理' })).toBeVisible()
+    expect(screen.queryByText('OEM_0031')).not.toBeInTheDocument()
+    expect(api.accounts).toHaveBeenCalledTimes(1)
+  })
+
+  it('撤回账号管理后立即关闭依赖账号列表的导入对话框', async () => {
+    const api = baseApi()
+    const view = renderDirectory(api, ['oem:account_manage'])
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: '导入' }))
+    fireEvent.click(await screen.findByText('导入账号'))
+    expect(await screen.findByRole('dialog', { name: '导入 ODM/OEMA 厂商账号' })).toBeVisible()
+    view.rerender(directoryElement(api, ['oem:company_manage']))
+    expect(screen.queryByRole('dialog', { name: '导入 ODM/OEMA 厂商账号' })).not.toBeInTheDocument()
+    view.rerender(directoryElement(api, ['oem:account_manage']))
+    expect(screen.queryByRole('dialog', { name: '导入 ODM/OEMA 厂商账号' })).not.toBeInTheDocument()
+    expect(api.accounts).not.toHaveBeenCalled()
+  })
+
   it('厂商列表和编辑资料与 Robot 一致，默认显示名称、状态、创建时间和操作', async () => {
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])

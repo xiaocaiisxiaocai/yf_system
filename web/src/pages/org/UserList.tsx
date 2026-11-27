@@ -153,9 +153,9 @@ export default function UserList() {
     menus: state.menus,
     mustChangePassword: state.mustChangePassword,
   })))
-  const canDelete = useAuth((state) => state.hasPerm('user:delete'))
   // 编辑（含数据范围）需要 user:manage；只有 user:view 的账号只看列表，不给一个必然 403 的入口。
-  const canManageUsers = useAuth((state) => state.hasPerm('user:manage'))
+  const canManageUsers = auth.permissions.includes('user:manage')
+  const canDelete = canManageUsers && auth.permissions.includes('user:delete')
   const [sessionUserId, sessionGeneration, sessionGrants] = createSessionQueryScope(auth)
   const sessionScope = useMemo(
     () => [sessionUserId, sessionGeneration, sessionGrants] as const,
