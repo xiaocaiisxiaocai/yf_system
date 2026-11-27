@@ -3,7 +3,7 @@ import {
   Button, Card, Checkbox, DatePicker, Empty, Form, Input, Message, Modal, Popconfirm, Select, Space, Tabs, Tag, Tooltip,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
-import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
+import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconFilter, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
@@ -14,9 +14,10 @@ import { OemProvider } from '../../oem/OemContext'
 import { useInternalOem } from '../../oem/useInternalOem'
 import { useAuth } from '../../store/auth'
 import type { ExcelImportRow, ExcelWorkbookSheet } from '../../utils/excelWorkbook'
-import ColumnFilterPanel from '../components/ColumnFilterPanel'
+import ItemHeaderFilter, { type HeaderFilterProps, type FilterControl, type FilterOption } from '../components/ItemHeaderFilter'
 import ItemFilesPopover from '../components/ItemFilesPopover'
 import { filterTerms } from '../filterTerms'
+import { exportOutsourceItems, listOutsourceItems } from '../itemRequests'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { normalizeImportDate } from '../importDate'
 import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
@@ -69,6 +70,12 @@ const customText = (field: Pick<FieldColumn, 'dataType'>, value?: string | null)
   field.dataType === 'BOOLEAN' ? (value === 'true' ? '是' : value === 'false' ? '否' : '-') : (value || '-')
 const BOOLEAN_OPTIONS = [{ label: '是', value: 'true' }, { label: '否', value: 'false' }]
 
+const FILE_OPTIONS = [
+  { label: '有可用档案', value: 'available' },
+  { label: '档案已清除', value: 'purged' },
+  { label: '无档案', value: 'none' },
+]
+
 const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
 const DATE_IMPORT_HEADERS = ['工令', 'BOM时间', '发图'] as const
 const IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
@@ -81,6 +88,7 @@ const DATE_IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
 interface Filters {
   keyword: string
   workOrders?: string
+  columnFilters?: Record<string, string>
   vendorId?: number
   typeId?: number
   status?: string
@@ -89,6 +97,16 @@ interface Filters {
   includeClosed: boolean
   /** Only what waits for a sender (opened from the count on the outsourcing entry). */
   sendQueue: boolean
+}
+
+function itemHeaderFilter(props: HeaderFilterProps): Pick<TableColumnProps<Item>, 'filteredValue' | 'filterIcon' | 'filterDropdown' | 'filterDropdownProps'> {
+  return {
+    filteredValue: props.values,
+    filterIcon: <button type="button" className="outsource-filter-trigger" aria-label={`${props.label}列筛选`}><IconFilter /></button>,
+    filterDropdownProps: { triggerProps: { unmountOnExit: true } },
+    filterDropdown: ({ confirm }) => <ItemHeaderFilter key={JSON.stringify(props.values)} {...props}
+      onApply={values => { props.onApply(values); confirm?.() }} />,
+  }
 }
 
 const today = () => {
@@ -113,6 +131,7 @@ export default function OutsourceListPage() {
   const [items, setItems] = useState<Item[]>([])
   const [total, setTotal] = useState(0)
   const [vendors, setVendors] = useState<Vendor[]>([])
+  const [customers, setCustomers] = useState<ApiResponses['GET /outsource/settings/customers']>([])
   const [types, setTypes] = useState<OutsourceType[]>([])
   const [layout, setLayout] = useState<FieldColumn[]>([])
   const [loading, setLoading] = useState(true)
@@ -138,9 +157,21 @@ export default function OutsourceListPage() {
     dateTo: filters.dateRange?.[1],
     keyword: filters.keyword || undefined,
     workOrders: filters.workOrders,
+    columnFilters: filters.columnFilters && Object.keys(filters.columnFilters).length ? JSON.stringify(filters.columnFilters) : undefined,
+    columnFilterTimeZone: filters.columnFilters?.importedAt || filters.columnFilters?.modifiedAt
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined,
     includeClosed: filters.includeClosed ? 'true' : undefined,
     sendQueue: filters.sendQueue ? 'true' : undefined,
   }), [filters])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    // Customer names can always be typed, including names without an alias.
+    void http.get<ApiResponses['GET /outsource/settings/customers']>('/outsource/settings/customers', { signal: controller.signal })
+      .then(response => { if (!controller.signal.aborted) setCustomers(response.data) })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [])
 
   const loadReference = useCallback(async () => {
     const [vendorResponse, typeResponse, fieldResponse] = await Promise.all([
@@ -156,7 +187,7 @@ export default function OutsourceListPage() {
     setLoading(true); setError(false)
     try {
       const [listResponse, syncResponse] = await Promise.all([
-        http.get<ApiResponses['GET /outsource/items']>('/outsource/items', { params: { ...params, page, pageSize } }),
+        listOutsourceItems({ ...params, page, pageSize }),
         http.get<ApiResponses['GET /outsource/sync-status']>('/outsource/sync-status'),
       ])
       if (seq !== sequence.current) return
@@ -182,10 +213,14 @@ export default function OutsourceListPage() {
     return () => { active = false; sequence.current += 1 }
   }, [load])
 
-  const changeFilters = (next: Partial<Filters>) => { setFilters((current) => ({ ...current, ...next })); setPage(1) }
+  const changeFilters = (next: Partial<Filters>) => {
+    setFilters(current => ({ ...current, ...next }))
+    setPage(1)
+    setSelected([])
+  }
   const hasActiveFilters = Boolean(
     keywordDraft.trim() || filters.keyword || filters.workOrders || filters.vendorId !== undefined || filters.typeId !== undefined
-    || filters.status || filters.sendStatus || filters.dateRange || filters.includeClosed || filters.sendQueue,
+    || Object.keys(filters.columnFilters ?? {}).length || filters.status || filters.sendStatus || filters.dateRange || filters.includeClosed || filters.sendQueue,
   )
   const resetFilters = () => {
     setKeywordDraft('')
@@ -199,7 +234,7 @@ export default function OutsourceListPage() {
     let active = true
     void Promise.resolve().then(() => {
       if (!active) return
-      setFilters((current) => current.sendQueue ? current : { ...current, sendQueue: true }); setPage(1)
+      setFilters((current) => current.sendQueue ? current : { ...current, sendQueue: true }); setPage(1); setSelected([])
       setSearchParams((current) => { const next = new URLSearchParams(current); next.delete('sendQueue'); return next }, { replace: true })
     })
     return () => { active = false }
@@ -240,11 +275,9 @@ export default function OutsourceListPage() {
     if (exporting) return
     setExporting(true)
     try {
-      const response = await http.get<ApiResponses['GET /outsource/items/export']>('/outsource/items/export', {
-        params, responseType: 'blob', timeout: 0,
-      })
+      const response = await exportOutsourceItems(params)
       const vendorName = filters.vendorId === undefined ? '' : `_${vendors.find((vendor) => vendor.id === filters.vendorId)?.name ?? ''}`
-      saveBlob(response.data as Blob, `外发工令${vendorName}_${today()}.xlsx`)
+      saveBlob(response.data, `外发工令${vendorName}_${today()}.xlsx`)
     } catch {
       // 统一请求层提示
     } finally {
@@ -348,6 +381,64 @@ export default function OutsourceListPage() {
     return { ...data, rows: data.rows.map((row) => ({ ...row, status: row.status as ImportRowOutcome['status'] })) }
   }
 
+  const vendorOptions = vendors.map(vendor => ({
+    label: vendor.status === 'ACTIVE' ? vendor.name : `${vendor.name}（已停用）`, value: String(vendor.id),
+  }))
+  const typeOptions = types.map(type => ({ label: `${type.code}【${type.name}】`, value: String(type.id) }))
+  const customerOptions = customers.map(customer => ({
+    value: customer.fullName, label: customer.shortName ? `${customer.shortName}（${customer.fullName}）` : customer.fullName,
+  }))
+  const byColumn = (key: string, label: string, control: FilterControl, options?: FilterOption[]) => {
+    const current = filters.columnFilters?.[key]
+    return itemHeaderFilter({
+      label, control, options, values: current ? [current] : [],
+      onApply: ([raw]) => {
+        const next = { ...filters.columnFilters }
+        const value = control === 'choice' ? raw : raw?.trim()
+        if (value) next[key] = value
+        else delete next[key]
+        changeFilters({ columnFilters: next })
+      },
+    })
+  }
+  const byOption = (key: 'vendorId' | 'typeId' | 'status' | 'sendStatus', label: string, options: FilterOption[]) => {
+    const current = filters[key]
+    const isId = key === 'vendorId' || key === 'typeId'
+    return itemHeaderFilter({
+      label, control: 'choice', options, values: current === undefined ? [] : [String(current)],
+      onApply: ([value]) => changeFilters({ [key]: isId && value !== undefined ? Number(value) : value }),
+    })
+  }
+
+  const fieldFilter = (field: FieldColumn) => {
+    switch (field.key) {
+      case 'vendor': return byOption('vendorId', field.label, vendorOptions)
+      case 'type': return byOption('typeId', field.label, typeOptions)
+      case 'status': return byOption('status', field.label, STATUS_OPTIONS)
+      case 'workOrderNo':
+        return itemHeaderFilter({ label: field.label, control: 'workOrders', values: filters.workOrders ? [filters.workOrders] : [],
+          onApply: ([text = '']) => changeFilters({ workOrders: filterTerms(text).length ? text : undefined }) })
+      case 'outsourceDate':
+        return itemHeaderFilter({ label: field.label, control: 'range', values: filters.dateRange ?? [],
+          onApply: values => changeFilters({ dateRange: values.length === 2 ? [values[0], values[1]] : undefined }) })
+      case 'files': return byColumn(field.key, field.label, 'choice', FILE_OPTIONS)
+      case 'customer': return byColumn(field.key, field.label, 'customer', customerOptions)
+      case 'electricalHandoff': return byColumn(field.key, field.label, 'choice', BOOLEAN_OPTIONS)
+      case 'quantity': return byColumn(field.key, field.label, 'number')
+      case 'workOrderIssuedOn':
+      case 'bomOn':
+      case 'drawingReleasedOn':
+      case 'originalDueDate':
+      case 'latestDueDate': return byColumn(field.key, field.label, 'date')
+    }
+    switch (field.dataType) {
+      case 'BOOLEAN': return byColumn(field.key, field.label, 'choice', BOOLEAN_OPTIONS)
+      case 'SELECT': return byColumn(field.key, field.label, 'choice', field.options.map(option => ({ label: option, value: option })))
+      case 'DATE': return byColumn(field.key, field.label, 'date')
+      case 'NUMBER': return byColumn(field.key, field.label, 'number')
+      default: return byColumn(field.key, field.label, 'text')
+    }
+  }
   const date = (value?: string | null) => value || '-'
   // Built-in columns by key; their titles, order and presence come from the field settings (外协清单契约 → 栏位设定).
   const builtIn: Record<string, Partial<TableColumnProps<Item>>> = {
@@ -364,15 +455,7 @@ export default function OutsourceListPage() {
         ? <Tooltip content={`签名：${item.electricalHandoffSigner ?? '-'}　时间：${fmtTime(item.electricalHandoffAt)}`}><span tabIndex={0}>是</span></Tooltip>
         : '否',
     },
-    workOrderNo: {
-      dataIndex: 'workOrderNo', width: 110,
-      filteredValue: filters.workOrders ? [filters.workOrders] : [],
-      filterDropdown: ({ confirm }) => <ColumnFilterPanel key={filters.workOrders ?? ''} label="工令" value={filters.workOrders ?? ''}
-        onApply={(text) => {
-          changeFilters({ workOrders: filterTerms(text).length ? text : undefined })
-          confirm?.()
-        }} />,
-    },
+    workOrderNo: { dataIndex: 'workOrderNo', width: 110 },
     customer: {
       dataIndex: 'customer', width: 150, ellipsis: true,
       render: (_, item) => item.customerFullName && item.customerFullName !== item.customer
@@ -400,7 +483,7 @@ export default function OutsourceListPage() {
   const fieldColumns: TableColumnProps<Item>[] = layout.map((field) => {
     const base: Partial<TableColumnProps<Item>> = builtIn[field.key]
       ?? { width: field.dataType === 'TEXT' ? 160 : 110, ellipsis: true, render: (_, item) => customText(field, item.customValues?.[field.key]) }
-    const column: TableColumnProps<Item> = { ...base, key: field.key, title: field.label, fixed: field.pinned ? 'left' : undefined }
+    const column: TableColumnProps<Item> = { ...base, ...fieldFilter(field), key: field.key, title: field.label, fixed: field.pinned ? 'left' : undefined }
     if (field.key === 'files') return column
     // A cell that differs from what was last mailed to the vendor is yellow, as in the mail and its Excel attachment.
     // Arco takes a cell's class from what its render function returns (`props`), not from `onCell`.
@@ -425,20 +508,20 @@ export default function OutsourceListPage() {
     }
   })
   const columns: TableColumnProps<Item>[] = [
-    { title: '序号', dataIndex: 'serialNo', width: 70, fixed: 'left', align: 'center' },
+    { ...byColumn('serialNo', '序号', 'number'), title: '序号', dataIndex: 'serialNo', width: 70, fixed: 'left', align: 'center' },
     ...fieldColumns.filter((column) => column.fixed),
     ...fieldColumns.filter((column) => !column.fixed),
     {
-      title: '发送状态', width: 120, align: 'center',
+      ...byOption('sendStatus', '发送状态', SEND_STATUS_OPTIONS), title: '发送状态', width: 120, align: 'center',
       render: (_, item) => <Space size={4}>
         <Tag color={SEND_TAG[item.sendStatus]?.color}>{SEND_TAG[item.sendStatus]?.label ?? item.sendStatus}</Tag>
         {item.closed && <Tag color="gray">已完成</Tag>}
       </Space>,
     },
-    { title: '导入人', dataIndex: 'importedBy', width: 100, ellipsis: true, render: (value: string | null) => value || '-' },
-    { title: '导入时间', width: 130, render: (_, item) => item.importedAt ? fmtTime(item.importedAt).slice(0, 16) : '-' },
-    { title: '修改人', dataIndex: 'modifiedBy', width: 100, ellipsis: true, render: (value: string | null) => value || '-' },
-    { title: '修改时间', width: 130, render: (_, item) => item.modifiedAt ? fmtTime(item.modifiedAt).slice(0, 16) : '-' },
+    { ...byColumn('importedBy', '导入人', 'text'), title: '导入人', dataIndex: 'importedBy', width: 100, ellipsis: true, render: (value: string | null) => value || '-' },
+    { ...byColumn('importedAt', '导入时间', 'date'), title: '导入时间', width: 130, render: (_, item) => item.importedAt ? fmtTime(item.importedAt).slice(0, 16) : '-' },
+    { ...byColumn('modifiedBy', '修改人', 'text'), title: '修改人', dataIndex: 'modifiedBy', width: 100, ellipsis: true, render: (value: string | null) => value || '-' },
+    { ...byColumn('modifiedAt', '修改时间', 'date'), title: '修改时间', width: 130, render: (_, item) => item.modifiedAt ? fmtTime(item.modifiedAt).slice(0, 16) : '-' },
     {
       title: '操作', width: editable.length > 0 ? 92 : 76, align: 'center', fixed: 'right',
       render: (_, item) => <Space size={0}>
@@ -457,13 +540,9 @@ export default function OutsourceListPage() {
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外发工令</h1>
     <Tabs className="oem-vendor-tabs" aria-label="外发厂商" activeTab={String(filters.vendorId ?? 'all')}
-      onChange={(key) => {
-        changeFilters({ vendorId: key === 'all' ? undefined : Number(key) })
-        setSelected([])
-      }}>
+      onChange={key => changeFilters({ vendorId: key === 'all' ? undefined : Number(key) })}>
       <Tabs.TabPane key="all" title="全部" />
-      {vendors.map((vendor) => <Tabs.TabPane key={String(vendor.id)}
-        title={vendor.status === 'ACTIVE' ? vendor.name : `${vendor.name}（已停用）`} />)}
+      {vendorOptions.map(vendor => <Tabs.TabPane key={vendor.value} title={vendor.label} />)}
     </Tabs>
     <div className="page-toolbar responsive-toolbar outsource-list-toolbar">
       <Space wrap>
@@ -472,7 +551,7 @@ export default function OutsourceListPage() {
           onClear={() => changeFilters({ keyword: '' })} />
         <Select aria-label="外发类型" placeholder="外发类型" allowClear showSearch style={{ width: 200 }} value={filters.typeId}
           onChange={(value) => changeFilters({ typeId: value })}
-          options={types.map((type) => ({ label: `${type.code}【${type.name}】`, value: type.id }))} />
+          options={typeOptions.map(option => ({ ...option, value: Number(option.value) }))} />
         <Select aria-label="状态" placeholder="状态" allowClear style={{ width: 100 }} value={filters.status}
           onChange={(value) => changeFilters({ status: value })} options={STATUS_OPTIONS} />
         <Select aria-label="发送状态" placeholder="发送状态" allowClear style={{ width: 140 }} value={filters.sendStatus}

@@ -50,42 +50,46 @@ internal static class OutsourceMatchStates
 /// <summary>List filters shared by the paged list and the export.</summary>
 public sealed record OutsourceItemQuery(
     ulong? VendorId, ulong? TypeId, string? Status, string? SendStatus, DateOnly? DateFrom, DateOnly? DateTo,
-    string? Keyword, bool IncludeClosed, bool SendQueue = false, IReadOnlyList<string>? WorkOrders = null)
+    string? Keyword, bool IncludeClosed, bool SendQueue = false, IReadOnlyList<string>? WorkOrders = null,
+    IReadOnlyDictionary<string, string>? ColumnFilters = null, string? ColumnFilterTimeZone = null)
 {
-    public static OutsourceItemQuery From(HttpRequest request)
+    public static OutsourceItemQuery From(HttpRequest request) => From(request.Query);
+
+    public static OutsourceItemQuery From(IQueryCollection query)
     {
-        static DateOnly? Date(HttpRequest request, string name)
+        static DateOnly? Date(IQueryCollection query, string name)
         {
-            var value = request.Query[name].ToString();
+            var value = query[name].ToString();
             if (value.Length == 0) return null;
             return DateOnly.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
                 ? date : throw ApiException.BadRequest("请求参数错误: " + name);
         }
-        var status = request.Query["status"].ToString();
-        var sendStatus = request.Query["sendStatus"].ToString();
+        var status = query["status"].ToString();
+        var sendStatus = query["sendStatus"].ToString();
         if (status.Length > 0 && !OutsourceItemStatuses.IsValid(status)) throw ApiException.BadRequest("请求参数错误: status");
         if (sendStatus.Length > 0 && !OutsourceSendStatuses.IsValid(sendStatus)) throw ApiException.BadRequest("请求参数错误: sendStatus");
-        var includeClosed = request.Query["includeClosed"].ToString() switch
+        var includeClosed = query["includeClosed"].ToString() switch
         {
             "" or "false" => false,
             "true" => true,
             _ => throw ApiException.BadRequest("请求参数错误: includeClosed"),
         };
-        var sendQueue = request.Query["sendQueue"].ToString() switch
+        var sendQueue = query["sendQueue"].ToString() switch
         {
             "" or "false" => false,
             "true" => true,
             _ => throw ApiException.BadRequest("请求参数错误: sendQueue"),
         };
-        var keyword = request.Query["keyword"].ToString().Trim();
-        var workOrders = OutsourceFilterTerms.Split(request.Query["workOrders"].ToString())
+        var keyword = query["keyword"].ToString().Trim();
+        var workOrders = OutsourceFilterTerms.Split(query["workOrders"].ToString())
             .Distinct(StringComparer.OrdinalIgnoreCase).Take(101).ToArray();
         if (workOrders.Length > 100 || workOrders.Any(term => term.Length > 64))
             throw ApiException.BadRequest("请求参数错误: workOrders");
-        return new(QueryValues.OptionalUInt64(request, "vendorId"), QueryValues.OptionalUInt64(request, "typeId"),
+        return new(QueryValues.OptionalUInt64(query, "vendorId"), QueryValues.OptionalUInt64(query, "typeId"),
             status.Length == 0 ? null : status, sendStatus.Length == 0 ? null : sendStatus,
-            Date(request, "dateFrom"), Date(request, "dateTo"), keyword.Length == 0 ? null : keyword[..Math.Min(keyword.Length, 64)],
-            includeClosed, sendQueue, workOrders);
+            Date(query, "dateFrom"), Date(query, "dateTo"), keyword.Length == 0 ? null : keyword[..Math.Min(keyword.Length, 64)],
+            includeClosed, sendQueue, workOrders, OutsourceColumnFilters.Parse(query["columnFilters"].ToString()),
+            query["columnFilterTimeZone"].ToString());
     }
 }
 
@@ -283,7 +287,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await AuthorizeReadAsync(context, actor, null, ct);
         var reference = await OutsourceReference.LoadAsync(context, ct);
-        var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
+        var filtered = await FilterAsync(context, query, reference, ct);
         var total = (ulong)await filtered.LongCountAsync(ct);
         var rows = await ListOrder(context, filtered)
             .Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size).ToArrayAsync(ct);
@@ -305,7 +309,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await AuthorizeReadAsync(context, actor, null, ct);
         var reference = await OutsourceReference.LoadAsync(context, ct);
-        var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
+        var filtered = await FilterAsync(context, query, reference, ct);
         if (await filtered.CountAsync(ct) > MaximumExportRows)
             throw ApiException.BadRequest($"一次最多导出 {MaximumExportRows} 条，请缩小筛选范围");
         var rows = await ListOrder(context, filtered).ToArrayAsync(ct);
@@ -324,16 +328,20 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         items.OrderBy(x => context.OemCompanies.Where(c => c.Id == x.VendorId).Select(c => c.Name).FirstOrDefault())
             .ThenBy(x => x.VendorId).ThenByDescending(x => x.OutsourceDate).ThenBy(x => x.WorkOrderNo).ThenBy(x => x.Id);
 
-    private static IQueryable<OutsourceItem> Filter(IQueryable<OutsourceItem> items, OutsourceItemQuery query, OutsourceReference reference)
+    private static async Task<IQueryable<OutsourceItem>> FilterAsync(
+        YfDbContext context, OutsourceItemQuery query, OutsourceReference reference, CancellationToken ct)
     {
+        var items = context.OutsourceItems.AsNoTracking();
         if (!query.IncludeClosed) items = items.Where(x => x.ClosedAt == null);
         if (query.VendorId is { } vendorId) items = items.Where(x => x.VendorId == vendorId);
         if (query.TypeId is { } typeId)
         {
-            var code = reference.CodeOf(typeId);
-            if (code is null) return items.Where(_ => false);
-            var labelled = code + "【";
-            items = items.Where(x => x.TypeCode == code || x.TypeCode!.StartsWith(labelled));
+            // Retired types still identify historical rows, although they can no longer be assigned.
+            var code = reference.CodeOf(typeId) ?? await context.OutsourceTypes.AsNoTracking().Where(x => x.Id == typeId)
+                .Select(x => x.Code).SingleOrDefaultAsync(ct);
+            items = code is null ? items.Where(_ => false) : items.Where(x => x.TypeCode != null &&
+                (x.TypeCode.Trim() == code || (x.TypeCode.IndexOf("【") > 0
+                    && x.TypeCode.Substring(0, x.TypeCode.IndexOf("【")).Trim() == code)));
         }
         if (query.Status is { } status) items = items.Where(x => x.Status == status);
         if (query.SendStatus is { } sendStatus) items = items.Where(x => x.SendStatus == sendStatus);
@@ -355,7 +363,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                 || byShortName.Contains(x.Customer!)
                 || EF.Functions.Like(x.MachineModel!, pattern, QueryValues.LikeEscape));
         }
-        return items;
+        return await OutsourceColumnFilters.ApplyAsync(context, items, query, reference, ct);
     }
 
     internal static Expression<Func<OutsourceItem, bool>> MatchWorkOrders(IReadOnlyList<string> terms)
@@ -772,6 +780,11 @@ internal sealed class OutsourceReference
     public OutsourceFieldLayout Layout { get; }
     /// <summary>Directory and custom values for the items loaded in this request.</summary>
     private readonly Dictionary<ulong, (string? Supervisor, Dictionary<string, string?> Custom)> values = [];
+    private DateTime? archiveTime;
+
+    // A retention deadline can pass between filtering, counting and rendering the archive indicator.
+    public async Task<DateTime> ArchiveTimeAsync(YfDbContext db, CancellationToken ct) =>
+        archiveTime ??= await DbClock.UtcNowAsync(db, ct, 3);
 
     private OutsourceReference(Dictionary<string, (ulong, string, string, bool)> types, HashSet<(ulong, ulong)> mapping,
         Dictionary<ulong, string> vendorNames, HashSet<ulong> activeVendorIds,
@@ -888,7 +901,7 @@ internal sealed class OutsourceReference
         var names = userIds.Length == 0 ? [] : await context.Users.AsNoTracking().Where(x => userIds.Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, x => x.RealName, ct);
         var byId = items.ToDictionary(x => x.Id);
-        var counts = await OutsourceFiles.CountsAsync(context, byId.Keys, null, ct);
+        var counts = await OutsourceFiles.CountsAsync(context, byId.Keys, null, ct, archiveTime);
         responses = responses.Select(response => response with
         {
             ImportedBy = byId[response.Id].CreatedBy is { } importer ? names.GetValueOrDefault(importer) : null,

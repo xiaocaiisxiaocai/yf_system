@@ -42,6 +42,19 @@ public sealed class OutsourceItemQueryTests
         Assert.Equal("请求参数错误: workOrders", error.Message);
     }
 
+    [Theory]
+    [InlineData("{")]
+    [InlineData("[]")]
+    [InlineData("""{"quantity":2}""")]
+    [InlineData("""{"quantity":"2","quantity":"3"}""")]
+    public void ColumnFiltersRequireAnObjectWithDistinctKeysAndStringValues(string json)
+    {
+        var request = new DefaultHttpContext().Request;
+        request.QueryString = QueryString.Create("columnFilters", json);
+        var error = Assert.Throws<ApiException>(() => OutsourceItemQuery.From(request));
+        Assert.Equal(400, error.Status);
+    }
+
     [Fact]
     public void MaximumTermsTranslateToEscapedSqlDisjunctionWithoutADatabase()
     {

@@ -2517,8 +2517,10 @@ export interface ApiResponses {
   "POST /outsource/items/date-import": AdminImportResponse
   "POST /outsource/items/date-import/preview": OutsourceDateImportPreviewResponse
   "GET /outsource/items/export": Blob
+  "POST /outsource/items/export": Blob
   "POST /outsource/items/import": AdminImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse
+  "POST /outsource/items/query": PageResponseOfOutsourceItemResponse
   "PUT /outsource/items/skip-notice": OutsourceBatchResponse
   "POST /outsource/items/sync": OutsourceSyncStatusResponse
   "PUT /outsource/items/{id}": OutsourceItemResponse
