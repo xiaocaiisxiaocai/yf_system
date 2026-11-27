@@ -86,7 +86,6 @@ const DATE_IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
 ]
 
 interface Filters {
-  keyword: string
   workOrders?: string
   columnFilters?: Record<string, string>
   vendorId?: number
@@ -123,9 +122,8 @@ export default function OutsourceListPage() {
   const canSend = permissions.includes(OUTSOURCE_PERMISSIONS.send)
   const canDateImport = permissions.includes(OUTSOURCE_PERMISSIONS.dateImport)
   const [searchParams, setSearchParams] = useSearchParams()
-  const [filters, setFilters] = useState<Filters>(() => ({ keyword: '', includeClosed: false, sendQueue: searchParams.get('sendQueue') === '1' }))
+  const [filters, setFilters] = useState<Filters>(() => ({ includeClosed: false, sendQueue: searchParams.get('sendQueue') === '1' }))
   const refreshQueue = useSendQueue((state) => state.refresh)
-  const [keywordDraft, setKeywordDraft] = useState('')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [items, setItems] = useState<Item[]>([])
@@ -155,7 +153,6 @@ export default function OutsourceListPage() {
     sendStatus: filters.sendStatus,
     dateFrom: filters.dateRange?.[0],
     dateTo: filters.dateRange?.[1],
-    keyword: filters.keyword || undefined,
     workOrders: filters.workOrders,
     columnFilters: filters.columnFilters && Object.keys(filters.columnFilters).length ? JSON.stringify(filters.columnFilters) : undefined,
     columnFilterTimeZone: filters.columnFilters?.importedAt || filters.columnFilters?.modifiedAt
@@ -219,12 +216,11 @@ export default function OutsourceListPage() {
     setSelected([])
   }
   const hasActiveFilters = Boolean(
-    keywordDraft.trim() || filters.keyword || filters.workOrders || filters.vendorId !== undefined || filters.typeId !== undefined
+    filters.workOrders || filters.vendorId !== undefined || filters.typeId !== undefined
     || Object.keys(filters.columnFilters ?? {}).length || filters.status || filters.sendStatus || filters.dateRange || filters.includeClosed || filters.sendQueue,
   )
   const resetFilters = () => {
-    setKeywordDraft('')
-    setFilters({ keyword: '', includeClosed: false, sendQueue: false })
+    setFilters({ includeClosed: false, sendQueue: false })
     setSelected([])
     setPage(1)
   }
@@ -546,16 +542,6 @@ export default function OutsourceListPage() {
     </Tabs>
     <div className="page-toolbar responsive-toolbar outsource-list-toolbar">
       <Space wrap>
-        <Input.Search aria-label="搜索工令、客户或机型" placeholder="工令、客户或机型" value={keywordDraft} allowClear style={{ width: 200 }}
-          onChange={setKeywordDraft} onSearch={(value) => changeFilters({ keyword: value.trim() })}
-          onClear={() => changeFilters({ keyword: '' })} />
-        <Select aria-label="外发类型" placeholder="外发类型" allowClear showSearch style={{ width: 200 }} value={filters.typeId}
-          onChange={(value) => changeFilters({ typeId: value })}
-          options={typeOptions.map(option => ({ ...option, value: Number(option.value) }))} />
-        <Select aria-label="状态" placeholder="状态" allowClear style={{ width: 100 }} value={filters.status}
-          onChange={(value) => changeFilters({ status: value })} options={STATUS_OPTIONS} />
-        <Select aria-label="发送状态" placeholder="发送状态" allowClear style={{ width: 140 }} value={filters.sendStatus}
-          onChange={(value) => changeFilters({ sendStatus: value })} options={SEND_STATUS_OPTIONS} />
         <DatePicker.RangePicker aria-label="外发日期" style={{ width: 240 }} placeholder={['外发日期起', '外发日期止']}
           value={filters.dateRange} onChange={(value) => changeFilters({ dateRange: value?.length === 2 ? [value[0], value[1]] : undefined })} />
         <Checkbox checked={filters.includeClosed} onChange={(value) => changeFilters({ includeClosed: value })}>显示已完成</Checkbox>

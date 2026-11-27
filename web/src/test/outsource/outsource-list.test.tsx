@@ -207,6 +207,11 @@ describe('外发工令页面', () => {
       expect(filter(label)).toBeInTheDocument()
     }
     expect(filter('操作')).toBeNull()
+    expect(screen.queryByPlaceholderText('工令、客户或机型')).not.toBeInTheDocument()
+    for (const label of ['外发类型', '状态', '发送状态']) {
+      expect(screen.queryByRole('combobox', { name: label })).not.toBeInTheDocument()
+    }
+    expect(screen.getByPlaceholderText('外发日期起')).toBeInTheDocument()
 
     await user.click(filter('外发厂商'))
     await user.click(await readyForPointer(await screen.findByRole('combobox', { name: '筛选外发厂商' })))
