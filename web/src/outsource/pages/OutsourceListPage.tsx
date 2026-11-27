@@ -101,7 +101,7 @@ interface Filters {
 
 function itemHeaderFilter(props: HeaderFilterProps): Pick<TableColumnProps<Item>, 'filteredValue' | 'filterIcon' | 'filterDropdown' | 'filterDropdownProps'> {
   return {
-    filteredValue: props.values,
+    filteredValue: props.values.filter(Boolean),
     filterIcon: <button type="button" className="outsource-filter-trigger" aria-label={`${props.label}列筛选`}><IconFilter /></button>,
     filterDropdownProps: { triggerProps: { unmountOnExit: true } },
     filterDropdown: ({ confirm }) => <ItemHeaderFilter key={JSON.stringify(props.values)} {...props}
@@ -385,16 +385,19 @@ export default function OutsourceListPage() {
   const customerOptions = customers.map(customer => ({
     value: customer.fullName, label: customer.shortName ? `${customer.shortName}（${customer.fullName}）` : customer.fullName,
   }))
+  const updatedColumnFilters = (key: string, value?: string) => {
+    const next = { ...filters.columnFilters }
+    if (value) next[key] = value
+    else delete next[key]
+    return next
+  }
   const byColumn = (key: string, label: string, control: FilterControl, options?: FilterOption[]) => {
     const current = filters.columnFilters?.[key]
     return itemHeaderFilter({
       label, control, options, values: current ? [current] : [],
       onApply: ([raw]) => {
-        const next = { ...filters.columnFilters }
         const value = control === 'choice' ? raw : raw?.trim()
-        if (value) next[key] = value
-        else delete next[key]
-        changeFilters({ columnFilters: next })
+        changeFilters({ columnFilters: updatedColumnFilters(key, value) })
       },
     })
   }
@@ -413,8 +416,13 @@ export default function OutsourceListPage() {
       case 'type': return byOption('typeId', field.label, typeOptions)
       case 'status': return byOption('status', field.label, STATUS_OPTIONS)
       case 'workOrderNo':
-        return itemHeaderFilter({ label: field.label, control: 'workOrders', values: filters.workOrders ? [filters.workOrders] : [],
-          onApply: ([text = '']) => changeFilters({ workOrders: filterTerms(text).length ? text : undefined }) })
+        return itemHeaderFilter({
+          label: field.label, control: 'workOrders', values: [filters.workOrders ?? '', filters.columnFilters?.ipmsSyncStatus ?? ''],
+          onApply: ([text = '', syncStatus]) => changeFilters({
+            workOrders: filterTerms(text).length ? text : undefined,
+            columnFilters: updatedColumnFilters('ipmsSyncStatus', syncStatus),
+          }),
+        })
       case 'outsourceDate':
         return itemHeaderFilter({ label: field.label, control: 'range', values: filters.dateRange ?? [],
           onApply: values => changeFilters({ dateRange: values.length === 2 ? [values[0], values[1]] : undefined }) })
@@ -452,7 +460,14 @@ export default function OutsourceListPage() {
         ? <Tooltip content={`签名：${item.electricalHandoffSigner ?? '-'}　时间：${fmtTime(item.electricalHandoffAt)}`}><span tabIndex={0}>是</span></Tooltip>
         : '否',
     },
-    workOrderNo: { dataIndex: 'workOrderNo', width: 110 },
+    workOrderNo: {
+      dataIndex: 'workOrderNo', width: 110,
+      render: (_, item) => item.ipmsSyncedAt == null && !item.closed
+        ? <Space size={4} wrap>
+          <span>{item.workOrderNo}</span>
+          <Tooltip content="IPMS 尚无此工令资料；若长期不消失，请确认工令号是否正确"><Tag size="small" color="gold">待同步</Tag></Tooltip>
+        </Space> : item.workOrderNo,
+    },
     customer: {
       dataIndex: 'customer', width: 150, ellipsis: true,
       render: (_, item) => item.customerFullName && item.customerFullName !== item.customer

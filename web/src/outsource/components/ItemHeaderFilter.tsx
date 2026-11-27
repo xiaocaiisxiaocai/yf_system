@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { AutoComplete, Button, DatePicker, Input, Select } from '@arco-design/web-react'
-import ColumnFilterPanel from './ColumnFilterPanel'
+import './ColumnFilterPanel.css'
 
 export type FilterControl = 'text' | 'number' | 'date' | 'range' | 'choice' | 'customer' | 'workOrders'
 export type FilterOption = { label: string; value: string }
@@ -20,13 +20,19 @@ export default function ItemHeaderFilter({ label, control, values, options = [],
   const value = draft[0] ?? ''
   const setValue = (next?: string) => setDraft(next ? [next] : [])
   const name = `筛选${label}`
-  if (control === 'workOrders') {
-    return <ColumnFilterPanel label={label} value={value} onApply={text => onApply(text ? [text] : [])} />
-  }
-
   const apply = () => onApply(draft)
   let input
-  if (control === 'choice') {
+  if (control === 'workOrders') {
+    const syncStatus = draft[1] ?? ''
+    input = <>
+      <Input.TextArea autoFocus autoSize={{ minRows: 1, maxRows: 6 }} placeholder={`筛选${label}，可粘贴多个`}
+        value={value} onChange={text => setDraft([text, syncStatus])}
+        onPressEnter={event => { if (!event.shiftKey) { event.preventDefault(); apply() } }} />
+      <Select aria-label="同步状态" placeholder="同步状态" allowClear value={syncStatus || undefined}
+        options={[{ label: '尚未同步', value: 'unsynced' }]} onChange={status => setDraft([value, status ?? ''])}
+        getPopupContainer={popupParent} />
+    </>
+  } else if (control === 'choice') {
     input = <Select aria-label={name} placeholder="全部" allowClear showSearch options={options}
       value={value || undefined} onChange={setValue} getPopupContainer={popupParent} />
   } else if (control === 'customer') {

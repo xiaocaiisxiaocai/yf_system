@@ -39,6 +39,8 @@ public sealed class OutsourceColumnFilterTests
                   ('COL-C',3,'2026-11-03',@company,'PAUSED','电子制造有限公司','工程甲',2,'2026-11-06','Rate 50',@engineer,'2026-11-02 08:00:00',@leader,'2026-11-02 08:00:00'),
                   ('COL-D',4,'2026-11-03',@company,'NORMAL','其他公司','无关联',12,'2026-11-06','Rate 50',@engineer,'2026-11-01 06:59:59.999',NULL,NULL),
                   ('COL-E',5,'2026-11-03',@company,'NORMAL','电子制造有限公司','无关联',2,'2026-12-06',NULL,NULL,'2026-11-01 12:00:00',NULL,NULL);
+                UPDATE outsource_items SET ipms_synced_at='2026-11-03 12:00:00'
+                WHERE work_order_no IN ('COL-B','COL-C','COL-D','COL-E');
                 INSERT INTO outsource_item_values(item_id,field_id,value)
                 SELECT i.id,f.id,'true' FROM outsource_items i JOIN outsource_fields f ON f.field_key='hasRobotV'
                 WHERE i.work_order_no IN ('COL-A','COL-B','COL-C');
@@ -65,6 +67,7 @@ public sealed class OutsourceColumnFilterTests
             page["list"]!.AsArray().Select(row => row!["workOrderNo"]!.GetValue<string>()).ToArray();
 
         var matches = new[] { "COL-A", "COL-B" };
+        Assert.Equal(["COL-A"], await Search(Columns(new { ipmsSyncStatus = "unsynced" })));
         Assert.Equal(matches, await Search(Columns(new { remark = "%" })));
         Assert.Equal(["COL-A", "COL-B", "COL-C", "COL-E"], await Search(Columns(new { quantity = "2" })));
         Assert.Equal(["COL-A", "COL-B", "COL-C"], await Search(Columns(new { supervisor = "主管甲" })));

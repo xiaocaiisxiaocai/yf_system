@@ -40,6 +40,10 @@ internal static class OutsourceColumnFilters
             var pattern = QueryValues.ContainsPattern(value);
             switch (key)
             {
+                case "ipmsSyncStatus":
+                    if (value != "unsynced") throw Invalid(key);
+                    items = items.Where(x => x.IpmsSyncedAt == null);
+                    break;
                 case "serialNo":
                     if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var serial)) throw Invalid(key);
                     items = items.Where(x => x.SerialNo == serial);

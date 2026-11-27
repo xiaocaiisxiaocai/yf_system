@@ -25,7 +25,7 @@ const base = {
   ipmsSyncedAt: '2026-11-10T00:00:00Z', electricalHandoff: false, electricalHandoffAt: null, electricalHandoffSigner: null,
 }
 const items = [
-  { ...base, id: 1, workOrderNo: '21089901', vendorId: 1, vendorName: '鼎亚', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
+  { ...base, id: 1, workOrderNo: '21089901', ipmsSyncedAt: null, vendorId: 1, vendorName: '鼎亚', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
     status: 'PAUSED', sendStatus: 'UNSENT', matchState: 'OK', updatedAt: '2026-11-10T01:02:03.456Z' },
   { ...base, id: 2, workOrderNo: '21089961', vendorId: 2, vendorName: '元控', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
     status: 'NORMAL', sendStatus: 'SENT', matchState: 'VENDOR_MISMATCH', updatedAt: '2026-11-10T01:02:03.456Z',
@@ -66,9 +66,9 @@ const fieldLayout = {
 /** The same columns for an account that fills none of them in. */
 const readOnlyLayout = { fields: fieldLayout.fields.map((field) => ({ ...field, canEdit: false })) }
 
-function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length) {
+function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length, list = items) {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-    data: url === '/outsource/items' ? { list: items, total, page: 1, pageSize: 100 }
+    data: url === '/outsource/items' ? { list, total, page: 1, pageSize: 100 }
         : url === '/outsource/items/export' ? new Blob()
         : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
           : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
@@ -145,7 +145,24 @@ describe('外发工令页面', () => {
     expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
   })
 
-  it('工令表头可粘贴多个工令，筛选回到第一页，导出和重置复用筛选条件', async () => {
+  it('仅在未完成且尚未同步的工令号旁显示待同步提示', async () => {
+    const user = userEvent.setup()
+    setSession([])
+    const closed = { ...items[0], id: 3, workOrderNo: '21089962', closed: true }
+    mockApi(readOnlyLayout, 3, [...items, closed])
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    const cell = (order: string) => within(screen.getByText(order).closest('td')!)
+    await screen.findByText('21089901')
+    const tag = cell('21089901').getByText('待同步')
+    expect(tag).toBeVisible()
+    expect(cell('21089961').queryByText('待同步')).not.toBeInTheDocument()
+    expect(cell(closed.workOrderNo).queryByText('待同步')).not.toBeInTheDocument()
+    await user.hover(tag)
+    expect(await screen.findByText('IPMS 尚无此工令资料；若长期不消失，请确认工令号是否正确')).toBeVisible()
+  })
+
+  it('工令表头可组合多个工令与同步状态，筛选回到第一页，导出和重置复用筛选条件', async () => {
     const user = userEvent.setup()
     setSession([])
     const get = mockApi(readOnlyLayout, 101)
@@ -163,6 +180,16 @@ describe('外发工令页面', () => {
     get.mockClear()
 
     await user.click(filter)
+    await user.click(await readyForPointer(await screen.findByRole('combobox', { name: '同步状态' })))
+    await user.click(await readyForPointer(await screen.findByRole('option', { name: '尚未同步' })))
+    await user.click(screen.getByRole('button', { name: /^筛选$/ }))
+    const columnFilters = JSON.stringify({ ipmsSyncStatus: 'unsynced' })
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ workOrders: undefined, columnFilters, page: 1 }),
+    })))
+    expect(filter).toHaveClass('arco-table-filters-active')
+
+    await user.click(filter)
     const input = await screen.findByPlaceholderText('筛选工令，可粘贴多个')
     await waitFor(() => expect(getComputedStyle(input).pointerEvents).not.toBe('none'))
     await user.click(input)
@@ -170,20 +197,20 @@ describe('外发工令页面', () => {
     await user.paste(workOrders)
     await user.click(screen.getByRole('button', { name: /^筛选$/ }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
-      params: expect.objectContaining({ workOrders, page: 1 }),
+      params: expect.objectContaining({ workOrders, columnFilters, page: 1 }),
     })))
     expect(filter).toHaveClass('arco-table-filters-active')
 
     await user.click(screen.getByRole('button', { name: /^导出$/ }))
     await waitFor(() => expect(saveBlob).toHaveBeenCalled())
     expect(get).toHaveBeenCalledWith('/outsource/items/export', expect.objectContaining({
-      params: expect.objectContaining({ workOrders }), responseType: 'blob',
+      params: expect.objectContaining({ workOrders, columnFilters }), responseType: 'blob',
     }))
 
     get.mockClear()
     await user.click(screen.getByRole('button', { name: '重置筛选' }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
-      params: expect.objectContaining({ workOrders: undefined, page: 1 }),
+      params: expect.objectContaining({ workOrders: undefined, columnFilters: undefined, page: 1 }),
     })))
     expect(filter).not.toHaveClass('arco-table-filters-active')
     expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
