@@ -218,32 +218,31 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         if (lookups.Count == 0) return result;
 
         IReadOnlyDictionary<string, IpmsWorkOrder> found;
-        try { found = await ipms.LookupAsync(lookups.Select(x => x.WorkOrderNo).ToArray(), ct); }
+        try { found = await ipms.LookupForImportAsync(lookups.Select(x => x.WorkOrderNo).ToArray(), ct); }
         catch (IpmsUnavailableException error) { throw ApiException.Unavailable(error.Message); }
         var foundIgnoringCase = found.Values.ToDictionary(x => x.WorkOrderNo, StringComparer.OrdinalIgnoreCase);
         foreach (var lookup in lookups)
         {
-            var preview = result[lookup.Index].Preview;
-            if (!foundIgnoringCase.TryGetValue(lookup.WorkOrderNo, out var order))
-            { result[lookup.Index] = new("INVALID", preview with { Status = "INVALID", Message = "IPMS 查无此工令" }, 0, null); continue; }
-            var withIpms = preview with
+            foundIgnoringCase.TryGetValue(lookup.WorkOrderNo, out var order);
+            var preview = result[lookup.Index].Preview with
             {
                 VendorName = lookup.VendorName, OutsourceDate = lookup.Date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                Customer = reference.CustomerShown(order.Customer), MachineModel = order.MachineModel, TypeLabel = lookup.TypeLabel,
-                Quantity = order.Quantity, LatestDueDate = order.DueDate,
+                Customer = reference.CustomerShown(order?.Customer), MachineModel = order?.MachineModel, TypeLabel = lookup.TypeLabel,
+                Quantity = order?.Quantity, LatestDueDate = order?.DueDate,
             };
-            if (order.Closed)
-            { result[lookup.Index] = new("INVALID", withIpms with { Status = "INVALID", Message = "IPMS 显示该工令已结案" }, 0, null); continue; }
+            if (order?.Closed == true)
+            { result[lookup.Index] = new("INVALID", preview with { Status = "INVALID", Message = "IPMS 显示该工令已结案" }, 0, null); continue; }
             var item = new OutsourceItem
             {
-                WorkOrderNo = order.WorkOrderNo, OutsourceDate = lookup.Date, VendorId = lookup.VendorId,
+                WorkOrderNo = order?.WorkOrderNo ?? lookup.WorkOrderNo, OutsourceDate = lookup.Date, VendorId = lookup.VendorId,
+                TypeCode = lookup.TypeCode, OriginalDueDate = order?.DueDate, LatestDueDate = order?.DueDate,
                 Status = OutsourceItemStatuses.Normal, SendStatus = OutsourceSendStatuses.Unsent,
             };
-            ApplyIpms(item, order, DateTime.UtcNow);
-            item.TypeCode = lookup.TypeCode; // entered by staff, not read from IPMS
-            // IPMS only supplies the original due date; the latest one starts out the same and is then maintained by purchasing.
-            item.OriginalDueDate = item.LatestDueDate = order.DueDate;
-            result[lookup.Index] = new("READY", withIpms with { Status = "READY" }, lookup.VendorId, item);
+            if (order is not null) ApplyIpms(item, order, DateTime.UtcNow);
+            result[lookup.Index] = new("READY", preview with
+            {
+                Status = "READY", Message = order is null ? "IPMS 暂无资料，可先导入，后续同步补齐" : null,
+            }, lookup.VendorId, item);
         }
         return result;
     }

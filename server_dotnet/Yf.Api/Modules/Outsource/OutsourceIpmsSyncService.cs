@@ -236,18 +236,19 @@ public sealed class OutsourceIpmsSyncService(
     {
         var next = new OutsourceItem();
         OutsourceItemService.ApplyIpms(next, order, now);
+        // A work order imported before IPMS data exists gets its first due date here.
+        var originalDue = item.OriginalDueDate ?? order.DueDate;
+        var latestDue = item.LatestDueDate ?? originalDue;
         var changes = AuditChange.OnlyChanged(
             new AuditChange("customer", "", item.Customer, next.Customer),
             new AuditChange("machineModel", "", item.MachineModel, next.MachineModel),
             new AuditChange("mechanicalOwner", "", item.MechanicalOwner, next.MechanicalOwner),
             new AuditChange("electricalOwner", "", item.ElectricalOwner, next.ElectricalOwner),
             new AuditChange("workOrderIssuedOn", "", item.WorkOrderIssuedOn, next.WorkOrderIssuedOn),
-            new AuditChange("quantity", "", item.Quantity, next.Quantity));
+            new AuditChange("quantity", "", item.Quantity, next.Quantity),
+            new AuditChange("originalDueDate", "", item.OriginalDueDate, originalDue),
+            new AuditChange("latestDueDate", "", item.LatestDueDate, latestDue));
         var changed = supervisorNotice || changes.Length > 0;
-        // IPMS supplies only the original due date, once; the latest due date is purchasing's, so a sync never moves it
-        // (it is only filled in when it was empty).
-        var originalDue = item.OriginalDueDate ?? order.DueDate;
-        var latestDue = item.LatestDueDate ?? originalDue;
         DateTime? closedAt = order.Closed ? now : null;
 
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
@@ -272,8 +273,8 @@ public sealed class OutsourceIpmsSyncService(
         {
             // Nothing changed: record the sync time without bumping the edit version (updated_at stays as is).
             updated = await row.ExecuteUpdateAsync(s => s
-                .SetProperty(x => x.IpmsSyncedAt, now).SetProperty(x => x.OriginalDueDate, originalDue)
-                .SetProperty(x => x.LatestDueDate, latestDue).SetProperty(x => x.ClosedAt, closedAt).SetProperty(x => x.UpdatedAt, x => x.UpdatedAt), ct);
+                .SetProperty(x => x.IpmsSyncedAt, now).SetProperty(x => x.ClosedAt, closedAt)
+                .SetProperty(x => x.UpdatedAt, x => x.UpdatedAt), ct);
         }
         if (updated > 0 && changes.Length > 0)
         {

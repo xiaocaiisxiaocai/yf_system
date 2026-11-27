@@ -416,14 +416,17 @@ describe('外发工令页面', () => {
     }))
   })
 
-  it('汇入模板含外发类型范例，预览请求保留外发类型并排除范例', async () => {
+  it('跳过模板范例，IPMS 暂无资料的工令可预览并确认导入', async () => {
     const user = userEvent.setup()
     setSession(['outsource:manage'])
     mockApi()
-    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
-      rowNumber: 3, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',
-      customer: '超穎(泰國)', machineModel: 'ST-201L', typeLabel: 'OEMA【进料+制造】', quantity: 1, latestDueDate: '2026-12-31',
-    }] } } as never)
+    const pending = 'IPMS 暂无资料，可先导入，后续同步补齐'
+    const post = vi.spyOn(http, 'post').mockResolvedValueOnce({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
+      rowNumber: 3, workOrderNo: '21089901', status: 'READY', message: pending, vendorName: '鼎亚', outsourceDate: '2026-11-04',
+      customer: null, machineModel: null, typeLabel: 'OEMA【进料+制造】', quantity: null, latestDueDate: null,
+    }] } } as never).mockResolvedValueOnce({ data: { created: 1, skipped: 0, failed: 0, rows: [
+      { rowNumber: 3, status: 'CREATED' },
+    ] } } as never)
     const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
@@ -443,6 +446,12 @@ describe('外发工令页面', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', {
       rows: [{ rowNumber: 3, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],
     }))
+    expect(await within(dialog).findByText(pending)).toBeVisible()
+    expect(post).toHaveBeenCalledTimes(1)
+    const confirm = within(dialog).getByRole('button', { name: '确认导入' })
+    expect(confirm).toBeEnabled()
+    await user.click(confirm)
+    expect(post).toHaveBeenCalledWith('/outsource/items/import', post.mock.calls[0][1])
   })
 
   it('BOM 时间与发图导入模板的数据表包含一行日期范例', async () => {

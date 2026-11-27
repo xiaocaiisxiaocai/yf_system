@@ -600,7 +600,7 @@ export default function OutsourceListPage() {
       onSent={() => { setMailing(null); setSelected([]); void load() }} />
     <ExcelImportDialog<ImportRow> visible={importOpen} title="汇入外发工令" templateName="外发工令汇入模板.xlsx"
       requiredHeaders={IMPORT_HEADERS} templateSheets={IMPORT_WORKBOOK} maxRows={500} keyTitle="工令"
-      notice={<>填写外发日期、工令、外发类型和外发厂商，序号自动编，其余字段由 IPMS 带出。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}
+      notice={<>填写外发日期、工令、外发类型和外发厂商，序号自动编。IPMS 暂无该工令时可先导入，客户、机型等资料由后续同步补齐。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}
       prepare={prepareImport} commit={commitImport}
       onImported={() => { void load() }} onClose={() => setImportOpen(false)} />
     <ExcelImportDialog<DateImportRow> visible={dateImportOpen} title="导入BOM时间与发图" templateName="BOM时间与发图导入模板.xlsx"
