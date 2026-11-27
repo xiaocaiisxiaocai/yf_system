@@ -70,27 +70,54 @@ public sealed class OutsourceSyncTests
         var type = await settings.CreateTypeAsync(buyer, new("OEMA", "进料+制造", 1), ct);
         await settings.UpdateTypeSettingsAsync(buyer, type, ct, vendorIds: [vendor.Id]);
         foreach (var no in new[] { "A1", "B1", "C1", "D1", "E1" }) ipms.Add(no);
-        var imported = await items.ImportAsync(buyer, new(new[] { "A1", "B1", "C1", "D1", "E1" }
+        var imported = await items.ImportAsync(buyer, new(new[] { "A1", "B1", "C1", "D1", "E1", "F1" }
             .Select((no, index) => new OutsourceImportRow(index + 2, "2026-11-04", no, "鼎亚", "OEMA")).ToArray()), ct);
-        Assert.Equal(5, imported.Created);
+        Assert.Equal((6, 0, 0), (imported.Created, imported.Skipped, imported.Failed));
+        var pendingImport = imported.Rows.Single(x => x.Key == "F1");
+        Assert.Equal(("CREATED", "IPMS 暂无资料，可先导入，后续同步补齐"), (pendingImport.Status, pendingImport.Message));
+        var repeated = await items.ImportAsync(buyer, new([new(2, "2026-11-05", "F1", "鼎亚", "OEMA")]), ct);
+        Assert.Equal((0, 1, 0), (repeated.Created, repeated.Skipped, repeated.Failed));
         await database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT' WHERE work_order_no IN ('A1','E1')", ct);
         OutsourceItemResponse Row(IEnumerable<OutsourceItemResponse> rows, string no) => rows.Single(x => x.WorkOrderNo == no);
         var before = (await items.ListAsync(buyer, Query(true), 1, 20, 0, ct)).List;
+        var pending = Row(before, "F1");
+        Assert.Equal((vendor.Id, type.Id, new DateOnly(2026, 11, 4), "NORMAL", "UNSENT"),
+            (pending.VendorId, pending.TypeId, pending.OutsourceDate, pending.Status, pending.SendStatus));
+        Assert.Null(pending.Customer);
+        Assert.Null(pending.MachineModel);
+        Assert.Null(pending.MechanicalOwner);
+        Assert.Null(pending.ElectricalOwner);
+        Assert.Null(pending.WorkOrderIssuedOn);
+        Assert.Null(pending.Quantity);
+        Assert.Null(pending.OriginalDueDate);
+        Assert.Null(pending.LatestDueDate);
+        Assert.Null(pending.IpmsSyncedAt);
 
         // IPMS moves the original due date and the owner: the owner is synced, the due dates (purchasing's latest one included) stay.
         ipms.Orders["A1"] = ipms.Orders["A1"] with { DueDate = new DateOnly(2027, 1, 15), MechanicalOwner = "新执行人" };
         ipms.Orders["B1"] = ipms.Orders["B1"] with { Quantity = 2 };
         ipms.Orders["C1"] = ipms.Orders["C1"] with { Closed = true };
         ipms.Orders.Remove("D1");
+        ipms.Add("F1");
 
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => sync.SyncNowAsync(viewer, new(null), ct))).Status);
         var status = await sync.SyncNowAsync(buyer, new(null), ct);
-        Assert.Equal((5, 2, 1, 1, (string?)null, "MANUAL"),
+        Assert.Equal((6, 3, 1, 1, (string?)null, "MANUAL"),
             (status.LastProcessed, status.LastChanged, status.LastClosed, status.LastMissing, status.LastError, status.LastTrigger));
         Assert.NotNull(status.LastSuccessAt);
         Assert.False(status.Running);
 
         var after = (await items.ListAsync(buyer, Query(true), 1, 20, 0, ct)).List;
+        var filled = Row(after, "F1");
+        Assert.Equal((pending.Id, pending.SerialNo, pending.VendorId, pending.TypeId, pending.OutsourceDate, pending.SendStatus),
+            (filled.Id, filled.SerialNo, filled.VendorId, filled.TypeId, filled.OutsourceDate, filled.SendStatus));
+        Assert.Equal(("超穎(泰國)", "ST-201L", "机构甲", "电控乙", new DateOnly(2026, 9, 30), 1),
+            (filled.Customer, filled.MachineModel, filled.MechanicalOwner, filled.ElectricalOwner, filled.WorkOrderIssuedOn, filled.Quantity));
+        Assert.Equal((new DateOnly(2026, 12, 31), new DateOnly(2026, 12, 31)), (filled.OriginalDueDate, filled.LatestDueDate));
+        Assert.NotNull(filled.IpmsSyncedAt);
+        var filledHistory = await items.ChangesAsync(viewer, filled.Id, ct);
+        Assert.Contains(filledHistory, change => change.Field == "originalDueDate" && change.OldValue is null);
+        Assert.Contains(filledHistory, change => change.Field == "latestDueDate" && change.OldValue is null);
         var a = Row(after, "A1");
         Assert.Equal((new DateOnly(2026, 12, 31), new DateOnly(2026, 12, 31), "新执行人", "PENDING_NOTICE"), (a.LatestDueDate, a.OriginalDueDate, a.MechanicalOwner, a.SendStatus));
         var b = Row(after, "B1");
@@ -114,7 +141,7 @@ public sealed class OutsourceSyncTests
 
         // Closed items are no longer synchronized; a second run changes nothing.
         var again = await sync.SyncNowAsync(buyer, new(null), ct);
-        Assert.Equal((4, 0, 0, 1), (again.LastProcessed, again.LastChanged, again.LastClosed, again.LastMissing));
+        Assert.Equal((5, 0, 0, 1), (again.LastProcessed, again.LastChanged, again.LastClosed, again.LastMissing));
         var selected = await sync.SyncNowAsync(buyer, new([a.Id]), ct);
         Assert.Equal(1, selected.LastProcessed);
 

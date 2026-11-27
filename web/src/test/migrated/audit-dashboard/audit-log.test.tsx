@@ -26,7 +26,7 @@ const page = (list: AuditLogRow[], current = 1, total = list.length) => ({
   list,
   total,
   page: current,
-  pageSize: 20,
+  pageSize: 100,
 })
 
 const loginRow = (overrides: Partial<AuditLogRow> = {}): AuditLogRow => ({
@@ -145,7 +145,7 @@ describe('操作日志真实界面', () => {
     const pages: number[] = []
     mocks.get.mockImplementation(async (_url, { params }) => {
       pages.push(params.page)
-      return { data: page(params.page === 2 && !purged ? [row] : [], params.page, purged ? 20 : 21) }
+      return { data: page(params.page === 2 && !purged ? [row] : [], params.page, purged ? 100 : 101) }
     })
     const user = userEvent.setup()
     await renderLoaded()

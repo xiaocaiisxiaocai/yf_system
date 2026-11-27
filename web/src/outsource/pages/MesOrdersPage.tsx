@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Empty, Message, Space, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconSync } from '@arco-design/web-react/icon'
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import http from '../../api/client'
 import type { ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
@@ -52,7 +53,7 @@ export default function MesOrdersPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)

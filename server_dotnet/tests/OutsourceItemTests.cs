@@ -84,11 +84,18 @@ public sealed class OutsourceItemTests
             ("2026-11-04", "21090301", "停用厂", "OEMA"));
 
         var preview = await service.PreviewImportAsync(planner, request, ct);
-        Assert.Equal((1, 2, 7), (preview.Ready, preview.Skipped, preview.Invalid));
+        Assert.Equal((2, 2, 6), (preview.Ready, preview.Skipped, preview.Invalid));
         var messages = preview.Rows.ToDictionary(x => x.RowNumber, x => (x.Status, x.Message));
         Assert.Equal(("READY", null), messages[2]);
         Assert.Equal(("INVALID", "OEMA【进料+制造】 不可配元控"), messages[3]);
-        Assert.Equal(("INVALID", "IPMS 查无此工令"), messages[4]);
+        Assert.Equal(("READY", "IPMS 暂无资料，可先导入，后续同步补齐"), messages[4]);
+        var pending = preview.Rows.Single(x => x.RowNumber == 4);
+        Assert.Equal(("鼎亚", "2026-11-04", "OEMA【进料+制造】"), (pending.VendorName, pending.OutsourceDate, pending.TypeLabel));
+        Assert.Null(pending.Customer);
+        Assert.Null(pending.MachineModel);
+        Assert.Null(pending.Quantity);
+        Assert.Null(pending.LatestDueDate);
+        Assert.Empty((await service.ListAsync(viewer, Query(), 1, 20, 0, ct)).List);
         Assert.Equal("SKIPPED", messages[5].Status);
         Assert.Equal("SKIPPED", messages[6].Status);
         Assert.Equal(("INVALID", "外发日期格式不正确"), messages[7]);
@@ -101,8 +108,11 @@ public sealed class OutsourceItemTests
 
         // Only planners import; the confirmed import re-checks and stores only READY rows.
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.PreviewImportAsync(viewer, request, ct))).Status);
+        // This missing order arrives in IPMS already closed between preview and confirmation.
+        ipms.Add("99999999", closed: true);
         var imported = await service.ImportAsync(planner, request, ct);
         Assert.Equal((1, 2, 7), (imported.Created, imported.Skipped, imported.Failed));
+        Assert.Equal("IPMS 显示该工令已结案", imported.Rows.Single(x => x.Key == "99999999").Message);
         var again = await service.ImportAsync(planner, Request(("2026-11-04", "21089901", "鼎亚", "OEMA"), ("2026-11-06", "21089902", "元控", "odm-12345")), ct);
         Assert.Equal((1, 1, 0), (again.Created, again.Skipped, again.Failed));
         Assert.Equal("工令已存在，未覆盖现有资料", again.Rows.Single(x => x.Key == "21089901").Message);
@@ -111,6 +121,9 @@ public sealed class OutsourceItemTests
         ipms.Unavailable = true;
         var outage = await Assert.ThrowsAsync<ApiException>(() => service.PreviewImportAsync(planner, Request(("2026-11-04", "21090001", "鼎亚", "OEMA")), ct));
         Assert.Equal((503, "IPMS 暂时无法连接，请稍后再试"), (outage.Status, outage.Message));
+        var commitOutage = await Assert.ThrowsAsync<ApiException>(() => service.ImportAsync(planner,
+            Request(("2026-11-04", "21090001", "鼎亚", "OEMA"), ("2026-11-04", "new-absent", "鼎亚", "OEMA")), ct));
+        Assert.Equal(503, commitOutage.Status);
         ipms.Unavailable = false;
 
         // The list and export read the supervisor from the directory.

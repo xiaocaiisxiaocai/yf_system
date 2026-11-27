@@ -498,7 +498,7 @@ describe('供应商与分页列表行为', () => {
     installGet(async (url: string, config?: unknown) => {
       if (url !== '/admin/suppliers') return { data: [] }
       const requested = Number((config as { params?: { page?: number } })?.params?.page || 1)
-      return { data: page(requested === 2 && !deleted ? [supplierRow({ id: 91, name: '末页供应商' })] : [supplierRow({ id: 1, name: '首页供应商' })], 10, requested, deleted ? 10 : 11) }
+      return { data: page(requested === 2 && !deleted ? [supplierRow({ id: 91, name: '末页供应商' })] : [supplierRow({ id: 1, name: '首页供应商' })], 100, requested, deleted ? 100 : 101) }
     })
     mocks.delete.mockImplementation(async () => { deleted = true; return { data: {} } })
     const user = userEvent.setup()
@@ -568,7 +568,7 @@ describe('重复搜索运行时注册用例', () => {
         oldSignal = request.signal
         return oldPage.promise
       }
-      return Promise.resolve({ data: page([{ id: 1, employeeNo: 'first-page', realName: '首页', email: 'first@example.invalid', status: 'ACTIVE', createdAt: '' }], 10, 1, 20) })
+      return Promise.resolve({ data: page([{ id: 1, employeeNo: 'first-page', realName: '首页', email: 'first@example.invalid', status: 'ACTIVE', createdAt: '' }], 100, 1, 120) })
     })
 
     const user = userEvent.setup()

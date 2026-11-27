@@ -30,7 +30,7 @@ internal sealed class MessageService(
     {
         await ProjectAccessService.RequireViewAsync(conn, null, actor, projectId, ct);
         var project = await LoadProjectAsync(conn, null, projectId, false, ct);
-        var (actualPage, size) = ProjectJson.ClampPage(page, pageSize);
+        var (actualPage, size) = ProjectJson.ClampPage(page, Math.Min(pageSize, 100UL)); // The discussion uses a cursor-based message window.
         await using var db = EfDb.Use(conn);
         var query =
             from message in db.Messages

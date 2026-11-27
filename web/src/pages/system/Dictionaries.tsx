@@ -1,3 +1,4 @@
+import { TABLE_PAGINATION } from '../../components/tablePagination'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { actionSlots } from '../../components/ActionSlots'
 import { Button, Card, Empty, Form, Input, InputNumber, Message, Modal, Select, Space, Switch, Tabs, Tooltip, Typography } from '@arco-design/web-react'
@@ -182,7 +183,7 @@ export default function Dictionaries() {
       </Space>
       <Button className="dictionary-add" aria-label={prefixLabel('新增', label)} type="primary" icon={<IconPlus />} disabled={!canCreate} onClick={() => startEdit()}>{prefixLabel('新增', label)}</Button>
     </div>
-    {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <ResizableTable<ManagedItem> tableId={`dictionaries-${type}`} className="page-table" rowKey="id" loading={loading} data={rows} pagination={{ pageSize: 20 }} noDataElement={emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
+    {error ? <LoadError message="基础数据加载失败" onRetry={load} /> : <ResizableTable<ManagedItem> tableId={`dictionaries-${type}`} className="page-table" rowKey="id" loading={loading} data={rows} pagination={TABLE_PAGINATION} noDataElement={emptyContent} scroll={{ x: type === 'ROBOT_PART' ? 950 : 600, y: 'var(--page-table-scroll-y)' }} columns={columns as TableColumnProps<ManagedItem>[]} />}
     <Modal className="form-dialog" title={prefixLabel(editing ? '编辑' : '新增', label)} visible={open} onOk={save} onCancel={() => { if (!saving) setOpen(false) }} confirmLoading={saving} closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }} okText={prefixLabel(editing ? '保存' : '创建', label)} cancelText="取消" unmountOnExit>
       <Form onSubmit={() => void save()} form={form} layout="vertical" disabled={saving}>
         {type === 'ROBOT_PART' ? <>

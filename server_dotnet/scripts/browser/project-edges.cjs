@@ -59,7 +59,7 @@ function updatePayload(current, overrides) {
       context, auth.accessToken, f.suppliers.b.id);
     const prefix = '边界项目-' + crypto.randomBytes(5).toString('hex');
     const projects = [];
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < 52; index += 1) {
       projects.push(await createProject(
         context, auth.accessToken, index === 11 ? f.suppliers.b.id : f.suppliers.a.id,
         prefix + '-' + String(index).padStart(2, '0'),
@@ -88,6 +88,10 @@ function updatePayload(current, overrides) {
       await input.fill(text);
       await input.press('Enter');
     });
+    const choosePageSize = size => listAction({ keyword: prefix, page: 1, pageSize: size }, async () => {
+      await page.locator('.arco-pagination .arco-select').click();
+      await page.getByRole('option', { name: size + ' 条/页', exact: true }).click();
+    });
     const terminateAndDelete = async item => {
       await json('PUT', '/projects/' + item.id + '/status', { status: 'TERMINATED' });
       await json('DELETE', '/projects/' + item.id);
@@ -97,7 +101,7 @@ function updatePayload(current, overrides) {
 
     await record('项目名称清除、状态与 Robot 厂商筛选保持准确结果', async () => {
       const found = await search(prefix);
-      assert.equal(found.total, 13);
+      assert.equal(found.total, 53);
       const toolbar = page.locator('.page-toolbar');
       const choose = async (position, label, parameters) => listAction(parameters, async () => {
         await toolbar.locator('.arco-select').nth(position).click();
@@ -106,7 +110,7 @@ function updatePayload(current, overrides) {
       // 状态已改为列表上方的页签；厂商下拉是工具栏里的第一个选择框。
       const state = await listAction({ keyword: prefix, status: 'IN_PROGRESS', page: 1 },
         () => page.getByRole('tab', { name: '进行中', exact: true }).click());
-      assert.equal(state.total, 13); assert(state.list.every(item => item.status === 'IN_PROGRESS'));
+      assert.equal(state.total, 53); assert(state.list.every(item => item.status === 'IN_PROGRESS'));
       const supplier = await choose(0, f.suppliers.b.name, {
         keyword: prefix, supplierId: f.suppliers.b.id, status: 'IN_PROGRESS', page: 1,
       });
@@ -124,24 +128,19 @@ function updatePayload(current, overrides) {
         await page.locator('.page-toolbar .arco-input-search .arco-input-clear-icon').click();
         assert.equal(await input.inputValue(), '');
       });
-      assert(cleared.total >= 13);
+      assert(cleared.total >= 53);
       await search(prefix);
     });
 
     await record('项目分页和页大小返回真实行数', async () => {
-      const second = await listAction({ keyword: prefix, page: 2, pageSize: 10 }, () =>
+      const first = await choosePageSize(50);
+      assert.equal(first.list.length, 50);
+      const second = await listAction({ keyword: prefix, page: 2, pageSize: 50 }, () =>
         page.locator('.arco-pagination-item').filter({ hasText: /^2$/ }).click());
       assert.equal(second.list.length, 3);
-      const larger = await listAction({ keyword: prefix, pageSize: 20 }, async () => {
-        await page.locator('.arco-pagination .arco-select').click();
-        await page.getByRole('option', { name: '20 条/页', exact: true }).click();
-      });
-      assert.equal(larger.list.length, 13);
-      const normal = await listAction({ keyword: prefix, pageSize: 10 }, async () => {
-        await page.locator('.arco-pagination .arco-select').click();
-        await page.getByRole('option', { name: '10 条/页', exact: true }).click();
-      });
-      assert.equal(normal.list.length, 10);
+      assert.equal(new Set([...first.list, ...second.list].map(item => item.id)).size, 53);
+      const larger = await choosePageSize(100);
+      assert.equal(larger.page, 1); assert.equal(larger.list.length, 53);
     });
 
     await record('项目列表可重试，Robot 厂商失败可打开表单但禁止提交并保留草稿恢复', async () => {
@@ -278,16 +277,17 @@ function updatePayload(current, overrides) {
     });
 
     await record('删除末页项目后自动回退到有效页码', async () => {
-      await search(prefix);
-      const second = await listAction({ keyword: prefix, page: 2 }, () =>
+      const first = await search(prefix);
+      if (first.pageSize !== 50) await choosePageSize(50);
+      const second = await listAction({ keyword: prefix, page: 2, pageSize: 50 }, () =>
         page.locator('.arco-pagination-item').filter({ hasText: /^2$/ }).click());
       assert.equal(second.list.length, 2);
-      for (const item of projects.slice(10, 12)) await terminateAndDelete(item);
+      for (const item of second.list) await terminateAndDelete(item);
       await page.reload();
       await page.getByRole('heading', { name: 'Robot仿真协作', exact: true }).waitFor();
-      await search(prefix);
-      const remaining = await json('GET', '/projects?keyword=' + encodeURIComponent(prefix) + '&page=1&pageSize=10');
-      assert.equal(remaining.total, 10); assert.equal(remaining.list.length, 10);
+      await page.waitForURL(url => url.searchParams.get('page') !== '2');
+      const remaining = await json('GET', '/projects?keyword=' + encodeURIComponent(prefix) + '&page=1&pageSize=50');
+      assert.equal(remaining.total, 50); assert.equal(remaining.list.length, 50);
       await page.getByRole('link', { name: remaining.list[0].name, exact: true }).waitFor();
     });
 

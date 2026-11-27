@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -6,6 +7,7 @@ import {
 import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../../api/client'
+import { createSessionQueryScope } from '../../api/queryClient'
 import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
 import DangerPopconfirm from '../../components/DangerPopconfirm'
@@ -25,7 +27,7 @@ interface Role {
   status: 'ACTIVE' | 'DISABLED'
   permissionIds: number[]
   assignedUserCount: number
-  canManage?: boolean
+  canManage: boolean
   supplierRestricted?: boolean
 }
 
@@ -50,15 +52,20 @@ const SCOPE_LABELS: Record<string, string> = {
 }
 
 export default function RoleList() {
-  const canDelete = useAuth((state) => state.hasPerm('role:delete'))
-  // 只读（role:view）账号可以查看权限，但新增/编辑角色需要 role:manage。
   const canManageRoles = useAuth((state) => state.hasPerm('role:manage'))
-  const [data, setData] = useState<PageResp<Role>>({ list: [], total: 0, page: 1, pageSize: 20 })
+  const authorization = useAuth((state) => JSON.stringify(createSessionQueryScope(state)))
+  // 切换账号或授权时丢弃旧草稿，重新读取按当前委派范围计算的角色和权限点。
+  return <RoleTable key={authorization} canManageRoles={canManageRoles} />
+}
+
+function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
+  const canDelete = useAuth((state) => state.hasPerm('role:delete'))
+  const [data, setData] = useState<PageResp<Role>>({ list: [], total: 0, page: 1, pageSize: DEFAULT_PAGE_SIZE })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [perms, setPerms] = useState<Perm[]>([])
   const [permsLoading, setPermsLoading] = useState(true)
   const [permsError, setPermsError] = useState(false)
@@ -69,7 +76,9 @@ export default function RoleList() {
   const [saving, setSaving] = useState(false)
   const [savingPerms, setSavingPerms] = useState(false)
   const [editing, setEditing] = useState<Role | null>(null)
-  const [permTarget, setPermTarget] = useState<Role | null>(null)
+  const [permTargetId, setPermTargetId] = useState<number | null>(null)
+  const permTarget = data.list.find((role) => role.id === permTargetId)
+  const canAssign = canManageRoles && permTarget?.canManage === true
   const [permKeyword, setPermKeyword] = useState('')
   const [roleScopes, setRoleScopes] = useState<Record<string, string>>({})
   const [roleScopesOriginal, setRoleScopesOriginal] = useState<Record<string, string>>({})
@@ -98,7 +107,7 @@ export default function RoleList() {
         if (active) {
           setData(next)
           setLoadError(false)
-          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || 20)))
+          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
           if (page > lastPage) setPage(lastPage)
         }
       })
@@ -111,7 +120,7 @@ export default function RoleList() {
     return () => {
       active = false
     }
-  }, [fetchRoles, page, reloadKey])
+  }, [fetchRoles, page, pageSize, reloadKey])
 
   const retryPermissions = () => {
     setPermsLoading(true)
@@ -143,11 +152,12 @@ export default function RoleList() {
       })
     return () => {
       permsSeq.current += 1
+      saveInFlight.current = false
     }
   }, [])
 
   const mutablePermissionIds = useMemo(() => {
-    if (!permTarget || permTarget.canManage === false) return new Set<string>()
+    if (!canAssign) return new Set<string>()
     const result = new Set(perms
       .filter((permission) => permission.grantable !== false
         && (!permTarget.supplierRestricted || permission.supplierAssignable !== false))
@@ -156,13 +166,13 @@ export default function RoleList() {
       if (permission.parentId && !result.has(String(permission.parentId))) result.delete(String(permission.id))
     }
     return result
-  }, [permTarget, perms])
+  }, [canAssign, permTarget, perms])
 
   const removablePermissionIds = useMemo(() => new Set(
-    permTarget?.canManage === false ? [] : (permTarget?.permissionIds || [])
+    !canAssign ? [] : permTarget.permissionIds
       .map(String)
       .filter((id) => checked.includes(id) && !mutablePermissionIds.has(id)),
-  ), [checked, mutablePermissionIds, permTarget])
+  ), [canAssign, checked, mutablePermissionIds, permTarget])
 
   const permTree = useMemo(() => {
     const menus = perms.filter((p) => p.type === 'MENU')
@@ -209,23 +219,24 @@ export default function RoleList() {
       : matched
   }, [normalizedPermKeyword, permTree, perms, savingPerms])
 
+  const displayedChecks = canAssign ? checked : (permTarget?.permissionIds ?? []).map(String)
   const halfChecked = permTree
     .filter((group) => {
-      const relevantChildren = permTarget?.canManage === false
+      const relevantChildren = !canAssign
         ? group.children
         : group.children.filter((child) => !child.disabled)
       return relevantChildren.length > 0
-        && (checked.includes(group.key) || relevantChildren.some((child) => checked.includes(child.key)))
-        && (!checked.includes(group.key) || !relevantChildren.every((child) => checked.includes(child.key)))
+        && (displayedChecks.includes(group.key) || relevantChildren.some((child) => displayedChecks.includes(child.key)))
+        && (!displayedChecks.includes(group.key) || !relevantChildren.every((child) => displayedChecks.includes(child.key)))
     })
     .map((group) => group.key)
 
   const submit = async () => {
-    if (saveInFlight.current) return
+    if (saveInFlight.current || !canManageRoles || (editing && !editing.canManage)) return
     saveInFlight.current = true
     try {
       const v = await form.validate().catch(() => null)
-      if (!v) return
+      if (!v || !saveInFlight.current) return
       setSaving(true)
       if (editing) {
         await http.put<ApiResponses['PUT /admin/roles/{id}']>(`/admin/roles/${editing.id}`, v)
@@ -265,13 +276,13 @@ export default function RoleList() {
   }
 
   const savePerms = async () => {
-    if (permissionSaveInFlight.current || permsLoading || permsError || perms.length === 0 || permTarget?.canManage === false) return
+    if (permissionSaveInFlight.current || permsLoading || permsError || perms.length === 0 || !canAssign) return
     permissionSaveInFlight.current = true
     const ids = Array.from(new Set(checked)).map(Number)
     setSavingPerms(true)
     try {
       // 只提交改过的业务域：另一域可能已被他人调整，整份写回会把它恢复成旧值。
-      const changedScopes = roleScopesLoadedFor === permTarget!.id
+      const changedScopes = roleScopesLoadedFor === permTarget.id
         ? SCOPE_DOMAINS
           .filter(({ domain }) => (roleScopes[domain] ?? '') !== (roleScopesOriginal[domain] ?? ''))
           .map(({ domain }) => ({ domain, value: roleScopes[domain] ?? '' }))
@@ -281,13 +292,13 @@ export default function RoleList() {
         || ids.some((id) => !permOriginal.includes(String(id)))
       if (!permsChanged && changedScopes.length === 0) {
         Message.info('没有需要保存的修改')
-        setPermTarget(null)
+        setPermTargetId(null)
         setPermKeyword('')
         return
       }
       // 一次请求、一个事务：动作权限与数据范围要么都生效，要么都不生效。
       await http.put<ApiResponses['PUT /admin/roles/{id}/authorization']>(
-        `/admin/roles/${permTarget!.id}/authorization`,
+        `/admin/roles/${permTarget.id}/authorization`,
         {
           permissionIds: permsChanged ? ids : null,
           scopes: changedScopes.length > 0
@@ -295,7 +306,7 @@ export default function RoleList() {
             : null,
         })
       Message.success('权限已保存')
-      setPermTarget(null)
+      setPermTargetId(null)
       setPermKeyword('')
       load()
     } catch (error) {
@@ -388,20 +399,20 @@ export default function RoleList() {
                 size="mini"
                 type="text"
                 onClick={() => {
-                  setPermTarget(r)
+                  setPermTargetId(r.id)
                   setPermKeyword('')
                   setChecked(r.permissionIds.map(String))
                   setPermOriginal(r.permissionIds.map(String))
                   void loadRoleScopes(r.id)
                 }}
               >
-                {r.canManage === false ? '查看权限' : '分配权限'}
+                {canManageRoles && r.canManage ? '分配权限' : '查看权限'}
               </Button>,
-              <Button
+              canManageRoles && <Button
                 key="edit"
                 size="mini"
                 type="text"
-                disabled={r.canManage === false}
+                disabled={!r.canManage}
                 onClick={() => {
                   setEditing(r)
                   form.setFieldsValue({ name: r.name, description: r.description })
@@ -410,33 +421,33 @@ export default function RoleList() {
               >
                 编辑
               </Button>,
-              r.canManage !== false && r.status === 'ACTIVE' && r.assignedUserCount > 0 ? (
+              canManageRoles && (r.canManage && r.status === 'ACTIVE' && r.assignedUserCount > 0 ? (
                 <Tooltip key="status" content={`该角色绑定 ${r.assignedUserCount} 个用户；启用用户未更换角色前不能停用。`}>
                   <Button size="mini" type="text" status="danger" disabled>停用</Button>
                 </Tooltip>
               ) : r.status === 'ACTIVE' ? (
                 <DangerPopconfirm
                   key="status"
-                  disabled={r.canManage === false}
+                  disabled={!r.canManage}
                   title="确认停用该角色？"
                   onOk={() => toggle(r)}
                 >
-                  <Button size="mini" type="text" status="danger" disabled={r.canManage === false}>停用</Button>
+                  <Button size="mini" type="text" status="danger" disabled={!r.canManage}>停用</Button>
                 </DangerPopconfirm>
               ) : (
                 <Popconfirm
                   key="status"
-                  disabled={r.canManage === false}
+                  disabled={!r.canManage}
                   title="确认启用该角色？"
                   onOk={() => toggle(r)}
                 >
-                  <Button size="mini" type="text" status="success" disabled={r.canManage === false}>启用</Button>
+                  <Button size="mini" type="text" status="success" disabled={!r.canManage}>启用</Button>
                 </Popconfirm>
-              ),
-              canDelete && (
-                <DangerPopconfirm key="delete" disabled={r.canManage === false || r.isBuiltIn}
+              )),
+              canManageRoles && canDelete && (
+                <DangerPopconfirm key="delete" disabled={!r.canManage || r.isBuiltIn}
                   title="删除后不可恢复，仍绑定用户时无法删除。确认？" onOk={() => remove(r)}>
-                  <Button size="mini" type="text" status="danger" disabled={r.canManage === false || r.isBuiltIn}>删除</Button>
+                  <Button size="mini" type="text" status="danger" disabled={!r.canManage || r.isBuiltIn}>删除</Button>
                 </DangerPopconfirm>
               ),
             ], 'role'),
@@ -449,7 +460,7 @@ export default function RoleList() {
             onChange: (nextPage, nextSize) => {
               setLoading(true)
               setLoadError(false)
-              setPage(nextPage)
+              setPage(nextSize === pageSize ? nextPage : 1)
               setPageSize(nextSize)
             },
           }}
@@ -482,16 +493,16 @@ export default function RoleList() {
 
       <Drawer
         width="min(440px, 100vw)"
-        title={permTarget ? `${permTarget.canManage === false ? '查看权限' : '分配权限'} · ${permTarget.name}` : ''}
+        title={permTarget ? `${canAssign ? '分配权限' : '查看权限'} · ${permTarget.name}` : ''}
         visible={!!permTarget}
-        onCancel={() => { if (!savingPerms) { setPermTarget(null); setPermKeyword('') } }}
+        onCancel={() => { if (!savingPerms) { setPermTargetId(null); setPermKeyword('') } }}
         closable={!savingPerms}
         maskClosable={!savingPerms}
         escToExit={!savingPerms}
         footer={
           <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
-            <Button disabled={savingPerms} onClick={() => { setPermTarget(null); setPermKeyword('') }}>{permTarget?.canManage === false ? '关闭' : '取消'}</Button>
-            {permTarget?.canManage !== false && (
+            <Button disabled={savingPerms} onClick={() => { setPermTargetId(null); setPermKeyword('') }}>{canAssign ? '取消' : '关闭'}</Button>
+            {canAssign && (
               <Button type="primary" loading={savingPerms} disabled={permsLoading || permsError || perms.length === 0} onClick={savePerms}>
                 保存权限
               </Button>
@@ -504,7 +515,7 @@ export default function RoleList() {
           <div style={{ marginBottom: 12 }}>
             <Typography.Text type="secondary">
               当前绑定：<Tag color={permTarget.assignedUserCount > 0 ? 'orange' : 'gray'}>{permTarget.assignedUserCount} 位用户</Tag>
-              {permTarget.assignedUserCount > 0 && (
+              {canAssign && permTarget.assignedUserCount > 0 && (
                 <span style={{ marginLeft: 6, fontSize: 12, color: 'var(--color-text-3)' }}>修改后将即时影响已绑定的用户权限</span>
               )}
             </Typography.Text>
@@ -539,10 +550,10 @@ export default function RoleList() {
                 checkStrictly
                 defaultExpandedKeys={permTree.map((g) => g.key)}
                 treeData={displayedPermTree}
-                checkedKeys={checked.filter((key) => !halfChecked.includes(key))}
+                checkedKeys={displayedChecks.filter((key) => !halfChecked.includes(key))}
                 halfCheckedKeys={halfChecked}
                 onCheck={(_, extra) => {
-                  if (savingPerms) return
+                  if (!canAssign || savingPerms) return
                   const next = new Set(checked)
                   const key = String(extra.node.key)
                   const permission = perms.find((p) => String(p.id) === key)
@@ -580,10 +591,11 @@ export default function RoleList() {
                 <div key={domain} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginBottom: 12 }}>
                   <span style={{ flex: '0 1 150px' }}>{label}</span>
                   <Select
+                    aria-label={label}
                     style={{ flex: '1 1 160px', maxWidth: '100%' }}
-                    value={roleScopes[domain] ?? ''}
+                    value={(canAssign ? roleScopes : roleScopesOriginal)[domain] ?? ''}
                     loading={roleScopesLoading}
-                    disabled={permTarget.canManage === false || roleScopesLoading || roleScopesLoadedFor !== permTarget.id}
+                    disabled={!canAssign || roleScopesLoading || roleScopesLoadedFor !== permTarget.id}
                     onChange={(value) => setRoleScopes((prev) => ({ ...prev, [domain]: value }))}
                   >
                     <Select.Option value="">未设置（主管看所辖组织）</Select.Option>
@@ -596,7 +608,7 @@ export default function RoleList() {
             </div>
           </>
         )}
-        {permTarget?.canManage === false && (
+        {canManageRoles && permTarget && !permTarget.canManage && (
           <div className="dialog-note">该角色超出当前账号的委派范围，仅可查看。</div>
         )}
       </Drawer>

@@ -18,7 +18,7 @@ const row = (id: number, no: string, status: string, label: string, electricalHa
   values: { serialNo: String(id), outsourceDate: '2026-11-04', status: label, workOrderNo: no, customer: '超穎', remark: null,
     electricalHandoff: electricalHandoff ? '是' : closed || canElectricalHandoff ? '否' : null },
 })
-const page = (list: ReturnType<typeof row>[]) => ({ columns, list, total: list.length, page: 1, pageSize: 20 })
+const page = (list: ReturnType<typeof row>[]) => ({ columns, list, total: list.length, page: 1, pageSize: 100 })
 
 function renderPortal(api: Pick<OemApi, 'outsourceItems'> & Partial<Pick<OemApi, 'setOutsourceElectricalHandoff'>>) {
   return render(
@@ -44,15 +44,15 @@ describe('ODM/OEMA 门户外发工令', () => {
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual(
       expect.arrayContaining(['序号', '外发日期', '状态', '转迅得研发电控设计', '工令', '档案', '客户', '备注', '操作']))
     expect(screen.queryByRole('button', { name: /编辑|删除|发送/ })).not.toBeInTheDocument()
-    expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, keyword: '', includeClosed: false })
+    expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, keyword: '', includeClosed: false })
 
     const search = screen.getByPlaceholderText('工令、客户或机型')
     await user.type(search, 'A2')
     // Arco reads keyCode 13 for Enter, which user-event does not set in jsdom.
     fireEvent.keyDown(search, { key: 'Enter', code: 'Enter', keyCode: 13, charCode: 13, which: 13 })
-    await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, keyword: 'A2', includeClosed: false }))
+    await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, keyword: 'A2', includeClosed: false }))
     await user.click(screen.getByText('显示已完成'))
-    await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 20, keyword: 'A2', includeClosed: true }))
+    await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, keyword: 'A2', includeClosed: true }))
   })
 
   it('vendor portal shows the column and loads from the vendor endpoint', async () => {

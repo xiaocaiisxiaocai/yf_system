@@ -76,9 +76,11 @@ public static class QueryValues
     public static string ContainsPattern(string term) =>
         "%" + term.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_") + "%";
 
-    public static ulong? OptionalUInt64(HttpRequest request, string name)
+    public static ulong? OptionalUInt64(HttpRequest request, string name) => OptionalUInt64(request.Query, name);
+
+    public static ulong? OptionalUInt64(IQueryCollection query, string name)
     {
-        if (!request.Query.TryGetValue(name, out var values)) return null;
+        if (!query.TryGetValue(name, out var values)) return null;
         if (values.Count != 1 || !ulong.TryParse(values[0], NumberStyles.None, CultureInfo.InvariantCulture, out var value))
             throw ApiException.BadRequest("请求参数错误: " + name);
         return value;
@@ -95,13 +97,23 @@ public static class QueryValues
         return DateTime.SpecifyKind(value, DateTimeKind.Utc);
     }
 
-    public static (ulong Page, uint Size, ulong Offset) Page(HttpRequest request)
+    public const uint DefaultPageSize = 100;
+    private const uint MaximumPageSize = 500;
+
+    public static (ulong Page, uint Size, ulong Offset) Page(HttpRequest request) => Page(request.Query);
+
+    public static (ulong Page, uint Size, ulong Offset) Page(IQueryCollection query)
     {
-        var p = OptionalUInt64(request, "page") ?? 1;
-        var requestedSize = OptionalUInt64(request, "pageSize") ?? 20;
+        var p = OptionalUInt64(query, "page") ?? 1;
+        var requestedSize = OptionalUInt64(query, "pageSize");
         if (requestedSize > uint.MaxValue) throw ApiException.BadRequest("请求参数错误: pageSize");
-        var s = Math.Clamp((uint)requestedSize, 1U, 100U);
-        p = Math.Clamp(p, 1, ulong.MaxValue / s);
-        return (p, s, (p - 1) * s);
+        return NormalizePage(p, requestedSize);
+    }
+
+    internal static (ulong Page, uint Size, ulong Offset) NormalizePage(ulong page, ulong? requestedSize)
+    {
+        var size = (uint)Math.Clamp(requestedSize ?? DefaultPageSize, 1UL, MaximumPageSize);
+        var actualPage = Math.Clamp(page, 1UL, ulong.MaxValue / size);
+        return (actualPage, size, (actualPage - 1) * size);
     }
 }

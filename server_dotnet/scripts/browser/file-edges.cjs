@@ -87,7 +87,7 @@ async function assertExcelGrid(dialog, expectedRows) {
 
     const c2sNames = [];
     const s2cNames = [];
-    for (let index = 0; index < 7; index++) {
+    for (let index = 0; index < 45; index++) {
       // STEP 与压缩文件本身属于必需资料（上传资料要求契约-2026-09-24），C2S 夹具不会触发补传，计数保持不变。
       const name = prefix + '-c2s-' + String(index).padStart(2, '0') + (index === 0 ? '.step' : '.zip');
       const bytes = Buffer.from('C2S|' + suffix + '|' + index);
@@ -138,19 +138,25 @@ async function assertExcelGrid(dialog, expectedRows) {
       if (isUploadPath(path)) writeUploadEvent({ event: 'requestfailed', method: request.method(), path, status: null, requestfailed: request.failure()?.errorText || 'unknown' });
     });
 
-    const initial = waitForList({ page: 1, pageSize: 10 });
+    const initial = waitForList({ page: 1, pageSize: 100 });
     await page.goto(s.base + '/projects/' + project.id);
     const initialData = await (await initial).json();
     await page.getByRole('tab', { name: '文件', exact: true, selected: true }).waitFor();
 
     await record('文件列表双向多页总数和分页真实结果', async () => {
-      assert.equal(initialData.total, 14);
-      assert.equal(initialData.list.length, 10);
-      await page.getByText('共 14 条', { exact: true }).waitFor();
-      const second = await listAction({ page: 2, pageSize: 10 }, () =>
+      assert.equal(initialData.total, 52);
+      assert.equal(initialData.list.length, 52);
+      await page.getByText('共 52 条', { exact: true }).waitFor();
+      const first = await listAction({ page: 1, pageSize: 50 }, async () => {
+        await page.locator('.arco-pagination .arco-select').click();
+        await page.getByRole('option', { name: '50 条/页', exact: true }).click();
+      });
+      assert.equal(first.list.length, 50);
+      const second = await listAction({ page: 2, pageSize: 50 }, () =>
         page.locator('.arco-pagination-item').filter({ hasText: /^2$/ }).click());
-      assert.equal(second.total, 14);
-      assert.equal(second.list.length, 4);
+      assert.equal(second.total, 52);
+      assert.equal(second.list.length, 2);
+      assert.equal(new Set([...first.list, ...second.list].map(item => item.id)).size, 52);
       assert(second.list.every(item => item.direction === 'C2S'));
     });
 
@@ -158,7 +164,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       await row(c2sNames[0]).getByRole('checkbox').locator('..').click();
       await page.getByRole('button', { name: '打包下载（1）', exact: true }).waitFor();
 
-      const supplierFiles = await listAction({ page: 1, pageSize: 10, direction: 'S2C' }, async () => {
+      const supplierFiles = await listAction({ page: 1, pageSize: 50, direction: 'S2C' }, async () => {
         await direction.click();
         await page.getByRole('option', { name: '供应商 → SAA', exact: true }).click();
       });
@@ -166,7 +172,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       assert(supplierFiles.list.every(item => item.direction === 'S2C'));
       assert.equal(await page.getByRole('button', { name: '打包下载（1）', exact: true }).count(), 0);
 
-      const byName = await listAction({ page: 1, pageSize: 10, direction: 'S2C', keyword: workbookName }, async () => {
+      const byName = await listAction({ page: 1, pageSize: 50, direction: 'S2C', keyword: workbookName }, async () => {
         await search.fill(workbookName);
         await search.press('Enter');
       });
@@ -174,7 +180,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       assert.equal(byName.list[0].originalName, workbookName);
       await row(workbookName).waitFor();
 
-      const clearedName = await listAction({ page: 1, pageSize: 10, direction: 'S2C', keyword: '' }, async () => {
+      const clearedName = await listAction({ page: 1, pageSize: 50, direction: 'S2C', keyword: '' }, async () => {
         await search.hover();
         await page.locator('.responsive-toolbar .arco-input-search .arco-input-clear-icon').click();
         assert.equal(await search.inputValue(), '');
@@ -182,9 +188,9 @@ async function assertExcelGrid(dialog, expectedRows) {
       assert.equal(clearedName.total, 7);
 
       await direction.hover();
-      const clearedDirection = await listAction({ page: 1, pageSize: 10, direction: '' }, () =>
+      const clearedDirection = await listAction({ page: 1, pageSize: 50, direction: '' }, () =>
         direction.locator('.arco-select-clear-icon').click());
-      assert.equal(clearedDirection.total, 14);
+      assert.equal(clearedDirection.total, 52);
     });
 
     await record('文件列表错误重试和迟到响应不覆盖新条件', async () => {
@@ -197,9 +203,9 @@ async function assertExcelGrid(dialog, expectedRows) {
       }), { times: 1 });
       await page.reload();
       await page.getByText('加载失败', { exact: true }).waitFor();
-      const retried = await listAction({ page: 1, pageSize: 10 }, () =>
+      const retried = await listAction({ page: 1, pageSize: 100 }, () =>
         page.getByRole('button', { name: '重试', exact: true }).click());
-      assert.equal(retried.total, 14);
+      assert.equal(retried.total, 52);
 
       let releaseOld;
       const oldReleased = new Promise(resolve => { releaseOld = resolve; });
@@ -222,7 +228,7 @@ async function assertExcelGrid(dialog, expectedRows) {
       await search.fill(oldKeyword);
       await search.press('Enter');
       await oldSeen;
-      const newest = await listAction({ page: 1, pageSize: 10, keyword: newestKeyword }, async () => {
+      const newest = await listAction({ page: 1, pageSize: 100, keyword: newestKeyword }, async () => {
         await search.fill(newestKeyword);
         await search.press('Enter');
       });
@@ -254,7 +260,7 @@ async function assertExcelGrid(dialog, expectedRows) {
     await record('真实浏览器上传中断后复用会话断点续传', async () => {
       const interruptedName = prefix + '-interrupted.zip';
       const interruptedBytes = Buffer.alloc(2 * 1024 * 1024 + 257, 0x5a);
-      await listAction({ page: 1, pageSize: 10, keyword: '' }, async () => {
+      await listAction({ page: 1, pageSize: 100, keyword: '' }, async () => {
         await search.fill('');
         await search.press('Enter');
       });

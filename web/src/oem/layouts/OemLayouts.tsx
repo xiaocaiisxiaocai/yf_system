@@ -102,8 +102,8 @@ export function PortalLayout() {
     <QueryClientProvider client={portalQueryClient}>
       <OemProvider value={oemValue}>
         <Shell title={WORK_ORDER_TITLE} subtitle={account?.companyName} menu={[
-          { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
           { path: `${PORTAL_BASE}/outsource`, label: '外发工令', icon: <IconList />, visible: true },
+          { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
         ]} account={
           <Dropdown trigger="click" droplist={
             <Menu onClickMenuItem={(key) => {

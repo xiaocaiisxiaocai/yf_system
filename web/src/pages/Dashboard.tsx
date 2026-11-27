@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE, TABLE_PAGINATION } from '../components/tablePagination'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Button, Card, Empty, Grid, List, Pagination, Result, Skeleton, Statistic, Tag, Typography } from '@arco-design/web-react'
@@ -51,8 +52,6 @@ interface MessagePage {
   pageSize: number
 }
 
-const PAGE_SIZE = 10
-
 function isAuthorizationError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   const candidate = error as { status?: unknown; response?: { status?: unknown } }
@@ -63,6 +62,8 @@ function isAuthorizationError(error: unknown): boolean {
 export default function Dashboard() {
   const [pendingPage, setPendingPage] = useState(1)
   const [messagePage, setMessagePage] = useState(1)
+  const [pendingPageSize, setPendingPageSize] = useState(DEFAULT_PAGE_SIZE)
+  const [messagePageSize, setMessagePageSize] = useState(DEFAULT_PAGE_SIZE)
   const [unreadOnly, setUnreadOnly] = useState(true)
   const observedRevision = useRef<string | null>(null)
   // 只订阅用到的字段；token 静默刷新等无关变化不再重渲染整个工作台。
@@ -112,22 +113,22 @@ export default function Dashboard() {
     },
   }, queryClient)
   const pendingQuery = useQuery({
-    queryKey: [...dashboardQueryKey, 'pending-projects', pendingPage],
+    queryKey: [...dashboardQueryKey, 'pending-projects', pendingPage, pendingPageSize],
     enabled: hasDashboard,
     queryFn: async ({ signal }) => {
       const config: QuietRequestConfig = {
-        params: { page: pendingPage, pageSize: PAGE_SIZE }, signal, quietNetworkError: true,
+        params: { page: pendingPage, pageSize: pendingPageSize }, signal, quietNetworkError: true,
       }
       const response = await http.get<ApiResponses['GET /dashboard/pending-projects']>('/dashboard/pending-projects', config)
       return response.data as PendingProjectPage
     },
   }, queryClient)
   const messageQuery = useQuery({
-    queryKey: [...dashboardQueryKey, 'messages', messagePage, unreadOnly],
+    queryKey: [...dashboardQueryKey, 'messages', messagePage, messagePageSize, unreadOnly],
     enabled: hasDashboard,
     queryFn: async ({ signal }) => {
       const config: QuietRequestConfig = {
-        params: { page: messagePage, pageSize: PAGE_SIZE, unreadOnly }, signal, quietNetworkError: true,
+        params: { page: messagePage, pageSize: messagePageSize, unreadOnly }, signal, quietNetworkError: true,
       }
       const response = await http.get<ApiResponses['GET /dashboard/messages']>('/dashboard/messages', config)
       return response.data as MessagePage
@@ -140,10 +141,10 @@ export default function Dashboard() {
   const data = dashboardAuthorizationError ? undefined : summaryQuery.data
   const pendingData = !dashboardAuthorizationError && pendingQuery.data
     ? pendingQuery.data
-    : { list: [], total: 0, page: pendingPage, pageSize: PAGE_SIZE }
+    : { list: [], total: 0, page: pendingPage, pageSize: pendingPageSize }
   const messageData = !dashboardAuthorizationError && messageQuery.data
     ? messageQuery.data
-    : { list: [], total: 0, page: messagePage, pageSize: PAGE_SIZE }
+    : { list: [], total: 0, page: messagePage, pageSize: messagePageSize }
   const loading = summaryQuery.isPending
   const loadError = summaryQuery.isError && !summaryQuery.data
   const summaryRefreshError = summaryQuery.isRefetchError && !!summaryQuery.data
@@ -170,18 +171,18 @@ export default function Dashboard() {
   useEffect(() => {
     const next = pendingQuery.data
     if (!next) return
-    const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
+    const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pendingPageSize)))
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the server can shrink the last page between requests
     if (pendingPage > lastPage) setPendingPage(lastPage)
-  }, [pendingPage, pendingQuery.data])
+  }, [pendingPage, pendingPageSize, pendingQuery.data])
 
   useEffect(() => {
     const next = messageQuery.data
     if (!next) return
-    const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || PAGE_SIZE)))
+    const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || messagePageSize)))
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the server can shrink the last page between requests
     if (messagePage > lastPage) setMessagePage(lastPage)
-  }, [messagePage, messageQuery.data])
+  }, [messagePage, messagePageSize, messageQuery.data])
 
   useEffect(() => {
     if (!hasDashboard) return
@@ -352,15 +353,17 @@ export default function Dashboard() {
                     </List.Item>
                   )}
                 />
-                {pendingData.total > pendingData.pageSize && (
+                {pendingData.total > 0 && (
                   <div className="dashboard-pagination">
                     <Pagination
+                      {...TABLE_PAGINATION}
+                      selectProps={{ getPopupContainer: () => document.body }}
                       current={pendingPage}
-                      pageSize={pendingData.pageSize || PAGE_SIZE}
+                      pageSize={pendingPageSize}
                       total={pendingData.total}
-                      sizeCanChange={false}
-                      onChange={(page) => {
-                        setPendingPage(page)
+                      onChange={(page, size) => {
+                        setPendingPage(size === pendingPageSize ? page : 1)
+                        setPendingPageSize(size)
                       }}
                     />
                   </div>
@@ -455,15 +458,17 @@ export default function Dashboard() {
                     )
                   }}
                 />
-                {messageData.total > messageData.pageSize && (
+                {messageData.total > 0 && (
                   <div className="dashboard-pagination">
                     <Pagination
+                      {...TABLE_PAGINATION}
+                      selectProps={{ getPopupContainer: () => document.body }}
                       current={messagePage}
-                      pageSize={messageData.pageSize || PAGE_SIZE}
+                      pageSize={messagePageSize}
                       total={messageData.total}
-                      sizeCanChange={false}
-                      onChange={(page) => {
-                        setMessagePage(page)
+                      onChange={(page, size) => {
+                        setMessagePage(size === messagePageSize ? page : 1)
+                        setMessagePageSize(size)
                       }}
                     />
                   </div>

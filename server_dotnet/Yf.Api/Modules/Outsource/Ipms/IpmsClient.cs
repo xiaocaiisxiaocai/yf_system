@@ -35,6 +35,10 @@ public interface IIpmsClient
     /// Throws <see cref="IpmsUnavailableException"/> when IPMS cannot answer at all.
     /// </summary>
     Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct);
+
+    /// <summary>Returns any available enrichment for an import, including an empty first-time MES mirror.</summary>
+    Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupForImportAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct)
+        => LookupAsync(workOrderNos, ct);
 }
 
 public sealed class IpmsOptions

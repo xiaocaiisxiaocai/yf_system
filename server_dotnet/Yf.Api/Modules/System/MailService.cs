@@ -256,23 +256,21 @@ public sealed class MailService
     public async Task<PageResponse<MailAuditEntry>> LogsAsync(string scope, string result, ulong page, ulong pageSize, CancellationToken ct)
     {
         var actions = MailLogActions(scope, result);
-        var size = Math.Clamp(pageSize, 1UL, 100UL);
-        var actualPage = Math.Clamp(page, 1UL, 100_000UL);
+        var (actualPage, size, offset) = QueryValues.NormalizePage(page, pageSize);
         await using var conn = await db.OpenAsync(ct);
         await using var context = EfDb.Use(conn);
         var query = context.AuditLogs.Where(log => Enumerable.Contains(actions, log.Action));
         var total = checked((ulong)await query.LongCountAsync(ct));
-        var list = await ReadMailLogsAsync(context, query, checked((int)((actualPage - 1) * size)), (int)size, ct);
+        var list = await ReadMailLogsAsync(context, query, offset, size, ct);
         return new(list, total, actualPage, size);
     }
 
     private static async Task<MailAuditEntry[]> ReadMailLogsAsync(YfDbContext context,
-        IQueryable<Infrastructure.Entities.AuditLog> query, int skip, int take, CancellationToken ct)
+        IQueryable<Infrastructure.Entities.AuditLog> query, ulong offset, ulong size, CancellationToken ct)
     {
         var rows = await query
             .OrderByDescending(log => log.CreatedAt).ThenByDescending(log => log.Id)
-            .Skip(skip)
-            .Take(take)
+            .Page(offset, size)
             .Select(log => new MailAuditRow
             {
                 Id = log.Id,

@@ -7,7 +7,7 @@ import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
 import LoadError from '../../components/LoadError'
 import ResizableTable from '../../components/ResizableTable'
-import { TABLE_PAGINATION } from '../../components/tablePagination'
+import { DEFAULT_PAGE_SIZE, TABLE_PAGINATION } from '../../components/tablePagination'
 import ItemFilesPopover from '../../outsource/components/ItemFilesPopover'
 import { saveBlob } from '../../utils/saveBlob'
 import { useOem } from '../OemContext'
@@ -36,7 +36,7 @@ export default function PortalOutsourcePage() {
   const filesScope = JSON.stringify(queryScope)
   const [data, setData] = useState<Page | null>(null)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [keyword, setKeyword] = useState('')
   const [applied, setApplied] = useState('')
   const [includeClosed, setIncludeClosed] = useState(false)

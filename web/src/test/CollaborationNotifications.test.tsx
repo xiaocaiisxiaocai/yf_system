@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -90,7 +90,7 @@ function page(item = notification()) {
     list: [item],
     total: 1,
     page: 1,
-    pageSize: 20,
+    pageSize: 100,
     unreadCount: 1,
   }
 }
@@ -125,6 +125,49 @@ describe('协作通知行为', () => {
 
     await user.click(title)
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/projects/11?tab=messages&target=29')
+  })
+
+  it('通知按选定条数从第一页重查，并在切换页签后沿用该条数', async () => {
+    mocks.get.mockImplementation(async (_url, { params }) => ({
+      data: { ...page(), page: params.page, pageSize: params.pageSize, total: 720 },
+    }))
+    const user = userEvent.setup()
+    renderNotifications()
+    await user.click(screen.getByRole('button', { name: /协作动态通知/ }))
+    const footer = (await screen.findByText('2', { selector: '.arco-pagination-item' })).closest<HTMLElement>('.arco-pagination')!
+    const lastQuery = () => mocks.get.mock.lastCall?.[1].params
+    expect(lastQuery()).toEqual({ page: 1, pageSize: 100, unreadOnly: true })
+    await user.click(within(footer).getByText('2'))
+    expect(lastQuery()).toEqual({ page: 2, pageSize: 100, unreadOnly: true })
+    await user.click(within(footer).getByRole('combobox'))
+    const options = await screen.findAllByRole('option')
+    expect(options.map((option) => Number.parseInt(option.textContent!))).toEqual([50, 100, 200, 500])
+    fireEvent.click(screen.getByRole('option', { name: /^500\s/ }))
+    expect(lastQuery()).toEqual({ page: 1, pageSize: 500, unreadOnly: true })
+    await user.click(screen.getByRole('tab', { name: '全部' }))
+    expect(lastQuery()).toEqual({ page: 1, pageSize: 500, unreadOnly: false })
+  })
+
+  it('大页标记按接口上限分批，部分失败后只重试剩余未查看通知', async () => {
+    const records = Array.from({ length: 101 }, (_, i) => notification({ id: i + 1, title: `动态${i + 1}` }))
+    mocks.get.mockImplementation(async (_url, { params }) => ({
+      data: { ...page(), list: records.slice(0, params.pageSize), pageSize: params.pageSize, total: 101 },
+    }))
+    mocks.post.mockResolvedValueOnce({ data: {} }).mockRejectedValueOnce(new Error('断线'))
+    const user = userEvent.setup()
+    renderNotifications()
+    await user.click(screen.getByRole('button', { name: /协作动态通知/ }))
+    await user.click(await screen.findByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: /^200\s/ }))
+    const lastTitle = await screen.findByRole('button', { name: '查看通知：动态101' })
+    const markPage = screen.getByRole('button', { name: '将本页标记为已查看' })
+    await user.click(markPage)
+    await waitFor(() => expect(mocks.state.refresh).toHaveBeenCalledOnce())
+    expect(mocks.post.mock.calls.map(([, body]) => body.ids)).toEqual([records.slice(0, 100).map((item) => item.id), [101]])
+    expect(lastTitle.closest('article')).toHaveAttribute('data-read', 'false')
+    await user.click(markPage)
+    await waitFor(() => expect(lastTitle.closest('article')).toHaveAttribute('data-read', 'true'))
+    expect(mocks.post.mock.calls[2][1]).toEqual({ ids: [101] })
   })
 
   it('自己标记已查看导致的概览变化不会误报新动态，真正的新动态仍会提示', async () => {

@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import { optionalTextLengthRule, textLengthRule } from '../../utils/textRules'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
@@ -153,9 +154,9 @@ export default function UserList() {
     menus: state.menus,
     mustChangePassword: state.mustChangePassword,
   })))
-  const canDelete = useAuth((state) => state.hasPerm('user:delete'))
   // 编辑（含数据范围）需要 user:manage；只有 user:view 的账号只看列表，不给一个必然 403 的入口。
-  const canManageUsers = useAuth((state) => state.hasPerm('user:manage'))
+  const canManageUsers = auth.permissions.includes('user:manage')
+  const canDelete = canManageUsers && auth.permissions.includes('user:delete')
   const [sessionUserId, sessionGeneration, sessionGrants] = createSessionQueryScope(auth)
   const sessionScope = useMemo(
     () => [sessionUserId, sessionGeneration, sessionGrants] as const,
@@ -167,7 +168,7 @@ export default function UserList() {
   const [departmentId, setDepartmentId] = useState<number>()
   const [status, setStatus] = useState<string>()
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchField, setBatchField] = useState<BatchEditField | null>(null)
   const [batchChanges, setBatchChanges] = useState<BatchChanges>({})
@@ -809,7 +810,7 @@ export default function UserList() {
             pageSize,
             onChange: (p, ps) => {
               const sameQuery = page === p && pageSize === ps
-              setPage(p)
+              setPage(ps === pageSize ? p : 1)
               setPageSize(ps)
               if (sameQuery) void usersQuery.refetch()
             },

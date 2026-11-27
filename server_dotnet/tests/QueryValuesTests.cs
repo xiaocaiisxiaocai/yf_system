@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Yf.Api.Infrastructure;
+using Yf.Api.Modules.Projects;
 
 namespace Yf.Api.Tests;
 
@@ -24,10 +25,38 @@ public class QueryValuesTests
     {
         var context = new DefaultHttpContext();
         Assert.Null(QueryValues.OptionalUInt64(context.Request, "departmentId"));
-        Assert.Equal((1UL, 20U, 0UL), QueryValues.Page(context.Request));
-        context.Request.QueryString = new QueryString("?page=0&pageSize=101&departmentId=18446744073709551615");
-        Assert.Equal(ulong.MaxValue, QueryValues.OptionalUInt64(context.Request, "departmentId"));
         Assert.Equal((1UL, 100U, 0UL), QueryValues.Page(context.Request));
+        context.Request.QueryString = new QueryString("?page=0&pageSize=501&departmentId=18446744073709551615");
+        Assert.Equal(ulong.MaxValue, QueryValues.OptionalUInt64(context.Request, "departmentId"));
+        Assert.Equal((1UL, 500U, 0UL), QueryValues.Page(context.Request));
+    }
+
+    [Theory]
+    [InlineData(10)]
+    [InlineData(20)]
+    [InlineData(50)]
+    [InlineData(100)]
+    [InlineData(200)]
+    [InlineData(500)]
+    public void PageSizesUseTheSameOffsetAcrossLists(int requested)
+    {
+        var request = new DefaultHttpContext().Request;
+        request.QueryString = new QueryString($"?page=3&pageSize={requested}");
+        var size = (uint)requested;
+        Assert.Equal((3UL, size, 2UL * size), QueryValues.Page(request));
+        Assert.Equal((3UL, (ulong)size), ProjectJson.ClampPage(3, size));
+    }
+
+    [Fact]
+    public void LargePageNumbersCannotWrapToTheBeginning()
+    {
+        var request = new DefaultHttpContext().Request;
+        request.QueryString = new QueryString($"?page={ulong.MaxValue}&pageSize=500");
+        var (page, size, offset) = QueryValues.Page(request);
+        Assert.Equal(500U, size);
+        Assert.Equal(ulong.MaxValue / size, page);
+        Assert.Equal(checked((page - 1) * size), offset);
+        Assert.True(offset > int.MaxValue);
     }
 
     [Theory]

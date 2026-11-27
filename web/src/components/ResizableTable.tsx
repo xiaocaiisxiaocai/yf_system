@@ -58,7 +58,8 @@ function lockedByDefault<T>(column: TableColumnProps<T>, index: number) {
 }
 
 function mergePagination(pagination: TableProps['pagination']) {
-  if (!pagination || typeof pagination !== 'object') return pagination
+  if (pagination === false) return false
+  if (!pagination || typeof pagination !== 'object') return TABLE_PAGINATION
   return {
     ...TABLE_PAGINATION,
     ...pagination,

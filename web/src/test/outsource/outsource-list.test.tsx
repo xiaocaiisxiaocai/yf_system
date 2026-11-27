@@ -25,7 +25,7 @@ const base = {
   ipmsSyncedAt: '2026-11-10T00:00:00Z', electricalHandoff: false, electricalHandoffAt: null, electricalHandoffSigner: null,
 }
 const items = [
-  { ...base, id: 1, workOrderNo: '21089901', vendorId: 1, vendorName: '鼎亚', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
+  { ...base, id: 1, workOrderNo: '21089901', ipmsSyncedAt: null, vendorId: 1, vendorName: '鼎亚', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
     status: 'PAUSED', sendStatus: 'UNSENT', matchState: 'OK', updatedAt: '2026-11-10T01:02:03.456Z' },
   { ...base, id: 2, workOrderNo: '21089961', vendorId: 2, vendorName: '元控', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
     status: 'NORMAL', sendStatus: 'SENT', matchState: 'VENDOR_MISMATCH', updatedAt: '2026-11-10T01:02:03.456Z',
@@ -57,7 +57,7 @@ const FIELD_ORDER: [string, string, string, boolean][] = [
 /** The default columns (外协清单契约 → 栏位设定): today's built-in columns, each one an editor may fill in marked canEdit. */
 const fieldLayout = {
   fields: FIELD_ORDER.map(([key, label, category, canEdit]) => ({
-    key, label, dataType: key === 'electricalHandoff' ? 'BOOLEAN' : 'TEXT', options: [], category,
+    key, label, dataType: key === 'electricalHandoff' ? 'BOOLEAN' : 'TEXT', options: [] as string[], category,
     pinned: ['outsourceDate', 'status', 'electricalHandoff', 'workOrderNo'].includes(key),
     vendorVisible: true, vendorEditable: false, canEdit,
   })),
@@ -66,13 +66,20 @@ const fieldLayout = {
 /** The same columns for an account that fills none of them in. */
 const readOnlyLayout = { fields: fieldLayout.fields.map((field) => ({ ...field, canEdit: false })) }
 
-function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length) {
+function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length, list = items) {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-    data: url === '/outsource/items' ? { list: items, total, page: 1, pageSize: 20 }
+    data: url === '/outsource/items' ? { list, total, page: 1, pageSize: 100 }
         : url === '/outsource/items/export' ? new Blob()
         : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
+          : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
           : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
   } as never))
+}
+
+// Arco disables pointer events during popup entrance animations.
+async function readyForPointer<T extends HTMLElement>(element: T) {
+  await waitFor(() => expect(getComputedStyle(element).pointerEvents).not.toBe('none'))
+  return element
 }
 
 describe('外发工令页面', () => {
@@ -104,7 +111,7 @@ describe('外发工令页面', () => {
     }
   })
 
-  it('不分厂商页签，可按厂商筛选，暂停整行标红，类型与厂商不符时提示', async () => {
+  it('按厂商页签筛选并导出，暂停整行标红，类型与厂商不符时提示', async () => {
     setSession([])
     const get = mockApi(readOnlyLayout)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -117,27 +124,48 @@ describe('外发工令页面', () => {
     expect(screen.queryByRole('button', { name: /编辑工令/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
 
-    expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['全部', '鼎亚', '元控'])
+    expect(screen.getByRole('tab', { name: '全部', selected: true })).toBeVisible()
+    vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
     expect(get).not.toHaveBeenCalledWith('/outsource/items/summary', expect.anything())
     const user = userEvent.setup()
-    await user.click(screen.getByRole('combobox', { name: '外发厂商' }))
-    fireEvent.click(await screen.findByRole('option', { name: '元控' }))
+    await user.click(screen.getByRole('tab', { name: '元控' }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: 2, page: 1 }),
     })))
-    const reset = screen.getByRole('button', { name: '重置筛选' })
+    await user.click(screen.getByRole('button', { name: '导出' }))
+    expect(get).toHaveBeenCalledWith('/outsource/items/export', expect.objectContaining({
+      params: expect.objectContaining({ vendorId: 2 }),
+    }))
     get.mockClear()
-    await user.click(reset)
+    await user.click(screen.getByRole('tab', { name: '全部' }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: undefined, page: 1 }),
     })))
     expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
   })
 
-  it('工令表头可粘贴多个工令，筛选回到第一页，导出和重置复用筛选条件', async () => {
+  it('仅在未完成且尚未同步的工令号旁显示待同步提示', async () => {
     const user = userEvent.setup()
     setSession([])
-    const get = mockApi(readOnlyLayout, 40)
+    const closed = { ...items[0], id: 3, workOrderNo: '21089962', closed: true }
+    mockApi(readOnlyLayout, 3, [...items, closed])
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    const cell = (order: string) => within(screen.getByText(order).closest('td')!)
+    await screen.findByText('21089901')
+    const tag = cell('21089901').getByText('待同步')
+    expect(tag).toBeVisible()
+    expect(cell('21089961').queryByText('待同步')).not.toBeInTheDocument()
+    expect(cell(closed.workOrderNo).queryByText('待同步')).not.toBeInTheDocument()
+    await user.hover(tag)
+    expect(await screen.findByText('IPMS 尚无此工令资料；若长期不消失，请确认工令号是否正确')).toBeVisible()
+  })
+
+  it('工令表头可组合多个工令与同步状态，筛选回到第一页，导出和重置复用筛选条件', async () => {
+    const user = userEvent.setup()
+    setSession([])
+    const get = mockApi(readOnlyLayout, 101)
     const saveBlob = vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
@@ -152,6 +180,16 @@ describe('外发工令页面', () => {
     get.mockClear()
 
     await user.click(filter)
+    await user.click(await readyForPointer(await screen.findByRole('combobox', { name: '同步状态' })))
+    await user.click(await readyForPointer(await screen.findByRole('option', { name: '尚未同步' })))
+    await user.click(screen.getByRole('button', { name: /^筛选$/ }))
+    const columnFilters = JSON.stringify({ ipmsSyncStatus: 'unsynced' })
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ workOrders: undefined, columnFilters, page: 1 }),
+    })))
+    expect(filter).toHaveClass('arco-table-filters-active')
+
+    await user.click(filter)
     const input = await screen.findByPlaceholderText('筛选工令，可粘贴多个')
     await waitFor(() => expect(getComputedStyle(input).pointerEvents).not.toBe('none'))
     await user.click(input)
@@ -159,23 +197,109 @@ describe('外发工令页面', () => {
     await user.paste(workOrders)
     await user.click(screen.getByRole('button', { name: /^筛选$/ }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
-      params: expect.objectContaining({ workOrders, page: 1 }),
+      params: expect.objectContaining({ workOrders, columnFilters, page: 1 }),
     })))
     expect(filter).toHaveClass('arco-table-filters-active')
 
     await user.click(screen.getByRole('button', { name: /^导出$/ }))
     await waitFor(() => expect(saveBlob).toHaveBeenCalled())
     expect(get).toHaveBeenCalledWith('/outsource/items/export', expect.objectContaining({
-      params: expect.objectContaining({ workOrders }), responseType: 'blob',
+      params: expect.objectContaining({ workOrders, columnFilters }), responseType: 'blob',
     }))
 
     get.mockClear()
     await user.click(screen.getByRole('button', { name: '重置筛选' }))
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
-      params: expect.objectContaining({ workOrders: undefined, page: 1 }),
+      params: expect.objectContaining({ workOrders: undefined, columnFilters: undefined, page: 1 }),
     })))
     expect(filter).not.toHaveClass('arco-table-filters-active')
     expect(screen.queryByRole('button', { name: '重置筛选' })).not.toBeInTheDocument()
+  })
+
+  it('数据列表头均可筛选，厂商与页签同步，自定义选项保留空格且导出复用组合条件', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:manage'])
+    const sample = readOnlyLayout.fields[0]
+    const get = mockApi({ fields: [...readOnlyLayout.fields,
+      { ...sample, key: 'files', label: '档案', pinned: false },
+      { ...sample, key: 'custom_phase', label: '阶段', category: 'CUSTOM', dataType: 'SELECT', options: ['Stage A', 'Stage B'], pinned: false },
+    ] })
+    vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    const row = (await screen.findByText('21089901')).closest('tr')!
+    await user.click(within(row).getByRole('checkbox'))
+    const filter = (label: string) => screen.getByText(label, { selector: '.arco-table-th-item-title' }).closest('th')!
+      .querySelector<HTMLElement>('.arco-table-filters')!
+    for (const label of ['序号', ...readOnlyLayout.fields.map(field => field.label), '档案', '阶段', '发送状态', '导入人', '导入时间', '修改人', '修改时间']) {
+      expect(filter(label)).toBeInTheDocument()
+    }
+    expect(filter('操作')).toBeNull()
+    expect(screen.queryByPlaceholderText('工令、客户或机型')).not.toBeInTheDocument()
+    for (const label of ['外发类型', '状态', '发送状态']) {
+      expect(screen.queryByRole('combobox', { name: label })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByPlaceholderText('外发日期起')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('外发日期止')).not.toBeInTheDocument()
+
+    await user.click(filter('外发厂商'))
+    await user.click(await readyForPointer(await screen.findByRole('combobox', { name: '筛选外发厂商' })))
+    await user.click(await readyForPointer(await screen.findByRole('option', { name: '元控' })))
+    await user.click(screen.getByRole('button', { name: /^筛选$/ }))
+    expect(await screen.findByRole('tab', { name: '元控', selected: true })).toBeVisible()
+    expect(within(row).getByRole('checkbox')).not.toBeChecked()
+
+    await user.click(filter('阶段'))
+    await user.click(await readyForPointer(await screen.findByRole('combobox', { name: '筛选阶段' })))
+    await user.click(await readyForPointer(await screen.findByRole('option', { name: 'Stage A' })))
+    await user.click(screen.getByRole('button', { name: /^筛选$/ }))
+    const conditions = { vendorId: 2, columnFilters: JSON.stringify({ custom_phase: 'Stage A' }) }
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ ...conditions, page: 1 }),
+    })))
+    await user.click(screen.getByRole('button', { name: /^导出$/ }))
+    expect(get).toHaveBeenCalledWith('/outsource/items/export', expect.objectContaining({ params: expect.objectContaining(conditions) }))
+    await user.click(screen.getByRole('button', { name: '重置筛选' }))
+    expect(screen.getByRole('tab', { name: '全部', selected: true })).toBeVisible()
+    expect(filter('阶段')).not.toHaveClass('arco-table-filters-active')
+    await user.click(filter('外发日期'))
+    expect(await screen.findByPlaceholderText('开始日期')).toBeVisible()
+    expect(screen.getByPlaceholderText('结束日期')).toBeVisible()
+  })
+
+  it('客户表头接受简称字典和自由关键字，审计日期按显示时区筛选', async () => {
+    const user = userEvent.setup()
+    setSession([])
+    const get = mockApi(readOnlyLayout)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    await screen.findByText('21089901')
+    const openFilter = (label: string) => user.click(screen.getByText(label, { selector: '.arco-table-th-item-title' })
+      .closest('th')!.querySelector<HTMLElement>('.arco-table-filters')!)
+    const apply = () => user.click(screen.getByRole('button', { name: /^筛选$/ }))
+    await openFilter('客户')
+    const input = await readyForPointer(await screen.findByPlaceholderText('输入或选择客户'))
+    await user.type(input, '华东')
+    await user.click(await readyForPointer(await screen.findByRole('option', { name: '华东（华东元件有限公司）' })))
+    await apply()
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({ columnFilters: JSON.stringify({ customer: '华东元件有限公司' }) }),
+    })))
+    await openFilter('客户')
+    const freeText = await readyForPointer(await screen.findByPlaceholderText('输入或选择客户'))
+    await user.clear(freeText)
+    await user.type(freeText, '未建档')
+    await apply()
+    await openFilter('修改时间')
+    const day = await readyForPointer(await screen.findByPlaceholderText('选择日期'))
+    await user.click(day)
+    fireEvent.change(day, { target: { value: '2026-11-25' } })
+    fireEvent.keyDown(day, { key: 'Enter', keyCode: 13 })
+    await apply()
+    await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
+      params: expect.objectContaining({
+        columnFilters: JSON.stringify({ customer: '未建档', modifiedAt: '2026-11-25' }),
+        columnFilterTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }),
+    })))
   })
 
   it('采购编辑时带上版本，厂商只能选该类型允许的厂商', async () => {
@@ -239,7 +363,7 @@ describe('外发工令页面', () => {
 
     await user.click(within(dialog).getByRole('combobox', { name: '外发厂商' }))
     expect(screen.queryByRole('option', { name: '鼎亚' })).not.toBeInTheDocument()
-    fireEvent.click(await screen.findByRole('option', { name: '元控' }))
+    fireEvent.click(await readyForPointer(await screen.findByRole('option', { name: '元控' })))
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     await waitFor(() => expect(put).toHaveBeenCalledWith('/outsource/items/1', {
       vendorId: 2, typeId: 6, status: 'PAUSED', remark: '', expectedUpdatedAt: '2026-11-10T01:02:03.456Z',
@@ -252,7 +376,8 @@ describe('外发工令页面', () => {
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items'
         ? { list: [{ ...items[0], typeId: null, typeLabel: 'XYZ', typeCode: 'XYZ', matchState: 'UNKNOWN_TYPE' }], total: 1, page: 1, pageSize: 20 }
-          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
+          : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: items[0] } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -302,7 +427,8 @@ describe('外发工令页面', () => {
 
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [{ ...items[1], closed: true }], total: 1, page: 1, pageSize: 20 }
-          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
+          : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     put.mockClear()
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -317,14 +443,17 @@ describe('外发工令页面', () => {
     }))
   })
 
-  it('汇入模板含外发类型范例，预览请求保留外发类型并排除范例', async () => {
+  it('跳过模板范例，IPMS 暂无资料的工令可预览并确认导入', async () => {
     const user = userEvent.setup()
     setSession(['outsource:manage'])
     mockApi()
-    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
-      rowNumber: 3, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',
-      customer: '超穎(泰國)', machineModel: 'ST-201L', typeLabel: 'OEMA【进料+制造】', quantity: 1, latestDueDate: '2026-12-31',
-    }] } } as never)
+    const pending = 'IPMS 暂无资料，可先导入，后续同步补齐'
+    const post = vi.spyOn(http, 'post').mockResolvedValueOnce({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
+      rowNumber: 3, workOrderNo: '21089901', status: 'READY', message: pending, vendorName: '鼎亚', outsourceDate: '2026-11-04',
+      customer: null, machineModel: null, typeLabel: 'OEMA【进料+制造】', quantity: null, latestDueDate: null,
+    }] } } as never).mockResolvedValueOnce({ data: { created: 1, skipped: 0, failed: 0, rows: [
+      { rowNumber: 3, status: 'CREATED' },
+    ] } } as never)
     const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
@@ -344,6 +473,12 @@ describe('外发工令页面', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', {
       rows: [{ rowNumber: 3, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],
     }))
+    expect(await within(dialog).findByText(pending)).toBeVisible()
+    expect(post).toHaveBeenCalledTimes(1)
+    const confirm = within(dialog).getByRole('button', { name: '确认导入' })
+    expect(confirm).toBeEnabled()
+    await user.click(confirm)
+    expect(post).toHaveBeenCalledWith('/outsource/items/import', post.mock.calls[0][1])
   })
 
   it('BOM 时间与发图导入模板的数据表包含一行日期范例', async () => {
@@ -381,7 +516,8 @@ describe('外发工令页面', () => {
     setSession(['outsource:manage', 'outsource:send'])
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [items[0], { ...items[1], closed: true }], total: 2, page: 1, pageSize: 20 }
-          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+          : url === '/outsource/fields' ? fieldLayout : url === '/outsource/sync-status' ? syncStatus : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
+          : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: { items } } as never)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -398,7 +534,7 @@ describe('外发工令页面', () => {
     await user.click(screen.getByRole('button', { name: '批量修改 (1)' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('combobox', { name: '外发厂商' }))
-    fireEvent.click(await screen.findByRole('option', { name: '元控' }))
+    fireEvent.click(await readyForPointer(await screen.findByRole('option', { name: '元控' })))
     await user.click(within(dialog).getByRole('combobox', { name: '外发类型' }))
     fireEvent.click(await screen.findByRole('option', { name: 'OEMA【进料+制造】' }))
 
@@ -422,6 +558,7 @@ describe('外发工令页面', () => {
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list, total: 2, page: 1, pageSize: 20 }
         : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
+          : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
           : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     const put = vi.spyOn(http, 'put').mockResolvedValue({ data: items[0] } as never)
@@ -492,6 +629,7 @@ describe('外发工令页面', () => {
     vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/items' ? { list: [changedHandoff], total: 1, page: 1, pageSize: 20 }
         : url === '/outsource/fields' ? readOnlyLayout : url === '/outsource/sync-status' ? syncStatus
+          : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
           : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
     } as never))
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)

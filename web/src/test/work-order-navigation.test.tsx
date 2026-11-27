@@ -16,7 +16,7 @@ const employee = {
   id: 6, employeeNo: 'E06', realName: '导航测试员', email: 'nav@example.test',
   userType: 'INTERNAL' as const, supplierId: null, isSystemAdmin: false,
 }
-const allScreens = ['文件传递单', '审批', '外发工令', '发送记录', 'IPMS 资料', '外协管理设定', '外发工令设定', '文件传递设置', '审计日志']
+const allScreens = ['外发工令', '文件传递单', '审批', '发送记录', 'IPMS 资料', '外协管理设定', '外发工令设定', '文件传递设置', '操作日志']
 const allGrants = ['oem:transfer_view', 'oem:flow_approve', 'outsource:send', 'outsource:settings', 'oem:notify_manage', 'oem:audit_view']
 
 function Location() {
@@ -76,10 +76,10 @@ describe('工令协作模块导航', () => {
     ['oem:company_manage', ['外发工令', '外协管理设定']],
     ['oem:account_manage', ['外发工令', '外协管理设定']],
     ['oem:directory_view', ['外发工令', '外协管理设定']],
-    ['oem:transfer_create', ['文件传递单', '外发工令']],
-    ['oem:approval_recover', ['审批', '外发工令']],
+    ['oem:transfer_create', ['外发工令', '文件传递单']],
+    ['oem:approval_recover', ['外发工令', '审批']],
     ['oem:file_policy_manage', ['外发工令', '文件传递设置']],
-    ['oem:audit_view', ['外发工令', '审计日志']],
+    ['oem:audit_view', ['外发工令', '操作日志']],
   ] as [string, string[]][])('仅显示权限 %s 可用的菜单', (permission, expected) => {
     useAuth.setState({ permissions: permission ? [permission] : [] })
     renderWorkArea()

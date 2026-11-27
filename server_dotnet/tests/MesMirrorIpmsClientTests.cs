@@ -72,9 +72,10 @@ public sealed class MesMirrorIpmsClientTests
         await database.ExecuteAsync($"INSERT INTO mes_mirror_state(id,base_url,account,protected_password) VALUES(1,'http://127.0.0.1:6001','a','{settings.Protect("p")}')", ct);
         Assert.True(await client.IsConfiguredAsync(ct));
 
-        // Before anything was fetched, lookups fail instead of reporting every work order missing.
+        // An empty mirror can accept early imports; synchronization still reports the mirror is not ready.
         var notYet = await Assert.ThrowsAsync<IpmsUnavailableException>(() => client.LookupAsync(["A1"], ct));
         Assert.Equal("尚未从 IPMS 抓取资料，请先在设定页抓取", notYet.Message);
+        Assert.Empty(await client.LookupForImportAsync(["A1"], ct));
 
         foreach (var no in new[] { "A1", "A2", "A3" })
             await database.ExecuteAsync($$"""

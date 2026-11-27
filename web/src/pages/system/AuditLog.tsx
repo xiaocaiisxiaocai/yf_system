@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Card, DatePicker, Input, Select, Space } from '@arco-design/web-react'
 import { IconSearch } from '@arco-design/web-react/icon'
@@ -35,12 +36,12 @@ const PRESENTER: AuditPresenter = {
 export default function AuditLog() {
   const [draft, setDraft] = useState<Filters>(EMPTY_FILTERS)
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS)
-  const [data, setData] = useState<PageResp<AuditLogRow>>({ list: [], total: 0, page: 1, pageSize: 20 })
+  const [data, setData] = useState<PageResp<AuditLogRow>>({ list: [], total: 0, page: 1, pageSize: DEFAULT_PAGE_SIZE })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [selected, setSelected] = useState<AuditLogRow | null>(null)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [reloadKey, setReloadKey] = useState(0)
   const fetchLogs = useCallback(async () => {
     void reloadKey
@@ -123,7 +124,7 @@ export default function AuditLog() {
           total={data.total}
           page={page}
           pageSize={pageSize}
-          onPageChange={(nextPage, nextSize) => { beginReload(); setPage(nextPage); setPageSize(nextSize) }}
+          onPageChange={(nextPage, nextSize) => { beginReload(); setPage(nextSize === pageSize ? nextPage : 1); setPageSize(nextSize) }}
           onView={setSelected}
         />
       )}

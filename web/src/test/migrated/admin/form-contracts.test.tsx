@@ -276,7 +276,7 @@ describe('管理员表单契约', () => {
     mocks.get.mockImplementation(async (url: string, config?: { params?: { page?: number } }) => {
       if (url !== '/admin/users') return getFixtures(url)
       const currentPage = config?.params?.page ?? 1
-      return { data: { list: [batchUsers[currentPage - 1]], page: currentPage, pageSize: 10, total: 11 } }
+      return { data: { list: [batchUsers[currentPage - 1]], page: currentPage, pageSize: 100, total: 101 } }
     })
     mocks.put.mockResolvedValue({ data: { succeeded: [21, 22], failed: [] } })
     const user = userEvent.setup()

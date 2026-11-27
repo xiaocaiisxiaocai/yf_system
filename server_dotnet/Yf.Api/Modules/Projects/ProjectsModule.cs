@@ -45,7 +45,7 @@ public static class ProjectsModule
                 conn,
                 actor,
                 QueryUlong(context, "page", 1),
-                QueryUlong(context, "pageSize", 20),
+                QueryUlong(context, "pageSize", QueryValues.DefaultPageSize),
                 QueryString(context, "keyword"),
                 QueryString(context, "status"),
                 QueryNullableUlong(context, "supplierId"),
@@ -75,7 +75,7 @@ public static class ProjectsModule
             WithDb(context, (conn, actor, _, ct) => service.HistoryAsync(conn, actor, id, ct)));
         api.MapGet("/project-copies/{copyId:long}/files", (HttpContext context, ulong copyId, ProjectCopyService service) =>
             WithDb(context, (conn, actor, _, ct) => service.FileHistoryAsync(conn, actor, copyId,
-                QueryUlong(context, "page", 1), QueryUlong(context, "pageSize", 20), ct)));
+                QueryUlong(context, "page", 1), QueryUlong(context, "pageSize", QueryValues.DefaultPageSize), ct)));
         api.MapGet("/projects/{id:long}", (HttpContext context, ulong id, ProjectService service) =>
             WithDb(context, (conn, actor, _, ct) => service.DetailAsync(conn, actor, id, ct)));
         api.MapPut("/projects/{id:long}", (HttpContext context, ulong id, ProjectUpsertRequest request, ProjectService service) =>
@@ -212,14 +212,14 @@ public static class ProjectsModule
                 conn,
                 actor,
                 QueryUlong(context, "page", 1),
-                QueryUlong(context, "pageSize", 20),
+                QueryUlong(context, "pageSize", QueryValues.DefaultPageSize),
                 ct)));
         api.MapGet("/dashboard/messages", (HttpContext context, DashboardService service) =>
             WithDb(context, (conn, actor, _, ct) => service.MessagesAsync(
                 conn,
                 actor,
                 QueryUlong(context, "page", 1),
-                QueryUlong(context, "pageSize", 10),
+                QueryUlong(context, "pageSize", QueryValues.DefaultPageSize),
                 QueryBool(context, "unreadOnly", false),
                 ct)));
         api.MapGet("/collaboration/summary", (HttpContext context, CollaborationService service) =>
@@ -229,7 +229,7 @@ public static class ProjectsModule
                 conn,
                 actor,
                 QueryUlong(context, "page", 1),
-                QueryUlong(context, "pageSize", 20),
+                QueryUlong(context, "pageSize", QueryValues.DefaultPageSize),
                 QueryBool(context, "unreadOnly", false),
                 ct)));
         api.MapPost("/collaboration/reads", (HttpContext context, MarkCollaborationReadRequest request, CollaborationService service) =>

@@ -437,10 +437,10 @@ async function openReleasedFile(page, url, fileName) {
         assert.equal(response.status(), 200);
         const query = new URL(response.url()).searchParams;
         assert.equal(query.get('page'), '1');
-        assert.equal(query.get('pageSize'), '20');
+        assert.equal(query.get('pageSize'), '100');
         const body = await response.json();
         assert.equal(body.page, 1);
-        assert.equal(body.pageSize, 20);
+        assert.equal(body.pageSize, 100);
         return body.list.find(task => task.transferId === outboundId) ? body : null;
       });
       assert.ok(listed.total >= 1);

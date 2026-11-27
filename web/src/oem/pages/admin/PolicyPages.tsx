@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Typography } from '@arco-design/web-react'
 import { IconSearch } from '@arco-design/web-react/icon'
+import { DEFAULT_PAGE_SIZE } from '../../../components/tablePagination'
 import { fmtSize } from '../../../api/types'
 import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
@@ -320,7 +321,7 @@ export function AuditPage() {
   const [rows, setRows] = useState<AuditLogRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [selected, setSelected] = useState<AuditLogRow | null>(null)
@@ -353,7 +354,7 @@ export function AuditPage() {
   const resetFilters = () => { setDraft(EMPTY_AUDIT_FILTERS); setFilters(EMPTY_AUDIT_FILTERS); setPage(1) }
 
   return (
-    <Card className="page-card page-card--table audit-page" title={<h1 className="visually-hidden">审计日志</h1>}>
+    <Card className="page-card page-card--table audit-page" title={<h1 className="visually-hidden">操作日志</h1>}>
       <div className="audit-filter-panel audit-filter-panel--compact">
         <Input allowClear value={draft.keyword} placeholder="搜索账号或详情" prefix={<IconSearch />} onChange={(value) => setDraft((state) => ({ ...state, keyword: value }))} onPressEnter={applyFilters} />
         <Select allowClear showSearch value={draft.action} placeholder="具体操作" onChange={(value) => setDraft((state) => ({ ...state, action: value as string | undefined }))}>
@@ -382,7 +383,7 @@ export function AuditPage() {
         />
       )}
 
-      <AuditDetailDrawer title="审计日志详情" row={selected} presenter={OEM_AUDIT_PRESENTER} onClose={() => setSelected(null)} />
+      <AuditDetailDrawer title="操作日志详情" row={selected} presenter={OEM_AUDIT_PRESENTER} onClose={() => setSelected(null)} />
     </Card>
   )
 }

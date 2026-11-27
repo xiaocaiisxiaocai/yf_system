@@ -15,8 +15,9 @@ import {
 import '../styles/collaboration.css'
 import type { ApiResponses } from '../api/types'
 import LoadError from './LoadError'
+import { DEFAULT_PAGE_SIZE, TABLE_PAGINATION } from './tablePagination'
 
-const PAGE_SIZE = 20
+const READ_BATCH_SIZE = 100
 
 const TYPE_LABEL: Record<CollaborationNotification['type'], string> = {
   FILE: '文件',
@@ -67,6 +68,7 @@ export default function CollaborationNotifications() {
   const [unreadOnly, setUnreadOnly] = useState(true)
   const [list, setList] = useState<CollaborationNotification[]>([])
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [listFailed, setListFailed] = useState(false)
@@ -97,7 +99,7 @@ export default function CollaborationNotifications() {
     listController.current?.abort()
   }, [])
 
-  const loadList = useCallback(async function loadPage(nextPage: number, nextUnreadOnly: boolean) {
+  const loadList = useCallback(async function loadPage(nextPage: number, nextUnreadOnly: boolean, size = pageSize) {
     const sequence = ++requestSequence.current
     const requestGeneration = useAuth.getState().generation
     const revisionAtStart = useCollaboration.getState().revision
@@ -108,7 +110,7 @@ export default function CollaborationNotifications() {
     setListFailed(false)
     try {
       const response = await http.get<ApiResponses['GET /collaboration/notifications']>('/collaboration/notifications', {
-        params: { page: nextPage, pageSize: PAGE_SIZE, unreadOnly: nextUnreadOnly },
+        params: { page: nextPage, pageSize: size, unreadOnly: nextUnreadOnly },
         signal: controller.signal,
         quietNetworkError: true,
       } as QuietRequestConfig)
@@ -117,7 +119,7 @@ export default function CollaborationNotifications() {
         || useAuth.getState().generation !== requestGeneration) return
       const lastPage = Math.max(1, Math.ceil(result.total / result.pageSize))
       if (result.page > lastPage) {
-        await loadPage(lastPage, nextUnreadOnly)
+        await loadPage(lastPage, nextUnreadOnly, size)
         return
       }
       setList(result.list)
@@ -137,7 +139,7 @@ export default function CollaborationNotifications() {
     } finally {
       if (sequence === requestSequence.current) setLoading(false)
     }
-  }, [])
+  }, [pageSize])
 
   const openDrawer = () => {
     knownRevision.current = revision
@@ -159,7 +161,6 @@ export default function CollaborationNotifications() {
   const markViewed = useCallback(async (ids: number[]): Promise<boolean> => {
     const pendingIds = [...new Set(ids)]
       .filter((id) => Number.isSafeInteger(id) && id > 0 && !markingIds.current.has(id))
-      .slice(0, 100)
     if (pendingIds.length === 0) return true
     const requestGeneration = useAuth.getState().generation
     const before = useCollaboration.getState()
@@ -170,14 +171,23 @@ export default function CollaborationNotifications() {
     markingDepth.current += 1
     setMarking((current) => new Set([...current, ...pendingIds]))
     try {
-      await http.post<ApiResponses['POST /collaboration/reads']>('/collaboration/reads', { ids: pendingIds })
-      if (useAuth.getState().generation !== requestGeneration) return false
-      const selected = new Set(pendingIds)
-      setList((current) => current.map((item) => selected.has(item.id) ? { ...item, read: true } : item))
+      const marked = new Set<number>()
+      for (let start = 0; start < pendingIds.length; start += READ_BATCH_SIZE) {
+        const batch = pendingIds.slice(start, start + READ_BATCH_SIZE)
+        try {
+          await http.post<ApiResponses['POST /collaboration/reads']>('/collaboration/reads', { ids: batch })
+        } catch {
+          break
+        }
+        if (useAuth.getState().generation !== requestGeneration) return false
+        for (const id of batch) marked.add(id)
+      }
+      if (marked.size === 0 || useAuth.getState().generation !== requestGeneration) return false
+      setList((current) => current.map((item) => marked.has(item.id) ? { ...item, read: true } : item))
       await useCollaboration.getState().refresh()
       const after = useCollaboration.getState()
       if (syncedBefore && after.revision && after.latestId <= before.latestId) knownRevision.current = after.revision
-      return true
+      return marked.size === pendingIds.length
     } catch {
       return false
     } finally {
@@ -338,17 +348,18 @@ export default function CollaborationNotifications() {
             </Spin>
           )}
 
-          {total > PAGE_SIZE && (
+          {total > 0 && (
             <Pagination
+              {...TABLE_PAGINATION}
               className="collaboration-pagination"
               current={page}
-              pageSize={PAGE_SIZE}
+              pageSize={pageSize}
               total={total}
-              sizeCanChange={false}
-              showTotal
-              onChange={(nextPage) => {
-                setPage(nextPage)
-                void loadList(nextPage, unreadOnly)
+              onChange={(nextPage, size) => {
+                const target = size === pageSize ? nextPage : 1
+                setPage(target)
+                setPageSize(size)
+                void loadList(target, unreadOnly, size)
               }}
             />
           )}

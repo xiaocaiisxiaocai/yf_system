@@ -174,7 +174,7 @@ describe('系统参数与 SMTP 生产界面', () => {
       if (url === '/admin/system/mail-logs') {
         logCalls.push(config?.params ?? {})
         const page = Number(config?.params?.page ?? 1)
-        return { data: { page, pageSize: 20, total: 45, list: [
+        return { data: { page, pageSize: config?.params?.pageSize, total: 145, list: [
           { ...retry, id: 30 + page },
           { id: 90 + page, action: 'EMAIL_TEST_DIAGNOSE', targetType: 'system', targetId: 'smtp', createdAt: '2026-11-08T03:46:44Z', detail: { reason: '连接、加密和登录均正常（未发送邮件）' } },
           { id: 95 + page, action: 'EMAIL_TEST_DIAGNOSE', targetType: 'system', targetId: 'smtp', createdAt: '2026-11-08T02:55:35Z', detail: { failedStep: '加密', reason: '服务器中途断开连接（ConnectionReset）' } },
@@ -189,16 +189,21 @@ describe('系统参数与 SMTP 生产界面', () => {
     const log = document.querySelector<HTMLElement>('.system-mail-log')!
     expect(await within(log).findByText(/发送失败：连接与加密：服务器中途断开连接（ConnectionReset）。11 封待发送/)).toBeVisible()
     expect(await within(log).findByText(/^连接与加密：服务器中途断开连接（ConnectionReset）；暂停发送，不计入重试次数；下次 .+；收件人 u\*\*\*@example\.invalid$/)).toBeVisible()
-    expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'all', page: 1, pageSize: 20 })
+    expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'all', page: 1, pageSize: 100 })
     expect(within(log).getByText('连接检测：正常').closest('.arco-tag')).toHaveClass('arco-tag-green')
     expect(within(log).getByText('连接检测：失败').closest('.arco-tag')).toHaveClass('arco-tag-red')
 
     await user.click(within(log).getByRole('combobox', { name: '邮件日志结果' }))
     fireEvent.click(await screen.findByRole('option', { name: '失败与重试' }))
-    await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 1, pageSize: 20 }))
+    await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 1, pageSize: 100 }))
 
     fireEvent.click(log.querySelector<HTMLElement>('.arco-pagination-item-next')!)
-    await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 2, pageSize: 20 }))
+    await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 2, pageSize: 100 }))
+    await user.click(await within(log).findByText('100 条/页'))
+    expect(within(log).getAllByRole('option', { name: /条\/页$/ }).map(option => option.textContent)).toEqual(['50 条/页', '100 条/页', '200 条/页', '500 条/页'])
+    fireEvent.click(screen.getByRole('option', { name: '500 条/页' }))
+    await waitFor(() => expect(logCalls.at(-1)).toEqual({ scope: 'collaboration', result: 'problem', page: 1, pageSize: 500 }))
+    expect(await within(log).findByText('500 条/页')).toBeVisible()
   })
 
   it('retry now resumes paused delivery from the failure alert and refreshes the queue', async () => {

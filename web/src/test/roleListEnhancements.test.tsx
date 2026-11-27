@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   auth: {
     user: { id: 1, realName: '管理员', userType: 'INTERNAL' },
-    hasPerm: () => true,
+    permissions: ['role:manage', 'role:delete'],
+    hasPerm: (code: string): boolean => mocks.auth.permissions.includes(code),
   },
 }))
 
@@ -30,6 +31,7 @@ import RoleList from '../pages/rbac/RoleList'
 
 describe('RoleList permission tree enhancements and user impact indicator', () => {
   beforeEach(() => {
+    mocks.auth.permissions = ['role:manage', 'role:delete']
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/admin/roles') {
         return {
@@ -67,6 +69,40 @@ describe('RoleList permission tree enhancements and user impact indicator', () =
       }
       return { data: [] }
     })
+  })
+
+  it('查看与删除授权不能代替管理权，即使目标角色在委派范围内', async () => {
+    mocks.auth.permissions = ['role:view', 'role:delete']
+    render(<RoleList />)
+    const row = within((await screen.findByText('工程主管')).closest('tr')!)
+    expect(row.queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
+    expect(row.queryByRole('button', { name: '停用' })).not.toBeInTheDocument()
+    expect(row.queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+    fireEvent.click(row.getByRole('button', { name: '查看权限' }))
+    expect(await screen.findByText('查看权限 · 工程主管')).toBeVisible()
+    const checked = screen.getByText('项目查看').closest('.arco-tree-node')!.querySelector('input')!
+    expect(checked).toBeChecked()
+    expect(checked).toBeDisabled()
+    for (const name of ['项目范围', 'ODM/OEMA 传递单范围']) {
+      expect(screen.getByRole('combobox', { name })).toHaveClass('arco-select-disabled')
+    }
+    expect(screen.queryByRole('button', { name: '保存权限' })).not.toBeInTheDocument()
+  })
+
+  it('已打开的授权抽屉在撤销管理权后丢弃未保存的勾选', async () => {
+    const view = render(<RoleList />)
+    fireEvent.click(await screen.findByRole('button', { name: '分配权限' }))
+    const checkbox = (await screen.findByText('项目删除')).closest('.arco-tree-node')!.querySelector('input')!
+    fireEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
+    mocks.auth.permissions = ['role:view']
+    view.rerender(<RoleList />)
+    expect(screen.queryByRole('button', { name: '保存权限' })).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: '查看权限' }))
+    const saved = (await screen.findByText('项目删除')).closest('.arco-tree-node')!.querySelector('input')!
+    expect(saved).not.toBeChecked()
+    expect(saved).toBeDisabled()
+    expect(mocks.put).not.toHaveBeenCalled()
   })
 
   it('renders user impact count and alert notice in permission drawer', async () => {

@@ -4,7 +4,7 @@ import { Alert, Button, Card, Space, Table, Tag } from '@arco-design/web-react'
 import { Link, useNavigate } from 'react-router-dom'
 import { fmtTime } from '../../api/types'
 import { ColumnResizeProvider } from '../../components/columnResize'
-import { TABLE_PAGINATION } from '../../components/tablePagination'
+import { DEFAULT_PAGE_SIZE, TABLE_PAGINATION } from '../../components/tablePagination'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import { oemRequestError } from '../api/requestError'
@@ -21,15 +21,13 @@ const OEM_APPROVAL_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'activatedAt', title: '待审批起始', defaultWidth: 170, minWidth: 140 },
 ]
 
-const PAGE_SIZE = 20
-
 export default function ApprovalInboxPage() {
   const { api, base, queryScope, userId } = useOem()
   const switcher = useHubSwitcher()
   const navigate = useNavigate()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(PAGE_SIZE)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const approvals = useQuery({
     queryKey: ['oem', ...queryScope, 'pending-approvals', page, pageSize],
     queryFn: () => api.pendingApprovals({ page, pageSize }),

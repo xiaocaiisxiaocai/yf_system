@@ -521,16 +521,16 @@ describe('ProjectList migrated behavior', () => {
 
   it('restores filters and paging from the address and writes searches back to it', async () => {
     mocks.get.mockImplementation((url: string) => url === '/projects'
-      ? Promise.resolve({ data: { list: [], total: 0, page: 2, pageSize: 20 } })
+      ? Promise.resolve({ data: { list: [], total: 0, page: 2, pageSize: 200 } })
       : Promise.resolve({ data: url === '/supplier-options' ? suppliers : [] }))
     render(
-      <MemoryRouter initialEntries={['/projects?q=旧关键字&status=IN_PROGRESS&supplier=8&page=2&pageSize=20']}>
+      <MemoryRouter initialEntries={['/projects?q=旧关键字&status=IN_PROGRESS&supplier=8&page=2&pageSize=200']}>
         <ProjectList />
         <LocationProbe />
       </MemoryRouter>,
     )
     await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
-      params: { page: 2, pageSize: 20, keyword: '旧关键字', status: 'IN_PROGRESS', supplierId: 8 },
+      params: { page: 2, pageSize: 200, keyword: '旧关键字', status: 'IN_PROGRESS', supplierId: 8 },
     })))
     const search = screen.getByPlaceholderText('项目名称 / 工令号 / 机型 / 料号')
     expect(search).toHaveValue('旧关键字')
@@ -539,7 +539,7 @@ describe('ProjectList migrated behavior', () => {
     await waitFor(() => expect(new URLSearchParams(locationProbe.search).get('q')).toBe('新关键字'))
     const params = new URLSearchParams(locationProbe.search)
     expect(params.get('page')).toBeNull()
-    expect(params.get('pageSize')).toBe('20')
+    expect(params.get('pageSize')).toBe('200')
     expect(params.get('status')).toBe('IN_PROGRESS')
   })
 
@@ -573,7 +573,7 @@ describe('ProjectList migrated behavior', () => {
       </MemoryRouter>,
     )
     await waitFor(() => expect(mocks.get).toHaveBeenCalledWith('/projects', expect.objectContaining({
-      params: { page: 1, pageSize: 10, keyword: undefined, status: undefined, supplierId: undefined },
+      params: { page: 1, pageSize: 100, keyword: undefined, status: undefined, supplierId: undefined },
     })))
   })
   it('按负责人和课别筛选看得到的项目，只看本人时不显示这两个筛选', async () => {

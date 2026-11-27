@@ -178,6 +178,8 @@
   "POST /api/v1/oem/transfers/{}/uploads/init",
   "POST /api/v1/oem/uploads/{}/merge",
   "POST /api/v1/outsource/items/batch-delete",
+  "POST /api/v1/outsource/items/export",
+  "POST /api/v1/outsource/items/query",
   "POST /api/v1/outsource/items/import",
   "POST /api/v1/outsource/items/import/preview",
   "POST /api/v1/outsource/items/date-import/preview",

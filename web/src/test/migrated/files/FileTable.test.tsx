@@ -103,6 +103,22 @@ describe('FileTable DOM contracts', () => {
     mocks.status = 'ready'
   })
 
+  it('changing file page size resets to page one and requests the selected size', async () => {
+    mocks.get.mockImplementation(async (_url, { params }) => ({
+      data: { list: [row(1, '工艺.pdf', 'pdf', 128)], total: 720, page: params.page, pageSize: params.pageSize },
+    }))
+    const user = userEvent.setup()
+    render(<FileTable projectId={1} projectStatus="IN_PROGRESS" compact />)
+    await screen.findByText('工艺.pdf')
+    expect(mocks.get.mock.lastCall?.[1].params).toMatchObject({ page: 1, pageSize: 100 })
+    await user.click(screen.getByText('2', { selector: '.arco-pagination-item' }))
+    await waitFor(() => expect(mocks.get.mock.lastCall?.[1].params).toMatchObject({ page: 2, pageSize: 100 }))
+    const footer = document.querySelector<HTMLElement>('.arco-pagination')!
+    await user.click(within(footer).getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: /^200\s/ }))
+    await waitFor(() => expect(mocks.get.mock.lastCall?.[1].params).toMatchObject({ page: 1, pageSize: 200 }))
+  })
+
   it('preview dispatch offers PPTX within the parser limit and streamed videos independently of document size', async () => {
     mocks.permissions.add('file:preview')
     const limit = 50 * 1024 * 1024

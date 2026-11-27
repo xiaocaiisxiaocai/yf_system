@@ -62,6 +62,38 @@ public sealed class OutsourceFilesTests
     }
 
     [Fact(Timeout = 180_000)]
+    public async Task FileColumnFilterUsesDisplayedIndicatorIncludingMixedAndProcessingOnlyRecords()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = await OemTestHost.StartAsync(ct);
+        var (admin, company, mixed) = await CreateItemAsync(host, ct);
+        var mixedTransfer = await AddTransferAsync(host, company, mixed, ct);
+        await AddFileAsync(host, mixedTransfer, "live.pdf", PayloadStatuses.Available, ValidationStatuses.Valid, ct);
+        await AddFileAsync(host, mixedTransfer, "removed.pdf", PayloadStatuses.Purged, ValidationStatuses.Valid, ct);
+        var expired = await host.CreateOutsourceItemAsync(company, "FILES-2", ct);
+        var expiredFile = await AddFileAsync(host, await AddTransferAsync(host, company, expired, ct),
+            "expired.pdf", PayloadStatuses.Available, ValidationStatuses.Valid, ct);
+        await using (var db = await host.OpenAsync(ct))
+            await db.ExecuteAsync(new CommandDefinition(
+                "UPDATE oem_transfer_files SET purge_due_at=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 1 HOUR) WHERE id=@expiredFile",
+                new { expiredFile }, cancellationToken: ct));
+        var processing = await host.CreateOutsourceItemAsync(company, "FILES-3", ct);
+        await AddFileAsync(host, await AddTransferAsync(host, company, processing, ct),
+            "processing.pdf", PayloadStatuses.Available, ValidationStatuses.Pending, ct);
+        var empty = await host.CreateOutsourceItemAsync(company, "FILES-4", ct);
+
+        async Task<ulong[]> Filter(string value)
+        {
+            var filter = Uri.EscapeDataString(System.Text.Json.JsonSerializer.Serialize(new { files = value }));
+            var result = await admin.GetAsync($"{Items}?columnFilters={filter}", ct).Ok();
+            return result["list"]!.AsArray().Select(row => row!.Id()).Order().ToArray();
+        }
+        Assert.Equal([mixed], await Filter("available"));
+        Assert.Equal([expired], await Filter("purged"));
+        Assert.Equal([processing, empty], await Filter("none"));
+    }
+
+    [Fact(Timeout = 180_000)]
     public async Task ExpiredFilesNotYetPurgedAreListedAsPurgedAndNotCounted()
     {
         var ct = TestContext.Current.CancellationToken;

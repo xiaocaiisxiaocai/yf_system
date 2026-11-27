@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Card, Descriptions, Empty, Message, Modal, Popover, Select, Space, Tag, Tooltip } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import http, { type QuietRequestConfig } from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import LoadError from '../../components/LoadError'
@@ -50,7 +51,7 @@ export default function OutsourceMailsPage() {
   const [mails, setMails] = useState<Mail[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [vendorId, setVendorId] = useState<number>()
   const [status, setStatus] = useState<string>()
   const [vendors, setVendors] = useState<Vendor[]>([])

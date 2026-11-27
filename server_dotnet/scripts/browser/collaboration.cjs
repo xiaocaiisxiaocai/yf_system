@@ -182,13 +182,13 @@ async function chooseNotificationTab(drawer, name) {
       assert.equal(await adminInput().isEnabled(), true);
     });
 
-    await record('二十二条真实未查看通知形成两页积压且翻页无重复', async () => {
+    await record('五十二条真实未查看通知形成两页积压且翻页无重复', async () => {
       // Leave the message tab first: messages shown there are marked read, which also clears their notifications.
       await adminPage.goto(s.base + '/');
       await adminPage.getByRole('heading', { name: '工作台', exact: true }).waitFor();
       // Listen before posting: the coalesced realtime refresh can land while the posts are still going out.
-      const summaryReached = waitSummary(adminPage, value => value.unreadCount >= 22, 60000);
-      for (let index = 0; index < 22; index += 1) {
+      const summaryReached = waitSummary(adminPage, value => value.unreadCount >= 52, 120000);
+      for (let index = 0; index < 52; index += 1) {
         await json(supplierContext, supplierToken, 'POST',
           `/projects/${project.id}/messages`, {
             content: `协作积压-${String(index + 1).padStart(2, '0')}-${marker}`,
@@ -196,12 +196,21 @@ async function chooseNotificationTab(drawer, name) {
           });
       }
       const summary = await summaryReached;
-      assert(summary.unreadCount >= 22);
+      assert(summary.unreadCount >= 52);
       const drawer = await openNotifications(adminPage);
       await chooseNotificationTab(drawer, '未查看');
       await drawer.locator('[data-notification-id]').first().waitFor();
+      await drawer.locator('.arco-pagination .arco-select').click();
+      const resized = adminPage.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/v1/collaboration/notifications' && url.searchParams.get('pageSize') === '50'
+          && url.searchParams.get('page') === '1' && response.status() === 200;
+      });
+      await adminPage.getByRole('option', { name: '50 条/页', exact: true }).click();
+      assert.equal((await (await resized).json()).list.length, 50);
+      await drawer.locator('[data-notification-id]').nth(50).waitFor({ state: 'detached' });
       const firstIds = await drawer.locator('[data-notification-id]').evaluateAll(nodes => nodes.map(node => node.dataset.notificationId));
-      assert.equal(firstIds.length, 20);
+      assert.equal(firstIds.length, 50);
       const secondPage = waitResponse(adminPage, '/collaboration/notifications');
       await drawer.locator('.arco-pagination-item').filter({ hasText: /^2$/ }).click();
       const pageTwoResponse = await secondPage;
@@ -215,7 +224,7 @@ async function chooseNotificationTab(drawer, name) {
     });
 
     await record('另一参与人发言时实时追加新留言并保留供应商草稿和既有列表', async () => {
-      await supplierPage.getByText(`协作积压-22-${marker}`, { exact: true }).waitFor();
+      await supplierPage.getByText(`协作积压-52-${marker}`, { exact: true }).waitFor();
       const beforeIds = await supplierPage.locator('.msg-item')
         .evaluateAll(nodes => nodes.map(node => node.dataset.messageId));
       assert(beforeIds.length >= 23);

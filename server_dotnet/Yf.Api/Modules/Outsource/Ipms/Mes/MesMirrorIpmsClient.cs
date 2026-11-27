@@ -8,14 +8,21 @@ namespace Yf.Api.Modules.Outsource.Ipms.Mes;
 /// <summary>
 /// Serves IPMS work-order data from the daily copy of the IPMS MES monitoring list (<c>mes_work_orders</c>). Never touches
 /// the network, so outsourcing imports and syncs are not slowed by IPMS. Work orders absent from the copy are simply not
-/// found; before the first fetch nothing can be looked up, so lookups fail instead of reporting every work order missing.
+/// found. Sync requires a populated or previously fetched mirror; imports can also use an empty mirror.
 /// </summary>
 public sealed class MesMirrorIpmsClient(IDbContextFactory<YfDbContext> dbFactory, IMesSettings settings) : IIpmsClient
 {
     /// <summary>Configured once the address, account and password are set (on the settings page or in configuration).</summary>
     public async Task<bool> IsConfiguredAsync(CancellationToken ct) => (await settings.ConnectionAsync(ct)).Complete;
 
-    public async Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct)
+    public Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct)
+        => ReadOrdersAsync(workOrderNos, requireSnapshot: true, ct);
+
+    public Task<IReadOnlyDictionary<string, IpmsWorkOrder>> LookupForImportAsync(IReadOnlyCollection<string> workOrderNos, CancellationToken ct)
+        => ReadOrdersAsync(workOrderNos, requireSnapshot: false, ct);
+
+    private async Task<IReadOnlyDictionary<string, IpmsWorkOrder>> ReadOrdersAsync(
+        IReadOnlyCollection<string> workOrderNos, bool requireSnapshot, CancellationToken ct)
     {
         var wanted = workOrderNos.Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.Ordinal).ToArray();
         var result = new Dictionary<string, IpmsWorkOrder>(StringComparer.Ordinal);
@@ -23,9 +30,9 @@ public sealed class MesMirrorIpmsClient(IDbContextFactory<YfDbContext> dbFactory
         try
         {
             await using var context = await dbFactory.CreateDbContextAsync(ct);
-            var fetchedBefore = await context.MesMirrorState.AsNoTracking().AnyAsync(x => x.Id == 1 && x.LastSuccessAt != null, ct)
-                || await context.MesWorkOrders.AnyAsync(ct);
-            if (!fetchedBefore) throw new IpmsUnavailableException("尚未从 IPMS 抓取资料，请先在设定页抓取");
+            if (requireSnapshot && !await context.MesMirrorState.AsNoTracking().AnyAsync(x => x.Id == 1 && x.LastSuccessAt != null, ct)
+                && !await context.MesWorkOrders.AnyAsync(ct))
+                throw new IpmsUnavailableException("尚未从 IPMS 抓取资料，请先在设定页抓取");
             var rows = await context.MesWorkOrders.AsNoTracking().Where(x => wanted.Contains(x.WorkOrderNo))
                 .Select(x => new { x.WorkOrderNo, x.RawJson }).ToArrayAsync(ct);
             foreach (var row in rows) result[row.WorkOrderNo] = Map(row.WorkOrderNo, row.RawJson);

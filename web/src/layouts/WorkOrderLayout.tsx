@@ -27,18 +27,18 @@ export default function WorkOrderLayout() {
   const queued = useSendQueue((state) => state.count)
 
   const menu: MenuEntry[] = [
-    { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: oem && (has('oem:transfer_create') || has('oem:transfer_view')) },
-    { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: oem && (has('oem:flow_approve') || has('oem:approval_recover')) },
     {
       path: OUTSOURCE_HOME, label: '外发工令', icon: <IconList />, visible: internal,
       badge: canSend ? queued : undefined, to: canSend && queued > 0 ? SEND_QUEUE_PATH : undefined,
     },
+    { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: oem && (has('oem:transfer_create') || has('oem:transfer_view')) },
+    { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: oem && (has('oem:flow_approve') || has('oem:approval_recover')) },
     { path: '/outsource/mails', label: '发送记录', icon: <IconEmail />, visible: canSend },
     { path: '/outsource/ipms-data', label: 'IPMS 资料', icon: <IconStorage />, visible: has(OUTSOURCE_PERMISSIONS.settings), admin: true },
     { path: OUTSOURCE_MANAGEMENT_PATH, label: '外协管理设定', icon: <IconUserGroup />, visible: oem && OUTSOURCE_MANAGEMENT_PERMISSIONS.some(has), admin: true },
     { path: '/outsource/settings', label: '外发工令设定', icon: <IconSettings />, visible: has(OUTSOURCE_PERMISSIONS.settings), admin: true },
     { path: '/oem/admin/settings', label: '文件传递设置', icon: <IconSettings />, visible: oem && OEM_SETTINGS_PERMISSIONS.some(has), admin: true },
-    { path: '/oem/admin/audit', label: '审计日志', icon: <IconHistory />, visible: oem && has('oem:audit_view'), admin: true },
+    { path: '/oem/admin/audit', label: '操作日志', icon: <IconHistory />, visible: oem && has('oem:audit_view'), admin: true },
   ]
   return menu.some((item) => item.visible)
     ? <SectionShell title={WORK_ORDER_TITLE} menu={menu} line="workOrder" account={<AccountMenu />} />

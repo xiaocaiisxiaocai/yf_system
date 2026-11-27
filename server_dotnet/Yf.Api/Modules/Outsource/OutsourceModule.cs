@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Primitives;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
 using Yf.Api.Modules.Outsource.Ipms;
@@ -87,15 +88,13 @@ public static class OutsourceModule
 
         var items = endpoints.MapGroup("/api/v1/outsource/items");
         items.MapGet("", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
-        {
-            var p = QueryValues.Page(c.Request);
-            return s.ListAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request), p.Page, p.Size, p.Offset, ct);
-        });
-        items.MapGet("/export", async (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
-        {
-            var export = await s.ExportAsync(AccessService.GetCurrent(c), OutsourceItemQuery.From(c.Request), ct);
-            return Results.File(export.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.FileName);
-        });
+            ListItemsAsync(c.Request.Query, c, s, ct));
+        items.MapPost("/query", (Dictionary<string, string> parameters, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            ListItemsAsync(BodyParameters(parameters), c, s, ct));
+        items.MapGet("/export", (HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            ExportItemsAsync(c.Request.Query, c, s, ct));
+        items.MapPost("/export", (Dictionary<string, string> parameters, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
+            ExportItemsAsync(BodyParameters(parameters), c, s, ct));
         items.MapPost("/import/preview", (OutsourceImportRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.PreviewImportAsync(AccessService.GetCurrent(c), r, ct));
         items.MapPost("/import", (OutsourceImportRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
@@ -165,9 +164,8 @@ public static class OutsourceModule
             s.ConfirmImportAsync(AccessService.GetCurrent(c), r, ct));
         mirror.MapPost("/orders/query", (MesOrdersQuery r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
         {
-            var size = (uint)Math.Clamp(r.PageSize ?? 20, 1UL, 100UL);
-            var page = Math.Clamp(r.Page ?? 1, 1UL, ulong.MaxValue / size);
-            return s.OrdersAsync(AccessService.GetCurrent(c), page, size, (page - 1) * size, r.Filters, ct);
+            var (page, size, offset) = QueryValues.NormalizePage(r.Page ?? 1, r.PageSize);
+            return s.OrdersAsync(AccessService.GetCurrent(c), page, size, offset, r.Filters, ct);
         });
         mirror.MapGet("/settings", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.SettingsAsync(AccessService.GetCurrent(c), ct));
@@ -176,6 +174,32 @@ public static class OutsourceModule
         mirror.MapPost("/test", (MesMirrorTestRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.TestAsync(AccessService.GetCurrent(c), r, ct));
         return endpoints;
+    }
+
+    // Long filters travel in a JSON object with the same parameter names and string values as the GET query.
+    internal static IQueryCollection BodyParameters(Dictionary<string, string> parameters)
+    {
+        var values = new Dictionary<string, StringValues>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in parameters)
+        {
+            values.TryGetValue(key, out var previous);
+            values[key] = StringValues.Concat(previous, value);
+        }
+        return new QueryCollection(values);
+    }
+
+    private static Task<PageResponse<OutsourceItemResponse>> ListItemsAsync(
+        IQueryCollection parameters, HttpContext context, OutsourceItemService service, CancellationToken ct)
+    {
+        var page = QueryValues.Page(parameters);
+        return service.ListAsync(AccessService.GetCurrent(context), OutsourceItemQuery.From(parameters), page.Page, page.Size, page.Offset, ct);
+    }
+
+    private static async Task<IResult> ExportItemsAsync(
+        IQueryCollection parameters, HttpContext context, OutsourceItemService service, CancellationToken ct)
+    {
+        var export = await service.ExportAsync(AccessService.GetCurrent(context), OutsourceItemQuery.From(parameters), ct);
+        return Results.File(export.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.FileName);
     }
 
     // Same as the Kestrel/IIS request cap: ~5000 rows with every MES column filled can pass 16 MiB of JSON.

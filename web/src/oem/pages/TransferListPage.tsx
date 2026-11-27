@@ -22,7 +22,7 @@ import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import EnterSubmit from '../../components/EnterSubmit'
 import ResizableTable from '../../components/ResizableTable'
-import { TABLE_PAGINATION } from '../../components/tablePagination'
+import { DEFAULT_PAGE_SIZE, TABLE_PAGINATION } from '../../components/tablePagination'
 
 const OEM_TRANSFER_COLUMNS: readonly ColumnLayoutSpec[] = [
   { key: 'title', title: '文件', defaultWidth: 240, minWidth: 140, locked: true },
@@ -380,7 +380,7 @@ export default function TransferListPage() {
   const can = useCan()
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [direction, setDirection] = useState('')
   // 从“厂商与账号”页的“传递记录”进入时带 ?companyId=，列表只显示与该厂商的往来。
   const [searchParams, setSearchParams] = useSearchParams()
