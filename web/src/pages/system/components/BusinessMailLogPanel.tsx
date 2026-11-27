@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE, TABLE_PAGINATION } from '../../../components/tablePagination'
 import { useCallback, useState } from 'react'
 import { Alert, Button, Card, Empty, Message, Pagination, Select, Space, Spin, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import ResizableTable from '../../../components/ResizableTable'
@@ -15,7 +16,6 @@ import {
 type Scope = 'collaboration' | 'oem' | 'all'
 const LABELS = { collaboration: 'Robot 仿真协作', oem: 'ODM/OEMA', all: '全部业务' }
 const QUEUE_LABELS = { collaboration: 'Robot 业务通知队列', oem: 'ODM/OEMA 业务通知队列', all: '全部业务通知队列' }
-const PAGE_SIZE = 20
 
 type LogPage = { key: string; list: MailRecent[]; total: number }
 
@@ -58,13 +58,14 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
   const [error, setError] = useState('')
   const [result, setResult] = useState<MailLogResult>('all')
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [logs, setLogs] = useState<LogPage | null>(null)
   const [logsError, setLogsError] = useState('')
   const beginRequest = useLatestRequest()
   const beginLogsRequest = useLatestRequest()
   const visibleScope = canManageOem ? scope : 'collaboration'
   const data = visibleScope === 'collaboration' ? mail : snapshot?.scope === visibleScope && snapshot.source === mail ? snapshot.data : null
-  const logsKey = `${visibleScope}|${result}|${page}`
+  const logsKey = `${visibleScope}|${result}|${page}|${pageSize}`
 
   const load = useCallback(async () => {
     const isLatest = beginRequest()
@@ -86,11 +87,11 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
     setLogsError('')
     try {
       const response = await http.get<ApiResponses['GET /admin/system/mail-logs']>('/admin/system/mail-logs', {
-        params: { scope: visibleScope, result, page, pageSize: PAGE_SIZE },
+        params: { scope: visibleScope, result, page, pageSize },
       })
       if (isLatest()) setLogs({ key: logsKey, list: (response.data.list ?? []) as MailRecent[], total: Number(response.data.total ?? 0) })
     } catch { if (isLatest()) setLogsError('邮件日志加载失败，请重试') }
-  }, [beginLogsRequest, data, visibleScope, result, page, logsKey])
+  }, [beginLogsRequest, data, visibleScope, result, page, pageSize, logsKey])
   useLoadEffect(loadLogs)
 
   const [retrying, setRetrying] = useState(false)
@@ -136,7 +137,8 @@ export default function BusinessMailLogPanel({ mail, formatTime, onRefresh, onVi
         <Select aria-label="邮件日志结果" size="small" style={{ width: 130 }} value={result} onChange={(value: MailLogResult) => { setResult(value); setPage(1) }}>
           {MAIL_LOG_RESULTS.map(item => <Select.Option key={item.value} value={item.value}>{item.label}</Select.Option>)}
         </Select>
-        {pageLogs && pageLogs.total > PAGE_SIZE && <Pagination size="small" simple current={page} pageSize={PAGE_SIZE} total={pageLogs.total} onChange={setPage} />}
+        {pageLogs && pageLogs.total > 0 && <Pagination {...TABLE_PAGINATION} size="small" current={page} pageSize={pageSize} total={pageLogs.total}
+          onChange={(nextPage, size) => { setPage(size === pageSize ? nextPage : 1); setPageSize(size) }} />}
       </div>
       {logsError ? <Alert type="error" content={logsError} action={<Button size="small" onClick={() => void loadLogs()}>重试</Button>} /> : <div className="system-mail-log-table">
         <ResizableTable tableId="mail-logs" growKey="summary" className="page-table" rowKey="id" size="small" pagination={false} loading={!pageLogs} noDataElement={<Empty description="暂无邮件记录" />} data={pageLogs?.list ?? []} scroll={{ x: 480, y: 'var(--page-table-scroll-y)' }}

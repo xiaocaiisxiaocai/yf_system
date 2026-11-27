@@ -3,6 +3,7 @@ import {
   Button, Empty, Input, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip,
 } from '@arco-design/web-react'
 import ResizableTable from './ResizableTable'
+import { DEFAULT_PAGE_SIZE } from './tablePagination'
 import { IconDownload, IconEye, IconUpload, IconDelete, IconClose, IconUndo, IconRedo } from '@arco-design/web-react/icon'
 import http, { type QuietRequestConfig } from '../api/client'
 import { useAuth } from '../store/auth'
@@ -110,7 +111,7 @@ export default function FileTable({
   const fallbackRevision = useCollaboration((state) => (state.realtimeStatus === 'connected' ? 'live' : state.revision))
   // 实时信号合并后再重拉；信号不中止进行中的列表请求，翻页、筛选和卸载仍会中止。
   const { refreshKey: liveRefreshKey, begin: beginLive, end: endLive } = useCoalescedRefresh(`${liveActivity}|${reconnected}|${fallbackRevision}`)
-  const [data, setData] = useState<PageResp<FileItem>>({ list: [], total: 0, page: 1, pageSize: 10 })
+  const [data, setData] = useState<PageResp<FileItem>>({ list: [], total: 0, page: 1, pageSize: DEFAULT_PAGE_SIZE })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
   const [direction, setDirection] = useState<string>()
@@ -118,7 +119,7 @@ export default function FileTable({
   const [keyword, setKeyword] = useState('')
   const [searchText, setSearchText] = useState('')
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [loadError, setLoadError] = useState(false)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [preview, setPreview] = useState<FileItem | null>(null)
@@ -413,7 +414,8 @@ export default function FileTable({
           {selected.length > 0 && hasPerm('file:download') && (
             <>
               <span className="file-selected-summary" aria-label="已选文件大小">共 {fmtSize(selectedBytes)}</span>
-              <Button size={compact ? 'small' : undefined} icon={<IconDownload />} onClick={batchDownload} disabled={loading || batchDownloading} loading={batchDownloading}>
+              {selected.length > 100 && <span role="status">每次最多打包 100 个文件</span>}
+              <Button size={compact ? 'small' : undefined} icon={<IconDownload />} onClick={batchDownload} disabled={loading || batchDownloading || selected.length > 100} loading={batchDownloading}>
                 打包下载（{selected.length}）
               </Button>
             </>
@@ -455,7 +457,7 @@ export default function FileTable({
             size: compact ? 'small' : 'default',
             onChange: (p, ps) => {
               setLoading(true); setLoadError(false); setReloadKey((value) => value + 1)
-              setPage(p)
+              setPage(ps === pageSize ? p : 1)
               setPageSize(ps)
             },
           }}

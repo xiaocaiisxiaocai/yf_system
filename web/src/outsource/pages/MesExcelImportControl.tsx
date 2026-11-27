@@ -6,6 +6,7 @@ import type { MesImportConfirmRequest, MesImportRequest } from '../../api/genera
 import { requestErrorMessage } from '../../api/requestError'
 import type { ApiResponses } from '../../api/types'
 import ResizableTable from '../../components/ResizableTable'
+import { TABLE_PAGINATION } from '../../components/tablePagination'
 import { useAuth } from '../../store/auth'
 import { saveBlob } from '../../utils/saveBlob'
 import { createMesImportTemplate, readMesExcelImport } from '../mesExcelImport'
@@ -209,7 +210,7 @@ function MesExcelImportDialog({ onClose, onImported }: { onClose: () => void; on
         <h3>Excel 内重复</h3>
         <ResizableTable<DuplicateRow> tableId="outsource-ipms-import-duplicates" size="small" rowKey="rowNumber"
           data={preview.duplicates.flatMap((group) => group.rows.map((row) => ({ ...row, workOrder: group.workOrder })))}
-          columns={duplicateColumns} pagination={{ defaultPageSize: 10 }} />
+          columns={duplicateColumns} pagination={TABLE_PAGINATION} />
       </section>}
       {existing.length > 0 && <section aria-label="已存在">
         <div className="outsource-ipms-import-heading">
@@ -220,14 +221,14 @@ function MesExcelImportDialog({ onClose, onImported }: { onClose: () => void; on
           </Space>
         </div>
         <ResizableTable<Existing> tableId="outsource-ipms-import-existing" size="small" rowKey="workOrder"
-          data={existing} columns={existingColumns} pagination={{ defaultPageSize: 10 }}
+          data={existing} columns={existingColumns} pagination={TABLE_PAGINATION}
           rowSelection={{ type: 'checkbox', checkCrossPage: true, selectedRowKeys: overwrite,
             checkboxProps: () => ({ disabled: submitting }), onChange: (keys) => setOverwrite(keys.map(String)) }} />
       </section>}
       {invalid.length > 0 && <section aria-label="无效行">
         <h3>无效行</h3>
         <ResizableTable<InvalidRow> tableId="outsource-ipms-import-invalid" size="small" rowKey="rowNumber"
-          data={invalid} columns={invalidColumns} growKey="reason" pagination={{ defaultPageSize: 10 }} />
+          data={invalid} columns={invalidColumns} growKey="reason" pagination={TABLE_PAGINATION} />
       </section>}
     </div>}
   </Modal>

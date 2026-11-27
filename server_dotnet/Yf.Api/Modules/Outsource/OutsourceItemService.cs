@@ -290,7 +290,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var filtered = await FilterAsync(context, query, reference, ct);
         var total = (ulong)await filtered.LongCountAsync(ct);
         var rows = await ListOrder(context, filtered)
-            .Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size).ToArrayAsync(ct);
+            .Page(offset, size).ToArrayAsync(ct);
         return new(await reference.JsonMarkedAsync(context, rows, ct), total, page, size);
     }
 

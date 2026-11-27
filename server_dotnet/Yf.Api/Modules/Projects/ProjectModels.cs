@@ -355,8 +355,7 @@ internal static class ProjectJson
 
     internal static (ulong Page, ulong Size) ClampPage(ulong page, ulong size)
     {
-        var actualSize = Math.Clamp(size, 1UL, 100UL);
-        var maxPage = ulong.MaxValue / actualSize;
-        return (Math.Clamp(page, 1UL, maxPage), actualSize);
+        var paging = QueryValues.NormalizePage(page, size);
+        return (paging.Page, paging.Size);
     }
 }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   Alert, Button, Drawer, Dropdown, Empty, Form, Input, InputNumber, Menu, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
+import { DEFAULT_PAGE_SIZE } from '../../../components/tablePagination'
 import ResizableTable from '../../../components/ResizableTable'
 import { IconDown, IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
@@ -106,7 +107,7 @@ function InternalRecipientsDrawer({ open, onClose }: InternalRecipientsDrawerPro
   const [failed, setFailed] = useState(false)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [importOpen, setImportOpen] = useState(false)
   const [importing, setImporting] = useState(false)
   const [picked, setPicked] = useState<number[]>([])
@@ -543,7 +544,7 @@ export default function CompaniesPage() {
   const [rows, setRows] = useState<Company[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
   const [editing, setEditing] = useState<Company | 'new' | null>(null)

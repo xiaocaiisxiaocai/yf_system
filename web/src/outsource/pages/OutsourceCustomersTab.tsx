@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Empty, Form, Input, Message, Modal, Radio, Space, Tag } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconPlus, IconSearch, IconSync } from '@arco-design/web-react/icon'
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import { actionSlots } from '../../components/ActionSlots'
@@ -25,7 +26,7 @@ export default function OutsourceCustomersTab() {
   const [error, setError] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [syncing, setSyncing] = useState(false)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)

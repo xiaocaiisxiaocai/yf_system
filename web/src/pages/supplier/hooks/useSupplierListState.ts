@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE } from '../../../components/tablePagination'
 import { useCallback, useEffect, useState } from 'react'
 import http from '../../../api/client'
 import { type PageResp } from '../../../api/types'
@@ -5,13 +6,13 @@ import type { ApiResponses } from '../../../api/types'
 import type { Supplier } from '../components/supplierTypes'
 
 export function useSupplierListState() {
-  const [data, setData] = useState<PageResp<Supplier>>({ list: [], total: 0, page: 1, pageSize: 10 })
+  const [data, setData] = useState<PageResp<Supplier>>({ list: [], total: 0, page: 1, pageSize: DEFAULT_PAGE_SIZE })
   const [loading, setLoading] = useState(true)
   const [reloadKey, setReloadKey] = useState(0)
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<string>()
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [loadError, setLoadError] = useState(false)
 
   const fetchSuppliers = useCallback(async () => {
@@ -51,9 +52,9 @@ export function useSupplierListState() {
     setLoading(true)
     setLoadError(false)
     setReloadKey((current) => current + 1)
-    setPage(nextPage)
+    setPage(nextPageSize === pageSize ? nextPage : 1)
     setPageSize(nextPageSize)
-  }, [])
+  }, [pageSize])
 
   useEffect(() => {
     let active = true

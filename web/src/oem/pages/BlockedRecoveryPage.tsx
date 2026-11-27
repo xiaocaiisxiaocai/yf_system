@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { fmtTime } from '../../api/types'
 import { ColumnResizeProvider } from '../../components/columnResize'
-import { TABLE_PAGINATION } from '../../components/tablePagination'
+import { DEFAULT_PAGE_SIZE, TABLE_PAGINATION } from '../../components/tablePagination'
 import { type ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import { oemRequestError } from '../api/requestError'
@@ -33,7 +33,7 @@ export default function BlockedRecoveryPage() {
   const navigate = useNavigate()
   const tableHostRef = useRef<HTMLDivElement>(null)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const blocked = useQuery({
     queryKey: ['oem', ...queryScope, 'approval-recovery', page, pageSize],
     queryFn: () => api.listTransfers({ page, pageSize, approvalStatus: 'APPROVAL_BLOCKED' }),

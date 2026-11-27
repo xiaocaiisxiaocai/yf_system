@@ -164,9 +164,8 @@ public static class OutsourceModule
             s.ConfirmImportAsync(AccessService.GetCurrent(c), r, ct));
         mirror.MapPost("/orders/query", (MesOrdersQuery r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
         {
-            var size = (uint)Math.Clamp(r.PageSize ?? 20, 1UL, 100UL);
-            var page = Math.Clamp(r.Page ?? 1, 1UL, ulong.MaxValue / size);
-            return s.OrdersAsync(AccessService.GetCurrent(c), page, size, (page - 1) * size, r.Filters, ct);
+            var (page, size, offset) = QueryValues.NormalizePage(r.Page ?? 1, r.PageSize);
+            return s.OrdersAsync(AccessService.GetCurrent(c), page, size, offset, r.Filters, ct);
         });
         mirror.MapGet("/settings", (HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.SettingsAsync(AccessService.GetCurrent(c), ct));

@@ -4,6 +4,7 @@ import {
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconFilter, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import http from '../../api/client'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
@@ -125,7 +126,7 @@ export default function OutsourceListPage() {
   const [filters, setFilters] = useState<Filters>(() => ({ includeClosed: false, sendQueue: searchParams.get('sendQueue') === '1' }))
   const refreshQueue = useSendQueue((state) => state.refresh)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [items, setItems] = useState<Item[]>([])
   const [total, setTotal] = useState(0)
   const [vendors, setVendors] = useState<Vendor[]>([])

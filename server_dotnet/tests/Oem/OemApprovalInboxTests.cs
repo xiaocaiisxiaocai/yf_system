@@ -133,7 +133,7 @@ public sealed class OemApprovalInboxTests
         var all = await world.Leader.GetAsync("/api/v1/oem/approvals/pending", ct).Ok();
         Assert.Equal(3UL, all["total"]!.GetValue<ulong>());
         Assert.Equal(1UL, all["page"]!.GetValue<ulong>());
-        Assert.Equal(20U, all["pageSize"]!.GetValue<uint>());
+        Assert.Equal(100U, all["pageSize"]!.GetValue<uint>());
         // Make the activation order differ from the task-id order, with a tie broken by id.
         var ids = all["list"]!.AsArray().Select(task => task!.Id("taskId")).Order().ToArray();
         await using (var conn = await host.OpenAsync(ct))

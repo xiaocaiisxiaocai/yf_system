@@ -320,6 +320,21 @@ describe('ResizableTable', () => {
     expect(screen.getByRole('separator', { name: '调整文件名列宽' })).toHaveAttribute('aria-valuenow', '200')
   })
 
+  it('默认每页显示100条，可以从四档页长中选择500条', async () => {
+    const user = userEvent.setup()
+    const data = Array.from({ length: 101 }, (_, index) => ({ id: index + 1, name: `记录${index + 1}` }))
+    render(<ResizableTable tableId="page-size-options" rowKey="id" data={data} columns={[{ title: '名称', dataIndex: 'name' }]} />)
+
+    expect(screen.getByText('记录100')).toBeVisible()
+    expect(screen.queryByText('记录101')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('combobox'))
+    const options = await screen.findAllByRole('option')
+    expect(options.map(option => option.textContent?.match(/\d+/)?.[0])).toEqual(['50', '100', '200', '500'])
+    await waitFor(() => expect(getComputedStyle(options[3]).pointerEvents).not.toBe('none'))
+    await user.click(options[3])
+    expect(await screen.findByText('记录101')).toBeVisible()
+  })
+
   it('allows pagination.showTotal=false to suppress duplicate totals and hides empty state while loading', () => {
     const view = render(
       <ResizableTable<Row>

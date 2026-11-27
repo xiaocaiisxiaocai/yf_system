@@ -379,7 +379,7 @@ describe('ProjectDetail migrated behavior', () => {
       if (url === '/projects/1') return Promise.resolve({ data: project(1, { hasCopyHistory: true, copySource: { projectId: 2, name: '原项目' } }) })
       if (url === '/projects/1/summary') return Promise.resolve({ data: { unreadMessages: 0 } })
       if (url === '/projects/1/copy-history') return Promise.resolve({ data: {
-        source: { copyId: 16, projectId: 2, name: '原项目', fileCount: 21, totalBytes: 2048, copiedByName: '管理员', createdAt: '2026-09-15T01:00:00Z' },
+        source: { copyId: 16, projectId: 2, name: '原项目', fileCount: 201, totalBytes: 2048, copiedByName: '管理员', createdAt: '2026-09-15T01:00:00Z' },
         copies: [],
         hasRestrictedRelations: true,
       } })
@@ -392,7 +392,7 @@ describe('ProjectDetail migrated behavior', () => {
           targetFileName: '规格.xlsx',
           targetDeleted: false,
         }],
-        total: 21, page: config?.params?.page, pageSize: 20,
+        total: 201, page: config?.params?.page, pageSize: config?.params?.pageSize,
       } })
       throw new Error(`unexpected GET ${url}`)
     })
@@ -409,6 +409,11 @@ describe('ProjectDetail migrated behavior', () => {
     expect(within(fileNames[0].closest<HTMLElement>('.copy-file-name')!).getByText('已删除')).toBeInTheDocument()
     expect(fileNames[1]).toHaveAttribute('title', '规格.xlsx')
     expect(within(fileNames[1].closest<HTMLElement>('.copy-file-name')!).queryByText('已删除')).not.toBeInTheDocument()
-    expect(calls.find((call) => call.url === '/project-copies/16/files')?.config?.params).toEqual({ page: 1, pageSize: 20 })
+    expect(calls.find((call) => call.url === '/project-copies/16/files')?.config?.params).toEqual({ page: 1, pageSize: 100 })
+    await user.click(within(drawer).getByText('100 条/页'))
+    const sizeOption = await screen.findByRole('option', { name: '200 条/页' })
+    await waitFor(() => expect(getComputedStyle(sizeOption).pointerEvents).not.toBe('none'))
+    await user.click(sizeOption)
+    await waitFor(() => expect(calls.filter(call => call.url === '/project-copies/16/files').at(-1)?.config?.params).toEqual({ page: 1, pageSize: 200 }))
   })
 })

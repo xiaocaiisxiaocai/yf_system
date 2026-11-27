@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import { textLengthRule } from '../../utils/textRules'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -59,12 +60,12 @@ export default function RoleList() {
 
 function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
   const canDelete = useAuth((state) => state.hasPerm('role:delete'))
-  const [data, setData] = useState<PageResp<Role>>({ list: [], total: 0, page: 1, pageSize: 20 })
+  const [data, setData] = useState<PageResp<Role>>({ list: [], total: 0, page: 1, pageSize: DEFAULT_PAGE_SIZE })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [perms, setPerms] = useState<Perm[]>([])
   const [permsLoading, setPermsLoading] = useState(true)
   const [permsError, setPermsError] = useState(false)
@@ -106,7 +107,7 @@ function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
         if (active) {
           setData(next)
           setLoadError(false)
-          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || 20)))
+          const lastPage = Math.max(1, Math.ceil(next.total / (next.pageSize || pageSize)))
           if (page > lastPage) setPage(lastPage)
         }
       })
@@ -119,7 +120,7 @@ function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
     return () => {
       active = false
     }
-  }, [fetchRoles, page, reloadKey])
+  }, [fetchRoles, page, pageSize, reloadKey])
 
   const retryPermissions = () => {
     setPermsLoading(true)
@@ -459,7 +460,7 @@ function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
             onChange: (nextPage, nextSize) => {
               setLoading(true)
               setLoadError(false)
-              setPage(nextPage)
+              setPage(nextSize === pageSize ? nextPage : 1)
               setPageSize(nextSize)
             },
           }}

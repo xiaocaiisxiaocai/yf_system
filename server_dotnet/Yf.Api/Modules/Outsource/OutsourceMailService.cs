@@ -285,7 +285,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         if (vendorId is { } vendor) query = query.Where(x => x.VendorId == vendor);
         if (!string.IsNullOrEmpty(status)) query = query.Where(x => x.Status == status);
         var total = (ulong)await query.LongCountAsync(ct);
-        var mails = await MailsAsync(context, query.OrderByDescending(x => x.Id).Skip((int)Math.Min(offset, int.MaxValue)).Take((int)size), ct);
+        var mails = await MailsAsync(context, query.OrderByDescending(x => x.Id).Page(offset, size), ct);
         return new(mails, total, page, size);
     }
 

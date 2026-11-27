@@ -119,7 +119,7 @@ describe('ODM/OEMA 传递单按厂商分页签', () => {
   it('从后续页选择父级组织时重置到第一页', async () => {
     const user = userEvent.setup()
     const api = renderList('internal', '/oem/transfers', {
-      listTransfers: vi.fn().mockResolvedValue({ list: [], total: 41, page: 1, pageSize: 20 }),
+      listTransfers: vi.fn().mockResolvedValue({ list: [], total: 101, page: 1, pageSize: 100 }),
     })
     await user.click(await screen.findByLabelText('下一页'))
     await vi.waitFor(() => expect(lastQuery(api).page).toBe(2))

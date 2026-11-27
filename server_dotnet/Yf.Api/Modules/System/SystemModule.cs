@@ -53,7 +53,7 @@ public static class SystemModule
                 await AccessService.RequirePermissionAsync(connection, null, AccessService.GetCurrent(ctx), "oem:notify_manage", ct);
             }
             return await service.LogsAsync(scope, ctx.Request.Query["result"].FirstOrDefault() ?? "all",
-                QueryValues.OptionalUInt64(ctx.Request, "page") ?? 1, QueryValues.OptionalUInt64(ctx.Request, "pageSize") ?? 20, ct);
+                QueryValues.OptionalUInt64(ctx.Request, "page") ?? 1, QueryValues.OptionalUInt64(ctx.Request, "pageSize") ?? QueryValues.DefaultPageSize, ct);
         }).Produces<PageResponse<MailAuditEntry>>();
         config.MapPost("/mail-retry", (HttpContext ctx, MailService service, CancellationToken ct) =>
             service.RetryNowAsync(AccessService.GetCurrent(ctx),

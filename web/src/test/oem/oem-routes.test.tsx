@@ -407,7 +407,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     const user = userEvent.setup()
     setInternalSession(['oem:transfer_create', 'oem:transfer_view'])
     const get = vi.spyOn(http, 'get').mockImplementation(async (url) => {
-      if (url === '/oem/transfers') return { data: { list: [], total: 41, page: 1, pageSize: 20 } } as never
+      if (url === '/oem/transfers') return { data: { list: [], total: 101, page: 1, pageSize: 100 } } as never
       if (url === '/departments' || url === '/oem/company-options') return { data: [] } as never
       throw new Error(`unexpected GET ${String(url)}`)
     })

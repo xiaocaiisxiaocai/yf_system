@@ -315,7 +315,8 @@ export function AuditTable({
       data={rows}
       scroll={{ x: AUDIT_TABLE_SCROLL_X, y: 'var(--page-table-scroll-y)' }}
       columns={auditColumns(presenter, onView)}
-      pagination={{ total, current: page, pageSize, showTotal: false, onChange: onPageChange }}
+      pagination={{ total, current: page, pageSize, showTotal: false,
+        onChange: (next, size) => onPageChange(size === pageSize ? next : 1, size) }}
     />
   )
 }

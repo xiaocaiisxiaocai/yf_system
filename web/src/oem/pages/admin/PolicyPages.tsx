@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Message, Modal, Select, Space, Spin, Switch, Typography } from '@arco-design/web-react'
 import { IconSearch } from '@arco-design/web-react/icon'
+import { DEFAULT_PAGE_SIZE } from '../../../components/tablePagination'
 import { fmtSize } from '../../../api/types'
 import { isVersionConflict } from '../../../api/versionConflict'
 import { oemRequestError } from '../../api/requestError'
@@ -320,7 +321,7 @@ export function AuditPage() {
   const [rows, setRows] = useState<AuditLogRow[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(20)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [selected, setSelected] = useState<AuditLogRow | null>(null)

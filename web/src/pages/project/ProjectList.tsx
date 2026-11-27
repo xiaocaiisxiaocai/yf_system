@@ -8,7 +8,7 @@ import http, { type QuietRequestConfig } from '../../api/client'
 import { actionSlots } from '../../components/ActionSlots'
 import { ColumnResizeProvider } from '../../components/columnResize'
 import DangerPopconfirm from '../../components/DangerPopconfirm'
-import { TABLE_PAGINATION } from '../../components/tablePagination'
+import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, TABLE_PAGINATION } from '../../components/tablePagination'
 import type { ColumnLayoutSpec } from '../../components/tableColumnLayout'
 import { useAdjustableColumns } from '../../components/useAdjustableColumns'
 import { useAuth } from '../../store/auth'
@@ -54,8 +54,6 @@ function expectOptionList<T>(value: unknown): T[] {
   return value as T[]
 }
 
-const DEFAULT_PAGE_SIZE = 10
-
 function parsePositiveIntParam(value: string | null) {
   const parsed = value ? Number(value) : NaN
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined
@@ -63,7 +61,7 @@ function parsePositiveIntParam(value: string | null) {
 
 function parsePageSizeParam(value: string | null) {
   const parsed = parsePositiveIntParam(value)
-  return parsed && parsed <= 100 ? parsed : DEFAULT_PAGE_SIZE
+  return parsed && PAGE_SIZE_OPTIONS.includes(parsed) ? parsed : DEFAULT_PAGE_SIZE
 }
 
 function parseStatusParam(value: string | null) {
@@ -77,7 +75,7 @@ function parseMaterialParam(value: string | null) {
 export default function ProjectList() {
   const navigate = useNavigate()
   const revision = useCollaboration((state) => state.revision)
-  const [data, setData] = useState<PageResp<ProjectSummary>>({ list: [], total: 0, page: 1, pageSize: 10 })
+  const [data, setData] = useState<PageResp<ProjectSummary>>({ list: [], total: 0, page: 1, pageSize: DEFAULT_PAGE_SIZE })
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
   const [listStale, setListStale] = useState(false)
@@ -310,7 +308,7 @@ export default function ProjectList() {
         </div>}
         <ColumnResizeProvider actions={columnLayout.actions} picker={columnLayout.picker}>
           <div ref={tableHostRef} className="page-table-host">
-            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} noDataElement={loading ? <span /> : undefined} columns={columns} components={columnLayout.components} data={data.list} scroll={{ x: columnLayout.scrollX, y: 'var(--page-table-scroll-y)' }} pagination={{ ...TABLE_PAGINATION, total: data.total, current: page, pageSize, onChange: (nextPage, nextSize) => applyQuery({ page: nextPage, pageSize: nextSize }) }} />
+            <Table className="page-table page-table--resizable" rowKey="id" loading={loading} noDataElement={loading ? <span /> : undefined} columns={columns} components={columnLayout.components} data={data.list} scroll={{ x: columnLayout.scrollX, y: 'var(--page-table-scroll-y)' }} pagination={{ ...TABLE_PAGINATION, total: data.total, current: page, pageSize, onChange: (nextPage, nextSize) => applyQuery({ page: nextSize === pageSize ? nextPage : 1, pageSize: nextSize }) }} />
           </div>
         </ColumnResizeProvider>
         </>}

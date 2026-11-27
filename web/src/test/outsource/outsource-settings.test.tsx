@@ -645,7 +645,7 @@ describe('外协设定与入口回归保护', () => {
   it('客户简称搜索关键字时将分页重置回第 1 页', async () => {
     const user = userEvent.setup()
     setInternalSession(['outsource:settings'])
-    const manyAliases = Array.from({ length: 25 }, (_, index) => ({
+    const manyAliases = Array.from({ length: 105 }, (_, index) => ({
       id: index + 1,
       fullName: `测试客户全称${String(index + 1).padStart(2, '0')}`,
       shortName: `简${String(index + 1).padStart(2, '0')}`,
@@ -658,11 +658,11 @@ describe('外协设定与入口回归保护', () => {
 
     const { container } = render(<MemoryRouter><OutsourceCustomersTab /></MemoryRouter>)
     expect(await screen.findByText('测试客户全称01')).toBeInTheDocument()
-    expect(screen.queryByText('测试客户全称21')).not.toBeInTheDocument()
+    expect(screen.queryByText('测试客户全称101')).not.toBeInTheDocument()
 
     const page2 = container.querySelector('.arco-pagination-item[aria-label="2"]') ?? within(container.querySelector('.arco-pagination') as HTMLElement).getByText('2')
     await user.click(page2)
-    expect(await screen.findByText('测试客户全称21')).toBeInTheDocument()
+    expect(await screen.findByText('测试客户全称101')).toBeInTheDocument()
     expect(screen.queryByText('测试客户全称01')).not.toBeInTheDocument()
     expect(container.querySelector('.arco-pagination-item-active')).toHaveTextContent('2')
 

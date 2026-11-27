@@ -97,15 +97,23 @@ public static class QueryValues
         return DateTime.SpecifyKind(value, DateTimeKind.Utc);
     }
 
+    public const uint DefaultPageSize = 100;
+    private const uint MaximumPageSize = 500;
+
     public static (ulong Page, uint Size, ulong Offset) Page(HttpRequest request) => Page(request.Query);
 
     public static (ulong Page, uint Size, ulong Offset) Page(IQueryCollection query)
     {
         var p = OptionalUInt64(query, "page") ?? 1;
-        var requestedSize = OptionalUInt64(query, "pageSize") ?? 20;
+        var requestedSize = OptionalUInt64(query, "pageSize");
         if (requestedSize > uint.MaxValue) throw ApiException.BadRequest("请求参数错误: pageSize");
-        var s = Math.Clamp((uint)requestedSize, 1U, 100U);
-        p = Math.Clamp(p, 1, ulong.MaxValue / s);
-        return (p, s, (p - 1) * s);
+        return NormalizePage(p, requestedSize);
+    }
+
+    internal static (ulong Page, uint Size, ulong Offset) NormalizePage(ulong page, ulong? requestedSize)
+    {
+        var size = (uint)Math.Clamp(requestedSize ?? DefaultPageSize, 1UL, MaximumPageSize);
+        var actualPage = Math.Clamp(page, 1UL, ulong.MaxValue / size);
+        return (actualPage, size, (actualPage - 1) * size);
     }
 }

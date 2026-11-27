@@ -46,7 +46,7 @@ function account(overrides: Partial<VendorAccount> = {}): VendorAccount {
 }
 
 function page(list: Company[], current = 1, total = list.length): Page<Company> {
-  return { list, total, page: current, pageSize: 20 }
+  return { list, total, page: current, pageSize: 100 }
 }
 
 function deferred<T>() {
@@ -212,9 +212,9 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     await waitFor(() => expect(restoreRecipients).toHaveBeenCalledWith([52]))
   })
 
-  it('可通知人员按页显示：每页 20 人，可翻页，搜索后回到第一页', async () => {
+  it('可通知人员按页显示：每页 100 人，可翻页，搜索后回到第一页', async () => {
     const user = userEvent.setup()
-    const people = Array.from({ length: 25 }, (_, index) => ({
+    const people = Array.from({ length: 105 }, (_, index) => ({
       userId: 100 + index, employeeNo: `E${100 + index}`, realName: `人员${String(index + 1).padStart(2, '0')}`, departmentName: '采购课',
       email: `p${index}@example.invalid`, canReceive: true, unavailableReason: null, removed: false,
     }))
@@ -222,10 +222,10 @@ describe('ODM/OEMA 厂商与账号目录', () => {
 
     await user.click(await screen.findByRole('button', { name: '可通知人员' }))
     const drawer = (await screen.findByText('人员01（E100）')).closest<HTMLElement>('.arco-drawer')!
-    expect(within(drawer).queryByText('人员21（E120）')).not.toBeInTheDocument()
+    expect(within(drawer).queryByText('人员101（E200）')).not.toBeInTheDocument()
     expect(drawer.querySelector('.arco-pagination')).not.toBeNull()
     await user.click(within(drawer).getByText('2', { selector: '.arco-pagination-item' }))
-    expect(await within(drawer).findByText('人员21（E120）')).toBeInTheDocument()
+    expect(await within(drawer).findByText('人员101（E200）')).toBeInTheDocument()
     await user.type(within(drawer).getByPlaceholderText('姓名、工号或组织'), '人员01')
     expect(await within(drawer).findByText('人员01（E100）')).toBeInTheDocument()
   })
@@ -418,8 +418,8 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     const pending = deferred<void>()
     let deleted = false
     const companies = vi.fn().mockImplementation(async (query: { page: number }) => {
-      if (query.page === 2 && !deleted) return page([company({ id: 91, name: '末页厂商' })], 2, 21)
-      return page([company({ id: 1, name: '首页厂商' })], 1, deleted ? 20 : 21)
+      if (query.page === 2 && !deleted) return page([company({ id: 91, name: '末页厂商' })], 2, 101)
+      return page([company({ id: 1, name: '首页厂商' })], 1, deleted ? 100 : 101)
     })
     const deleteCompany = vi.fn().mockImplementation(async () => {
       await pending.promise

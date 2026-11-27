@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge, Button, Card, Descriptions, Drawer, Empty, Result, Spin, Tabs, Tag, Tooltip, Typography } from '@arco-design/web-react'
 import ResizableTable from '../../components/ResizableTable'
@@ -63,8 +64,9 @@ function ProjectCopyRecord({
   onNavigate: (projectId: number) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [data, setData] = useState<PageResp<ProjectCopyFileMapping>>({ list: [], total: 0, page: 1, pageSize: 20 })
+  const [data, setData] = useState<PageResp<ProjectCopyFileMapping>>({ list: [], total: 0, page: 1, pageSize: DEFAULT_PAGE_SIZE })
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -78,7 +80,7 @@ function ProjectCopyRecord({
     setLoading(true)
     setError(false)
     http.get<ApiResponses['GET /project-copies/{copyId}/files']>(`/project-copies/${item.copyId}/files`, {
-      params: { page, pageSize: 20 },
+      params: { page, pageSize },
       signal: controller.signal,
       quietNetworkError: true,
     } as QuietRequestConfig)
@@ -97,7 +99,7 @@ function ProjectCopyRecord({
       requestSeq.current += 1
       controller.abort()
     }
-  }, [expanded, item.copyId, page, reloadKey])
+  }, [expanded, item.copyId, page, pageSize, reloadKey])
 
   const sourceLabel = relation === 'source' ? '来源项目文件' : '当前项目文件'
   const targetLabel = relation === 'source' ? '当前项目文件' : '副本项目文件'
@@ -158,12 +160,14 @@ function ProjectCopyRecord({
                   ),
                 },
               ]}
-              pagination={data.total > data.pageSize ? {
+              pagination={data.total > 0 ? {
                 total: data.total,
                 current: page,
-                pageSize: data.pageSize || 20,
-                sizeCanChange: false,
-                onChange: (nextPage) => setPage(nextPage),
+                pageSize,
+                onChange: (nextPage, size) => {
+                  setPage(size === pageSize ? nextPage : 1)
+                  setPageSize(size)
+                },
               } : false}
               noDataElement={<Empty description={item.fileCount ? '暂无可显示的文件映射' : '复制时没有项目文件'} />}
             />

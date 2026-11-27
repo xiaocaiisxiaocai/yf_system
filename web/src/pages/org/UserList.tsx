@@ -1,3 +1,4 @@
+import { DEFAULT_PAGE_SIZE } from '../../components/tablePagination'
 import { optionalTextLengthRule, textLengthRule } from '../../utils/textRules'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
@@ -167,7 +168,7 @@ export default function UserList() {
   const [departmentId, setDepartmentId] = useState<number>()
   const [status, setStatus] = useState<string>()
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [batchField, setBatchField] = useState<BatchEditField | null>(null)
   const [batchChanges, setBatchChanges] = useState<BatchChanges>({})
@@ -809,7 +810,7 @@ export default function UserList() {
             pageSize,
             onChange: (p, ps) => {
               const sameQuery = page === p && pageSize === ps
-              setPage(p)
+              setPage(ps === pageSize ? p : 1)
               setPageSize(ps)
               if (sameQuery) void usersQuery.refetch()
             },

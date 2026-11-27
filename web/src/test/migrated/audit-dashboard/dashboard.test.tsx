@@ -35,7 +35,7 @@ const summary = {
   unreadMessages: 12,
   recentMessages: [],
 }
-const emptyPage = { list: [], total: 0, page: 1, pageSize: 10 }
+const emptyPage = { list: [], total: 0, page: 1, pageSize: 100 }
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -131,7 +131,7 @@ describe('工作台协作生产界面', () => {
       if (url === '/dashboard/pending-projects') return { data: emptyPage }
       if (url === '/dashboard/messages') return {
         data: config.params?.unreadOnly
-          ? { list: [unread], total: 12, page: config.params.page, pageSize: 10 }
+          ? { list: [unread], total: 102, page: config.params.page, pageSize: 100 }
           : emptyPage,
       }
       throw new Error(`unexpected request ${url}`)
@@ -142,7 +142,7 @@ describe('工作台协作生产界面', () => {
     expect(await screen.findByText('请核对全部验收记录')).toBeVisible()
     const initialMessages = mocks.get.mock.calls.find(([url]) => url === '/dashboard/messages')
     expect(initialMessages?.[1]).toMatchObject({
-      params: { page: 1, pageSize: 10, unreadOnly: true },
+      params: { page: 1, pageSize: 100, unreadOnly: true },
       signal: expect.any(AbortSignal),
       quietNetworkError: true,
     })
@@ -153,7 +153,7 @@ describe('工作台协作生产界面', () => {
     await user.click(screen.getByRole('button', { name: '全部' }))
     await waitFor(() => {
       const last = mocks.get.mock.calls.filter(([url]) => url === '/dashboard/messages').at(-1)
-      expect(last?.[1]).toMatchObject({ params: { page: 1, pageSize: 10, unreadOnly: false }, quietNetworkError: true })
+      expect(last?.[1]).toMatchObject({ params: { page: 1, pageSize: 100, unreadOnly: false }, quietNetworkError: true })
     })
   })
 
@@ -163,7 +163,7 @@ describe('工作台协作生产界面', () => {
       if (mocks.collaboration.revision === 'initial') {
         if (url === '/dashboard/summary') return { data: summary }
         if (url === '/dashboard/messages') {
-          return { data: { list: [{ id: 7, projectId: 3, content: '原留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 } }
+          return { data: { list: [{ id: 7, projectId: 3, content: '原留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 100 } }
         }
         return { data: emptyPage }
       }
@@ -191,7 +191,7 @@ describe('工作台协作生产界面', () => {
         refresh.request.resolve({ data: refresh.url === '/dashboard/summary'
           ? { ...summary, unreadMessages: 1 }
           : refresh.url === '/dashboard/messages'
-            ? { list: [{ id: 202, projectId: 2, content: '新留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 }
+            ? { list: [{ id: 202, projectId: 2, content: '新留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 100 }
             : emptyPage })
       }
     })
@@ -202,7 +202,7 @@ describe('工作台协作生产界面', () => {
         refresh.request.resolve({ data: refresh.url === '/dashboard/summary'
           ? { ...summary, unreadMessages: 9 }
           : refresh.url === '/dashboard/messages'
-            ? { list: [{ id: 101, projectId: 1, content: '旧留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 }
+            ? { list: [{ id: 101, projectId: 1, content: '旧留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 100 }
             : emptyPage })
       }
     })
@@ -215,7 +215,7 @@ describe('工作台协作生产界面', () => {
       if (mocks.collaboration.revision !== 'initial') throw new Error('temporary refresh failure')
       if (url === '/dashboard/summary') return { data: summary }
       if (url === '/dashboard/pending-projects') return { data: emptyPage }
-      return { data: { list: [{ id: 7, projectId: 3, content: '保留内容', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 } }
+      return { data: { list: [{ id: 7, projectId: 3, content: '保留内容', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 100 } }
     })
     const view = render(dashboardView())
     expect(await screen.findByText('保留内容')).toBeVisible()
@@ -233,7 +233,7 @@ describe('工作台协作生产界面', () => {
       if (denied) throw httpError(status)
       if (url === '/dashboard/summary') return { data: summary }
       if (url === '/dashboard/pending-projects') return { data: emptyPage }
-      return { data: { list: [{ id: 7, projectId: 3, content: '受保护留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 10 } }
+      return { data: { list: [{ id: 7, projectId: 3, content: '受保护留言', createdAt: '', unread: true }], total: 1, page: 1, pageSize: 100 } }
     })
     const view = render(dashboardView())
     expect(await screen.findByText('受保护留言')).toBeVisible()
@@ -318,7 +318,7 @@ describe('工作台协作生产界面', () => {
     const user = userEvent.setup()
     render(dashboardView())
     await waitFor(() => expect(pendingRequests).toHaveLength(1))
-    expect(pendingRequests[0].params).toEqual({ page: 1, pageSize: 10 })
+    expect(pendingRequests[0].params).toEqual({ page: 1, pageSize: 100 })
 
     await act(async () => pendingRequests[0].request.reject(new Error('pending projects unavailable')))
     expect(await screen.findByText('待审核资料项目加载失败')).toBeVisible()
@@ -326,18 +326,18 @@ describe('工作台协作生产界面', () => {
     await waitFor(() => expect(pendingRequests).toHaveLength(2))
 
     const firstPage = [{ id: 11, name: '待确认项目 A', materialReviewStatus: 'PENDING', updatedAt: '2026-09-10T01:00:00Z' }]
-    await act(async () => pendingRequests[1].request.resolve({ data: { list: firstPage, total: 11, page: 1, pageSize: 10 } }))
+    await act(async () => pendingRequests[1].request.resolve({ data: { list: firstPage, total: 101, page: 1, pageSize: 100 } }))
     expect(await screen.findByRole('link', { name: '待确认项目 A' })).toHaveAttribute('href', '/projects/11')
     expect(document.querySelector('#dashboard-pending > .arco-card-body > .dashboard-scroll.arco-list-wrapper')).not.toBeNull()
     expect(screen.getByText('资料待审核')).toBeVisible()
 
     await user.click(screen.getByLabelText('第 2 页'))
     await waitFor(() => expect(pendingRequests).toHaveLength(3))
-    expect(pendingRequests[2].params).toEqual({ page: 2, pageSize: 10 })
-    await act(async () => pendingRequests[2].request.resolve({ data: { list: [], total: 10, page: 2, pageSize: 10 } }))
+    expect(pendingRequests[2].params).toEqual({ page: 2, pageSize: 100 })
+    await act(async () => pendingRequests[2].request.resolve({ data: { list: [], total: 10, page: 2, pageSize: 100 } }))
     await waitFor(() => expect(pendingRequests).toHaveLength(4))
-    expect(pendingRequests[3].params).toEqual({ page: 1, pageSize: 10 })
-    await act(async () => pendingRequests[3].request.resolve({ data: { list: firstPage, total: 10, page: 1, pageSize: 10 } }))
+    expect(pendingRequests[3].params).toEqual({ page: 1, pageSize: 100 })
+    await act(async () => pendingRequests[3].request.resolve({ data: { list: firstPage, total: 10, page: 1, pageSize: 100 } }))
     await waitFor(() => expect(screen.queryByLabelText('第 2 页')).not.toBeInTheDocument())
 
     await user.click(screen.getByRole('button', { name: '刷新工作台' }))

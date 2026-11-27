@@ -68,7 +68,7 @@ const readOnlyLayout = { fields: fieldLayout.fields.map((field) => ({ ...field, 
 
 function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length) {
   return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-    data: url === '/outsource/items' ? { list: items, total, page: 1, pageSize: 20 }
+    data: url === '/outsource/items' ? { list: items, total, page: 1, pageSize: 100 }
         : url === '/outsource/items/export' ? new Blob()
         : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
           : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
@@ -148,7 +148,7 @@ describe('外发工令页面', () => {
   it('工令表头可粘贴多个工令，筛选回到第一页，导出和重置复用筛选条件', async () => {
     const user = userEvent.setup()
     setSession([])
-    const get = mockApi(readOnlyLayout, 40)
+    const get = mockApi(readOnlyLayout, 101)
     const saveBlob = vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
