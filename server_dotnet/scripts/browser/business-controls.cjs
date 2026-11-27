@@ -100,15 +100,17 @@ async function choose(page, placeholder, optionName) {
     await api(adminContext, 'POST', '/projects/' + childControlSource.id + '/messages',
       { content: sourceOnlyMessage }, adminToken);
 
-    // API-only fixture setup: 11 projects with supplier-returned material awaiting the responsible user (admin)
+    // API-only fixture setup: 51 projects with supplier-returned material awaiting the responsible user (admin)
     // make the dashboard paginator real.
-    for (let index = 0; index < 11; index += 1) {
+    for (let index = 0; index < 51; index += 1) {
       const project = await createProject(
         adminContext, adminToken, f.suppliers.a.id,
         prefix + '-' + String(index + 1).padStart(2, '0'), defaults);
-      await uploadBytes(
-        adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile, { ensureStep: true },
-      );
+      if (index < 2) {
+        await uploadBytes(
+          adminContext, adminToken, project.id, prefix + '-' + index + '.zip', tinyFile, { ensureStep: true },
+        );
+      }
       await returnSupplierMaterial(supplierContext, supplierToken, project.id, prefix + '-' + index + '-回传.pdf');
       if (index === 0) {
         await api(supplierContext, 'POST', '/projects/' + project.id + '/messages', {
@@ -171,26 +173,34 @@ async function choose(page, placeholder, optionName) {
       const pendingFirstPromise = page.waitForResponse(response => {
         const url = new URL(response.url());
         return url.pathname === '/api/v1/dashboard/pending-projects'
-          && url.searchParams.get('page') === '1' && url.searchParams.get('pageSize') === '10'
+          && url.searchParams.get('page') === '1' && url.searchParams.get('pageSize') === '100'
           && response.status() === 200;
       });
       await page.goto(s.base + '/');
       const summary = await (await summaryPromise).json();
       const pendingFirst = await (await pendingFirstPromise).json();
-      assert(summary.pendingTasks >= 11);
+      assert(summary.pendingTasks >= 51);
       assert(summary.unreadMessages >= 1);
       for (const [title, value] of [['待审核资料项目', summary.pendingTasks], ['未读留言', summary.unreadMessages]]) {
         const card = page.locator('.dashboard-stat-card').filter({ hasText: title });
         await card.getByText(String(value), { exact: true }).waitFor();
       }
-      assert.equal(pendingFirst.list.length, 10);
+      assert.equal(pendingFirst.list.length, Math.min(pendingFirst.total, 100));
       for (const project of pendingFirst.list) {
         await page.getByRole('link', { name: dashboardProjectLabel(project), exact: true }).waitFor();
       }
+      const resize = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === '/api/v1/dashboard/pending-projects' && url.searchParams.get('page') === '1'
+          && url.searchParams.get('pageSize') === '50' && response.status() === 200;
+      });
+      await page.locator('.dashboard-pending .arco-select').click();
+      await page.getByRole('option', { name: '50 条/页', exact: true }).click();
+      assert.equal((await (await resize).json()).list.length, 50);
       const pendingSecondPromise = page.waitForResponse(response => {
         const url = new URL(response.url());
         return url.pathname === '/api/v1/dashboard/pending-projects'
-          && url.searchParams.get('page') === '2' && url.searchParams.get('pageSize') === '10'
+          && url.searchParams.get('page') === '2' && url.searchParams.get('pageSize') === '50'
           && response.status() === 200;
       });
       await page.locator('.dashboard-pending .arco-pagination-item').filter({ hasText: /^2$/ }).click();
@@ -203,7 +213,7 @@ async function choose(page, placeholder, optionName) {
 
     await record('工作台待确认链接和未读留言键盘操作进入真实目标', async () => {
       const currentPending = await (await api(adminContext, 'GET',
-        '/dashboard/pending-projects?page=2&pageSize=10', undefined, adminToken)).json();
+        '/dashboard/pending-projects?page=2&pageSize=50', undefined, adminToken)).json();
       const target = currentPending.list.find(item => pendingProjects.some(project => project.id === item.id));
       assert(target, 'page 2 must contain a dedicated pending fixture');
       await page.getByRole('link', { name: dashboardProjectLabel(target), exact: true }).click();
@@ -470,21 +480,21 @@ async function choose(page, placeholder, optionName) {
       });
       await page.getByRole('button', { name: '重置', exact: true }).click();
       const resetResult = await (await reset).json();
-      assert(resetResult.total > 20, 'dedicated setup must create enough audit rows for pagination');
+      assert(resetResult.total > 50, 'dedicated setup must create enough audit rows for pagination');
       const resized = page.waitForResponse(response => {
         const url = new URL(response.url());
         return url.pathname === '/api/v1/admin/audit-logs'
-          && url.searchParams.get('page') === '1' && url.searchParams.get('pageSize') === '10'
+          && url.searchParams.get('page') === '1' && url.searchParams.get('pageSize') === '50'
           && response.status() === 200;
       });
       await page.locator('.arco-pagination .arco-select').click();
-      await page.getByRole('option', { name: '10 条/页', exact: true }).click();
+      await page.getByRole('option', { name: '50 条/页', exact: true }).click();
       const first = await (await resized).json();
-      assert.equal(first.list.length, 10);
+      assert.equal(first.list.length, 50);
       const nextPage = page.waitForResponse(response => {
         const url = new URL(response.url());
         return url.pathname === '/api/v1/admin/audit-logs'
-          && url.searchParams.get('page') === '2' && url.searchParams.get('pageSize') === '10'
+          && url.searchParams.get('page') === '2' && url.searchParams.get('pageSize') === '50'
           && response.status() === 200;
       });
       await page.locator('.arco-pagination-item').filter({ hasText: /^2$/ }).click();

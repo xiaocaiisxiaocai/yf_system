@@ -357,6 +357,7 @@ export default function Dashboard() {
                   <div className="dashboard-pagination">
                     <Pagination
                       {...TABLE_PAGINATION}
+                      selectProps={{ getPopupContainer: () => document.body }}
                       current={pendingPage}
                       pageSize={pendingPageSize}
                       total={pendingData.total}
@@ -461,6 +462,7 @@ export default function Dashboard() {
                   <div className="dashboard-pagination">
                     <Pagination
                       {...TABLE_PAGINATION}
+                      selectProps={{ getPopupContainer: () => document.body }}
                       current={messagePage}
                       pageSize={messagePageSize}
                       total={messageData.total}
