@@ -100,13 +100,12 @@ public sealed record OutsourceExport(byte[] Content, string FileName);
 /// The outsourcing list itself: import (preview then confirm, both against IPMS), the overall table and per-vendor
 /// tabs, export, purchasing edits and deletion of unsent rows. See 外协清单契约 → 汇入 / 采购编辑与删除 / 页面.
 /// </summary>
-public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactory, AuditService audit, IIpmsClient ipms)
+public sealed partial class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactory, AuditService audit, IIpmsClient ipms)
 {
     internal const int MaximumImportRows = 500;
     internal const int MaximumBatchItems = 500;
     internal const int MaximumExportRows = 10_000;
     private const string ChangedMessage = "外协记录已被他人修改，请刷新后重试";
-    private static readonly string[] ImportHeaders = ["外发日期", "工令", "外发厂商", "外发类型"];
 
     // ---- import ----
 
@@ -115,65 +114,91 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var rows = ValidateRowCount(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await AuthorizeReadAsync(context, actor, OutsourcePermissions.Manage, ct);
-        var planned = await PlanImportAsync(context, rows, ct);
-        return new(planned.Count(x => x.Status == "READY"), planned.Count(x => x.Status == "SKIPPED"),
+        var reference = await OutsourceReference.LoadAsync(context, ct);
+        var planned = await PlanImportAsync(context, reference, rows, ct);
+        await CompleteImportRowsAsync(context, reference, actor, rows, planned, ct);
+        return new(planned.Count(x => x.Status is "READY" or "READY_UPDATE"), planned.Count(x => x.Status == "SKIPPED"),
             planned.Count(x => x.Status == "INVALID"), planned.Select(x => x.Preview).ToArray());
     }
 
     /// <summary>Re-plans against IPMS and the database, then stores only READY rows in one transaction.</summary>
-    public async Task<AdminImportResponse> ImportAsync(CurrentUser actor, OutsourceImportRequest request, CancellationToken ct)
+    public async Task<OutsourceImportResponse> ImportAsync(CurrentUser actor, OutsourceImportRequest request, CancellationToken ct)
     {
         var rows = ValidateRowCount(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await AuthorizeReadAsync(context, actor, OutsourcePermissions.Manage, ct);
-        var planned = await PlanImportAsync(context, rows, ct);
+        var initialReference = await OutsourceReference.LoadAsync(context, ct);
+        var planned = await PlanImportAsync(context, initialReference, rows, ct);
         await context.Database.CloseConnectionAsync();
 
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
         actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
-        var ready = planned.Where(x => x.Status == "READY").ToArray();
-        var vendorIds = ready.Select(x => x.VendorId).Distinct().ToArray();
-        var activeVendors = await context.OemCompanies.Where(x => vendorIds.Contains(x.Id) && x.Status == AccountStatuses.Active)
-            .Select(x => x.Id).ToArrayAsync(ct);
-        if (activeVendors.Length != vendorIds.Length) throw ApiException.Conflict("外协厂商状态已变化，请重新预览");
-        var items = ready.Select(x => x.Item!).ToArray();
-        var serial = await context.OutsourceItems.MaxAsync(x => (uint?)x.SerialNo, ct) ?? 0;
-        foreach (var item in items) { item.CreatedBy = actor.Id; item.SerialNo = ++serial; }
-        context.OutsourceItems.AddRange(items);
-        try { await context.SaveChangesAsync(ct); }
-        catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 } duplicate)
+        await LockImportRoutingAsync(context, initialReference, planned, ct);
+        var reference = await OutsourceReference.LoadAsync(context, ct, lockImportFields: true);
+        await CompleteImportRowsAsync(context, reference, actor, rows, planned, ct);
+        var ready = planned.Where(x => x.Status is "READY" or "READY_UPDATE").ToArray();
+        if (ready.Any(x => !reference.ActiveVendorIds.Contains(x.VendorId)
+            || reference.Find(x.Item!.TypeCode)?.Id != initialReference.Find(x.Item.TypeCode)?.Id
+            || reference.Match(x.Item.TypeCode, x.VendorId) != OutsourceMatchStates.Ok))
+            throw ApiException.Conflict("外发类型或厂商设定已变化，请重新预览");
+        var created = ready.Where(row => row.Before is null).ToArray();
+        if (created.Length > 0)
         {
-            throw ApiException.Conflict(duplicate.Message.Contains("uk_outsource_items_serial", StringComparison.Ordinal)
-                ? "另一批汇入刚刚完成，请重新预览后再汇入" : "部分工令已被他人汇入，请重新预览");
-        }
-        if (items.Length > 0)
-        {
+            var serial = await context.OutsourceItems.MaxAsync(x => (uint?)x.SerialNo, ct) ?? 0;
+            foreach (var row in created)
+            {
+                row.Item!.CreatedBy = actor.Id;
+                row.Item.SerialNo = ++serial;
+                context.OutsourceItems.Add(row.Item);
+            }
+            try { await context.SaveChangesAsync(ct); }
+            catch (DbUpdateException error) when (error.InnerException is MySqlException { Number: 1062 } duplicate)
+            {
+                throw ApiException.Conflict(duplicate.Message.Contains("uk_outsource_items_serial", StringComparison.Ordinal)
+                    ? "另一批汇入刚刚完成，请重新预览后再汇入" : "部分工令已被他人汇入，请重新预览");
+            }
+            foreach (var row in created)
+                foreach (var (fieldId, value) in row.StoredValues)
+                    context.OutsourceItemValues.Add(new OutsourceItemValue { ItemId = row.Item!.Id, FieldId = fieldId, Value = value });
+            await context.SaveChangesAsync(ct);
             await audit.WriteAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id,
                 "OUTSOURCE_ITEM_IMPORT", "outsource_item", null, new
                 {
                     targetName = "外协清单汇入",
-                    count = items.Length,
-                    workOrders = items.Select(x => x.WorkOrderNo).Take(100).ToArray(),
+                    count = created.Length,
+                    workOrders = created.Select(x => x.Item!.WorkOrderNo).Take(100).ToArray(),
                 }, null, ct);
+        }
+        var updates = ready.Where(row => row.Before is not null).ToArray();
+        if (updates.Length > 0)
+        {
+            var now = await DbClock.UtcNowAsync(context, ct, 3);
+            var noticeKeys = reference.Layout.NoticeKeys;
+            foreach (var row in updates)
+                await WriteImportUpdateAsync(context, actor, row, now, noticeKeys, ct);
         }
         await transaction.CommitAsync(ct);
         var results = planned.Select(x => new AdminImportRowResult(x.Preview.RowNumber, x.Preview.WorkOrderNo,
-            x.Status switch { "READY" => "CREATED", "SKIPPED" => "SKIPPED", _ => "FAILED" }, x.Preview.Message)).ToArray();
-        return new(results.Count(x => x.Status == "CREATED"), results.Count(x => x.Status == "SKIPPED"),
+            x.Status switch { "READY" => "CREATED", "READY_UPDATE" => "UPDATED", "SKIPPED" => "SKIPPED", _ => "FAILED" }, x.Preview.Message)).ToArray();
+        return new(created.Length, updates.Length, results.Count(x => x.Status == "SKIPPED"),
             results.Count(x => x.Status == "FAILED"), results);
     }
 
-    private sealed record PlannedRow(string Status, OutsourceImportPreviewRow Preview, ulong VendorId, OutsourceItem? Item);
-
-    private async Task<List<PlannedRow>> PlanImportAsync(YfDbContext context, OutsourceImportRow[] rows, CancellationToken ct)
+    private sealed record PlannedRow(string Status, OutsourceImportPreviewRow Preview, ulong VendorId, OutsourceItem? Item)
     {
-        var reference = await OutsourceReference.LoadAsync(context, ct);
+        public Dictionary<ulong, string> StoredValues { get; } = [];
+        public OutsourceItem? Before { get; init; }
+        public AuditChange[] Changes { get; init; } = [];
+    }
+
+    private async Task<List<PlannedRow>> PlanImportAsync(YfDbContext context, OutsourceReference reference, OutsourceImportRow[] rows, CancellationToken ct)
+    {
         var vendorsByName = await context.OemCompanies.AsNoTracking()
             .Select(x => new { x.Id, x.Name, x.Status }).ToListAsync(ct);
         var vendorLookup = vendorsByName.ToDictionary(x => x.Name.Trim(), StringComparer.OrdinalIgnoreCase);
         var parsed = rows.Select((row, index) => new
         {
-            RowNumber = row.RowNumber is >= 2 and <= MaximumImportRows + 1 ? row.RowNumber : index + 2,
+            RowNumber = row.RowNumber >= 2 ? row.RowNumber : index + 2,
             WorkOrderNo = row.WorkOrderNo?.Trim() ?? "",
             DateText = row.OutsourceDate?.Trim() ?? "",
             VendorName = row.VendorName?.Trim() ?? "",
@@ -181,9 +206,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         }).ToArray();
         var repeated = parsed.Where(x => x.WorkOrderNo.Length > 0).GroupBy(x => x.WorkOrderNo, StringComparer.OrdinalIgnoreCase)
             .Where(group => group.Count() > 1).Select(group => group.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var candidates = parsed.Select(x => x.WorkOrderNo).Where(ValidWorkOrder).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var existing = (await context.OutsourceItems.AsNoTracking().Where(x => candidates.Contains(x.WorkOrderNo))
-            .Select(x => x.WorkOrderNo).ToArrayAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var result = new List<PlannedRow>(parsed.Length);
         var lookups = new List<(int Index, string WorkOrderNo, DateOnly Date, ulong VendorId, string VendorName, string TypeCode, string TypeLabel)>();
@@ -196,8 +218,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             { result.Add(new("INVALID", Preview("INVALID", "工令需为 1~32 位字母、数字、连字符或下划线"), 0, null)); continue; }
             if (repeated.Contains(row.WorkOrderNo))
             { result.Add(new("SKIPPED", Preview("SKIPPED", "文件内工令重复，本重复组未汇入"), 0, null)); continue; }
-            if (existing.Contains(row.WorkOrderNo))
-            { result.Add(new("SKIPPED", Preview("SKIPPED", "工令已存在，未覆盖现有资料"), 0, null)); continue; }
             if (!DateOnly.TryParseExact(row.DateText, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
             { result.Add(new("INVALID", Preview("INVALID", "外发日期格式不正确"), 0, null)); continue; }
             if (!vendorLookup.TryGetValue(row.VendorName, out var vendor))
@@ -395,7 +415,10 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
             .ToArrayAsync(ct);
         return rows.Select(x => new OutsourceItemChangeResponse(x.change.Id, x.change.Field,
             // Only historical IPMS syncs wrote a department name under this key.
-            x.change.Field == "mechanicalSection" ? "机构课别" : layout.Label(ColumnKey(x.change.Field)),
+            x.change.Field == "mechanicalSection" ? "机构课别"
+                : x.change.Field.StartsWith(FallbackPrefix, StringComparison.Ordinal)
+                    ? layout.Label(ImportColumnKey(x.change.Field)) + "（Excel 补充值）"
+                    : layout.Label(ColumnKey(x.change.Field)),
             x.change.OldValue, x.change.NewValue, x.change.Source, x.Name, DateTime.SpecifyKind(x.change.ChangedAt, DateTimeKind.Utc),
             x.change.SignerName)).ToArray();
     }
@@ -667,8 +690,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
                     throw ApiException.Forbidden($"无权修改栏位「{layout.Label(key)}」");
             }
             // Only what vendors see needs a new notice; a change to an internal-only column keeps the send status.
-            var noticeNeeded = changes.Any(x => vendorKeys.Contains(ColumnKey(x.Field)));
-            var sendStatus = noticeNeeded && before.SendStatus == OutsourceSendStatuses.Sent ? OutsourceSendStatuses.PendingNotice : before.SendStatus;
+            var sendStatus = SendStatusAfterEdit(before, changes, vendorKeys);
             await context.OutsourceItems.Where(x => x.Id == before.Id).ExecuteUpdateAsync(s => s
                 .SetProperty(x => x.OutsourceDate, date).SetProperty(x => x.VendorId, vendor).SetProperty(x => x.TypeCode, typeCode)
                 .SetProperty(x => x.Remark, remark).SetProperty(x => x.Status, status).SetProperty(x => x.LatestDueDate, latestDue)
@@ -694,6 +716,10 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
 
     /// <summary>The column key an audit change belongs to (the type is recorded as <c>typeCode</c>).</summary>
     internal static string ColumnKey(string field) => field == "typeCode" ? "type" : field;
+
+    private static string SendStatusAfterEdit(OutsourceItem before, AuditChange[] changes, IReadOnlySet<string> vendorKeys) =>
+        before.SendStatus == OutsourceSendStatuses.Sent && changes.Any(change => change.Field == "vendor" || vendorKeys.Contains(ColumnKey(change.Field)))
+            ? OutsourceSendStatuses.PendingNotice : before.SendStatus;
 
     private sealed record CustomChange(OutsourceFieldLayout.Column Column, string? Value);
 
@@ -761,7 +787,6 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         return actor;
     }
 
-    internal static IReadOnlyList<string> TemplateHeaders => ImportHeaders;
 }
 
 /// <summary>Type dictionary, vendor mapping and vendor names, loaded once per request to resolve items.</summary>
@@ -803,7 +828,7 @@ internal sealed class OutsourceReference
         !string.IsNullOrWhiteSpace(fullName) && customerShortNames.TryGetValue(OutsourceSettingsService.CustomerKey(fullName), out var shortName)
             ? shortName : fullName;
 
-    public static async Task<OutsourceReference> LoadAsync(YfDbContext context, CancellationToken ct)
+    public static async Task<OutsourceReference> LoadAsync(YfDbContext context, CancellationToken ct, bool lockImportFields = false)
     {
         // Only active types match; a disabled type behaves like an unknown one until it is re-enabled.
         var types = await context.OutsourceTypes.AsNoTracking().Where(x => x.Status == AccountStatuses.Active)
@@ -811,7 +836,7 @@ internal sealed class OutsourceReference
         var mapping = await context.OutsourceTypeVendors.AsNoTracking().Select(x => new { x.TypeId, x.VendorId }).ToArrayAsync(ct);
         var vendors = await context.OemCompanies.AsNoTracking().Select(x => new { x.Id, x.Name, x.Status }).ToArrayAsync(ct);
         var aliases = await context.OutsourceCustomerAliases.AsNoTracking().Select(x => new { x.FullName, x.ShortName }).ToArrayAsync(ct);
-        var layout = await OutsourceFieldLayout.LoadAsync(context, ct);
+        var layout = await OutsourceFieldLayout.LoadAsync(context, ct, lockForImport: lockImportFields);
         return new(types.ToDictionary(x => Normalize(x.Code)!, x => (x.Id, x.Code, x.Name, x.AllowElectricalHandoff)),
             mapping.Select(x => (x.TypeId, x.VendorId)).ToHashSet(),
             vendors.ToDictionary(x => x.Id, x => x.Name),
@@ -923,16 +948,19 @@ internal sealed class OutsourceReference
             ? response with { ChangedFields = [.. edited[response.Id].Distinct()] } : response).ToArray();
     }
 
-    public OutsourceItemResponse Json(OutsourceItem item) => new OutsourceItemResponse(
+    public OutsourceItemResponse Json(OutsourceItem item) =>
+        Describe(item, values[item.Id].Supervisor, ActiveValuesOf(item.Id)).Marked(item, Layout);
+
+    public OutsourceItemResponse Describe(OutsourceItem item, string? supervisor, IReadOnlyDictionary<string, string?> custom) => new(
         item.Id, item.SerialNo, item.WorkOrderNo, item.OutsourceDate, item.VendorId, VendorNames.GetValueOrDefault(item.VendorId) ?? "",
-        CustomerShown(item.Customer), item.MachineModel, values[item.Id].Supervisor, item.MechanicalOwner, item.ElectricalOwner,
+        CustomerShown(item.Customer), item.MachineModel, supervisor, item.MechanicalOwner, item.ElectricalOwner,
         item.WorkOrderIssuedOn, item.BomOn, item.DrawingReleasedOn,
         item.TypeCode, Find(item.TypeCode)?.Id, Label(item.TypeCode), item.Quantity, item.OriginalDueDate, item.LatestDueDate,
         item.Remark, item.Status, item.SendStatus, Match(item.TypeCode, item.VendorId), item.ClosedAt is not null,
         item.IpmsSyncedAt, item.UpdatedAt, item.ElectricalHandoff,
         item.ElectricalHandoffAt is { } handoffAt ? DateTime.SpecifyKind(handoffAt, DateTimeKind.Utc) : null, item.ElectricalHandoffSigner,
         null, null, CreatedAtOf(item), null, item.ModifiedAt, item.Customer,
-        ActiveValuesOf(item.Id)).Marked(item, Layout);
+        custom);
 
     private static DateTime? CreatedAtOf(OutsourceItem item) => item.CreatedBy is null ? null : item.CreatedAt;
 }
@@ -964,6 +992,8 @@ internal static class OutsourceChangeMarks
 
 internal static class OutsourceWorkbook
 {
+    internal enum Purpose { InternalExport, VendorExport, MailAttachment }
+
     internal sealed record Field(string Key, string Header, double Width, Func<OutsourceItemResponse, string?> Value);
 
     private static readonly Field SendStatus = new("sendStatus", "发送状态", 14, x => OutsourceSendStatuses.Label(x.SendStatus));
@@ -998,21 +1028,22 @@ internal static class OutsourceWorkbook
     }
 
     /// <param name="changed">Per item id, the changed field keys (yellow cells); null for none.</param>
-    /// <param name="columns">The configured columns: every active one for the internal export, the vendor's for an attachment.</param>
-    /// <param name="forVendor">Vendor attachments leave out the internal send status.</param>
+    /// <param name="columns">The configured columns for the export or attachment.</param>
+    /// <param name="purpose">Downloads number the filtered rows in order. Mail retains the stored serial number.</param>
     internal static byte[] Build(IReadOnlyList<OutsourceItemResponse> items, IReadOnlyDictionary<ulong, IReadOnlySet<string>>? changed,
-        IReadOnlyList<Field> columns, bool forVendor = false)
+        IReadOnlyList<Field> columns, Purpose purpose = Purpose.InternalExport)
     {
-        var fields = forVendor ? columns.ToArray() : [.. columns, SendStatus];
+        var fields = purpose == Purpose.InternalExport ? [.. columns, SendStatus] : columns.ToArray();
         var headers = new[] { "序号" }.Concat(fields.Select(field => field.Header)).ToArray();
         var widths = new[] { 6d }.Concat(fields.Select(field => field.Width)).ToArray();
-        var rows = items.Select(item =>
+        var rows = items.Select((item, index) =>
         {
             var keys = changed?.GetValueOrDefault(item.Id);
             var highlighted = keys is null ? null : fields.Select((field, column) => (field, column))
                 .Where(x => keys.Contains(x.field.Key)).Select(x => x.column + 1).ToHashSet();
+            var number = purpose == Purpose.MailAttachment ? item.SerialNo : (uint)(index + 1);
             return new XlsxRow(
-                [item.SerialNo.ToString(CultureInfo.InvariantCulture), .. fields.Select(field => field.Value(item))],
+                [number.ToString(CultureInfo.InvariantCulture), .. fields.Select(field => field.Value(item))],
                 RowFill(item.Status), highlighted);
         }).ToArray();
         return SimpleXlsx.Write("外协清单", headers, rows, widths);

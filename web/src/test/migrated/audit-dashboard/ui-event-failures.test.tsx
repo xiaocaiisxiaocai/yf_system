@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -191,19 +191,17 @@ describe('UI 事件失败保护', () => {
     })
     const user = userEvent.setup()
     render(<SupplierList />)
-    await user.click(await screen.findByRole('button', { name: '账号管理' }))
-    expect(await screen.findByText('账号管理 · 供应商')).toBeVisible()
-    expect(screen.getByText('s12')).toBeVisible()
+    const accountsPanel = await screen.findByRole('region', { name: '账号管理' })
+    expect(await within(accountsPanel).findByText('s12')).toBeVisible()
 
-    const disableButton = () => screen.getByRole('button', { name: '停用' })
+    const disableButton = () => within(accountsPanel).getByRole('button', { name: '停用' })
     await user.click(disableButton())
     fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)
     await waitFor(() => expect(disableButton()).toBeDisabled())
     await act(async () => firstWrite.reject(new Error('account status failed')))
     await waitFor(() => expect(disableButton()).toBeEnabled())
     expect(accountGets).toBe(1)
-    expect(screen.getByText('账号管理 · 供应商')).toBeVisible()
-    expect(screen.getByText('s12')).toBeVisible()
+    expect(within(accountsPanel).getByText('s12')).toBeVisible()
 
     await user.click(disableButton())
     fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)

@@ -7,7 +7,7 @@ vi.mock('../api/client', () => ({
   default: { get: mocks.get, post: mocks.post, put: mocks.put },
 }))
 
-import { SupplierContactsDrawer } from '../pages/supplier/components/SupplierContactsDrawer'
+import { SupplierContactsPanel } from '../pages/supplier/components/SupplierContactsPanel'
 import type { Supplier } from '../pages/supplier/components/supplierTypes'
 
 const supplier = { id: 5, name: '甲厂' } as Supplier
@@ -15,11 +15,11 @@ const contact = { id: 11, name: '张三', email: 'zhang@example.com', sortNo: 1,
 const unhandled: unknown[] = []
 const onUnhandled = (reason: unknown) => { unhandled.push(reason) }
 
-// 全局拦截器已弹 toast，这里的请求失败只需被抽屉接住，不能变成 unhandledrejection。
+// 全局拦截器已弹 toast，这里的请求失败只需被面板接住，不能变成 unhandledrejection。
 const failure = () => Object.assign(new Error('请求失败'), { response: { status: 400, data: { message: '请求失败' } } })
 const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 20))
 
-describe('SupplierContactsDrawer failures', () => {
+describe('SupplierContactsPanel failures', () => {
   beforeEach(() => {
     unhandled.length = 0
     process.on('unhandledRejection', onUnhandled)
@@ -34,7 +34,7 @@ describe('SupplierContactsDrawer failures', () => {
 
   it('a rejected save keeps the dialog and input open without an unhandled rejection', async () => {
     mocks.post.mockRejectedValue(failure())
-    render(<SupplierContactsDrawer supplier={supplier} onClose={() => undefined} />)
+    render(<SupplierContactsPanel supplier={supplier} />)
     await screen.findByText('张三')
 
     fireEvent.click(screen.getByRole('button', { name: /新增联络人/ }))
@@ -59,7 +59,7 @@ describe('SupplierContactsDrawer failures', () => {
   it('a rejected enable/disable restores the button without an unhandled rejection', async () => {
     mocks.get.mockResolvedValue({ data: [{ ...contact, status: 'DISABLED' }] })
     mocks.put.mockRejectedValue(failure())
-    render(<SupplierContactsDrawer supplier={supplier} onClose={() => undefined} />)
+    render(<SupplierContactsPanel supplier={supplier} />)
     await screen.findByText('张三')
 
     // “启用”按钮的 onClick 直接返回 toggle 的 promise。
@@ -76,7 +76,7 @@ describe('SupplierContactsDrawer failures', () => {
   it('clicking a disabled contact deactivate button while toggling does not reopen DangerPopconfirm', async () => {
     let resolvePut!: (value: { data: Record<string, never> }) => void
     mocks.put.mockReturnValue(new Promise<{ data: Record<string, never> }>((resolve) => { resolvePut = resolve }))
-    render(<SupplierContactsDrawer supplier={supplier} onClose={() => undefined} />)
+    render(<SupplierContactsPanel supplier={supplier} />)
     await screen.findByText('张三')
 
     const getDisableBtn = () => screen.getByRole('button', { name: '停用' })

@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as XLSX from 'xlsx'
 import http from '../../api/client'
 import { fmtTime } from '../../api/types'
 import { normalizeImportDate } from '../../outsource/importDate'
@@ -25,9 +26,9 @@ const base = {
   ipmsSyncedAt: '2026-11-10T00:00:00Z', electricalHandoff: false, electricalHandoffAt: null, electricalHandoffSigner: null,
 }
 const items = [
-  { ...base, id: 1, workOrderNo: '21089901', ipmsSyncedAt: null, vendorId: 1, vendorName: '鼎亚', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
+  { ...base, id: 1, serialNo: 71, workOrderNo: '21089901', ipmsSyncedAt: null, vendorId: 1, vendorName: '鼎亚', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
     status: 'PAUSED', sendStatus: 'UNSENT', matchState: 'OK', updatedAt: '2026-11-10T01:02:03.456Z' },
-  { ...base, id: 2, workOrderNo: '21089961', vendorId: 2, vendorName: '元控', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
+  { ...base, id: 2, serialNo: 69, workOrderNo: '21089961', vendorId: 2, vendorName: '元控', typeCode: 'OEMA', typeId: 5, typeLabel: 'OEMA【进料+制造】',
     status: 'NORMAL', sendStatus: 'SENT', matchState: 'VENDOR_MISMATCH', updatedAt: '2026-11-10T01:02:03.456Z',
     electricalHandoff: true, electricalHandoffAt: '2026-11-24T01:02:03Z', electricalHandoffSigner: '王小明' },
 ]
@@ -67,19 +68,39 @@ const fieldLayout = {
 const readOnlyLayout = { fields: fieldLayout.fields.map((field) => ({ ...field, canEdit: false })) }
 
 function mockApi(layout: typeof fieldLayout = fieldLayout, total = items.length, list = items) {
-  return vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
-    data: url === '/outsource/items' ? { list, total, page: 1, pageSize: 100 }
-        : url === '/outsource/items/export' ? new Blob()
-        : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
-          : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
-          : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
-  } as never))
+  return vi.spyOn(http, 'get').mockImplementation(async (url: string, config) => {
+    if (url === '/outsource/items') {
+      const { vendorId, page = 1 } = (config?.params ?? {}) as { vendorId?: number; page?: number }
+      const visible = vendorId ? list.filter(item => item.vendorId === vendorId) : list
+      return { data: { list: visible, total: vendorId ? visible.length : total, page, pageSize: 100 } } as never
+    }
+    return { data: url === '/outsource/items/export' ? new Blob()
+      : url === '/outsource/fields' ? layout : url === '/outsource/sync-status' ? syncStatus
+      : url.endsWith('/customers') ? [{ fullName: '华东元件有限公司', shortName: '华东' }]
+      : url.endsWith('/vendors') ? vendors : url.endsWith('/types') ? types : [],
+    } as never
+  })
 }
 
 // Arco disables pointer events during popup entrance animations.
 async function readyForPointer<T extends HTMLElement>(element: T) {
   await waitFor(() => expect(getComputedStyle(element).pointerEvents).not.toBe('none'))
   return element
+}
+
+async function openWorkOrderImport(user: ReturnType<typeof userEvent.setup>, orders: string[]) {
+  setSession(['outsource:manage'])
+  mockApi()
+  render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+  await screen.findByText('21089901')
+  await user.click(screen.getByRole('button', { name: '导入' }))
+  const dialog = within(await screen.findByRole('dialog', { name: '汇入外发工令' }))
+  const bytes = await workbook.createExcelWorkbook([{
+    name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商', '备注'],
+    rows: orders.map(order => ['2026-11-27', order, 'OEMA', '鼎亚', '已复核']),
+  }])
+  await user.upload(dialog.getByLabelText('选择 Excel 文件'), new File([bytes], '更新工令.xlsx'))
+  return dialog
 }
 
 describe('外发工令页面', () => {
@@ -119,6 +140,8 @@ describe('外发工令页面', () => {
     const paused = (await screen.findByText('21089901')).closest('tr')!
     expect(paused).toHaveClass('outsource-row--paused')
     const mismatch = screen.getByText('21089961').closest('tr')!
+    expect(paused.cells[0]).toHaveTextContent(/^1$/)
+    expect(mismatch.cells[0]).toHaveTextContent(/^2$/)
     expect(within(mismatch).getByText('不符')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^导入$/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /编辑工令/ })).not.toBeInTheDocument()
@@ -130,6 +153,8 @@ describe('外发工令页面', () => {
     expect(get).not.toHaveBeenCalledWith('/outsource/items/summary', expect.anything())
     const user = userEvent.setup()
     await user.click(screen.getByRole('tab', { name: '元控' }))
+    await waitFor(() => expect(screen.queryByText('21089901')).not.toBeInTheDocument())
+    expect(screen.getByText('21089961').closest('tr')!.cells[0]).toHaveTextContent(/^1$/)
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ vendorId: 2, page: 1 }),
     })))
@@ -154,10 +179,10 @@ describe('外发工令页面', () => {
 
     const cell = (order: string) => within(screen.getByText(order).closest('td')!)
     await screen.findByText('21089901')
-    const tag = cell('21089901').getByText('待同步')
+    const tag = cell('21089901').getByRole('img', { name: '待同步' })
     expect(tag).toBeVisible()
-    expect(cell('21089961').queryByText('待同步')).not.toBeInTheDocument()
-    expect(cell(closed.workOrderNo).queryByText('待同步')).not.toBeInTheDocument()
+    expect(cell('21089961').queryByRole('img', { name: '待同步' })).not.toBeInTheDocument()
+    expect(cell(closed.workOrderNo).queryByRole('img', { name: '待同步' })).not.toBeInTheDocument()
     await user.hover(tag)
     expect(await screen.findByText('IPMS 尚无此工令资料；若长期不消失，请确认工令号是否正确')).toBeVisible()
   })
@@ -177,6 +202,7 @@ describe('外发工令页面', () => {
     await waitFor(() => expect(get).toHaveBeenCalledWith('/outsource/items', expect.objectContaining({
       params: expect.objectContaining({ page: 2 }),
     })))
+    expect(screen.getByText('21089901').closest('tr')!.cells[0]).toHaveTextContent(/^101$/)
     get.mockClear()
 
     await user.click(filter)
@@ -188,6 +214,7 @@ describe('外发工令页面', () => {
       params: expect.objectContaining({ workOrders: undefined, columnFilters, page: 1 }),
     })))
     expect(filter).toHaveClass('arco-table-filters-active')
+    expect(screen.getByText('21089901').closest('tr')!.cells[0]).toHaveTextContent(/^1$/)
 
     await user.click(filter)
     const input = await screen.findByPlaceholderText('筛选工令，可粘贴多个')
@@ -230,10 +257,11 @@ describe('外发工令页面', () => {
     await user.click(within(row).getByRole('checkbox'))
     const filter = (label: string) => screen.getByText(label, { selector: '.arco-table-th-item-title' }).closest('th')!
       .querySelector<HTMLElement>('.arco-table-filters')!
-    for (const label of ['序号', ...readOnlyLayout.fields.map(field => field.label), '档案', '阶段', '发送状态', '导入人', '导入时间', '修改人', '修改时间']) {
+    for (const label of [...readOnlyLayout.fields.map(field => field.label), '档案', '阶段', '发送状态', '导入人', '导入时间', '修改人', '修改时间']) {
       expect(filter(label)).toBeInTheDocument()
     }
     expect(filter('操作')).toBeNull()
+    expect(filter('序号')).toBeNull()
     expect(screen.queryByPlaceholderText('工令、客户或机型')).not.toBeInTheDocument()
     for (const label of ['外发类型', '状态', '发送状态']) {
       expect(screen.queryByRole('combobox', { name: label })).not.toBeInTheDocument()
@@ -443,7 +471,7 @@ describe('外发工令页面', () => {
     }))
   })
 
-  it('跳过模板范例，IPMS 暂无资料的工令可预览并确认导入', async () => {
+  it('旧四列表可跳过范例；IPMS 暂无资料的工令可预览并确认导入', async () => {
     const user = userEvent.setup()
     setSession(['outsource:manage'])
     mockApi()
@@ -454,31 +482,221 @@ describe('外发工令页面', () => {
     }] } } as never).mockResolvedValueOnce({ data: { created: 1, skipped: 0, failed: 0, rows: [
       { rowNumber: 3, status: 'CREATED' },
     ] } } as never)
-    const download = vi.spyOn(workbook, 'downloadExcelWorkbook').mockResolvedValue(undefined)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
     await screen.findByText('21089901') // the toolbar keeps changing until the list has loaded
     await user.click(screen.getByRole('button', { name: '导入' }))
     const dialog = await screen.findByRole('dialog')
-    expect(within(dialog).getByText(/填写外发日期、工令、外发类型和外发厂商/)).toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
-    await waitFor(() => expect(download).toHaveBeenCalledWith('外发工令汇入模板.xlsx', [{
+    const buffer = await workbook.createExcelWorkbook([{
       name: '数据', headers: ['外发日期', '工令', '外发类型', '外发厂商'],
-      rows: [['2026-11-23', '21000001', 'OEMA', '示例厂商']],
-    }]))
-
-    const [sheet] = download.mock.calls[0][1]
-    const buffer = await workbook.createExcelWorkbook([{ ...sheet, rows: [...sheet.rows, ['2026-11-04', '21089901', 'OEMA', '鼎亚']] }])
+      rows: [['2026-11-23', '21000001', 'OEMA', '示例厂商'], ['2026-11-04', '21089901', 'OEMA', '鼎亚']],
+    }])
     await user.upload(within(dialog).getByLabelText('选择 Excel 文件') as HTMLInputElement, new File([buffer], 'items.xlsx'))
     await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', {
       rows: [{ rowNumber: 3, outsourceDate: '2026-11-04', workOrderNo: '21089901', vendorName: '鼎亚', typeName: 'OEMA' }],
     }))
     expect(await within(dialog).findByText(pending)).toBeVisible()
+    expect(within(dialog).getByText('已忽略范例行')).toBeVisible()
     expect(post).toHaveBeenCalledTimes(1)
     const confirm = within(dialog).getByRole('button', { name: '确认导入' })
     expect(confirm).toBeEnabled()
     await user.click(confirm)
     expect(post).toHaveBeenCalledWith('/outsource/items/import', post.mock.calls[0][1])
+  })
+
+  it('下载的全列模板可填自定义和选填资料，按服务端最终值预览，确认后才提交', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:manage', 'outsource:date_import'])
+    const layout = { fields: [...fieldLayout.fields,
+      { ...fieldLayout.fields[0], key: 'files', label: '档案', category: 'FIXED', canEdit: false },
+      { ...fieldLayout.fields[0], key: 'custom_stage', label: '加工阶段', category: 'CUSTOM', dataType: 'SELECT', options: ['一阶段'] },
+    ] }
+    mockApi(layout)
+    const save = vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
+    const post = vi.spyOn(http, 'post').mockResolvedValueOnce({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
+      rowNumber: 4, workOrderNo: 'WO-FULL', status: 'READY', vendorName: '鼎亚', outsourceDate: '2026-11-04',
+      typeLabel: 'OEMA【进料+制造】', customer: 'IPMS客户', machineModel: 'Excel机型', latestDueDate: null, quantity: null,
+      fieldValues: { customer: 'IPMS客户', machineModel: 'Excel机型', custom_stage: '一阶段', remark: '留样', bomOn: '2026-11-08' },
+    }] } } as never).mockResolvedValueOnce({ data: { created: 1, skipped: 0, failed: 0, rows: [
+      { rowNumber: 4, status: 'CREATED' },
+    ] } } as never)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+
+    await screen.findByText('21089901')
+    await user.click(screen.getByRole('button', { name: '导入' }))
+    const dialog = await screen.findByRole('dialog', { name: '汇入外发工令' })
+    await user.click(within(dialog).getByRole('button', { name: '下载模板' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith(expect.any(Blob), '外发工令汇入模板.xlsx'))
+    const book = XLSX.read(await save.mock.calls[0][0].arrayBuffer(), { type: 'array' })
+    const sheet = book.Sheets['数据']
+    const [headers] = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 })
+    expect(headers).toEqual(['序号', ...layout.fields.map(field => field.label).filter(label => !['状态', '转迅得研发电控设计', '档案'].includes(label))])
+    const rules = XLSX.utils.sheet_to_json<string[]>(book.Sheets['说明'], { header: 1 })
+    expect(rules.slice(1).map(([label]) => label)).toEqual(headers)
+    expect(rules.filter(([, rule]) => rule?.includes('必填')).map(([label]) => label).sort()).toEqual(
+      ['外发日期', '工令', '外发类型', '外发厂商'].sort(),
+    )
+    const values: Record<string, string> = {
+      外发日期: '2026-11-04', 工令: 'WO-FULL', 外发类型: 'OEMA', 外发厂商: '鼎亚',
+      客户: 'Excel客户', 机型: 'Excel机型', 备注: '留样', 加工阶段: '一阶段', BOM时间: '2026-11-08',
+      序号: '239', 档案: '2', 状态: '暂停', 转迅得研发电控设计: '是', 发送状态: '已发送', 导入人: '旧导入人',
+      导入时间: '2026-11-03', 修改人: '旧修改人', 修改时间: '2026-11-04',
+    }
+    const previousHeaders = [...headers, '状态', '转迅得研发电控设计', '档案', '发送状态', '导入人', '导入时间', '修改人', '修改时间']
+    XLSX.utils.sheet_add_aoa(sheet, [previousHeaders], { origin: 'A1' })
+    XLSX.utils.sheet_add_aoa(sheet, [previousHeaders.map(header => values[header] ?? '')], { origin: 'A4' })
+    const bytes = XLSX.write(book, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+    await user.upload(within(dialog).getByLabelText('选择 Excel 文件'), new File([bytes], '实际填写的全列模板.xlsx'))
+
+    const payload = { rows: [{ rowNumber: 4, workOrderNo: 'WO-FULL', outsourceDate: '2026-11-04', typeName: 'OEMA', vendorName: '鼎亚',
+      fieldValues: { customer: 'Excel客户', machineModel: 'Excel机型', remark: '留样', custom_stage: '一阶段', bomOn: '2026-11-08' },
+    }] }
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', payload))
+    const preview = (await within(dialog).findByText('WO-FULL')).closest('tr')!
+    expect(preview).toHaveTextContent('IPMS客户')
+    expect(preview).not.toHaveTextContent('Excel客户')
+    expect(preview).toHaveTextContent('Excel机型')
+    expect(preview).toHaveTextContent('一阶段')
+    expect(post).toHaveBeenCalledTimes(1)
+    await user.click(within(dialog).getByRole('button', { name: '确认导入' }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/outsource/items/import', payload))
+  })
+
+  it('缺少必填表头时不能预览，填写无权导入的日期列时保留源行和错误原因', async () => {
+    const user = userEvent.setup()
+    setSession(['outsource:manage'])
+    mockApi()
+    const message = '没有导入BOM时间与发图的权限'
+    const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ready: 0, skipped: 0, invalid: 1, rows: [
+      { rowNumber: 2, workOrderNo: 'WO-DATE', status: 'INVALID', message },
+    ] } } as never)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    await screen.findByText('21089901')
+    await user.click(screen.getByRole('button', { name: '导入' }))
+    const dialog = within(await screen.findByRole('dialog'))
+    const upload = async (headers: string[], values: string[]) => {
+      const bytes = await workbook.createExcelWorkbook([{ name: '数据', headers, rows: [values] }])
+      await user.upload(dialog.getByLabelText('选择 Excel 文件'), new File([bytes], '部分列.xlsx'))
+    }
+    await upload(['工令', '外发日期', '外发厂商', '备注'], ['WO-DATE', '2026-11-04', '鼎亚', ''])
+    expect(await dialog.findByRole('alert')).toHaveTextContent('外发类型')
+    expect(dialog.getByRole('button', { name: '确认导入' })).toBeDisabled()
+    expect(post).not.toHaveBeenCalled()
+
+    await upload(['工令', '发图', '外发厂商', '外发类型', '外发日期'], ['WO-DATE', '2026-11-08', '鼎亚', 'OEMA', '2026-11-04'])
+    expect(await dialog.findByText(message)).toBeVisible()
+    expect(post).toHaveBeenCalledWith('/outsource/items/import/preview', { rows: [{
+      rowNumber: 2, workOrderNo: 'WO-DATE', vendorName: '鼎亚', typeName: 'OEMA', outsourceDate: '2026-11-04',
+      fieldValues: { drawingReleasedOn: '2026-11-08' },
+    }] })
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(dialog.getByRole('button', { name: '确认导入' })).toBeDisabled()
+  })
+
+  it('全为已有工令时可确认更新，每行绑定预览时的工令 ID、版本和变更摘要', async () => {
+    const user = userEvent.setup()
+    const firstVersion = '2026-11-27T01:02:03.123Z'
+    const secondVersion = '2026-11-27T02:03:04.456Z'
+    const firstHash = '1a'.repeat(32)
+    const secondHash = '2b'.repeat(32)
+    const post = vi.spyOn(http, 'post').mockResolvedValueOnce({ data: {
+      ready: 2, skipped: 0, invalid: 0, rows: [
+        { rowNumber: 3, workOrderNo: 'WO-2', status: 'READY_UPDATE', expectedItemId: 7002, expectedUpdatedAt: secondVersion, expectedChangeHash: secondHash,
+          changedFields: ['remark'], fieldValues: { remark: '已复核' } },
+        { rowNumber: 2, workOrderNo: 'WO-1', status: 'READY_UPDATE', expectedItemId: 7001, expectedUpdatedAt: firstVersion, expectedChangeHash: firstHash,
+          changedFields: ['outsourceDate', 'remark'], fieldValues: { remark: '已复核' } },
+      ],
+    } }).mockResolvedValueOnce({ data: {
+      created: 0, updated: 2, skipped: 0, failed: 0, rows: [
+        { rowNumber: 2, key: 'WO-1', status: 'UPDATED' }, { rowNumber: 3, key: 'WO-2', status: 'UPDATED' },
+      ],
+    } })
+    const dialog = await openWorkOrderImport(user, ['WO-1', 'WO-2'])
+    expect(await dialog.findByText('待更新 2')).toBeVisible()
+    expect(dialog.getByText('待新增 0')).toBeVisible()
+    const first = (await dialog.findByText('WO-1')).closest('tr')!
+    expect(within(first).getByText('待更新')).toBeVisible()
+    expect(first).toHaveTextContent('外发日期')
+    expect(first).toHaveTextContent('备注')
+    const confirm = dialog.getByRole('button', { name: '确认导入' })
+    expect(confirm).toBeEnabled()
+    const initialRow = { outsourceDate: '2026-11-27', typeName: 'OEMA', vendorName: '鼎亚', fieldValues: { remark: '已复核' } }
+    expect(post).toHaveBeenCalledExactlyOnceWith('/outsource/items/import/preview', { rows: [
+      { ...initialRow, rowNumber: 2, workOrderNo: 'WO-1' }, { ...initialRow, rowNumber: 3, workOrderNo: 'WO-2' },
+    ] })
+    await user.click(confirm)
+    expect(post).toHaveBeenCalledWith('/outsource/items/import', { rows: [
+      { ...initialRow, rowNumber: 2, workOrderNo: 'WO-1', expectedItemId: 7001, expectedUpdatedAt: firstVersion, expectedChangeHash: firstHash },
+      { ...initialRow, rowNumber: 3, workOrderNo: 'WO-2', expectedItemId: 7002, expectedUpdatedAt: secondVersion, expectedChangeHash: secondHash },
+    ] })
+    expect(await screen.findByText('新增 0，更新 2，跳过 0，失败 0')).toBeVisible()
+  })
+
+  it('混合导入只提交可新增、可更新的行，结果分别统计新增、更新、跳过和错误', async () => {
+    const user = userEvent.setup()
+    const version = '2026-11-27T01:02:03.123Z'
+    const hash = '3c'.repeat(32)
+    const post = vi.spyOn(http, 'post').mockResolvedValueOnce({ data: {
+      ready: 2, skipped: 1, invalid: 1, rows: [
+        { rowNumber: 2, workOrderNo: 'WO-NEW', status: 'READY' },
+        { rowNumber: 3, workOrderNo: 'WO-EDIT', status: 'READY_UPDATE', changedFields: ['remark'], expectedItemId: 79, expectedUpdatedAt: version, expectedChangeHash: hash },
+        { rowNumber: 4, workOrderNo: 'WO-SAME', status: 'SKIPPED', message: '没有变更' },
+        { rowNumber: 5, workOrderNo: 'WO-CLOSED', status: 'INVALID', message: '工令已完成' },
+      ],
+    } }).mockResolvedValueOnce({ data: { created: 1, updated: 1, skipped: 0, failed: 0, rows: [
+      { rowNumber: 2, key: 'WO-NEW', status: 'CREATED' }, { rowNumber: 3, key: 'WO-EDIT', status: 'UPDATED' },
+    ] } })
+    const dialog = await openWorkOrderImport(user, ['WO-NEW', 'WO-EDIT', 'WO-SAME', 'WO-CLOSED'])
+    expect(await dialog.findByText('待更新 1')).toBeVisible()
+    for (const count of ['待新增 1', '跳过 1', '错误 1']) expect(dialog.getByText(count)).toBeVisible()
+    await user.click(dialog.getByRole('button', { name: '确认导入' }))
+    const values = { outsourceDate: '2026-11-27', typeName: 'OEMA', vendorName: '鼎亚', fieldValues: { remark: '已复核' } }
+    expect(post).toHaveBeenCalledWith('/outsource/items/import', { rows: [
+      { ...values, rowNumber: 2, workOrderNo: 'WO-NEW' },
+      { ...values, rowNumber: 3, workOrderNo: 'WO-EDIT', expectedItemId: 79, expectedUpdatedAt: version, expectedChangeHash: hash },
+    ] })
+    expect(await screen.findByText('新增 1，更新 1，跳过 1，失败 1')).toBeVisible()
+    expect(dialog.getByText('已更新 1')).toBeVisible()
+    expect(dialog.getByText('WO-EDIT').closest('tr')).toHaveTextContent('已更新')
+    expect(dialog.getByText('WO-SAME').closest('tr')).toHaveTextContent('没有变更')
+    expect(dialog.getByText('WO-CLOSED').closest('tr')).toHaveTextContent('工令已完成')
+    expect(dialog.getByRole('button', { name: '确认导入' })).toBeDisabled()
+  })
+
+  it('版本冲突后不能重复提交；重新预览同一文件时全部无差异就只显示跳过', async () => {
+    const user = userEvent.setup()
+    const row = { rowNumber: 2, workOrderNo: 'WO-CONFLICT' }
+    const binding = { expectedItemId: 91, expectedUpdatedAt: '2026-11-27T01:00:00.000Z', expectedChangeHash: '4d'.repeat(32) }
+    const post = vi.spyOn(http, 'post').mockResolvedValueOnce({ data: { ready: 1, skipped: 0, invalid: 0, rows: [
+      { ...row, status: 'READY_UPDATE', changedFields: ['remark'], ...binding },
+    ] } }).mockRejectedValueOnce({ isAxiosError: true, response: { status: 409 } })
+      .mockResolvedValueOnce({ data: { ready: 0, skipped: 1, invalid: 0, rows: [
+        { ...row, status: 'SKIPPED', message: '没有变更' },
+      ] } })
+    const dialog = await openWorkOrderImport(user, ['WO-CONFLICT'])
+    expect(await dialog.findByText('待更新 1')).toBeVisible()
+    const confirm = dialog.getByRole('button', { name: '确认导入' })
+    await user.click(confirm)
+    const repreview = await dialog.findByRole('button', { name: '重新预览' })
+    expect(post).toHaveBeenNthCalledWith(2, '/outsource/items/import', { rows: [expect.objectContaining({ ...row, ...binding })] })
+    expect(confirm).toBeDisabled()
+    await user.click(repreview)
+    expect(await dialog.findByText('跳过 1')).toBeVisible()
+    expect(confirm).toBeDisabled()
+    expect(post).toHaveBeenNthCalledWith(3, '/outsource/items/import/preview', post.mock.calls[0][1])
+    expect(post).toHaveBeenCalledTimes(3)
+  })
+
+  it('覆盖预览缺少变更摘要时禁止提交', async () => {
+    const user = userEvent.setup()
+    const post = vi.spyOn(http, 'post').mockResolvedValueOnce({ data: { ready: 1, skipped: 0, invalid: 0, rows: [
+      { rowNumber: 2, workOrderNo: 'WO-INCOMPLETE', status: 'READY_UPDATE', changedFields: ['remark'],
+        expectedItemId: 92, expectedUpdatedAt: '2026-11-27T01:00:00.000Z' },
+    ] } })
+    const dialog = await openWorkOrderImport(user, ['WO-INCOMPLETE'])
+    expect(await dialog.findByRole('alert')).toHaveTextContent('变更摘要')
+    expect(dialog.getByRole('button', { name: '确认导入' })).toBeDisabled()
+    expect(post).toHaveBeenCalledTimes(1)
   })
 
   it('BOM 时间与发图导入模板的数据表包含一行日期范例', async () => {

@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import {
-  Alert, Button, Drawer, Dropdown, Empty, Form, Input, InputNumber, Menu, Message, Modal, Popconfirm, Select, Space, Tag, Tooltip, Typography,
+  Alert, Button, Drawer, Empty, Form, Input, InputNumber, Message, Modal, Pagination, Popconfirm, Select, Space, Spin, Tag, Tooltip, Typography,
 } from '@arco-design/web-react'
 import { DEFAULT_PAGE_SIZE } from '../../../components/tablePagination'
 import ResizableTable from '../../../components/ResizableTable'
-import { IconDown, IconPlus } from '@arco-design/web-react/icon'
+import { IconPlus } from '@arco-design/web-react/icon'
 import { fmtTime } from '../../../api/types'
 import { oemRequestError } from '../../api/requestError'
 import type { Company, CompanyContact, InternalRecipient, VendorAccount } from '../../api/types'
 import { useCan, useOem } from '../../OemContext'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../../components/ExcelImportDialog'
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../../utils/excelWorkbook'
+import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validateInitialPassword, validatePassword } from '../../../utils/password'
+import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
+import './CompaniesPage.css'
+import EnterSubmit from '../../../components/EnterSubmit'
+import PasswordInput from '../../../components/PasswordInput'
+import ToolbarMenuButton from '../../../components/ToolbarMenuButton'
+import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../../utils/accountName'
+import StatusTag from '../../../components/StatusTag'
+import DangerPopconfirm from '../../../components/DangerPopconfirm'
 
 const OEM_COMPANY_IMPORT_HEADERS = ['厂商名称', '备注'] as const
 const OEM_COMPANY_WORKBOOK: ExcelWorkbookSheet[] = [
@@ -45,16 +53,6 @@ interface OemCompanyImportPayload {
   remark: string
 }
 
-import { PASSWORD_MAX_CHARS, PASSWORD_MIN_CHARS, passwordRule, validateInitialPassword, validatePassword } from '../../../utils/password'
-import { useLatestRequest, useLoadEffect } from '../../useLoadEffect'
-import './CompaniesPage.css'
-import EnterSubmit from '../../../components/EnterSubmit'
-import PasswordInput from '../../../components/PasswordInput'
-import ToolbarMenuButton from '../../../components/ToolbarMenuButton'
-import { ACCOUNT_NAME_MESSAGE, ACCOUNT_NAME_PATTERN, ACCOUNT_NAME_PLACEHOLDER, isValidAccountName } from '../../../utils/accountName'
-import StatusTag from '../../../components/StatusTag'
-import DangerPopconfirm from '../../../components/DangerPopconfirm'
-
 function EllipsisText({ value }: { value: string | null | undefined }) {
   const text = value || '-'
   return (
@@ -64,9 +62,11 @@ function EllipsisText({ value }: { value: string | null | undefined }) {
   )
 }
 
-interface AccountsDrawerProps {
+interface AccountsPanelProps {
   company: Company
-  onClose: () => void
+  refreshVersion: number
+  onAccountCreated: (company: Company) => Promise<void>
+  onAccountStatusToggled: (company: Company, account: VendorAccount, nextStatus: 'ACTIVE' | 'DISABLED') => void
   onAccountDeleted: (company: Company, account: VendorAccount) => Promise<void>
 }
 
@@ -189,7 +189,7 @@ function InternalRecipientsDrawer({ open, onClose }: InternalRecipientsDrawerPro
       </Modal>
       <ResizableTable tableId="oem-internal-recipients" rowKey="userId" size="small" loading={loading} data={shown}
         scroll={{ y: 'calc(100dvh - 330px)' }}
-        pagination={{ total: shown.length, current: page, pageSize, 
+        pagination={{ total: shown.length, current: page, pageSize,
           onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
         noDataElement={<Empty description="没有具备 ODM/OEMA 查看和下载权限的人员" />}
         columns={[
@@ -215,41 +215,49 @@ function InternalRecipientsDrawer({ open, onClose }: InternalRecipientsDrawerPro
   )
 }
 
-interface ContactsDrawerProps {
-  company: Company | null
-  onClose: () => void
+interface ContactsPanelProps {
+  company: Company
+  refreshVersion: number
   onChanged: () => void
 }
 
-function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
+function ContactsPanel({ company, refreshVersion, onChanged }: ContactsPanelProps) {
   const { api } = useOem()
-  const can = useCan()
   const [rows, setRows] = useState<CompanyContact[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [adding, setAdding] = useState(false)
   const [editingContact, setEditingContact] = useState<CompanyContact | null>(null)
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
-  const requestId = useRef(0)
+  const beginContactRequest = useLatestRequest()
+  const companyId = company.id
 
   const load = useCallback(async () => {
-    const current = ++requestId.current
-    if (!company) { setRows([]); setFailed(false); setLoading(false); return }
+    const isLatest = beginContactRequest()
     setLoading(true)
     try {
-      const result = await api.contacts(company.id)
-      if (requestId.current === current) { setRows(result); setFailed(false) }
+      const result = await api.contacts(companyId)
+      if (!isLatest()) return
+      setRows(result)
+      setFailed(false)
     } catch {
-      if (requestId.current === current) setFailed(true)
+      if (isLatest()) setFailed(true)
     } finally {
-      if (requestId.current === current) setLoading(false)
+      if (isLatest()) setLoading(false)
     }
-  }, [api, company])
+  }, [api, companyId, beginContactRequest])
   useLoadEffect(load)
 
+  const appliedRefreshRef = useRef(refreshVersion)
+  useEffect(() => {
+    if (appliedRefreshRef.current === refreshVersion) return
+    appliedRefreshRef.current = refreshVersion
+    void load()
+  }, [refreshVersion, load])
+
   const createContact = async () => {
-    if (!company || saving) return
+    if (saving) return
     const values = await form.validate().catch(() => null)
     if (!values) return
     const email = String(values.email ?? '').trim()
@@ -258,7 +266,7 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
     try {
       const body = { name: values.name.trim(), email: email || null, sortNo: values.sortNo ?? 0 }
       if (editingContact) await api.updateContact(editingContact.id, body)
-      else await api.createContact(company.id, body)
+      else await api.createContact(companyId, body)
       setAdding(false)
       form.resetFields()
       await load()
@@ -272,37 +280,39 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
   }
 
   return (
-    <Drawer width="min(920px, 100vw)" title={`联络人 · ${company?.name ?? ''}`} visible={!!company}
-      onCancel={onClose} footer={null} unmountOnExit>
-      {!can.manageCompanies ? <span>当前账号没有 ODM/OEMA 厂商管理权限。</span> : <>
+    <section className="oem-subpanel oem-contacts-panel" aria-label="联络人">
+      <div className="oem-subpanel-head">
+        <div className="oem-subpanel-title">
+          <h3>联络人</h3>
+          <Typography.Text type="secondary">共 {rows.length} 位联络人</Typography.Text>
+        </div>
+        <Button type="primary" size="small" icon={<IconPlus />} disabled={company.status !== 'ACTIVE'}
+          onClick={() => { setEditingContact(null); form.resetFields(); setAdding(true) }}>新增联络人</Button>
+      </div>
+      <div className="oem-subpanel-body">
         {failed && <Alert type="error" style={{ marginBottom: 12 }} content="联络人列表加载失败，请重试。" action={<Button size="small" loading={loading} onClick={() => void load()}>重试</Button>} />}
         {!loading && !failed && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
           <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有联络人均已停用，传递单发布后将不会收到邮件通知。" />
         )}
-        <div className="drawer-toolbar responsive-toolbar">
-          <Typography.Text type="secondary">共 {rows.length} 位联络人</Typography.Text>
-          <Space>
-            <Button type="primary" size="small" icon={<IconPlus />} disabled={company?.status !== 'ACTIVE'} onClick={() => { setEditingContact(null); form.resetFields(); setAdding(true) }}>新增联络人</Button>
-          </Space>
-        </div>
-        <ResizableTable tableId="oem-company-contacts" rowKey="id" size="small" loading={loading} data={rows} pagination={false} scroll={{ x: 660 }} columns={[
-          { title: '姓名', dataIndex: 'name', width: 150 },
-          { title: '邮箱', dataIndex: 'email', width: 220, render: (value: string | null) => value || '-' },
-          { title: '排序', dataIndex: 'sortNo', width: 64, align: 'center' as const },
-          { title: '状态', width: 64, align: 'center' as const, render: (_: unknown, row: CompanyContact) => <StatusTag status={row.status} /> },
-          { title: '操作', width: 144, fixed: 'right' as const, render: (_: unknown, row: CompanyContact) => <Space size={4}>
-            <Button size="mini" type="text" onClick={() => { setEditingContact(row); form.setFieldsValue(row); setAdding(true) }}>编辑</Button>
-            {row.status === 'ACTIVE' ? (
-              <DangerPopconfirm title="确认停用该联络人？" onOk={async () => { await api.setContactStatus(row.id, 'DISABLED'); await load(); onChanged() }}>
-                <Button size="mini" type="text" status="danger">停用</Button>
-              </DangerPopconfirm>
-            ) : (
-              <Popconfirm title="确认启用该联络人？" onOk={async () => { await api.setContactStatus(row.id, 'ACTIVE'); await load(); onChanged() }}>
-                <Button size="mini" type="text" status="success">启用</Button>
-              </Popconfirm>
-            )}
-          </Space> },
-        ]} />
+        <ResizableTable tableId="oem-company-contacts" className="oem-contact-table" rowKey="id" size="small" loading={loading} data={rows}
+          pagination={false} scroll={{ x: 600 }} noDataElement={<Empty description="暂无联络人" />} columns={[
+            { title: '姓名', dataIndex: 'name', width: 140, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
+            { title: '邮箱', dataIndex: 'email', width: 220, ellipsis: true, render: (value: string | null) => <EllipsisText value={value} /> },
+            { title: '排序', dataIndex: 'sortNo', width: 64, align: 'center' as const },
+            { title: '状态', width: 68, align: 'center' as const, render: (_: unknown, row: CompanyContact) => <StatusTag status={row.status} size="small" /> },
+            { title: '操作', width: 124, fixed: 'right' as const, render: (_: unknown, row: CompanyContact) => <Space size={4}>
+              <Button size="mini" type="text" onClick={() => { setEditingContact(row); form.setFieldsValue(row); setAdding(true) }}>编辑</Button>
+              {row.status === 'ACTIVE' ? (
+                <DangerPopconfirm title="确认停用该联络人？" onOk={async () => { await api.setContactStatus(row.id, 'DISABLED'); await load(); onChanged() }}>
+                  <Button size="mini" type="text" status="danger">停用</Button>
+                </DangerPopconfirm>
+              ) : (
+                <Popconfirm title="确认启用该联络人？" onOk={async () => { await api.setContactStatus(row.id, 'ACTIVE'); await load(); onChanged() }}>
+                  <Button size="mini" type="text" status="success">启用</Button>
+                </Popconfirm>
+              )}
+            </Space> },
+          ]} />
         <Modal className="form-dialog" title={editingContact ? '编辑联络人' : '新增联络人'} visible={adding} confirmLoading={saving}
           closable={!saving} maskClosable={!saving} escToExit={!saving} cancelButtonProps={{ disabled: saving }}
           onCancel={() => { if (!saving) setAdding(false) }} onOk={() => void createContact()} unmountOnExit>
@@ -313,17 +323,17 @@ function ContactsDrawer({ company, onClose, onChanged }: ContactsDrawerProps) {
             <EnterSubmit />
           </Form>
         </Modal>
-      </>}
-    </Drawer>
+      </div>
+    </section>
   )
 }
 
-function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerProps) {
+function AccountsPanel({ company, refreshVersion, onAccountCreated, onAccountStatusToggled, onAccountDeleted }: AccountsPanelProps) {
   const { api } = useOem()
   const can = useCan()
   const [rows, setRows] = useState<VendorAccount[]>([])
   const [loadError, setLoadError] = useState('')
-  const [accountsLoading, setAccountsLoading] = useState(false)
+  const [accountsLoading, setAccountsLoading] = useState(true)
   const [adding, setAdding] = useState(false)
   const [saving, setSaving] = useState(false)
   const [actionError, setActionError] = useState('')
@@ -333,14 +343,15 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
   const saveInFlight = useRef(false)
   const [form] = Form.useForm()
   const confirmation = useRef<ReturnType<typeof Modal.confirm> | null>(null)
-  // Arco's static dialogs live outside the drawer. Close them with the originating company or permission scope.
+  const companyId = company.id
+  // Arco's static dialogs live outside the panel. Close them when switching vendors or losing permission.
   useEffect(() => () => confirmation.current?.close(), [])
 
   const load = useCallback(async () => {
     const isLatest = beginAccountRequest()
     setAccountsLoading(true)
     try {
-      const nextRows = await api.accounts(company.id)
+      const nextRows = await api.accounts(companyId)
       if (!isLatest()) return
       setRows(nextRows)
       setLoadError('')
@@ -349,8 +360,15 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     } finally {
       if (isLatest()) setAccountsLoading(false)
     }
-  }, [api, company, beginAccountRequest])
+  }, [api, companyId, beginAccountRequest])
   useLoadEffect(load)
+
+  const appliedRefreshRef = useRef(refreshVersion)
+  useEffect(() => {
+    if (appliedRefreshRef.current === refreshVersion) return
+    appliedRefreshRef.current = refreshVersion
+    void load()
+  }, [refreshVersion, load])
 
   const save = async () => {
     if (saveInFlight.current) return
@@ -359,10 +377,10 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
       const values = await form.validate().catch(() => null)
       if (!values) return
       setSaving(true)
-      await api.createAccount(company.id, values)
+      await api.createAccount(companyId, values)
       Message.success('账号已创建（首次登录需改密）')
       setAdding(false)
-      await load()
+      await Promise.allSettled([load(), onAccountCreated(company)])
     } finally {
       saveInFlight.current = false
       setSaving(false)
@@ -392,13 +410,15 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
   // The server refuses e.g. disabling a vendor's last active account; keep its reason visible.
   const toggleAccountStatus = async (account: VendorAccount) => {
     const disabling = account.status === 'ACTIVE'
+    const nextStatus = disabling ? 'DISABLED' : 'ACTIVE'
     setActionError('')
     try {
-      await api.setAccountStatus(account.id, disabling ? 'DISABLED' : 'ACTIVE')
+      await api.setAccountStatus(account.id, nextStatus)
     } catch (error) {
       setActionError(`${disabling ? '停用' : '启用'}失败：${oemRequestError(error, '操作失败，请稍后重试')}`)
       return
     }
+    onAccountStatusToggled(company, account, nextStatus)
     await load()
   }
 
@@ -424,7 +444,7 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
     Message.success('账号已删除')
     const refreshed = await Promise.allSettled([load(), onAccountDeleted(company, account)])
     if (refreshed.some((result) => result.status === 'rejected')) {
-      setActionError('账号已删除，但列表刷新失败；请重新打开账号抽屉重试。')
+      setActionError('账号已删除，但列表刷新失败；请点击重试刷新。')
     }
   }
 
@@ -440,18 +460,18 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
   }
 
   const accountColumns = [
-    { key: 'employeeNo', title: '账号', dataIndex: 'employeeNo', ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
+    { key: 'employeeNo', title: '账号', dataIndex: 'employeeNo', width: 160, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
     {
-      key: 'status', title: '状态',
+      key: 'status', title: '状态', width: 72, align: 'center' as const,
       render: (_: unknown, row: VendorAccount) => (
         <Space size={4}>
           <StatusTag status={row.status} size="small" />
         </Space>
       ),
     },
-    { key: 'lastLoginAt', title: '最近登录', render: (_: unknown, row: VendorAccount) => (row.lastLoginAt ? fmtTime(row.lastLoginAt) : '-') },
+    { key: 'lastLoginAt', title: '最近登录', width: 168, render: (_: unknown, row: VendorAccount) => (row.lastLoginAt ? fmtTime(row.lastLoginAt) : '-') },
     {
-      key: 'actions', title: '操作', width: 216, fixed: 'right' as const,
+      key: 'actions', title: '操作', width: 204, fixed: 'right' as const,
       render: (_: unknown, row: VendorAccount) => (can.manageAccounts ? (
         <Space size={4}>
           <Button size="mini" type="text" onClick={() => reset(row)}>重置密码</Button>
@@ -480,66 +500,62 @@ function AccountsDrawer({ company, onClose, onAccountDeleted }: AccountsDrawerPr
   ]
 
   return (
-    <Drawer
-      width="min(920px, 100vw)"
-      wrapClassName="oem-accounts-drawer"
-      bodyStyle={{ overflowX: 'hidden' }}
-      title={`账号管理 · ${company.name}`}
-      visible
-      onCancel={onClose}
-      footer={null}
-      unmountOnExit
-    >
-      {loadError && (
-        <Alert type="error" style={{ marginBottom: 12 }} content={loadError}
-          action={<Button size="small" loading={accountsLoading} onClick={() => void load()}>重试</Button>} />
-      )}
-      {!accountsLoading && !loadError && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
-        <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有账号均已停用，暂时无法登录门户接收或回传文件。" />
-      )}
-      <div className="drawer-toolbar responsive-toolbar">
-        <Typography.Text type="secondary">共 {rows.length} 个账号</Typography.Text>
-        <Space>
-          <Button type="primary" size="small" icon={<IconPlus />} onClick={() => { form.resetFields(); setAdding(true) }} disabled={!can.manageAccounts}>新增账号</Button>
-        </Space>
+    <section className="oem-subpanel oem-accounts-panel" aria-label="账号管理">
+      <div className="oem-subpanel-head">
+        <div className="oem-subpanel-title">
+          <h3>账号管理</h3>
+          <Typography.Text type="secondary">共 {rows.length} 个账号</Typography.Text>
+        </div>
+        <Button type="primary" size="small" icon={<IconPlus />}
+          onClick={() => { form.resetFields(); setAdding(true) }}
+          disabled={!can.manageAccounts || company.status !== 'ACTIVE'}>新增账号</Button>
       </div>
-      {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
-      <ResizableTable tableId="oem-company-accounts"
-        className="account-table oem-account-table" size="small" loading={accountsLoading}
-        rowKey="id"
-        data={rows}
-        pagination={false}
-        scroll={{ x: 680 }}
-        columns={accountColumns}
-      />
-      <Modal
-        className="form-dialog"
-        title="新增账号"
-        visible={adding}
-        confirmLoading={saving}
-        closable={!saving}
-        maskClosable={!saving}
-        escToExit={!saving}
-        cancelButtonProps={{ disabled: saving }}
-        onCancel={() => { if (!saving) setAdding(false) }}
-        onOk={save}
-        okText="创建账号"
-        unmountOnExit
-      >
-        <Form onSubmit={() => void save()} form={form} layout="vertical">
-          <Form.Item field="employeeNo" label="账号" extra="不区分大小写，所有 ODM/OEMA 厂商之间不可重名" rules={[{ required: true }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
-            <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
-          </Form.Item>
-          <Form.Item field="password" label="初始密码" extra="首次登录需改密" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><PasswordInput placeholder="5-20 位" /></Form.Item>
-        <EnterSubmit /></Form>
-      </Modal>
-    </Drawer>
+      <div className="oem-subpanel-body">
+        {loadError && (
+          <Alert type="error" style={{ marginBottom: 12 }} content={loadError}
+            action={<Button size="small" loading={accountsLoading} onClick={() => void load()}>重试</Button>} />
+        )}
+        {!accountsLoading && !loadError && rows.length > 0 && rows.every((item) => item.status !== 'ACTIVE') && (
+          <Alert type="warning" style={{ marginBottom: 12 }} content="该厂商所有账号均已停用，暂时无法登录门户接收或回传文件。" />
+        )}
+        {actionError && <Typography.Text className="oem-delete-error" type="error" role="alert">{actionError}</Typography.Text>}
+        <ResizableTable tableId="oem-company-accounts"
+          className="account-table oem-account-table" size="small" loading={accountsLoading}
+          rowKey="id"
+          data={rows}
+          pagination={false}
+          scroll={{ x: 604 }}
+          noDataElement={<Empty description="暂无账号" />}
+          columns={accountColumns}
+        />
+        <Modal
+          className="form-dialog"
+          title="新增账号"
+          visible={adding}
+          confirmLoading={saving}
+          closable={!saving}
+          maskClosable={!saving}
+          escToExit={!saving}
+          cancelButtonProps={{ disabled: saving }}
+          onCancel={() => { if (!saving) setAdding(false) }}
+          onOk={save}
+          okText="创建账号"
+          unmountOnExit
+        >
+          <Form onSubmit={() => void save()} form={form} layout="vertical">
+            <Form.Item field="employeeNo" label="账号" extra="不区分大小写，所有 ODM/OEMA 厂商之间不可重名" rules={[{ required: true }, { match: ACCOUNT_NAME_PATTERN, message: ACCOUNT_NAME_MESSAGE }]}>
+              <Input autoFocus placeholder={ACCOUNT_NAME_PLACEHOLDER} />
+            </Form.Item>
+            <Form.Item field="password" label="初始密码" extra="首次登录需改密" rules={[{ required: true, message: '请输入初始密码' }, passwordRule]}><PasswordInput placeholder="5-20 位" /></Form.Item>
+          <EnterSubmit /></Form>
+        </Modal>
+      </div>
+    </section>
   )
 }
 
 export default function CompaniesPage() {
-  const { api, base } = useOem()
-  const navigate = useNavigate()
+  const { api } = useOem()
   const can = useCan()
   const [rows, setRows] = useState<Company[]>([])
   const [total, setTotal] = useState(0)
@@ -547,27 +563,31 @@ export default function CompaniesPage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [status, setStatus] = useState<string | undefined>()
   const [keyword, setKeyword] = useState('')
+  const [selectedCompanyId, setSelectedCompanyId] = useState<number | null>(null)
   const [editing, setEditing] = useState<Company | 'new' | null>(null)
   const [importOpen, setImportOpen] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [accountsOf, setAccountsOf] = useState<Company | null>(null)
-  const [contactsOf, setContactsOf] = useState<Company | null>(null)
   const [recipientsOpen, setRecipientsOpen] = useState(false)
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [contactImportOpen, setContactImportOpen] = useState(false)
   const [accountExporting, setAccountExporting] = useState(false)
   const [contactExporting, setContactExporting] = useState(false)
+  const [accountsRefreshVersion, setAccountsRefreshVersion] = useState(0)
+  const [contactsRefreshVersion, setContactsRefreshVersion] = useState(0)
   const [actionError, setActionError] = useState('')
-  const [listLoading, setListLoading] = useState(false)
+  const [listLoading, setListLoading] = useState(can.viewCompanies)
   const [listError, setListError] = useState('')
   const deletingIdsRef = useRef(new Set<number>())
   const [deletingIds, setDeletingIds] = useState<ReadonlySet<number>>(new Set())
   const saveInFlight = useRef(false)
   const beginRequest = useLatestRequest()
   const [form] = Form.useForm()
-  if (accountsOf && !can.viewAccounts) setAccountsOf(null)
   if (accountImportOpen && !can.manageAccounts) setAccountImportOpen(false)
+  if (contactImportOpen && !can.manageCompanies) setContactImportOpen(false)
+  if (recipientsOpen && !can.manageCompanies) setRecipientsOpen(false)
+
+  const selectedCompany = rows.find((item) => item.id === selectedCompanyId) ?? rows[0] ?? null
 
   const load = useCallback(async () => {
     if (!can.viewCompanies) return
@@ -834,8 +854,12 @@ export default function CompaniesPage() {
       const values = await form.validate().catch(() => null)
       if (!values) return
       setSaving(true)
-      if (editing === 'new') await api.createCompany(values)
-      else if (editing) await api.updateCompany(editing.id, values)
+      if (editing === 'new') {
+        const created = await api.createCompany(values)
+        if (created?.id) setSelectedCompanyId(created.id)
+      } else if (editing) {
+        await api.updateCompany(editing.id, values)
+      }
       Message.success('已保存')
       setEditing(null)
       await load()
@@ -878,8 +902,7 @@ export default function CompaniesPage() {
 
     setRows((current) => current.filter((item) => item.id !== company.id))
     setTotal((current) => Math.max(0, current - 1))
-    if (accountsOf?.id === company.id) setAccountsOf(null)
-    if (contactsOf?.id === company.id) setContactsOf(null)
+    if (selectedCompanyId === company.id) setSelectedCompanyId(null)
     Message.success('厂商已删除')
     if (rows.length === 1 && page > 1) {
       setPage(page - 1)
@@ -915,6 +938,24 @@ export default function CompaniesPage() {
     })
   }
 
+  const handleAccountCreated = useCallback(async (company: Company) => {
+    setRows((current) => current.map((row) => row.id === company.id ? {
+      ...row,
+      accountCount: (row.accountCount ?? 0) + 1,
+      activeAccountCount: (row.activeAccountCount ?? 0) + 1,
+    } : row))
+    await load()
+  }, [load])
+
+  const handleAccountStatusToggled = useCallback((company: Company, account: VendorAccount, nextStatus: 'ACTIVE' | 'DISABLED') => {
+    if (account.status === nextStatus) return
+    const delta = nextStatus === 'ACTIVE' ? 1 : -1
+    setRows((current) => current.map((row) => row.id === company.id ? {
+      ...row,
+      activeAccountCount: Math.max(0, (row.activeAccountCount ?? 0) + delta),
+    } : row))
+  }, [])
+
   const handleAccountDeleted = useCallback(async (company: Company, account: VendorAccount) => {
     setRows((current) => current.map((row) => row.id === company.id ? {
       ...row,
@@ -924,50 +965,10 @@ export default function CompaniesPage() {
     await load()
   }, [load])
 
-  const companyColumns = [
-    { key: 'name', title: '名称', dataIndex: 'name', width: 240, align: 'left' as const, ellipsis: true, render: (value: string) => <EllipsisText value={value} /> },
-    { key: 'status', title: '状态', width: 70, align: 'center' as const, render: (_: unknown, row: Company) => <StatusTag status={row.status} /> },
-    { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
-    {
-      key: 'actions', title: '操作', width: 316, fixed: 'right' as const,
-      render: (_: unknown, row: Company) => (
-        <Space size={4}>
-          {can.viewTransfers && <Button size="mini" type="text" onClick={() => navigate(`${base}/transfers?companyId=${row.id}`)}>传递记录</Button>}
-          {can.viewAccounts && <Button size="mini" type="text" onClick={() => setAccountsOf(row)}>账号管理</Button>}
-          {can.manageCompanies && <Button size="mini" type="text" onClick={() => setContactsOf(row)}>联络人</Button>}
-          {can.manageCompanies && (
-            <Dropdown
-              trigger="click"
-              position="br"
-              droplist={
-                <Menu
-                  onClickMenuItem={(key) => {
-                    if (key === 'edit') { form.setFieldsValue(row); setEditing(row) }
-                    if (key === 'toggle') confirmToggleCompanyStatus(row)
-                    if (key === 'delete') confirmDeleteCompany(row)
-                  }}
-                >
-                  <Menu.Item key="edit">编辑</Menu.Item>
-                  <Menu.Item key="toggle">
-                    <span style={{ color: row.status === 'ACTIVE' ? 'rgb(var(--danger-6))' : 'rgb(var(--success-6))' }}>
-                      {row.status === 'ACTIVE' ? '停用' : '启用'}
-                    </span>
-                  </Menu.Item>
-                  {can.deleteCompanies && (
-                    <Menu.Item key="delete" disabled={deletingIds.has(row.id)}>
-                      <span style={{ color: 'rgb(var(--danger-6))' }}>删除</span>
-                    </Menu.Item>
-                  )}
-                </Menu>
-              }
-            >
-              <Button size="mini" type="text">更多<IconDown style={{ marginLeft: 2 }} /></Button>
-            </Dropdown>
-          )}
-        </Space>
-      ),
-    },
-  ]
+  const vendorMetaSummary = (row: Company) => [
+    can.viewAccounts ? `账号 ${row.accountCount ?? 0}` : null,
+    can.manageCompanies ? `联络人 ${row.contactCount ?? 0}` : null,
+  ].filter(Boolean).join(' · ')
 
   return (
     <>
@@ -1000,15 +1001,131 @@ export default function CompaniesPage() {
         <Alert type="error" style={{ marginBottom: 12 }} content={`厂商列表加载失败：${listError}`}
           action={<Button size="small" loading={listLoading} onClick={() => void load().catch(() => undefined)}>重试</Button>} />
       )}
-          <ResizableTable tableId="oem-companies"
-            className="page-table oem-directory-table"
-            rowKey="id"
-            loading={listLoading}
-            data={rows}
-            columns={companyColumns}
-            scroll={{ x: 806, y: 'var(--page-table-scroll-y)' }}
-            pagination={{ current: page, total, pageSize, onChange: (nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) } }}
-          />
+
+      <div className="oem-directory-workspace">
+        <aside className="oem-vendor-panel" aria-label="厂商列表">
+          <div className="oem-vendor-panel-head">
+            <span className="oem-vendor-panel-title">厂商列表</span>
+            <span className="oem-vendor-panel-count">共 {total} 家</span>
+          </div>
+          <div className="oem-vendor-list oem-directory-table">
+            {listLoading && rows.length === 0 ? (
+              <div className="oem-vendor-state"><Spin /></div>
+            ) : rows.length === 0 ? (
+              <div className="oem-vendor-state"><Empty description="暂无厂商" /></div>
+            ) : (
+              <Spin loading={listLoading} className="oem-vendor-spin">
+                <ul className="oem-vendor-items">
+                  {rows.map((row) => {
+                    const selected = selectedCompany?.id === row.id
+                    const counts = vendorMetaSummary(row)
+                    const createdLabel = fmtTime(row.createdAt)
+                    return (
+                      <li key={row.id}>
+                        <button
+                          type="button"
+                          className={`oem-vendor-item${selected ? ' is-selected' : ''}`}
+                          aria-current={selected ? 'true' : undefined}
+                          onClick={() => setSelectedCompanyId(row.id)}
+                        >
+                          <span className="oem-vendor-item-top">
+                            <span className="oem-vendor-item-name" title={row.name}>{row.name}</span>
+                            <StatusTag status={row.status} size="small" />
+                          </span>
+                          <span className="oem-vendor-item-meta">
+                            <span>{counts || createdLabel}</span>
+                            {counts && <span className="oem-vendor-item-time" title={createdLabel}>{createdLabel.slice(0, 10)}</span>}
+                          </span>
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </Spin>
+            )}
+          </div>
+          {total > pageSize && (
+            <div className="oem-vendor-footer">
+              <Pagination
+                size="small"
+                current={page}
+                total={total}
+                pageSize={pageSize}
+                bufferSize={1}
+                showTotal={false}
+                sizeCanChange={false}
+                onChange={(nextPage, nextSize) => { setPage(nextPage); setPageSize(nextSize) }}
+              />
+            </div>
+          )}
+        </aside>
+
+        <div className="oem-detail-panel">
+          {!selectedCompany ? (
+            <div className="oem-detail-empty">
+              <Empty description={listLoading ? '正在加载厂商…' : '暂无厂商'} />
+            </div>
+          ) : (
+            <>
+              <section className="oem-company-summary" aria-label="厂商信息">
+                <div className="oem-company-summary-main">
+                  <div className="oem-company-summary-head">
+                    <h2 className="oem-company-summary-name">{selectedCompany.name}</h2>
+                    <StatusTag status={selectedCompany.status} />
+                  </div>
+                  <div className="oem-company-summary-meta">
+                    <span>创建时间：{fmtTime(selectedCompany.createdAt)}</span>
+                    {selectedCompany.remark && <span className="oem-company-summary-remark">备注：{selectedCompany.remark}</span>}
+                  </div>
+                </div>
+                {can.manageCompanies && (
+                  <Space size={8} wrap className="oem-company-summary-actions">
+                    <Button size="small" onClick={() => { form.setFieldsValue(selectedCompany); setEditing(selectedCompany) }}>编辑</Button>
+                    <Button
+                      size="small"
+                      status={selectedCompany.status === 'ACTIVE' ? 'danger' : 'success'}
+                      onClick={() => confirmToggleCompanyStatus(selectedCompany)}
+                    >
+                      {selectedCompany.status === 'ACTIVE' ? '停用' : '启用'}
+                    </Button>
+                    {can.deleteCompanies && (
+                      <Button
+                        size="small"
+                        status="danger"
+                        loading={deletingIds.has(selectedCompany.id)}
+                        disabled={deletingIds.has(selectedCompany.id)}
+                        onClick={() => confirmDeleteCompany(selectedCompany)}
+                      >
+                        删除
+                      </Button>
+                    )}
+                  </Space>
+                )}
+              </section>
+
+              {can.viewAccounts && (
+                <AccountsPanel
+                  key={`${selectedCompany.id}-${can.manageAccounts}-${can.deleteAccounts}`}
+                  company={selectedCompany}
+                  refreshVersion={accountsRefreshVersion}
+                  onAccountCreated={handleAccountCreated}
+                  onAccountStatusToggled={handleAccountStatusToggled}
+                  onAccountDeleted={handleAccountDeleted}
+                />
+              )}
+
+              {can.manageCompanies && (
+                <ContactsPanel
+                  key={selectedCompany.id}
+                  company={selectedCompany}
+                  refreshVersion={contactsRefreshVersion}
+                  onChanged={() => void load().catch(() => undefined)}
+                />
+              )}
+            </>
+          )}
+        </div>
+      </div>
 
       <ExcelImportDialog<OemCompanyImportPayload>
         visible={importOpen}
@@ -1033,7 +1150,7 @@ export default function CompaniesPage() {
         maxRows={100}
         prepare={prepareAccountImport}
         commit={importAccounts}
-        onImported={() => void load().catch(() => undefined)}
+        onImported={() => { setAccountsRefreshVersion((version) => version + 1); void load().catch(() => undefined) }}
         onClose={() => setAccountImportOpen(false)}
       />}
       <ExcelImportDialog<OemContactImportPayload>
@@ -1046,7 +1163,7 @@ export default function CompaniesPage() {
         maxRows={100}
         prepare={prepareContactImport}
         commit={importContacts}
-        onImported={() => void load().catch(() => undefined)}
+        onImported={() => { setContactsRefreshVersion((version) => version + 1); void load().catch(() => undefined) }}
         onClose={() => setContactImportOpen(false)}
       />
       <Modal
@@ -1066,18 +1183,6 @@ export default function CompaniesPage() {
           <Form.Item field="remark" label="备注"><Input.TextArea maxLength={512} /></Form.Item>
         <EnterSubmit /></Form>
       </Modal>
-      {accountsOf && can.viewAccounts && <AccountsDrawer
-        key={`${accountsOf.id}-${can.manageAccounts}-${can.deleteAccounts}`}
-        company={accountsOf}
-        onClose={() => setAccountsOf(null)}
-        onAccountDeleted={handleAccountDeleted}
-      />}
-      <ContactsDrawer
-        key={contactsOf?.id ?? 'contacts-closed'}
-        company={contactsOf}
-        onClose={() => setContactsOf(null)}
-        onChanged={() => void load().catch(() => undefined)}
-      />
       <InternalRecipientsDrawer open={recipientsOpen} onClose={() => setRecipientsOpen(false)} />
     </>
   )

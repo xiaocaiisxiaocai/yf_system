@@ -43,7 +43,7 @@ internal static class OutsourceFieldCategories
     internal const string Ipms = "IPMS";
     internal const string Process = "PROCESS";
     internal const string Manual = "MANUAL";
-    /// <summary>Only written by its own Excel import (BOM时间, 发图), never edited on the list.</summary>
+    /// <summary>Excel date columns (BOM时间, 发图): both import flows require outsource:date_import.</summary>
     internal const string Imported = "IMPORTED";
     internal const string Custom = "CUSTOM";
     internal static bool InternalEditable(string category) => category is Process or Manual or Custom;
@@ -210,9 +210,13 @@ internal sealed class OutsourceFieldLayout
         };
     }
 
-    public static async Task<OutsourceFieldLayout> LoadAsync(YfDbContext context, CancellationToken ct)
+    public static async Task<OutsourceFieldLayout> LoadAsync(YfDbContext context, CancellationToken ct, bool lockForImport = false)
     {
-        var fields = await context.OutsourceFields.AsNoTracking().OrderBy(x => x.SortNo).ThenBy(x => x.Id).ToArrayAsync(ct);
+        // Field settings writers take FOR UPDATE before changing fields, their options, or their editor grants.
+        var fields = lockForImport
+            ? await context.OutsourceFields.FromSqlRaw("SELECT * FROM outsource_fields ORDER BY sort_no, id LOCK IN SHARE MODE")
+                .AsNoTracking().ToArrayAsync(ct)
+            : await context.OutsourceFields.AsNoTracking().OrderBy(x => x.SortNo).ThenBy(x => x.Id).ToArrayAsync(ct);
         var editors = (await context.OutsourceFieldEditorRoles.AsNoTracking().ToArrayAsync(ct)).ToLookup(x => x.FieldId, x => x.RoleId);
         var editorUsers = (await context.OutsourceFieldEditorUsers.AsNoTracking().ToArrayAsync(ct)).ToLookup(x => x.FieldId, x => x.UserId);
         var columns = new List<Column>(fields.Length);

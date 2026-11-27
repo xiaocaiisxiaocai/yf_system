@@ -374,7 +374,7 @@ describe('ODM/OEMA 管理列表的过期响应', () => {
       .mockImplementationOnce(() => first.promise)
       .mockResolvedValue({ list: [company(2, '新结果厂')], total: 1, page: 1, pageSize: 20 })
     render(
-      <OemProvider value={context({ companies } as Partial<OemApi>, ['oem:company_manage'])}>
+      <OemProvider value={context({ companies, contacts: vi.fn().mockResolvedValue([]) } as Partial<OemApi>, ['oem:company_manage'])}>
         <MemoryRouter><CompaniesPage /></MemoryRouter>
       </OemProvider>,
     )
@@ -384,7 +384,7 @@ describe('ODM/OEMA 管理列表的过期响应', () => {
     fireEvent.keyDown(search, { key: 'Enter', keyCode: 13, which: 13 })
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(2))
     expect(companies).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '新' }))
-    expect(await screen.findByText('新结果厂')).toBeInTheDocument()
+    expect(await within(document.querySelector('.oem-directory-table')!).findByText('新结果厂')).toBeInTheDocument()
 
     first.resolve({ list: [company(1, '旧结果厂')], total: 1, page: 1, pageSize: 20 })
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -399,12 +399,12 @@ describe('ODM/OEMA 管理列表的过期响应', () => {
       .mockRejectedValueOnce({ response: { data: { message: '数据库忙' } } })
       .mockResolvedValue({ list: [company(3, '重试厂')], total: 1, page: 1, pageSize: 20 })
     render(
-      <OemProvider value={context({ companies } as Partial<OemApi>, ['oem:company_manage'])}>
+      <OemProvider value={context({ companies, contacts: vi.fn().mockResolvedValue([]) } as Partial<OemApi>, ['oem:company_manage'])}>
         <MemoryRouter><CompaniesPage /></MemoryRouter>
       </OemProvider>,
     )
     expect(await screen.findByText('厂商列表加载失败：数据库忙')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '重试' }))
-    expect(await screen.findByText('重试厂')).toBeInTheDocument()
+    expect(await within(document.querySelector('.oem-directory-table')!).findByText('重试厂')).toBeInTheDocument()
   })
 })

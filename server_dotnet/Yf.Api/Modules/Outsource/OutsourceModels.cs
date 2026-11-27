@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Yf.Api.Modules.Admin;
 
 namespace Yf.Api.Modules.Outsource;
 
@@ -44,16 +45,26 @@ public sealed record OutsourceCcUserResponse(ulong UserId, string EmployeeNo, st
 public sealed record OutsourceDefaultCcResponse(ulong UserId, string EmployeeNo, string RealName, string Email, string Status,
     IReadOnlyList<string> Modules);
 
-public sealed record OutsourceImportRow(int RowNumber, string? OutsourceDate, string? WorkOrderNo, string? VendorName, string? TypeName);
+public sealed record OutsourceImportRow(int RowNumber, string? OutsourceDate, string? WorkOrderNo, string? VendorName, string? TypeName,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string?>? FieldValues = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ulong? ExpectedItemId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? ExpectedUpdatedAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExpectedChangeHash = null);
 
 public sealed record OutsourceImportRequest(OutsourceImportRow[]? Rows);
 
-/// <summary>Preview of one import row: READY rows carry the IPMS snapshot that will be stored.</summary>
+/// <summary>READY rows show the values resolved from IPMS, Excel, and field settings before confirmation.</summary>
 public sealed record OutsourceImportPreviewRow(
     int RowNumber, string WorkOrderNo, string Status, string? Message, string? VendorName, string? OutsourceDate,
-    string? Customer, string? MachineModel, string? TypeLabel, int? Quantity, DateOnly? LatestDueDate);
+    string? Customer, string? MachineModel, string? TypeLabel, int? Quantity, DateOnly? LatestDueDate,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Dictionary<string, string?>? FieldValues = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ulong? ExpectedItemId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] DateTime? ExpectedUpdatedAt = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? ChangedFields = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ExpectedChangeHash = null);
 
 public sealed record OutsourceImportPreviewResponse(int Ready, int Skipped, int Invalid, OutsourceImportPreviewRow[] Rows);
+public sealed record OutsourceImportResponse(int Created, int Updated, int Skipped, int Failed, IReadOnlyList<AdminImportRowResult> Rows);
 
 public sealed record OutsourceItemResponse(
     ulong Id, uint SerialNo, string WorkOrderNo, DateOnly OutsourceDate, ulong VendorId, string VendorName,

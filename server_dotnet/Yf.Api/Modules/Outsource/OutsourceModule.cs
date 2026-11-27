@@ -98,7 +98,7 @@ public static class OutsourceModule
         items.MapPost("/import/preview", (OutsourceImportRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
             s.PreviewImportAsync(AccessService.GetCurrent(c), r, ct));
         items.MapPost("/import", (OutsourceImportRequest r, HttpContext c, OutsourceItemService s, CancellationToken ct) =>
-            s.ImportAsync(AccessService.GetCurrent(c), r, ct)).Produces<AdminImportResponse>();
+            s.ImportAsync(AccessService.GetCurrent(c), r, ct)).Produces<OutsourceImportResponse>();
         items.MapPost("/date-import/preview", (OutsourceDateImportRequest r, HttpContext c, OutsourceDateImportService s, CancellationToken ct) =>
             s.PreviewAsync(AccessService.GetCurrent(c), r, ct));
         items.MapPost("/date-import", (OutsourceDateImportRequest r, HttpContext c, OutsourceDateImportService s, CancellationToken ct) =>

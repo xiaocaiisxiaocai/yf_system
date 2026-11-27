@@ -149,12 +149,12 @@ describe('管理员表单契约', () => {
 
     mocks.get.mockImplementation(async (url: string) => {
       if (url === '/admin/suppliers') return { data: page([{ id: 8, name: '供应商', status: 'ACTIVE', createdAt: '' }]) }
-      if (url === '/admin/suppliers/8/accounts' || url === '/admin/supplier-role-options') return { data: [] }
+      if (url === '/admin/suppliers/8/accounts' || url === '/admin/suppliers/8/contacts' || url === '/admin/supplier-role-options') return { data: [] }
       return { data: [] }
     })
     const suppliers = render(<SupplierList />)
-    await user.click(await screen.findByRole('button', { name: '账号管理' }))
-    await user.click(await screen.findByRole('button', { name: '新增账号' }))
+    const accountsPanel = await screen.findByRole('region', { name: '账号管理' })
+    await user.click(within(accountsPanel).getByRole('button', { name: '新增账号' }))
     expect(screen.getByPlaceholderText('5-20 位')).toBeVisible()
     suppliers.unmount()
   })

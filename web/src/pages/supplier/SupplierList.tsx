@@ -1,20 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import {
-  Button, Card, Form, Input, Message, Popconfirm, Select, Space,
+  Button, Card, Empty, Form, Input, Message, Pagination, Popconfirm, Select, Space, Spin,
 } from '@arco-design/web-react'
-import ResizableTable from '../../components/ResizableTable'
 import { IconPlus } from '@arco-design/web-react/icon'
 import http from '../../api/client'
 import { isVersionConflict } from '../../api/versionConflict'
-import { actionSlots } from '../../components/ActionSlots'
 import DangerPopconfirm from '../../components/DangerPopconfirm'
 import { useAuth } from '../../store/auth'
 import { fmtTime } from '../../api/types'
 import type { ApiResponses, PageResp, SupplierContact } from '../../api/types'
 import ExcelImportDialog, { type ImportBatchOutcome, type ImportPreviewRow, type PreparedImport } from '../../components/ExcelImportDialog'
 import { downloadExcelWorkbook, type ExcelImportRow, type ExcelWorkbookSheet } from '../../utils/excelWorkbook'
-import { SupplierAccountsDrawer } from './components/SupplierAccountsDrawer'
-import { SupplierContactsDrawer } from './components/SupplierContactsDrawer'
+import { SupplierAccountsPanel } from './components/SupplierAccountsPanel'
+import { SupplierContactsPanel } from './components/SupplierContactsPanel'
 import { SupplierEditModal } from './components/SupplierEditModal'
 import type { Account, RoleOption, Supplier } from './components/supplierTypes'
 import { useSupplierListState } from './hooks/useSupplierListState'
@@ -23,6 +21,7 @@ import { validateInitialPassword } from '../../utils/password'
 import ToolbarMenuButton from '../../components/ToolbarMenuButton'
 import { ACCOUNT_NAME_MESSAGE, isValidAccountName } from '../../utils/accountName'
 import StatusTag from '../../components/StatusTag'
+import './SupplierList.css'
 
 const SUPPLIER_ACCOUNT_HEADERS = ['供应商名称', '账号', '角色', '初始密码'] as const
 const SUPPLIER_ACCOUNT_EXPORT_HEADERS = ['供应商名称', '账号', '角色', '状态', '最近登录'] as const
@@ -72,22 +71,22 @@ export default function SupplierList() {
     data, loading, keyword, status, page, pageSize, loadError,
     load, search, clearSearch, changeStatus, changePage,
   } = useSupplierListState()
+  const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
-  const [accTarget, setAccTarget] = useState<Supplier | null>(null)
-  const [accDrawerKey, setAccDrawerKey] = useState(0)
-  const [contactTarget, setContactTarget] = useState<Supplier | null>(null)
-  const [contactDrawerKey, setContactDrawerKey] = useState(0)
   const [accountImportOpen, setAccountImportOpen] = useState(false)
   const [contactImportOpen, setContactImportOpen] = useState(false)
   const [accountExporting, setAccountExporting] = useState(false)
   const [contactExporting, setContactExporting] = useState(false)
-  const accountTrigger = useRef<HTMLButtonElement | null>(null)
+  const [accountsRefreshVersion, setAccountsRefreshVersion] = useState(0)
+  const [contactsRefreshVersion, setContactsRefreshVersion] = useState(0)
   const saveInFlight = useRef(false)
   const togglingSupplierIdsRef = useRef(new Set<number>())
   const [togglingSupplierIds, setTogglingSupplierIds] = useState<ReadonlySet<number>>(new Set())
   const [form] = Form.useForm()
+
+  const selectedSupplier = data.list.find((item) => item.id === selectedSupplierId) ?? data.list[0] ?? null
 
   const fetchAllSuppliers = async (query: { keyword?: string; status?: string } = {}) => {
     const pageSizeForExport = 100
@@ -294,13 +293,6 @@ export default function SupplierList() {
     }
   }
 
-  useEffect(() => {
-    if (accTarget !== null) return
-    const trigger = accountTrigger.current
-    accountTrigger.current = null
-    if (trigger?.isConnected) trigger.focus()
-  }, [accTarget])
-
   const submit = async () => {
     if (saveInFlight.current) return
     saveInFlight.current = true
@@ -312,7 +304,9 @@ export default function SupplierList() {
         await http.put<ApiResponses['PUT /admin/suppliers/{id}']>(`/admin/suppliers/${editing.id}`, values)
         Message.success('供应商已更新')
       } else {
-        await http.post<ApiResponses['POST /admin/suppliers']>('/admin/suppliers', values)
+        const response = await http.post<ApiResponses['POST /admin/suppliers']>('/admin/suppliers', values)
+        const created = response.data as Partial<Supplier> | undefined
+        if (created?.id) setSelectedSupplierId(created.id)
         Message.success('供应商已创建')
       }
       setEditOpen(false)
@@ -346,8 +340,7 @@ export default function SupplierList() {
   const remove = async (supplier: Supplier) => {
     await http.delete<ApiResponses['DELETE /admin/suppliers/{id}']>(`/admin/suppliers/${supplier.id}`)
     Message.success('供应商已删除')
-    if (accTarget?.id === supplier.id) setAccTarget(null)
-    if (contactTarget?.id === supplier.id) setContactTarget(null)
+    if (selectedSupplierId === supplier.id) setSelectedSupplierId(null)
     load()
   }
 
@@ -399,106 +392,154 @@ export default function SupplierList() {
       {loadError ? (
         <LoadError onRetry={load} />
       ) : (
-        <ResizableTable tableId="suppliers"
-          className="page-table"
-          rowKey="id"
-          loading={loading}
-          data={data.list}
-          scroll={{ x: 740, y: 'var(--page-table-scroll-y)' }}
-          columns={[
-            { title: '名称', dataIndex: 'name', width: 240, align: 'left' as const, ellipsis: true },
-            {
-              title: '状态',
-              dataIndex: 'status',
-              width: 70,
-              align: 'center' as const,
-              render: (value: string) => <StatusTag status={value} />,
-            },
-            { title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center' as const, render: fmtTime },
-            {
-              title: '操作',
-              width: 300,
-              fixed: 'right' as const,
-              render: (_: unknown, supplier: Supplier) => actionSlots([
-                canManageAccounts && <Button key="accounts" size="mini" type="text" onClick={(event) => {
-                  accountTrigger.current = (event?.currentTarget as HTMLButtonElement | undefined) ?? null
-                  setAccDrawerKey(supplier.id)
-                  setAccTarget(supplier)
-                }}>
-                  账号管理
-                </Button>,
-                canManageSuppliers && <Button key="contacts" size="mini" type="text" onClick={() => {
-                  setContactDrawerKey(supplier.id)
-                  setContactTarget(supplier)
-                }}>
-                  联络人
-                </Button>,
-                canManageSuppliers && <Button
-                  key="edit"
-                  size="mini"
-                  type="text"
-                  onClick={() => {
-                    setEditing(supplier)
-                    form.setFieldsValue(supplier)
-                    setEditOpen(true)
-                  }}
-                >
-                  编辑
-                </Button>,
-                canManageSuppliers && (supplier.status === 'ACTIVE' ? (
-                  <DangerPopconfirm
-                    key="status"
-                    title="停用后其所有账号无法登录，确认？"
-                    disabled={togglingSupplierIds.has(supplier.id)}
-                    onOk={() => toggleStatus(supplier)}
-                  >
-                    <Button
-                      size="mini"
-                      type="text"
-                      status="danger"
-                      loading={togglingSupplierIds.has(supplier.id)}
-                      disabled={togglingSupplierIds.has(supplier.id)}
-                    >
-                      停用
-                    </Button>
-                  </DangerPopconfirm>
-                ) : (
-                  <Popconfirm
-                    key="status"
-                    title="确认启用？"
-                    disabled={togglingSupplierIds.has(supplier.id)}
-                    onOk={() => toggleStatus(supplier)}
-                  >
-                    <Button
-                      size="mini"
-                      type="text"
-                      status="success"
-                      loading={togglingSupplierIds.has(supplier.id)}
-                      disabled={togglingSupplierIds.has(supplier.id)}
-                    >
-                      启用
-                    </Button>
-                  </Popconfirm>
-                )),
-                canManageSuppliers && canDelete && (
-                  <DangerPopconfirm
-                    key="delete"
-                    title="删除后不可恢复；存在任何供应商账号或关联项目时无法删除。确认？"
-                    onOk={() => remove(supplier)}
-                  >
-                    <Button size="mini" type="text" status="danger">删除</Button>
-                  </DangerPopconfirm>
-                ),
-              ], 'supplier'),
-            },
-          ]}
-          pagination={{
-            total: data.total,
-            current: page,
-            pageSize,
-            onChange: changePage,
-          }}
-        />
+        <div className="supplier-directory-workspace">
+          <aside className="supplier-list-panel" aria-label="供应商列表">
+            <div className="supplier-list-panel-head">
+              <span className="supplier-list-panel-title">供应商列表</span>
+              <span className="supplier-list-panel-count">共 {data.total} 家</span>
+            </div>
+            <div className="supplier-list-body">
+              {loading && data.list.length === 0 ? (
+                <div className="supplier-list-state"><Spin /></div>
+              ) : data.list.length === 0 ? (
+                <div className="supplier-list-state"><Empty description="暂无供应商" /></div>
+              ) : (
+                <Spin loading={loading} className="supplier-list-spin">
+                  <ul className="supplier-list-items">
+                    {data.list.map((supplier) => {
+                      const selected = selectedSupplier?.id === supplier.id
+                      const createdLabel = fmtTime(supplier.createdAt)
+                      return (
+                        <li key={supplier.id}>
+                          <button
+                            type="button"
+                            className={`supplier-list-item${selected ? ' is-selected' : ''}`}
+                            aria-current={selected ? 'true' : undefined}
+                            onClick={() => setSelectedSupplierId(supplier.id)}
+                          >
+                            <span className="supplier-list-item-top">
+                              <span className="supplier-list-item-name" title={supplier.name}>{supplier.name}</span>
+                              <StatusTag status={supplier.status} size="small" />
+                            </span>
+                            <span className="supplier-list-item-meta">
+                              <span title={createdLabel}>{createdLabel}</span>
+                            </span>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </Spin>
+              )}
+            </div>
+            {data.total > pageSize && (
+              <div className="supplier-list-footer">
+                <Pagination
+                  size="small"
+                  current={page}
+                  total={data.total}
+                  pageSize={pageSize}
+                  bufferSize={1}
+                  showTotal={false}
+                  sizeCanChange={false}
+                  onChange={changePage}
+                />
+              </div>
+            )}
+          </aside>
+
+          <div className="supplier-detail-panel">
+            {!selectedSupplier ? (
+              <div className="supplier-detail-empty">
+                <Empty description={loading ? '正在加载供应商…' : '暂无供应商'} />
+              </div>
+            ) : (
+              <>
+                <section className="supplier-summary" aria-label="供应商信息">
+                  <div className="supplier-summary-main">
+                    <div className="supplier-summary-head">
+                      <h2 className="supplier-summary-name">{selectedSupplier.name}</h2>
+                      <StatusTag status={selectedSupplier.status} />
+                    </div>
+                    <div className="supplier-summary-meta">
+                      <span>创建时间：{fmtTime(selectedSupplier.createdAt)}</span>
+                      {selectedSupplier.remark && <span className="supplier-summary-remark">备注：{selectedSupplier.remark}</span>}
+                    </div>
+                  </div>
+                  {canManageSuppliers && (
+                    <Space size={8} wrap className="supplier-summary-actions">
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setEditing(selectedSupplier)
+                          form.setFieldsValue(selectedSupplier)
+                          setEditOpen(true)
+                        }}
+                      >
+                        编辑
+                      </Button>
+                      {selectedSupplier.status === 'ACTIVE' ? (
+                        <DangerPopconfirm
+                          title="停用后其所有账号无法登录，确认？"
+                          disabled={togglingSupplierIds.has(selectedSupplier.id)}
+                          onOk={() => toggleStatus(selectedSupplier)}
+                        >
+                          <Button
+                            size="small"
+                            status="danger"
+                            loading={togglingSupplierIds.has(selectedSupplier.id)}
+                            disabled={togglingSupplierIds.has(selectedSupplier.id)}
+                          >
+                            停用
+                          </Button>
+                        </DangerPopconfirm>
+                      ) : (
+                        <Popconfirm
+                          title="确认启用？"
+                          disabled={togglingSupplierIds.has(selectedSupplier.id)}
+                          onOk={() => toggleStatus(selectedSupplier)}
+                        >
+                          <Button
+                            size="small"
+                            status="success"
+                            loading={togglingSupplierIds.has(selectedSupplier.id)}
+                            disabled={togglingSupplierIds.has(selectedSupplier.id)}
+                          >
+                            启用
+                          </Button>
+                        </Popconfirm>
+                      )}
+                      {canDelete && (
+                        <DangerPopconfirm
+                          title="删除后不可恢复；存在任何供应商账号或关联项目时无法删除。确认？"
+                          onOk={() => remove(selectedSupplier)}
+                        >
+                          <Button size="small" status="danger">删除</Button>
+                        </DangerPopconfirm>
+                      )}
+                    </Space>
+                  )}
+                </section>
+
+                {canManageAccounts && (
+                  <SupplierAccountsPanel
+                    key={`accounts-${selectedSupplier.id}`}
+                    supplier={selectedSupplier}
+                    refreshVersion={accountsRefreshVersion}
+                  />
+                )}
+
+                {canManageSuppliers && (
+                  <SupplierContactsPanel
+                    key={`contacts-${selectedSupplier.id}`}
+                    supplier={selectedSupplier}
+                    refreshVersion={contactsRefreshVersion}
+                  />
+                )}
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       <SupplierEditModal
@@ -510,8 +551,6 @@ export default function SupplierList() {
         onCancel={() => { if (!saving) setEditOpen(false) }}
       />
 
-      {canManageAccounts && <SupplierAccountsDrawer key={`acc-${accDrawerKey}`} supplier={accTarget} onClose={() => setAccTarget(null)} />}
-      {canManageSuppliers && <SupplierContactsDrawer key={`contact-${contactDrawerKey}`} supplier={contactTarget} onClose={() => setContactTarget(null)} />}
       <ExcelImportDialog<SupplierAccountWorkbookRow>
         visible={accountImportOpen}
         title="导入 Robot 供应商账号"
@@ -522,7 +561,7 @@ export default function SupplierList() {
         maxRows={100}
         prepare={prepareSupplierAccountImport}
         commit={importSupplierAccounts}
-        onImported={() => load()}
+        onImported={() => { setAccountsRefreshVersion((version) => version + 1); load() }}
         onClose={() => setAccountImportOpen(false)}
       />
       <ExcelImportDialog<SupplierContactWorkbookRow>
@@ -535,7 +574,7 @@ export default function SupplierList() {
         maxRows={100}
         prepare={prepareSupplierContactImport}
         commit={importSupplierContacts}
-        onImported={() => load()}
+        onImported={() => { setContactsRefreshVersion((version) => version + 1); load() }}
         onClose={() => setContactImportOpen(false)}
       />
     </Card>

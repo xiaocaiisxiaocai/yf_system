@@ -105,6 +105,7 @@ export default function PortalOutsourcePage() {
     }
   }
 
+  const rowOffset = data ? (data.page - 1) * data.pageSize : 0
   const columns = useMemo<TableColumnProps<Row>[]>(() => [
     ...(data?.columns ?? []).map<TableColumnProps<Row>>((column) => column.key === 'files' ? {
       title: column.title, key: column.key, width: 120, align: 'center',
@@ -114,7 +115,9 @@ export default function PortalOutsourcePage() {
       title: column.title, key: column.key, width: WIDTHS[column.key] ?? 110, ellipsis: true,
       fixed: FIXED.has(column.key) ? 'left' as const : undefined,
       align: CENTERED.has(column.key) ? 'center' as const : undefined,
-      render: (_: unknown, row: Row) => row.values[column.key] ?? (column.key === 'electricalHandoff' ? '-' : ''),
+      render: (_, row, index) => column.key === 'serialNo'
+        ? rowOffset + index + 1
+        : row.values[column.key] ?? (column.key === 'electricalHandoff' ? '-' : ''),
     }),
     {
       title: '操作', width: 112, align: 'center', fixed: 'right',
@@ -125,7 +128,7 @@ export default function PortalOutsourcePage() {
         }}>{handoffLabel(row.electricalHandoff)}</Button>,
       ], 'outsource-handoff'),
     },
-  ], [api, data?.columns, filesScope, loading, saving])
+  ], [api, data?.columns, filesScope, loading, rowOffset, saving])
 
   return <Card className="page-card page-card--table outsource-list-page">
     <h1 className="visually-hidden">外发工令</h1>

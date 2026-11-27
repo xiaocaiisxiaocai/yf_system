@@ -115,7 +115,7 @@ public sealed class OutsourceItemTests
         Assert.Equal("IPMS 显示该工令已结案", imported.Rows.Single(x => x.Key == "99999999").Message);
         var again = await service.ImportAsync(planner, Request(("2026-11-04", "21089901", "鼎亚", "OEMA"), ("2026-11-06", "21089902", "元控", "odm-12345")), ct);
         Assert.Equal((1, 1, 0), (again.Created, again.Skipped, again.Failed));
-        Assert.Equal("工令已存在，未覆盖现有资料", again.Rows.Single(x => x.Key == "21089901").Message);
+        Assert.Equal("SKIPPED", again.Rows.Single(x => x.Key == "21089901").Status);
 
         // An IPMS outage rejects the whole batch; nothing half-imported.
         ipms.Unavailable = true;

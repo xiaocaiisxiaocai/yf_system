@@ -1345,10 +1345,23 @@ export interface OutsourceImportPreviewRow {
   typeLabel: string | null
   quantity: number | null
   latestDueDate: string | null
+  fieldValues?: Record<string, string | null> | null
+  expectedItemId?: number | null
+  expectedUpdatedAt?: string | null
+  changedFields?: Array<string> | null
+  expectedChangeHash?: string | null
 }
 
 export interface OutsourceImportRequest {
   rows?: Array<OutsourceImportRow> | null
+}
+
+export interface OutsourceImportResponse {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+  rows: Array<AdminImportRowResult>
 }
 
 export interface OutsourceImportRow {
@@ -1357,6 +1370,10 @@ export interface OutsourceImportRow {
   workOrderNo?: string | null
   vendorName?: string | null
   typeName?: string | null
+  fieldValues?: Record<string, string | null> | null
+  expectedItemId?: number | null
+  expectedUpdatedAt?: string | null
+  expectedChangeHash?: string | null
 }
 
 export interface OutsourceItemChangeResponse {
@@ -2518,7 +2535,7 @@ export interface ApiResponses {
   "POST /outsource/items/date-import/preview": OutsourceDateImportPreviewResponse
   "GET /outsource/items/export": Blob
   "POST /outsource/items/export": Blob
-  "POST /outsource/items/import": AdminImportResponse
+  "POST /outsource/items/import": OutsourceImportResponse
   "POST /outsource/items/import/preview": OutsourceImportPreviewResponse
   "POST /outsource/items/query": PageResponseOfOutsourceItemResponse
   "PUT /outsource/items/skip-notice": OutsourceBatchResponse
