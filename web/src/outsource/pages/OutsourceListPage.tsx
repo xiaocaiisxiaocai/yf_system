@@ -542,13 +542,11 @@ export default function OutsourceListPage() {
     </Tabs>
     <div className="page-toolbar responsive-toolbar outsource-list-toolbar">
       <Space wrap>
-        <DatePicker.RangePicker aria-label="外发日期" style={{ width: 240 }} placeholder={['外发日期起', '外发日期止']}
-          value={filters.dateRange} onChange={(value) => changeFilters({ dateRange: value?.length === 2 ? [value[0], value[1]] : undefined })} />
         <Checkbox checked={filters.includeClosed} onChange={(value) => changeFilters({ includeClosed: value })}>显示已完成</Checkbox>
         {canSend && <Checkbox checked={filters.sendQueue} onChange={(value) => changeFilters({ sendQueue: value })}>待发送</Checkbox>}
-        {hasActiveFilters && <Button onClick={resetFilters}>重置筛选</Button>}
       </Space>
       <Space wrap>
+        {hasActiveFilters && <Button onClick={resetFilters}>重置筛选</Button>}
         {canManage && closedSelected > 0 && <Button onClick={() => void setCompletion(false)}>重新开启 ({closedSelected})</Button>}
         {canSend && openSelected.length > 0 && <Button type="primary" icon={<IconEmail />} onClick={() => setMailing(openSelected)}>发送邮件 ({openSelected.length})</Button>}
         {canSend && skipTargets.length > 0 && <Popconfirm

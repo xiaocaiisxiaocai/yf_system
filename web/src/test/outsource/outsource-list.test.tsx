@@ -211,7 +211,8 @@ describe('外发工令页面', () => {
     for (const label of ['外发类型', '状态', '发送状态']) {
       expect(screen.queryByRole('combobox', { name: label })).not.toBeInTheDocument()
     }
-    expect(screen.getByPlaceholderText('外发日期起')).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('外发日期起')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('外发日期止')).not.toBeInTheDocument()
 
     await user.click(filter('外发厂商'))
     await user.click(await readyForPointer(await screen.findByRole('combobox', { name: '筛选外发厂商' })))
@@ -233,6 +234,9 @@ describe('外发工令页面', () => {
     await user.click(screen.getByRole('button', { name: '重置筛选' }))
     expect(screen.getByRole('tab', { name: '全部', selected: true })).toBeVisible()
     expect(filter('阶段')).not.toHaveClass('arco-table-filters-active')
+    await user.click(filter('外发日期'))
+    expect(await screen.findByPlaceholderText('开始日期')).toBeVisible()
+    expect(screen.getByPlaceholderText('结束日期')).toBeVisible()
   })
 
   it('客户表头接受简称字典和自由关键字，审计日期按显示时区筛选', async () => {
