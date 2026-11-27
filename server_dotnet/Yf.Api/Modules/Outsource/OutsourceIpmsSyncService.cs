@@ -99,7 +99,11 @@ public sealed class OutsourceIpmsSyncService(
             await context.Database.OpenConnectionAsync(ct);
             actor = await AccessService.ReadActorAsync(context.Database.Connection(), null, actor, ct);
             AccessService.RequireInternal(actor);
-            await AccessService.RequirePermissionAsync(context.Database.Connection(), null, actor, OutsourcePermissions.Manage, ct);
+            var grants = await AccessService.PermissionCodesAsync(context.Database.Connection(), null, actor.Id, ct);
+            // The settings page can run a full sync; selection by work order belongs to the list.
+            var fromSettings = ids is not { Length: > 0 } && grants.Contains(OutsourcePermissions.Settings);
+            if (!grants.Contains(OutsourcePermissions.Manage) || !(grants.Contains(OutsourcePermissions.View) || fromSettings))
+                throw ApiException.Forbidden();
         }
         var outcome = await RunAsync("MANUAL", actor.Id, ids is { Length: > 0 } ? ids : null, null, ct)
             ?? throw ApiException.Conflict("IPMS 同步正在进行，请稍后再试");
@@ -337,5 +341,5 @@ public sealed class OutsourceIpmsSyncService(
     private static DateTime? Utc(DateTime? value) => value is { } v ? DateTime.SpecifyKind(v, DateTimeKind.Utc) : null;
 
     private static Task AuthorizeAnyAsync(YfDbContext context, CurrentUser actor, CancellationToken ct) =>
-        OutsourceItemService.AuthorizeReadAsync(context, actor, null, ct);
+        OutsourceItemService.AuthorizeReadAsync(context, actor, ct);
 }

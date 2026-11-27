@@ -11,6 +11,7 @@ import { isVersionConflict } from '../../api/versionConflict'
 import { actionSlots } from '../../components/ActionSlots'
 import DangerPopconfirm from '../../components/DangerPopconfirm'
 import { useAuth } from '../../store/auth'
+import { OUTSOURCE_PERMISSIONS } from '../../outsource/outsourceNavigation'
 import { type PageResp } from '../../api/types'
 import type { ApiResponses } from '../../api/types'
 import type { DataScopeResponse, PermissionResponse } from '../../api/generated/api-types'
@@ -219,6 +220,10 @@ function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
   }, [normalizedPermKeyword, permTree, perms, savingPerms])
 
   const displayedChecks = canAssign ? checked : (permTarget?.permissionIds ?? []).map(String)
+  const selectedCodes = new Set(perms.filter(p => displayedChecks.includes(String(p.id))).map(p => p.code))
+  const needsOutsourceView = !selectedCodes.has(OUTSOURCE_PERMISSIONS.view) && [
+    OUTSOURCE_PERMISSIONS.import, OUTSOURCE_PERMISSIONS.export, OUTSOURCE_PERMISSIONS.delete, OUTSOURCE_PERMISSIONS.dateImport,
+  ].some(code => selectedCodes.has(code))
   const halfChecked = permTree
     .filter((group) => {
       const relevantChildren = !canAssign
@@ -541,6 +546,7 @@ function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
               onChange={setPermKeyword}
               style={{ marginBottom: 12 }}
             />
+            {needsOutsourceView && <div className="dialog-note" role="status">办理这些操作还需要查看外发工令。</div>}
             {displayedPermTree.length === 0 ? (
               <Typography.Text type="secondary">未找到匹配的权限点</Typography.Text>
             ) : (

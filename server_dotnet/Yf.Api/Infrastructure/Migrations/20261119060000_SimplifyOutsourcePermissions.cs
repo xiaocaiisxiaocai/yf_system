@@ -14,13 +14,16 @@ namespace Yf.Api.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // Down migrations retain permission selections. A database that already acquired
+            // the later split actions must keep its independent view/import grants on re-upgrade.
             migrationBuilder.Sql("""
                 INSERT IGNORE INTO role_permissions(role_id,permission_id)
                 SELECT grant_row.role_id, manage.id
                 FROM role_permissions grant_row
                 INNER JOIN permissions old ON old.id=grant_row.permission_id AND old.code='outsource:import'
                 CROSS JOIN permissions manage
-                WHERE manage.code='outsource:manage';
+                WHERE manage.code='outsource:manage'
+                  AND NOT EXISTS (SELECT 1 FROM permissions marker WHERE marker.code='outsource:delete');
                 """);
             migrationBuilder.Sql("""
                 INSERT IGNORE INTO role_permissions(role_id,permission_id)
@@ -33,9 +36,16 @@ namespace Yf.Api.Infrastructure.Migrations
             migrationBuilder.Sql("""
                 DELETE rp FROM role_permissions rp
                 INNER JOIN permissions p ON p.id = rp.permission_id
-                WHERE p.code IN ('outsource:view', 'outsource:import', 'outsource:field_settings');
+                LEFT JOIN permissions marker ON marker.code='outsource:delete'
+                WHERE p.code='outsource:field_settings'
+                   OR (marker.id IS NULL AND p.code IN ('outsource:view','outsource:import'));
                 """);
-            migrationBuilder.Sql("DELETE FROM permissions WHERE code IN ('outsource:view', 'outsource:import', 'outsource:field_settings');");
+            migrationBuilder.Sql("""
+                DELETE p FROM permissions p
+                LEFT JOIN permissions marker ON marker.code='outsource:delete'
+                WHERE p.code='outsource:field_settings'
+                   OR (marker.id IS NULL AND p.code IN ('outsource:view','outsource:import'));
+                """);
             migrationBuilder.Sql("UPDATE permissions SET name='管理外协清单' WHERE code='outsource:manage';");
             migrationBuilder.Sql("UPDATE permissions SET name='外协清单设定' WHERE code='outsource:settings';");
         }

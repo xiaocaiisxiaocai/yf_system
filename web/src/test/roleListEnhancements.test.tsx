@@ -63,6 +63,13 @@ describe('RoleList permission tree enhancements and user impact indicator', () =
             { id: 4, name: '项目导出', type: 'ACTION', parentId: 1, grantable: true },
             { id: 200, code: 'oem', name: 'ODM/OEMA 文件传递', type: 'MENU', parentId: null, grantable: true },
             { id: 217, code: 'outsource', name: '外协清单', type: 'MENU', parentId: null, grantable: true },
+            { id: 235, code: 'outsource:view', name: '查看外发工令', type: 'ACTION', parentId: 217, grantable: true },
+            { id: 236, code: 'outsource:export', name: '导出外发工令', type: 'ACTION', parentId: 217, grantable: true },
+            { id: 237, code: 'outsource:import', name: '导入外发工令', type: 'ACTION', parentId: 217, grantable: true },
+            { id: 238, code: 'outsource:delete', name: '删除外发工令', type: 'ACTION', parentId: 217, grantable: true },
+            { id: 233, code: 'outsource:date_import', name: '导入BOM时间与发图', type: 'ACTION', parentId: 217, grantable: true },
+            { id: 221, code: 'outsource:settings', name: '外发工令设定', type: 'ACTION', parentId: 217, grantable: true },
+            { id: 232, code: 'outsource:send', name: '发送外发工令邮件', type: 'ACTION', parentId: 217, grantable: true },
             { id: 220, code: 'outsource:manage', name: '管理外协清单', type: 'ACTION', parentId: 217, grantable: true },
           ],
         }
@@ -129,6 +136,34 @@ describe('RoleList permission tree enhancements and user impact indicator', () =
     expect(screen.getByText('外发工令')).toBeVisible()
     expect(screen.getByText('管理外发工令')).toBeVisible()
     expect(screen.queryByText('项目协作')).not.toBeInTheDocument()
+  })
+
+  it('勾选清单操作时说明查看依赖，独立邮件和设置不触发，也不自动授权', async () => {
+    render(<RoleList />)
+    fireEvent.click(await screen.findByRole('button', { name: '分配权限' }))
+    await screen.findByText('查看外发工令')
+    const checkbox = (name: string) => screen.getByText(name).closest('.arco-tree-node')!.querySelector('input')!
+    const view = checkbox('查看外发工令')
+    const hint = '办理这些操作还需要查看外发工令。'
+    fireEvent.click(checkbox('外发工令设定'))
+    fireEvent.click(checkbox('发送外发工令邮件'))
+    expect(screen.queryByText(hint)).not.toBeInTheDocument()
+    for (const label of ['导入外发工令', '删除外发工令', '导入BOM时间与发图', '导出外发工令']) {
+      fireEvent.click(checkbox(label))
+      expect(screen.getByText(hint)).toBeVisible()
+      expect(view).not.toBeChecked()
+      fireEvent.click(checkbox(label))
+      expect(screen.queryByText(hint)).not.toBeInTheDocument()
+    }
+    fireEvent.click(checkbox('导出外发工令'))
+    fireEvent.click(view)
+    expect(screen.queryByText(hint)).not.toBeInTheDocument()
+    fireEvent.click(view)
+    fireEvent.click(screen.getByRole('button', { name: '保存权限' }))
+    await vi.waitFor(() => expect(mocks.put).toHaveBeenCalled())
+    const [, body] = mocks.put.mock.calls[0] as [string, { permissionIds: number[] }]
+    expect(body.permissionIds).toContain(236)
+    expect(body.permissionIds).not.toContain(235)
   })
 
   it('limits a parent toggle to the children left visible by the permission filter', async () => {

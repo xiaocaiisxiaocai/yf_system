@@ -204,7 +204,7 @@ export default function App() {
         </>}
         <Route path="/outsource" element={<Guard><OutsourceLayout /></Guard>}>
           <Route index element={<OutsourceLanding />} />
-          <Route path="items" element={<OutsourceList />} />
+          <Route path="items" element={<Guard permission={OUTSOURCE_PERMISSIONS.view}><OutsourceList /></Guard>} />
           <Route path="mails" element={<Guard permission={OUTSOURCE_PERMISSIONS.send}><OutsourceMails /></Guard>} />
           <Route path="ipms-data" element={<Guard permission={OUTSOURCE_PERMISSIONS.settings}><OutsourceIpmsData /></Guard>} />
           <Route path="settings" element={<Guard permission={OUTSOURCE_PERMISSIONS.settings}><OutsourceSettings /></Guard>} />

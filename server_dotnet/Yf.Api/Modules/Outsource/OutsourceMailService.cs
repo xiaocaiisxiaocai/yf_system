@@ -3,7 +3,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
-using MySqlConnector;
 using Yf.Api.Infrastructure;
 using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Admin;
@@ -52,7 +51,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
     {
         var ids = ValidateItems(request.ItemIds);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
+        await OutsourceItemService.AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Send);
         var rows = await context.OutsourceItems.AsNoTracking().Where(x => ids.Contains(x.Id)).ToArrayAsync(ct);
         var plan = await PlanAsync(context, ids, rows, ct);
         var day = await BusinessDayAsync(context, ct);
@@ -75,7 +74,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
 
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Send, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Send);
         // A repeated confirmation (double click, retried request) returns what the first one queued.
         if (await context.OutsourceMailBatches.AnyAsync(x => x.RequestKey == requestKey, ct))
         {
@@ -280,7 +279,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         CurrentUser actor, ulong? vendorId, string? status, ulong page, uint size, ulong offset, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
+        await OutsourceItemService.AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.Send);
         var query = context.OutsourceMails.AsNoTracking();
         if (vendorId is { } vendor) query = query.Where(x => x.VendorId == vendor);
         if (!string.IsNullOrEmpty(status)) query = query.Where(x => x.Status == status);
@@ -294,7 +293,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Send, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Send);
         var mail = await context.OutsourceMails
             .FromSqlInterpolated($"SELECT * FROM outsource_mails WHERE id={id} FOR UPDATE")
             .AsNoTracking()
@@ -322,7 +321,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<(byte[] Content, string Name)> AttachmentAsync(CurrentUser actor, ulong id, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
+        await OutsourceItemService.AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.Send);
         var row = await context.OutsourceMails.AsNoTracking().Where(x => x.Id == id)
             .Select(x => new { x.Attachment, x.AttachmentName }).SingleOrDefaultAsync(ct);
         if (row?.Attachment is null || row.AttachmentName is null) throw ApiException.NotFound("该邮件没有附件");
@@ -385,26 +384,5 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
         var distinct = (ids ?? []).Distinct().ToArray();
         if (distinct.Length is < 1 or > MaximumItems) throw ApiException.BadRequest($"请选择 1–{MaximumItems} 条记录");
         return distinct;
-    }
-
-    private static async Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
-    {
-        AccessService.RequireInternal(actor);
-        await context.Database.OpenConnectionAsync(ct);
-        var connection = context.Database.Connection();
-        actor = await AccessService.ReadActorAsync(connection, null, actor, ct);
-        AccessService.RequireInternal(actor);
-        await AccessService.RequirePermissionAsync(connection, null, actor, permission, ct);
-    }
-
-    private static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, string permission, CancellationToken ct)
-    {
-        AccessService.RequireInternal(actor);
-        var connection = context.Database.Connection();
-        var transaction = context.Database.RequireTransaction();
-        actor = await AccessService.LockActorAsync(connection, transaction, actor, ct);
-        AccessService.RequireInternal(actor);
-        await AccessService.RequirePermissionAsync(connection, transaction, actor, permission, ct);
-        return actor;
     }
 }

@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }))
 vi.mock('../../../api/client', () => ({ default: { get: mocks.get, put: mocks.put, post: mocks.post } }))
 
 import SysConfig from '../../../pages/system/SysConfig'
+import { useAuth } from '../../../store/auth'
 
 const notificationPolicy = {
   globalEnabled: true,
@@ -73,10 +74,32 @@ async function openRules(user: ReturnType<typeof userEvent.setup>) {
 
 describe('系统参数与 SMTP 生产界面', () => {
   beforeEach(() => {
+    useAuth.setState({ permissions: ['config:manage'] })
     mocks.get.mockImplementation(async (url: string) => ({
       data: url.endsWith('/mail-settings') ? baseSmtp : url.endsWith('/mail-status') ? baseMail : [],
     }))
     mocks.put.mockResolvedValue({ data: baseSmtp })
+  })
+
+  it('只授予存储管理时只加载存储；增加系统权限后可在所有页签间切换', async () => {
+    useAuth.setState({ permissions: ['storage:manage'] })
+    mocks.get.mockImplementation(async (url: string) => ({
+      data: url === '/admin/storage-locations' ? { items: [] }
+        : url.endsWith('/mail-settings') ? baseSmtp : url.endsWith('/mail-status') ? baseMail : [],
+    }))
+    const user = userEvent.setup()
+    renderConfig()
+    expect(await screen.findByRole('tab', { name: '存储位置', selected: true })).toBeVisible()
+    expect(screen.getAllByRole('tab')).toHaveLength(1)
+    expect(mocks.get.mock.calls.map(([url]) => url)).toEqual(['/admin/storage-locations'])
+    act(() => useAuth.setState({ permissions: ['storage:manage', 'config:manage'] }))
+    expect(await screen.findByRole('tab', { name: '系统参数', selected: true })).toBeVisible()
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['系统参数', 'SMTP 配置', '邮件提醒规则', '存储位置'])
+    await user.click(screen.getByRole('tab', { name: '存储位置' }))
+    expect(await screen.findByRole('tab', { name: '存储位置', selected: true })).toBeVisible()
+    act(() => useAuth.setState({ permissions: ['config:manage'] }))
+    expect(await screen.findByRole('tab', { name: '系统参数', selected: true })).toBeVisible()
+    expect(screen.queryByRole('tab', { name: '存储位置' })).not.toBeInTheDocument()
   })
 
   it('edits internal networks and external hosts as one item per line', async () => {
@@ -114,6 +137,25 @@ describe('系统参数与 SMTP 生产界面', () => {
     expect(networks).toHaveValue(newNetworks)
     expect(hosts).toHaveValue(newHosts)
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+  })
+
+  it('保存参数后只剩存储管理权时不会再读取系统参数和邮件状态', async () => {
+    const saving = deferred<{ data: unknown }>()
+    mocks.put.mockReturnValue(saving.promise)
+    mocks.get.mockImplementation(async (url: string) => ({
+      data: url === '/admin/storage-locations' ? { items: [] }
+        : url.endsWith('/configs') ? [{ key: 'security.internal_networks', value: '10.0.0.0/8' }]
+          : url.endsWith('/mail-settings') ? baseSmtp : baseMail,
+    }))
+    renderConfig()
+    fireEvent.change(await screen.findByRole('textbox', { name: '内网网段' }), { target: { value: '192.168.0.0/16' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(mocks.put).toHaveBeenCalled()
+    mocks.get.mockClear()
+    act(() => useAuth.setState({ permissions: ['storage:manage'] }))
+    await screen.findByRole('tab', { name: '存储位置', selected: true })
+    await act(async () => saving.resolve({ data: {} }))
+    expect(mocks.get.mock.calls.map(([url]) => url)).toEqual(['/admin/storage-locations'])
   })
 
   it('system config exposes mail configuration, queue outcomes and missing mailbox hints', async () => {

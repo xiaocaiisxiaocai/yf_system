@@ -51,7 +51,7 @@ public sealed class OutsourceSyncTests
               (80,'外协采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (81,'外协查看',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
             INSERT INTO role_permissions(role_id,permission_id) SELECT 80,id FROM permissions WHERE code LIKE 'outsource%';
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 81,id FROM permissions WHERE code IN ('outsource');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 81,id FROM permissions WHERE code IN ('outsource','outsource:view');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9811,'os_sync_buyer','unused','采购','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9812,'os_sync_viewer','unused','主管','viewer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
@@ -151,6 +151,13 @@ public sealed class OutsourceSyncTests
         Assert.False((await sync.SetScheduleAsync(buyer, new(false), ct)).ScheduleEnabled);
         Assert.False((await sync.StatusAsync(viewer, ct)).ScheduleEnabled);
         Assert.True((await sync.SetScheduleAsync(buyer, new(true), ct)).ScheduleEnabled);
+        // A settings operator may still run the full sync without being allowed to select individual orders.
+        await database.ExecuteAsync("""
+            DELETE rp FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
+            WHERE rp.role_id=80 AND p.code='outsource:view'
+            """, ct);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => sync.SyncNowAsync(buyer, new([a.Id]), ct))).Status);
+        Assert.Equal("MANUAL", (await sync.SyncNowAsync(buyer, new(null), ct)).LastTrigger);
     }
 
     [Fact(Timeout = 180_000)]
@@ -301,7 +308,7 @@ public sealed class OutsourceSyncTests
               (80,'外协采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (81,'外协查看',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
             INSERT INTO role_permissions(role_id,permission_id) SELECT 80,id FROM permissions WHERE code LIKE 'outsource%';
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 81,id FROM permissions WHERE code IN ('outsource');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 81,id FROM permissions WHERE code IN ('outsource','outsource:view');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9821,'os_done_buyer','unused','采购','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9822,'os_done_viewer','unused','主管','viewer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));

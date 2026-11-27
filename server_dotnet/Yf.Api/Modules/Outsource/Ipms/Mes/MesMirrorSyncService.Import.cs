@@ -87,7 +87,7 @@ public sealed partial class MesMirrorSyncService
 
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         await LockImportStateAsync(context, ct);
         var groups = await ReadImportGroupsAsync(context, valid, ct);
         var chosen = groups.Select(group => (Group: group, Row: ChooseImportRow(group, request.ChosenRows))).ToArray();

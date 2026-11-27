@@ -47,7 +47,23 @@ describe('按可用功能决定模块导航与首页', () => {
 
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('没有任何权限的内部员工首页进入外发工令（全员可看），没有无意义的单模块切换', async () => {
+  it('没有任何权限的内部员工不能打开外发清单', async () => {
+    const get = vi.spyOn(http, 'get')
+    render(<MemoryRouter initialEntries={['/outsource/items']}><App /></MemoryRouter>)
+    expect(await screen.findByText('没有 ODM/OEM工令协作 的可用功能')).toBeVisible()
+    expect(get).not.toHaveBeenCalledWith('/outsource/items', expect.anything())
+  })
+
+  it('只有邮件发送权限时直达清单被守卫阻止，不请求工令', async () => {
+    useAuth.setState({ permissions: ['outsource:send'] })
+    const get = vi.spyOn(http, 'get')
+    render(<MemoryRouter initialEntries={['/outsource/items']}><App /></MemoryRouter>)
+    expect(await screen.findByText('无操作权限')).toBeVisible()
+    expect(get).not.toHaveBeenCalled()
+  })
+
+  it('只有外发查看权限时首页进入外发工令', async () => {
+    useAuth.setState({ permissions: ['outsource:view'] })
     renderShell()
     expect(await screen.findByRole('heading', { name: '外发工令页面' })).toBeInTheDocument()
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/outsource/items')
@@ -87,7 +103,7 @@ describe('按可用功能决定模块导航与首页', () => {
   })
 
   it('侧栏不会显示只分配菜单、没有操作权限的管理功能', async () => {
-    useAuth.setState({ menus: ['org:user', 'system:config'], permissions: ['org:user', 'system:config'] })
+    useAuth.setState({ menus: ['org:user', 'system:config'], permissions: ['org:user', 'system:config', 'outsource:view'] })
     renderShell()
     expect(await screen.findByRole('heading', { name: '外发工令页面' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: '用户管理' })).not.toBeInTheDocument()
@@ -95,7 +111,7 @@ describe('按可用功能决定模块导航与首页', () => {
   })
 
   it('只有工作台菜单、没有项目查看权限时不进入工作台', async () => {
-    useAuth.setState({ menus: ['dashboard'], permissions: ['dashboard'] })
+    useAuth.setState({ menus: ['dashboard'], permissions: ['dashboard', 'outsource:view'] })
     const get = vi.spyOn(http, 'get')
     renderShell()
     expect(await screen.findByRole('heading', { name: '外发工令页面' })).toBeInTheDocument()
@@ -122,7 +138,7 @@ describe('按可用功能决定模块导航与首页', () => {
     renderShell('/profile')
     expect(screen.getByRole('button', { name: 'Robot仿真协作' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'ODM/OEM工令协作' })).toBeInTheDocument()
-    act(() => { useAuth.setState({ permissions: [] }) })
+    act(() => { useAuth.setState({ permissions: ['oem:audit_view'] }) })
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Robot仿真协作' })).not.toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'ODM/OEM工令协作' })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: '用户管理' })).not.toBeInTheDocument()
@@ -162,8 +178,18 @@ describe('按可用功能决定模块导航与首页', () => {
     expect(get).not.toHaveBeenCalled()
   })
 
+  it('系统参数菜单配存储管理权可以直接打开存储位置', async () => {
+    useAuth.setState({ menus: ['system:config'], permissions: ['storage:manage'] })
+    const get = vi.spyOn(http, 'get').mockResolvedValue({ data: { items: [] } })
+    render(<MemoryRouter initialEntries={['/system/config']}><App /><CurrentLocation /></MemoryRouter>)
+    expect(await screen.findByRole('tab', { name: '存储位置', selected: true })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: '系统参数' })).toBeVisible()
+    expect(get.mock.calls.map(([url]) => url)).toContain('/admin/storage-locations')
+    expect(get.mock.calls.some(([url]) => url.startsWith('/admin/system/'))).toBe(false)
+  })
+
   it('实际项目路由在没有菜单时回到首页并进入外发工令，不请求项目数据', async () => {
-    useAuth.setState({ menus: [], permissions: [] })
+    useAuth.setState({ menus: [], permissions: ['outsource:view'] })
     const get = vi.spyOn(http, 'get').mockImplementation(async (url) => {
       if (url === '/outsource/items') return { data: { list: [], total: 0 } } as never
       if (url === '/outsource/fields') return { data: { fields: [] } } as never

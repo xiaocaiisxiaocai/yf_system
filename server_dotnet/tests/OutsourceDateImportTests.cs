@@ -41,8 +41,8 @@ public sealed class OutsourceDateImportTests
             INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
               (70,'采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (71,'设计',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:manage','outsource:settings');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:date_import');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:import','outsource:manage','outsource:settings');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:date_import');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9751,'od_buyer','unused','采购甲','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9752,'od_design','unused','设计乙','design@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));

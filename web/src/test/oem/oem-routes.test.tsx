@@ -155,7 +155,8 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent(/^\/$/)
   })
 
-  it('没有任何 ODM/OEMA 权限的内部员工通过工令协作入口进入外发工令', async () => {
+  it('只有外发工令查看权的内部员工通过工令协作入口进入清单', async () => {
+    useAuth.setState({ permissions: ['outsource:view'] })
     const user = userEvent.setup()
     render(<MemoryRouter><AppRail active="collaboration" /><CurrentLocation /></MemoryRouter>)
     await user.click(screen.getByRole('button', { name: 'ODM/OEM工令协作' }))
@@ -181,7 +182,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(await screen.findByRole('heading', { name: '组织架构' })).toBeInTheDocument()
     expect(screen.getByRole('status', { name: '当前地址' })).toHaveTextContent('/org/depts')
     expect(screen.queryByRole('button', { name: '新增事业部' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'ODM/OEM工令协作' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'ODM/OEM工令协作' })).not.toBeInTheDocument()
     await waitFor(() => expect(get).toHaveBeenCalledWith('/departments'))
   })
 
@@ -199,7 +200,8 @@ describe('ODM/OEMA 前端入口与路由', () => {
     expect(await screen.findByRole('status', { name: '当前地址' })).toHaveTextContent('/oem/approvals')
   })
 
-  it('内部员工在 OEM 根路径无 OEM 权限时进入外发工令', async () => {
+  it('内部员工在 OEM 根路径仅有外发查看权时进入清单', async () => {
+    useAuth.setState({ permissions: ['outsource:view'] })
     render(
       <MemoryRouter initialEntries={['/oem']}>
         <Routes>

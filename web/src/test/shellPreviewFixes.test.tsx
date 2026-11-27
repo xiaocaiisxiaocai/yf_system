@@ -35,7 +35,7 @@ describe('壳层导航、404 与水印修复回归', () => {
       token: 'shell-token',
       user: internalUser,
       menus: ['dashboard', 'project:list'],
-      permissions: ['project:list', 'oem:transfer_view', 'outsource:send'],
+      permissions: ['project:list', 'oem:transfer_view', 'outsource:view', 'outsource:send'],
       mustChangePassword: false,
       booted: true,
       generation: 91,

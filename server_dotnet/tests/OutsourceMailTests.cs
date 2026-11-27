@@ -52,9 +52,9 @@ public sealed class OutsourceMailTests
               (91,'外协查看',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (92,'外协编辑',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
             INSERT INTO role_permissions(role_id,permission_id) SELECT 90,id FROM permissions WHERE code LIKE 'outsource%';
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 91,id FROM permissions WHERE code IN ('outsource');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 91,id FROM permissions WHERE code IN ('outsource','outsource:view');
             -- Editing without the send permission (2026-11-19: editing and mailing vendors are separate).
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 92,id FROM permissions WHERE code IN ('outsource','outsource:manage');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 92,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9911,'om_buyer','unused','采购','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9912,'om_viewer','unused','主管','viewer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
@@ -195,6 +195,15 @@ public sealed class OutsourceMailTests
         await settings.UpdateTypeSettingsAsync(buyer, oema, ct, vendorIds: [dingya.Id]);
         var blocked = await Assert.ThrowsAsync<ApiException>(() => mails.PreviewAsync(buyer, new([Id("C1")]), ct));
         Assert.Contains("外发类型与厂商不符", blocked.Message, StringComparison.Ordinal);
+        // Mail records and archived attachments are available to senders after list access is withdrawn.
+        await database.ExecuteAsync("""
+            DELETE rp FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
+            WHERE rp.role_id=90 AND p.code='outsource:view'
+            """, ct);
+        Assert.NotEmpty((await mails.ListAsync(buyer, null, null, 1, 20, 0, ct)).List);
+        Assert.Equal(partial.AttachmentName, (await mails.AttachmentAsync(buyer, partial.Id, ct)).Name);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => mails.PreviewAsync(buyer, new([a.Id]), ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => items.SendQueueAsync(buyer, ct))).Status);
     }
 
     [Fact]

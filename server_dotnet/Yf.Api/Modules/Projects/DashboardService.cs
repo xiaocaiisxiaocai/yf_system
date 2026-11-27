@@ -72,7 +72,7 @@ internal sealed class DashboardService
         await AccessService.RequirePermissionAsync(conn, tx, current, "dashboard", ct);
 
         await using var db = EfDb.Use(conn, tx);
-        // Internal accounts can open every project, but the workbench counts and feeds only the ones they follow.
+        // InboxQueryAsync requires project:list and limits the workbench to the caller's followed projects.
         var visibleProjects = await ProjectAccessService.InboxQueryAsync(db, current, ct);
         var projectCount = (ulong)await visibleProjects.LongCountAsync(ct);
         var activeProjectCount = (ulong)await visibleProjects.LongCountAsync(

@@ -13,11 +13,19 @@ interface SendQueueState {
   refresh: () => Promise<void>
 }
 
+export function canViewSendQueue(permissions: readonly string[]) {
+  return permissions.includes(OUTSOURCE_PERMISSIONS.view) && permissions.includes(OUTSOURCE_PERMISSIONS.send)
+}
+
 /** Shared by the business rail, the outsourcing menu and the list, so a send or "no notice" updates every badge at once. */
 export const useSendQueue = create<SendQueueState>((set) => ({
   count: 0,
   refresh: async () => {
-    if (!useAuth.getState().permissions.includes(OUTSOURCE_PERMISSIONS.send)) { set({ count: 0 }); return }
+    const { permissions } = useAuth.getState()
+    if (!canViewSendQueue(permissions)) {
+      set({ count: 0 })
+      return
+    }
     try {
       const response = await http.get<ApiResponses['GET /outsource/send-queue']>('/outsource/send-queue', { quietNetworkError: true } as never)
       set({ count: Number(response.data?.count) || 0 })

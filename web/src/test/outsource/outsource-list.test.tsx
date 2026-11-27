@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,7 +14,7 @@ function setSession(permissions: string[]) {
   useAuth.setState({
     token: 'token',
     user: { id: 7, employeeNo: 'buyer', realName: '采购', email: 'buyer@example.test', userType: 'INTERNAL', supplierId: null, isSystemAdmin: false },
-    permissions, menus: [], mustChangePassword: false, booted: true, generation: 1,
+    permissions: ['outsource:view', ...permissions], menus: [], mustChangePassword: false, booted: true, generation: 1,
   })
 }
 
@@ -90,7 +90,38 @@ describe('外发工令页面', () => {
     expect(normalizeImportDate('下周')).toBe('下周')
   })
 
-  it('没有任何外协权限、但被指定填写某栏的人可以编辑，不能汇入、删除、标记完成或同步', async () => {
+  it.each([
+    ['outsource:manage', false, false, false],
+    ['outsource:import', true, false, false],
+    ['outsource:delete', false, true, false],
+    ['outsource:export', false, false, true],
+  ] as const)('独立授权 %s 只开放相应清单操作', async (grant, canImport, canDelete, canExport) => {
+    setSession([grant])
+    mockApi(readOnlyLayout)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    const row = (await screen.findByText('21089901')).closest('tr')!
+    const checkbox = within(row).queryByRole('checkbox')
+    if (checkbox) await userEvent.click(checkbox)
+    expect(Boolean(screen.queryByRole('button', { name: /^导入$/ }))).toBe(canImport)
+    expect(Boolean(screen.queryByRole('button', { name: /^删除$/ }))).toBe(canDelete)
+    expect(Boolean(screen.queryByRole('button', { name: /^导出$/ }))).toBe(canExport)
+  })
+
+  it('撤销导入授权会关闭已打开的导入窗口，保留清单访问', async () => {
+    setSession(['outsource:import'])
+    mockApi(readOnlyLayout)
+    render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
+    await screen.findByText('21089901')
+    await userEvent.click(screen.getByRole('button', { name: /^导入$/ }))
+    expect(await screen.findByRole('dialog')).toHaveTextContent('汇入外发工令')
+
+    act(() => { useAuth.setState({ permissions: ['outsource:view'] }) })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^导入$/ })).not.toBeInTheDocument()
+    expect(await screen.findByText('21089901')).toBeVisible()
+  })
+
+  it('只有查看权限、但被指定填写某栏的人可以编辑，不能汇入、删除、标记完成或同步', async () => {
     const user = userEvent.setup()
     setSession([])
     mockApi({ fields: readOnlyLayout.fields.map((field) => field.key === 'remark' ? { ...field, canEdit: true } : field) })
@@ -105,7 +136,7 @@ describe('外发工令页面', () => {
   })
 
   it('按厂商页签筛选并导出，暂停整行标红，类型与厂商不符时提示', async () => {
-    setSession([])
+    setSession(['outsource:export'])
     const get = mockApi(readOnlyLayout)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
 
@@ -140,7 +171,7 @@ describe('外发工令页面', () => {
 
   it('工令表头可粘贴多个工令，筛选回到第一页，导出和重置复用筛选条件', async () => {
     const user = userEvent.setup()
-    setSession([])
+    setSession(['outsource:export'])
     const get = mockApi(readOnlyLayout, 40)
     const saveBlob = vi.spyOn(downloads, 'saveBlob').mockImplementation(() => undefined)
     render(<MemoryRouter><OutsourceListPage /></MemoryRouter>)
@@ -323,7 +354,7 @@ describe('外发工令页面', () => {
 
   it('汇入模板含外发类型范例，预览请求保留外发类型并排除范例', async () => {
     const user = userEvent.setup()
-    setSession(['outsource:manage'])
+    setSession(['outsource:import'])
     mockApi()
     const post = vi.spyOn(http, 'post').mockResolvedValue({ data: { ready: 1, skipped: 0, invalid: 0, rows: [{
       rowNumber: 3, workOrderNo: '21089901', status: 'READY', message: null, vendorName: '鼎亚', outsourceDate: '2026-11-04',

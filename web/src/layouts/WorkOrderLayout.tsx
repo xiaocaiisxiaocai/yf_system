@@ -6,7 +6,7 @@ import AccountMenu from '../components/AccountMenu'
 import { OEM_UI_ENABLED } from '../features'
 import { OEM_SETTINGS_PERMISSIONS, OUTSOURCE_MANAGEMENT_PATH, OUTSOURCE_MANAGEMENT_PERMISSIONS } from '../oem/oemNavigation'
 import { OUTSOURCE_HOME, OUTSOURCE_PERMISSIONS } from '../outsource/outsourceNavigation'
-import { SEND_QUEUE_PATH, useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
+import { canViewSendQueue, SEND_QUEUE_PATH, useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
 import { useAuth } from '../store/auth'
 import { WORK_ORDER_TITLE } from './navigation'
 import SectionShell, { type MenuEntry } from './SectionShell'
@@ -23,13 +23,15 @@ export default function WorkOrderLayout() {
   const has = (code: string) => internal && permissions.includes(code)
   const oem = OEM_UI_ENABLED && internal
   const canSend = has(OUTSOURCE_PERMISSIONS.send)
-  useSendQueuePolling(canSend)
+  const canView = has(OUTSOURCE_PERMISSIONS.view)
+  const showSendQueue = internal && canViewSendQueue(permissions)
+  useSendQueuePolling(showSendQueue)
   const queued = useSendQueue((state) => state.count)
 
   const menu: MenuEntry[] = [
     {
-      path: OUTSOURCE_HOME, label: '外发工令', icon: <IconList />, visible: internal,
-      badge: canSend ? queued : undefined, to: canSend && queued > 0 ? SEND_QUEUE_PATH : undefined,
+      path: OUTSOURCE_HOME, label: '外发工令', icon: <IconList />, visible: canView,
+      badge: showSendQueue ? queued : undefined, to: showSendQueue && queued > 0 ? SEND_QUEUE_PATH : undefined,
     },
     { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: oem && (has('oem:transfer_create') || has('oem:transfer_view')) },
     { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: oem && (has('oem:flow_approve') || has('oem:approval_recover')) },

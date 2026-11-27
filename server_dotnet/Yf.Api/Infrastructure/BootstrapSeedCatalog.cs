@@ -84,6 +84,10 @@ internal static class BootstrapSeedCatalog
         (232, "outsource:send", "发送外协清单邮件", "ACTION", 217, 79),
         (233, "outsource:date_import", "导入BOM时间与发图", "ACTION", 217, 80),
         (234, "outsource:file_view", "外协档案", "ACTION", 217, 81),
+        (235, "outsource:view", "查看外发工令", "ACTION", 217, 82),
+        (236, "outsource:export", "导出外发工令", "ACTION", 217, 83),
+        (237, "outsource:import", "导入外发工令", "ACTION", 217, 84),
+        (238, "outsource:delete", "删除外发工令", "ACTION", 217, 85),
     ];
 
     private static readonly (string Key, string Value, string Description)[] Configs =

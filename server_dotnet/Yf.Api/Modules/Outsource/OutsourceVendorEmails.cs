@@ -34,7 +34,7 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
     public async Task<OutsourceVendorEmailResponse[]> ListAsync(CurrentUser actor, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await OutsourceItemService.AuthorizeReadAsync(context, actor, OutsourcePermissions.Settings, ct);
+        await OutsourceItemService.AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.Settings);
         return await context.OutsourceVendorEmails.AsNoTracking()
             .Join(context.OemCompanies, email => email.VendorId, vendor => vendor.Id, (email, vendor) => new { email, vendor })
             .OrderBy(x => x.vendor.Name).ThenBy(x => x.email.Id)
@@ -48,7 +48,7 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
         var vendorId = request.VendorId ?? throw ApiException.BadRequest("请选择厂商");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         var vendor = await LockVendorAsync(context, vendorId, ct);
         if (vendor.Status != AccountStatuses.Active) throw ApiException.BadRequest("厂商已停用，不能新增外协邮箱");
         if (await context.OutsourceVendorEmails.CountAsync(x => x.VendorId == vendorId, ct) >= MaximumPerVendor)
@@ -69,7 +69,7 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
         var email = OemValidation.Email(request.Email);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         var row = await LockAsync(context, id, ct);
         var vendorName = await context.OemCompanies.Where(x => x.Id == row.VendorId).Select(x => x.Name).SingleAsync(ct);
         if (await context.OutsourceVendorEmails.AnyAsync(x => x.VendorId == row.VendorId && x.Id != id && x.Email == email, ct))
@@ -91,7 +91,7 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         var row = await LockAsync(context, id, ct);
         var vendorName = await context.OemCompanies.Where(x => x.Id == row.VendorId).Select(x => x.Name).SingleAsync(ct);
         await context.OutsourceVendorEmails.Where(x => x.Id == id).ExecuteDeleteAsync(ct);
@@ -111,7 +111,7 @@ public sealed class OutsourceVendorEmailService(IDbContextFactory<YfDbContext> d
             throw ApiException.BadRequest($"导入行数需为 1–{MaximumImportRows} 行");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         var requestedNames = request.Rows
             .Select(row => row.VendorName?.Trim() ?? "")
             .Where(name => name.Length > 0)

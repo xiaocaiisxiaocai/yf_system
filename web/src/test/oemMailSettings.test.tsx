@@ -8,7 +8,7 @@ import { EMPTY_MAIL_STATUS } from '../pages/system/components/systemConfigModel'
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), canOem: true }))
 vi.mock('../api/client', () => ({ default: { get: mocks.get, put: mocks.put } }))
-vi.mock('../store/auth', () => ({ useAuth: () => ({ hasPerm: (code: string) => mocks.canOem && ['oem:notify_manage', 'oem:audit_view'].includes(code) }) }))
+vi.mock('../store/auth', () => ({ useAuth: () => ({ hasPerm: (code: string) => code === 'config:manage' || (mocks.canOem && ['oem:notify_manage', 'oem:audit_view'].includes(code)) }) }))
 
 const keys = ['oem.notify.enabled', 'oem.notify.event.approval_pending', 'oem.notify.event.transfer_released', 'oem.notify.event.sender_result', 'oem.notify.event.receipt']
 const settings = keys.map(key => ({ key, label: key, kind: 'boolean', value: key.endsWith('receipt') ? 'false' : 'true', min: null, max: null, readOnly: false, unsupportedReason: null, hint: null }))

@@ -23,9 +23,9 @@ internal static class OutsourceEditorScopes
 {
     /// <summary>Everyone who manages the list (<c>outsource:manage</c>); the default, so a new role needs no field setup.</summary>
     internal const string All = "ALL";
-    /// <summary>Only members of the field's editor roles (and system administrators); no permission needed.</summary>
+    /// <summary>Only members of the field's editor roles (and system administrators); no management permission needed.</summary>
     internal const string Roles = "ROLES";
-    /// <summary>Only the field's editor accounts (and system administrators); no permission needed.</summary>
+    /// <summary>Only the field's editor accounts (and system administrators); no management permission needed.</summary>
     internal const string Users = "USERS";
     /// <summary>Nobody inside the company, system administrators included.</summary>
     internal const string None = "NONE";
@@ -193,7 +193,7 @@ internal sealed class OutsourceFieldLayout
 
     /// <summary>
     /// Whether <paramref name="editor"/> may fill <paramref name="column"/> in. This is the only edit check: an ALL
-    /// column needs outsource:manage, a column limited to roles or people needs nothing beyond being named.
+    /// column needs outsource:manage, a column limited to roles or people checks its own assignments.
     /// </summary>
     public static bool CanEdit(Column column, OutsourceEditor editor)
     {
@@ -299,7 +299,7 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
     public async Task<OutsourceFieldLayoutResponse> LayoutAsync(CurrentUser actor, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await OutsourceItemService.AuthorizeReadAsync(context, actor, null, ct);
+        await OutsourceItemService.AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View);
         var layout = await OutsourceFieldLayout.LoadAsync(context, ct);
         var editor = await OutsourceEditor.LoadAsync(context, actor.Id, ct);
         return new(layout.Columns.Select(column => new OutsourceFieldColumnResponse(
@@ -310,7 +310,7 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
     public async Task<OutsourceFieldSettingsResponse> SettingsAsync(CurrentUser actor, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await OutsourceItemService.AuthorizeReadAsync(context, actor, OutsourcePermissions.Settings, ct);
+        await OutsourceItemService.AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.Settings);
         return await SettingsResponseAsync(context, ct);
     }
 
@@ -318,7 +318,7 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         var fields = await context.OutsourceFields.FromSqlRaw("SELECT * FROM outsource_fields FOR UPDATE").ToListAsync(ct);
         var field = fields.SingleOrDefault(x => x.Id == id) ?? throw ApiException.NotFound("栏位不存在");
         var builtIn = field.BuiltIn ? OutsourceBuiltInFields.ByKey.GetValueOrDefault(field.FieldKey) : null;
@@ -411,7 +411,7 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
         if (status is not (AccountStatuses.Active or AccountStatuses.Disabled)) throw ApiException.BadRequest("状态只能是启用或停用");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         var field = await context.OutsourceFields.FromSqlInterpolated($"SELECT * FROM outsource_fields WHERE id={id} FOR UPDATE")
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound("栏位不存在");
         if (field.BuiltIn) throw ApiException.BadRequest("系统栏位不能停用");
@@ -437,7 +437,7 @@ public sealed class OutsourceFieldService(IDbContextFactory<YfDbContext> dbFacto
         var ids = request.FieldIds ?? throw ApiException.BadRequest("请提供栏位顺序");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.Settings, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.Settings);
         var fields = await context.OutsourceFields.FromSqlRaw("SELECT * FROM outsource_fields FOR UPDATE").ToListAsync(ct);
         static bool IsPinned(OutsourceField field) => field.BuiltIn && OutsourceBuiltInFields.ByKey.TryGetValue(field.FieldKey, out var builtIn) && builtIn.Pinned;
         var movable = fields.Where(x => !IsPinned(x)).ToArray();

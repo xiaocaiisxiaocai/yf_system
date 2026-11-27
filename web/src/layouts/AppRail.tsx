@@ -6,8 +6,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useAuth } from '../store/auth'
 import { refreshCollaborationSummary, useCollaboration } from '../store/collaboration'
 import { businessHomes, WORK_ORDER_TITLE } from './navigation'
-import { OUTSOURCE_PERMISSIONS } from '../outsource/outsourceNavigation'
-import { useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
+import { canViewSendQueue, useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
 
 export type BusinessLine = 'collaboration' | 'workOrder'
 
@@ -32,8 +31,8 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
   const navigate = useNavigate()
   const { collaboration: collaborationPath, workOrder: workOrderPath } = businessHomes(grants)
   // Outsourcing items waiting for a sender are counted on the rail from every section, not only inside outsourcing.
-  const canSend = Boolean(workOrderPath) && grants.permissions.includes(OUTSOURCE_PERMISSIONS.send)
-  useSendQueuePolling(canSend)
+  const showSendQueue = Boolean(workOrderPath) && canViewSendQueue(grants.permissions)
+  useSendQueuePolling(showSendQueue)
   const queued = useSendQueue((state) => state.count)
 
   // Collaboration unread count is maintained by CollaborationNotifications inside AdminLayout;
@@ -75,7 +74,7 @@ export default function AppRail({ active, variant = 'rail', onNavigate }: {
     }] : []),
     ...(workOrderPath ? [{
       key: 'workOrder' as const, label: WORK_ORDER_TITLE, short: '工令协作', icon: <IconList />,
-      path: workOrderPath, badge: canSend ? queued : 0,
+      path: workOrderPath, badge: showSendQueue ? queued : 0,
     }] : []),
   ]
   if (lines.length === 0 || (lines.length === 1 && lines[0].key === active)) return null

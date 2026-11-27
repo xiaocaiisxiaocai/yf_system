@@ -164,8 +164,8 @@ public sealed class OutsourceFilesTests
         var transfer = await AddTransferAsync(host, company, item, ct);
         await AddFileAsync(host, transfer, "reference.pdf", PayloadStatuses.Available, ValidationStatuses.Valid, ct);
         const string password = "Files#2026";
-        await host.CreateInternalUserAsync("files_list", password, [], null, ct);
-        await host.CreateInternalUserAsync("files_open", password, ["outsource:file_view"], null, ct);
+        await host.CreateInternalUserAsync("files_list", password, ["outsource:view"], null, ct);
+        await host.CreateInternalUserAsync("files_open", password, ["outsource:view", "outsource:file_view"], null, ct);
         var reader = await host.LoginInternalAsync("files_list", password, ct);
         var opener = await host.LoginInternalAsync("files_open", password, ct);
 

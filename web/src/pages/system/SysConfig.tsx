@@ -8,14 +8,30 @@ import { useSystemConfig } from './hooks/useSystemConfig'
 import LoadError from '../../components/LoadError'
 import { useAuth } from '../../store/auth'
 import StorageLocationsPanel from './components/StorageLocationsPanel'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactElement } from 'react'
 import { OemApi } from '../../oem/api/OemApi'
 import OemMailRulesPanel from '../../oem/components/OemMailRulesPanel'
 
 export default function SysConfig() {
+  const { hasPerm } = useAuth()
+  const canManageConfig = hasPerm('config:manage')
+  const storageTab = hasPerm('storage:manage') ? (
+    <Tabs.TabPane key="storage" title="存储位置"><StorageLocationsPanel /></Tabs.TabPane>
+  ) : null
+  if (!canManageConfig && !storageTab) return null
+  return (
+    <Card className="page-card page-card--table system-page">
+      <h1 className="visually-hidden">系统参数</h1>
+      {canManageConfig ? <ConfigurationTabs storageTab={storageTab} /> : (
+        <Tabs className="system-config-tabs" defaultActiveTab="storage">{storageTab}</Tabs>
+      )}
+    </Card>
+  )
+}
+
+function ConfigurationTabs({ storageTab }: { storageTab: ReactElement | null }) {
   const navigate = useNavigate()
   const state = useSystemConfig(http)
-  const canManageStorage = useAuth().hasPerm('storage:manage')
   const canManageOemNotify = useAuth().hasPerm('oem:notify_manage')
   const [rulesBusiness, setRulesBusiness] = useState<'robot' | 'oem'>('robot')
   const oemApi = useMemo(() => new OemApi(http), [])
@@ -63,33 +79,14 @@ export default function SysConfig() {
   const smtpPanel = renderMailSettingsPanel(mailPanelProps)
   const reminderPanel = renderMailSettingsPanel(mailPanelProps, 'rules')
 
+  if (state.loadError) return <LoadError onRetry={state.load} />
+  if (state.loading) return <Spin loading style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 120 }} />
   return (
-    <Card className="page-card page-card--table system-page">
-      <h1 className="visually-hidden">系统参数</h1>
-      {state.loadError ? (
-        <LoadError onRetry={state.load} />
-      ) : state.loading ? (
-        <Spin loading style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', minHeight: 120 }} />
-      ) : (
-        <>
-          <Tabs className="system-config-tabs" defaultActiveTab="system">
-            <Tabs.TabPane key="system" title="系统参数">
-              {systemPanel}
-            </Tabs.TabPane>
-            <Tabs.TabPane key="smtp" title="SMTP 配置">
-              {smtpPanel}
-            </Tabs.TabPane>
-            <Tabs.TabPane key="mail-rules" title="邮件提醒规则">
-              {reminderPanel}
-            </Tabs.TabPane>
-            {canManageStorage && (
-              <Tabs.TabPane key="storage" title="存储位置">
-                <StorageLocationsPanel />
-              </Tabs.TabPane>
-            )}
-          </Tabs>
-        </>
-      )}
-    </Card>
+    <Tabs key={storageTab ? 'with-storage' : 'config'} className="system-config-tabs" defaultActiveTab="system">
+      <Tabs.TabPane key="system" title="系统参数">{systemPanel}</Tabs.TabPane>
+      <Tabs.TabPane key="smtp" title="SMTP 配置">{smtpPanel}</Tabs.TabPane>
+      <Tabs.TabPane key="mail-rules" title="邮件提醒规则">{reminderPanel}</Tabs.TabPane>
+      {storageTab}
+    </Tabs>
   )
 }

@@ -1,9 +1,9 @@
-/**
- * Permission points of the outsourcing list (外协清单契约 → 权限). Every internal account sees the list without one;
- * who fills a column in is set per column on the field settings page.
- */
 export const OUTSOURCE_PERMISSIONS = {
-  /** Import, delete, complete/reopen, manual sync, and the columns whose editor setting is "everyone who manages". */
+  view: 'outsource:view',
+  export: 'outsource:export',
+  import: 'outsource:import',
+  delete: 'outsource:delete',
+  /** Complete/reopen, manual sync and columns assigned to everyone who manages the list. */
   manage: 'outsource:manage',
   /** Vendor mails, the mail records and the send-queue count. */
   send: 'outsource:send',
@@ -13,5 +13,11 @@ export const OUTSOURCE_PERMISSIONS = {
   dateImport: 'outsource:date_import',
 } as const
 
-/** The outsourcing section's first page; every internal account may open it. */
 export const OUTSOURCE_HOME = '/outsource/items'
+
+export function outsourceHome(permissions: readonly string[]): string | null {
+  if (permissions.includes(OUTSOURCE_PERMISSIONS.view)) return OUTSOURCE_HOME
+  if (permissions.includes(OUTSOURCE_PERMISSIONS.send)) return '/outsource/mails'
+  if (permissions.includes(OUTSOURCE_PERMISSIONS.settings)) return '/outsource/settings'
+  return null
+}

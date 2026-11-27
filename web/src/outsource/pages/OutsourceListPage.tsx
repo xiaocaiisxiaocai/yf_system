@@ -5,6 +5,7 @@ import {
 import type { TableColumnProps } from '@arco-design/web-react'
 import { IconCheckCircle, IconDownload, IconEdit, IconEmail, IconHistory, IconSync, IconUpload } from '@arco-design/web-react/icon'
 import http from '../../api/client'
+import { createSessionQueryScope } from '../../api/queryClient'
 import { fmtTime, type ApiResponses } from '../../api/types'
 import EnterSubmit from '../../components/EnterSubmit'
 import DangerPopconfirm from '../../components/DangerPopconfirm'
@@ -98,11 +99,20 @@ const today = () => {
 
 /** The outsourcing list (外协清单契约 → 页面). */
 export default function OutsourceListPage() {
+  // Refresh column grants and discard pending imports or edits when the current user's grants change.
+  const authorization = useAuth(state => JSON.stringify(createSessionQueryScope(state)))
+  return <OutsourceList key={authorization} />
+}
+
+function OutsourceList() {
   const permissions = useAuth((state) => state.permissions)
   const oem = useInternalOem()
   const filesScope = JSON.stringify(oem.queryScope)
   const canManage = permissions.includes(OUTSOURCE_PERMISSIONS.manage)
   const canSend = permissions.includes(OUTSOURCE_PERMISSIONS.send)
+  const canImport = permissions.includes(OUTSOURCE_PERMISSIONS.import)
+  const canDelete = permissions.includes(OUTSOURCE_PERMISSIONS.delete)
+  const canExport = permissions.includes(OUTSOURCE_PERMISSIONS.export)
   const canDateImport = permissions.includes(OUTSOURCE_PERMISSIONS.dateImport)
   const [searchParams, setSearchParams] = useSearchParams()
   const [filters, setFilters] = useState<Filters>(() => ({ keyword: '', includeClosed: false, sendQueue: searchParams.get('sendQueue') === '1' }))
@@ -237,7 +247,7 @@ export default function OutsourceListPage() {
   }
 
   const exportItems = async () => {
-    if (exporting) return
+    if (!canExport || exporting) return
     setExporting(true)
     try {
       const response = await http.get<ApiResponses['GET /outsource/items/export']>('/outsource/items/export', {
@@ -496,7 +506,7 @@ export default function OutsourceListPage() {
           title={`将所选 ${openSelected.length} 条标记为已完成？之后不再同步、修改或发送。`} onOk={() => setCompletion(true)}>
           <Button icon={<IconCheckCircle />}>标记完成</Button>
         </Popconfirm>}
-        {canManage && selected.length > 0 && (
+        {canDelete && selected.length > 0 && (
           <DangerPopconfirm title={[
             sentSelected > 0 ? `所选含 ${sentSelected} 条已发送给厂商的记录，删除后不会通知厂商` : '',
             closedSelected > 0 ? `所选含 ${closedSelected} 条已完成记录` : '',
@@ -508,9 +518,9 @@ export default function OutsourceListPage() {
         {syncStatus && <SyncBadge status={syncStatus} />}
         {canManage && <Button icon={<IconSync />} loading={syncing} disabled={!syncStatus?.ipmsConfigured || syncStatus.running || (selected.length > 0 && openSelected.length === 0)}
           onClick={() => void syncNow()}>{openSelected.length > 0 ? `同步所选 (${openSelected.length})` : '立即同步'}</Button>}
-        <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
+        {canExport && <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>}
         {canDateImport && <Button icon={<IconUpload />} onClick={() => setDateImportOpen(true)}>导入BOM/发图</Button>}
-        {canManage && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>导入</Button>}
+        {canImport && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>导入</Button>}
       </Space>
     </div>
     {error ? <LoadError message="外发工令加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
@@ -518,7 +528,7 @@ export default function OutsourceListPage() {
         <ResizableTable<Item> tableId="outsource-items" className="page-table outsource-table" rowKey="id" loading={loading} data={items} columns={columns}
           rowClassName={(item) => [item.status === 'PAUSED' ? 'outsource-row--paused' : item.status === 'CANCELLED' ? 'outsource-row--cancelled' : 'outsource-row--normal',
             item.closed ? 'outsource-row--closed' : ''].filter(Boolean).join(' ')}
-          rowSelection={canManage || canSend || editable.length > 0 ? {
+          rowSelection={canManage || canDelete || canSend || editable.length > 0 ? {
             type: 'checkbox', selectedRowKeys: selected, onChange: (keys) => setSelected(keys as number[]),
           } : undefined}
           noDataElement={loading ? <span /> : <Empty description="暂无外协记录" />}

@@ -50,9 +50,9 @@ describe('工令协作入口与外发工令设定', () => {
     useAuth.setState({ token: null, user: null, permissions: [], menus: [] })
   })
 
-  it('每个内部员工都可从业务切换栏进入外发工令，不需要权限', async () => {
+  it('持有查看权的内部员工可从业务切换栏进入外发工令', async () => {
     const user = userEvent.setup()
-    setInternalSession([])
+    setInternalSession(['outsource:view'])
     render(
       <MemoryRouter initialEntries={['/']}>
         <Routes><Route path="*" element={<><AppRail active="collaboration" /><CurrentLocation /></>} /></Routes>
@@ -456,7 +456,7 @@ describe('工令协作入口与外发工令设定', () => {
 
   it('有发送权限时，业务切换栏的工令协作入口显示待发送数量，点击直接进入待发送筛选', async () => {
     const user = userEvent.setup()
-    setInternalSession(['dashboard', 'project:list', 'outsource', 'outsource:send'])
+    setInternalSession(['dashboard', 'project:list', 'outsource:view', 'outsource:send'])
     useAuth.setState({ menus: ['dashboard'] })
     const get = vi.spyOn(http, 'get').mockImplementation((url: string) => Promise.resolve({
       data: url === '/outsource/send-queue' ? { count: 3 } : [],

@@ -17,7 +17,7 @@ const employee = {
   userType: 'INTERNAL' as const, supplierId: null, isSystemAdmin: false,
 }
 const allScreens = ['外发工令', '文件传递单', '审批', '发送记录', 'IPMS 资料', '外协管理设定', '外发工令设定', '文件传递设置', '操作日志']
-const allGrants = ['oem:transfer_view', 'oem:flow_approve', 'outsource:send', 'outsource:settings', 'oem:notify_manage', 'oem:audit_view']
+const allGrants = ['outsource:view', 'oem:transfer_view', 'oem:flow_approve', 'outsource:send', 'outsource:settings', 'oem:notify_manage', 'oem:audit_view']
 
 function Location() {
   const { pathname, search } = useLocation()
@@ -38,7 +38,7 @@ function renderWorkArea(initialPath = '/outsource/items') {
 }
 
 function menuLabels() {
-  return screen.getAllByRole('menuitem').map((item) => item.textContent)
+  return screen.queryAllByRole('menuitem').map((item) => item.textContent)
 }
 
 describe('工令协作模块导航', () => {
@@ -69,17 +69,18 @@ describe('工令协作模块导航', () => {
   })
 
   it.each([
-    ['', ['外发工令']],
-    ['outsource:manage', ['外发工令']],
-    ['outsource:send', ['外发工令', '发送记录']],
-    ['outsource:settings', ['外发工令', 'IPMS 资料', '外协管理设定', '外发工令设定']],
-    ['oem:company_manage', ['外发工令', '外协管理设定']],
-    ['oem:account_manage', ['外发工令', '外协管理设定']],
-    ['oem:directory_view', ['外发工令', '外协管理设定']],
-    ['oem:transfer_create', ['外发工令', '文件传递单']],
-    ['oem:approval_recover', ['外发工令', '审批']],
-    ['oem:file_policy_manage', ['外发工令', '文件传递设置']],
-    ['oem:audit_view', ['外发工令', '操作日志']],
+    ['', []],
+    ['outsource:view', ['外发工令']],
+    ['outsource:manage', []],
+    ['outsource:send', ['发送记录']],
+    ['outsource:settings', ['IPMS 资料', '外协管理设定', '外发工令设定']],
+    ['oem:company_manage', ['外协管理设定']],
+    ['oem:account_manage', ['外协管理设定']],
+    ['oem:directory_view', ['外协管理设定']],
+    ['oem:transfer_create', ['文件传递单']],
+    ['oem:approval_recover', ['审批']],
+    ['oem:file_policy_manage', ['文件传递设置']],
+    ['oem:audit_view', ['操作日志']],
   ] as [string, string[]][])('仅显示权限 %s 可用的菜单', (permission, expected) => {
     useAuth.setState({ permissions: permission ? [permission] : [] })
     renderWorkArea()
@@ -89,7 +90,9 @@ describe('工令协作模块导航', () => {
   it.each([
     ['oem:transfer_create', '/oem/transfers'],
     ['oem:directory_view', '/oem/admin/outsource-settings'],
-    ['outsource:settings', '/outsource/items'],
+    ['outsource:settings', '/outsource/settings'],
+    ['outsource:send', '/outsource/mails'],
+    ['outsource:view', '/outsource/items'],
   ])('切换栏按权限 %s 进入 %s', async (permission, path) => {
     const user = userEvent.setup()
     useAuth.setState({ permissions: [permission] })
@@ -101,7 +104,7 @@ describe('工令协作模块导航', () => {
   it('发送人点击带有队列数量的外发工令时打开待发送筛选', async () => {
     const user = userEvent.setup()
     vi.mocked(http.get).mockResolvedValue({ data: { count: 3 } })
-    useAuth.setState({ permissions: ['oem:transfer_view', 'outsource:send'] })
+    useAuth.setState({ permissions: ['oem:transfer_view', 'outsource:view', 'outsource:send'] })
     renderWorkArea('/oem/transfers')
     const item = screen.getByRole('menuitem', { name: /^外发工令/ })
     expect(await within(item).findByText('3')).toBeVisible()

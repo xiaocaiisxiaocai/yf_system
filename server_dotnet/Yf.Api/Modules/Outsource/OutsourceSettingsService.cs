@@ -9,16 +9,14 @@ using Yf.Api.Modules.Outsource.Ipms.Mes;
 
 namespace Yf.Api.Modules.Outsource;
 
-/// <summary>
-/// Three permissions since 2026-11-19 (外协清单契约 → 权限): every internal account sees the list without one; who fills
-/// a column in is decided per column on the field settings page.
-/// </summary>
+/// <summary>Internal work order permissions. Column assignments still control edits to individual fields.</summary>
 internal static class OutsourcePermissions
 {
-    /// <summary>
-    /// Manages records: import, delete, complete/reopen and the manual IPMS sync; also fills in every column whose
-    /// editor setting is ALL. Columns limited to roles or people need no permission.
-    /// </summary>
+    internal const string View = "outsource:view";
+    internal const string Export = "outsource:export";
+    internal const string Import = "outsource:import";
+    internal const string Delete = "outsource:delete";
+    /// <summary>Completes and reopens records, runs the manual IPMS sync and edits columns assigned to managers.</summary>
     internal const string Manage = "outsource:manage";
     /// <summary>Previews and sends vendor mails, queues failed ones again, sees the mail records and the send queue.</summary>
     internal const string Send = "outsource:send";
@@ -467,7 +465,7 @@ public sealed class OutsourceSettingsService(IDbContextFactory<YfDbContext> dbFa
 
     /// <summary>Every internal account reads the list's vendor tabs, type filters and copy list.</summary>
     private static Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct) =>
-        OutsourceItemService.AuthorizeReadAsync(context, actor, null, ct);
+        OutsourceItemService.AuthorizeReadAsync(context, actor, ct);
 
     private static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, CancellationToken ct, bool management = false)
     {

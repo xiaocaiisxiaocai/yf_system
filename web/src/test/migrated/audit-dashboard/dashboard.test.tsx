@@ -249,6 +249,7 @@ describe('工作台协作生产界面', () => {
   })
 
   it('dashboard and project detail panels expose retry instead of a false empty state', async () => {
+    mocks.auth.permissions.push('config:manage')
     const cases: Array<{
       api: string
       element: React.ReactElement

@@ -26,7 +26,8 @@ public sealed class MigrationRoundTripTests
     private const string BeforeOutsourceTypeElectricalHandoff = "20261124093646_AddOutsourceFilesField";
     private const string RenameHandoffLabel = "20261125030000_RenameOutsourceHandoffLabel";
     private const string WidenRecipientEmail = "20261125140406_WidenOutsourceMailRecipientEmail";
-    private const string Latest = "20261126031537_AddAccountNetworkScope";
+    private const string BeforeOutsourceItemPermissions = "20261126031537_AddAccountNetworkScope";
+    private const string Latest = "20261126143000_SplitOutsourceItemPermissions";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -569,11 +570,90 @@ public sealed class MigrationRoundTripTests
             """));
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task OutsourceActionsPreserveInternalAccessAndDoNotRestoreRevokedGrants()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_action_grants", ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(BeforeOem, ct);
+        await SeedPreOemCatalogAsync(database, ct);
+        await migrator.MigrateAsync(BeforeOutsourceItemPermissions, ct);
+        await database.ExecuteAsync("""
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES
+              (71,'普通员工',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (72,'原生管',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (73,'供应商人员',1,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (74,'厂商自定义',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (75,'待分配角色',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (76,'已指定填写岗位',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+              (77,'待分配发信人',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,status,created_at,updated_at)
+            VALUES (71,'staff71','unused','普通员工','','INTERNAL','ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+                   (72,'supplier72','unused','厂商人员','','SUPPLIER','ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
+                   (73,'staff73','unused','混合角色员工','','INTERNAL','ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO user_roles(user_id,role_id) VALUES(71,71),(72,74),(73,74);
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT 72,id FROM permissions WHERE code='outsource:manage'
+            UNION ALL SELECT 77,id FROM permissions WHERE code='outsource:send';
+            UPDATE outsource_fields SET editor_scope='ROLES' WHERE field_key='remark';
+            INSERT INTO outsource_field_editor_roles(field_id,role_id)
+            SELECT id,76 FROM outsource_fields WHERE field_key='remark';
+            """, ct);
+
+        await migrator.MigrateAsync(Latest, ct);
+        async Task<string[]> GrantsAsync()
+        {
+            await using var connection = await database.Database.OpenAsync(ct);
+            var grants = await connection.QueryAsync<string>(new CommandDefinition("""
+                SELECT CONCAT(rp.role_id,'|',p.code)
+                FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
+                WHERE rp.role_id BETWEEN 71 AND 77 AND p.code IN
+                    ('outsource','outsource:view','outsource:export','outsource:import','outsource:delete')
+                ORDER BY rp.role_id,p.code
+                """, cancellationToken: ct));
+            return grants.ToArray();
+        }
+        string[] expected =
+        [
+            "71|outsource", "71|outsource:export", "71|outsource:view",
+            "72|outsource", "72|outsource:delete", "72|outsource:export", "72|outsource:import", "72|outsource:view",
+            "76|outsource", "76|outsource:export", "76|outsource:view",
+            "77|outsource", "77|outsource:export", "77|outsource:view",
+        ];
+        Assert.Equal(expected, await GrantsAsync());
+
+        await database.ExecuteAsync("""
+            DELETE rp FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
+            WHERE rp.role_id=72 AND p.code IN ('outsource','outsource:delete','outsource:export');
+            INSERT INTO role_permissions(role_id,permission_id)
+            SELECT 71,id FROM permissions WHERE code='outsource:import';
+            """, ct);
+        var configured = await GrantsAsync();
+        await migrator.MigrateAsync(BeforeOutsourceItemPermissions, ct);
+        await migrator.MigrateAsync(Latest, ct);
+        Assert.Equal(configured, await GrantsAsync());
+
+        // The 2026-11-19 migration folded the original import into manage. An independent
+        // import grant from this split must not become manage when that migration is replayed.
+        await migrator.MigrateAsync("20261119030550_SplitOutsourceSendPermission", ct);
+        await migrator.MigrateAsync(Latest, ct);
+        Assert.Equal(configured, await GrantsAsync());
+        await using var check = await database.Database.OpenAsync(ct);
+        Assert.Equal(0, await check.ExecuteScalarAsync<int>("""
+            SELECT COUNT(*) FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
+            WHERE rp.role_id=71 AND p.code='outsource:manage'
+            """));
+    }
+
+
     private static readonly string[] PreOemCodes = ["dashboard", "org:dept", "org:user", "user:manage", "dept:manage"];
 
     /// <summary>The outsourcing codes the built-in administrator holds after an upgrade.</summary>
     private static readonly string[] OutsourceCodes =
-        ["outsource", "outsource:date_import", "outsource:file_view", "outsource:manage", "outsource:send", "outsource:settings"];
+        ["outsource", "outsource:date_import", "outsource:delete", "outsource:export", "outsource:file_view",
+         "outsource:import", "outsource:manage", "outsource:send", "outsource:settings", "outsource:view"];
 
     private static async Task<NotSupportedException> AssertRollbackRefusedAsync(
         SchemaShapeTests.SchemaDatabaseScope database,

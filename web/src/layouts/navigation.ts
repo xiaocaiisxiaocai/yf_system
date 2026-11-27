@@ -1,6 +1,6 @@
 import { OEM_UI_ENABLED } from '../features'
 import { oemHome } from '../oem/oemNavigation'
-import { OUTSOURCE_HOME } from '../outsource/outsourceNavigation'
+import { outsourceHome } from '../outsource/outsourceNavigation'
 
 export const WORK_ORDER_TITLE = 'ODM/OEM工令协作'
 
@@ -20,7 +20,7 @@ export const COLLABORATION_PAGES = [
   { code: 'org:dept', path: '/org/depts', label: '组织架构', anyPermission: [] },
   { code: 'rbac:role', path: '/rbac/roles', label: '角色与权限', anyPermission: ['role:manage', 'role:view'] },
   { code: 'log:audit', path: '/logs', label: '操作日志', anyPermission: ['log:view'] },
-  { code: 'system:config', path: '/system/config', label: '系统参数', anyPermission: ['config:manage'] },
+  { code: 'system:config', path: '/system/config', label: '系统参数', anyPermission: ['config:manage', 'storage:manage'] },
   { code: 'system:dict', path: '/system/dictionaries', label: '数据字典', anyPermission: ['dict:manage'] },
 ] as const
 
@@ -49,7 +49,7 @@ export function collaborationPages({ menus, permissions, user }: NavigationGrant
 
 export function workOrderHome({ permissions, user }: Pick<NavigationGrants, 'permissions' | 'user'>) {
   if (user?.userType !== 'INTERNAL') return null
-  return (OEM_UI_ENABLED && oemHome(permissions)) || OUTSOURCE_HOME
+  return (OEM_UI_ENABLED && oemHome(permissions)) || outsourceHome(permissions)
 }
 
 export function businessHomes(grants: NavigationGrants) {

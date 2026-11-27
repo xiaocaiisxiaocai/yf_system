@@ -49,6 +49,7 @@ export function useSystemConfig(http: HttpClient) {
   const saveInFlight = useRef(false)
   const smtpSaveInFlight = useRef(false)
   const notificationSaveInFlight = useRef(false)
+  const mounted = useRef(false)
 
   const fetchSnapshot = useCallback(async (): Promise<Snapshot> => {
     const [configsResponse, mailResponse, smtpResponse] = await Promise.all([
@@ -85,6 +86,7 @@ export function useSystemConfig(http: HttpClient) {
 
   useEffect(() => {
     let active = true
+    mounted.current = true
     fetchSnapshot().then((next) => {
       if (active) {
         applySnapshot(next)
@@ -97,6 +99,7 @@ export function useSystemConfig(http: HttpClient) {
     })
     return () => {
       active = false
+      mounted.current = false
     }
   }, [applySnapshot, fetchSnapshot, reloadKey])
 
@@ -116,6 +119,7 @@ export function useSystemConfig(http: HttpClient) {
   }
 
   const refreshMailStatus = async () => {
+    if (!mounted.current) return
     setMail(normalizeMailStatus((await http.get<ApiResponses['GET /admin/system/mail-status']>('/admin/system/mail-status', quietRequest)).data))
   }
 
@@ -140,6 +144,7 @@ export function useSystemConfig(http: HttpClient) {
         host: smtpDraft.host.trim(), port: smtpDraft.port, username: smtpDraft.username.trim(),
         from: smtpDraft.from.trim(), security: smtpDraft.security, password: smtpPassword || null,
       })
+      if (!mounted.current) return
       const saved = response.data as SmtpSettings
       setSmtp(saved)
       setSmtpDraft(saved)
@@ -180,6 +185,7 @@ export function useSystemConfig(http: HttpClient) {
     ]
     try {
       await http.put<ApiResponses['PUT /admin/system/configs']>('/admin/system/configs', { items })
+      if (!mounted.current) return
       setMail((current) => current ? { ...current, notificationsEnabled: notificationDraft.globalEnabled, notificationPolicy: notificationDraft } : current)
       try {
         const refreshed = normalizeMailStatus((await http.get<ApiResponses['GET /admin/system/mail-status']>('/admin/system/mail-status', quietRequest)).data)
@@ -209,6 +215,7 @@ export function useSystemConfig(http: HttpClient) {
     setSaving(true)
     try {
       await http.put<ApiResponses['PUT /admin/system/configs']>('/admin/system/configs', { items })
+      if (!mounted.current) return
       setConfigs((current) => current.map((config) => (
         savedValues.has(config.key) ? { ...config, value: savedValues.get(config.key)! } : config
       )))

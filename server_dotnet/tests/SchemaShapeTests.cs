@@ -94,6 +94,7 @@ public sealed class SchemaShapeTests
         "20261125030000_RenameOutsourceHandoffLabel",
         "20261125140406_WidenOutsourceMailRecipientEmail",
         "20261126031537_AddAccountNetworkScope",
+        "20261126143000_SplitOutsourceItemPermissions",
     ];
 
     [Fact]
@@ -366,8 +367,14 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(63, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(63, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(67, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(67, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(4, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM permissions action JOIN permissions parent ON parent.id=action.parent_id
+                JOIN role_permissions rp ON rp.permission_id=action.id JOIN roles r ON r.id=rp.role_id
+                WHERE action.code IN ('outsource:view','outsource:export','outsource:import','outsource:delete')
+                  AND parent.code='outsource' AND action.type='ACTION' AND r.is_built_in=1 AND r.name='系统管理员'
+                """));
             Assert.Equal(1, await conn.ExecuteScalarAsync<int>("""
                 SELECT COUNT(*) FROM permissions p JOIN permissions parent ON parent.id=p.parent_id
                 JOIN role_permissions rp ON rp.permission_id=p.id JOIN roles r ON r.id=rp.role_id

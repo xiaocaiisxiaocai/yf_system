@@ -39,10 +39,10 @@ public sealed class OutsourceFieldTests
               (71,'采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (72,'机构',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (73,'发信',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:manage');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:manage','outsource:settings');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code IN ('outsource','outsource:manage');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 73,id FROM permissions WHERE code IN ('outsource','outsource:send');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:import','outsource:manage');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage','outsource:settings');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 73,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:send');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9741,'of_planner','unused','生管甲','planner@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9742,'of_buyer','unused','采购乙','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
@@ -76,7 +76,7 @@ public sealed class OutsourceFieldTests
 
     private static async Task<int> StatusOfAsync(Func<Task> action) => (await Assert.ThrowsAsync<ApiException>(action)).Status;
 
-    /// <summary>Holds only outsource:send: no column of the list is theirs unless they are named on it.</summary>
+    /// <summary>Can view the list and send mail: no column of the list is theirs unless they are named on it.</summary>
     private static readonly CurrentUser Sender = new(9744, "of_sender", "INTERNAL", null);
 
     [Fact(Timeout = 180_000)]
@@ -111,7 +111,7 @@ public sealed class OutsourceFieldTests
             layout.Fields.Where(x => x.CanEdit).Select(x => x.Key));
         Assert.DoesNotContain((await f.Fields.LayoutAsync(f.Admin, ct)).Fields.Where(x => x.CanEdit),
             x => x.Key is "hasRobotV" or "electricalHandoff");
-        // Seeing the list needs no permission; filling a column in does (ALL = outsource:manage).
+        // Viewing the list does not grant permission to edit its columns.
         Assert.Empty((await f.Fields.LayoutAsync(Sender, ct)).Fields.Where(x => x.CanEdit));
         // Field settings come with the settings permission.
         Assert.NotEmpty((await f.Fields.SettingsAsync(f.Buyer, ct)).Fields);

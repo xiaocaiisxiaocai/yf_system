@@ -30,7 +30,7 @@ function item(id: number, fileCount: number, purgedFileCount = 0): OutsourceItem
 function renderList(items: OutsourceItemResponse[], loadFiles: () => Promise<OutsourceItemFilesResponse>, permissions: string[] = []) {
   useAuth.setState({
     token: 'token', user: { id: 7, employeeNo: 'buyer', realName: '采购', email: '', userType: 'INTERNAL', supplierId: null, isSystemAdmin: false },
-    permissions, menus: [], generation: 1, mustChangePassword: false, booted: true,
+    permissions: ['outsource:view', ...permissions], menus: [], generation: 1, mustChangePassword: false, booted: true,
   })
   const fields = [{ key: 'workOrderNo', label: '工令', pinned: true }, { key: 'files', label: '档案', pinned: false }]
     .map((field) => ({ ...field, category: 'FIXED', dataType: 'TEXT', options: [], vendorVisible: true, vendorEditable: false, canEdit: false }))

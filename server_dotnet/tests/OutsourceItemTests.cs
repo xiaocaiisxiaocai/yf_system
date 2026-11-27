@@ -41,9 +41,9 @@ public sealed class OutsourceItemTests
               (70,'生管',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (71,'采购',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP()),
               (72,'主管',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:manage');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:manage','outsource:settings');
-            INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code IN ('outsource');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:import');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 71,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:manage','outsource:settings');
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code IN ('outsource','outsource:view','outsource:export');
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9711,'oi_planner','unused','生管甲','planner@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
               (9712,'oi_buyer','unused','采购乙','buyer@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
@@ -101,6 +101,8 @@ public sealed class OutsourceItemTests
 
         // Only planners import; the confirmed import re-checks and stores only READY rows.
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.PreviewImportAsync(viewer, request, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.ImportAsync(buyer, request, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.ExportAsync(planner, Query(), ct))).Status);
         var imported = await service.ImportAsync(planner, request, ct);
         Assert.Equal((1, 2, 7), (imported.Created, imported.Skipped, imported.Failed));
         var again = await service.ImportAsync(planner, Request(("2026-11-04", "21089901", "鼎亚", "OEMA"), ("2026-11-06", "21089902", "元控", "odm-12345")), ct);
@@ -190,13 +192,16 @@ public sealed class OutsourceItemTests
             Assert.Contains("<c r=\"A2\" s=\"7\"", sheet, StringComparison.Ordinal);
         }
 
-        // Deletion needs outsource:manage; a row already mailed to the vendor can be deleted too (the audit keeps its send status).
+        // Deletion needs its own grant; a row already mailed to the vendor can be deleted too (the audit keeps its send status).
         var latest = (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).List;
         var sentRow = latest.Single(x => x.WorkOrderNo == "21089901");
         var unsentRow = latest.Single(x => x.WorkOrderNo == "21089902");
         Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
-            service.BatchDeleteAsync(viewer, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct))).Status);
-        await service.BatchDeleteAsync(buyer, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct);
+            service.BatchDeleteAsync(planner, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
+            service.BatchDeleteAsync(buyer, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct))).Status);
+        await database.ExecuteAsync("INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code='outsource:delete'", ct);
+        await service.BatchDeleteAsync(viewer, new([new(unsentRow.Id, unsentRow.UpdatedAt)]), ct);
         Assert.Equal(1UL, (await service.ListAsync(buyer, Query(), 1, 20, 0, ct)).Total);
 
         // Closed rows are hidden unless asked for and cannot be edited.
@@ -210,12 +215,32 @@ public sealed class OutsourceItemTests
         Assert.Equal("已完成的记录不能修改，请先重新开启", (await Assert.ThrowsAsync<ApiException>(() =>
             service.UpdateAsync(buyer, closed.Id, new("2026-11-08", dingya.Id, null, null, "NORMAL", closed.UpdatedAt), ct))).Message);
 
-        await using var connection = await database.Database.OpenAsync(ct);
-        var actions = (await connection.QueryAsync<string>(
-            "SELECT action FROM audit_logs WHERE action LIKE 'OUTSOURCE_ITEM_%' ORDER BY id")).ToArray();
+        string[] actions;
+        await using (var connection = await database.Database.OpenAsync(ct))
+        {
+            actions = (await connection.QueryAsync<string>(
+                "SELECT action FROM audit_logs WHERE action LIKE 'OUTSOURCE_ITEM_%' ORDER BY id")).ToArray();
+        }
         Assert.Equal(2, actions.Count(x => x == "OUTSOURCE_ITEM_IMPORT"));
         Assert.Equal(1, actions.Count(x => x == "OUTSOURCE_ITEM_DELETE"));
         Assert.Equal(4, actions.Count(x => x == "OUTSOURCE_ITEM_UPDATE"));
+
+        // Revoking list access also revokes related reads and list actions even if their grants remain.
+        await database.ExecuteAsync("""
+            DELETE rp FROM role_permissions rp JOIN permissions p ON p.id=rp.permission_id
+            WHERE rp.role_id=72 AND p.code='outsource:view';
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 72,id FROM permissions WHERE code='outsource:import';
+            """, ct);
+        var fields = new OutsourceFieldService(factory, audit);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => fields.LayoutAsync(viewer, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.ListAsync(viewer, Query(), 1, 20, 0, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.ChangesAsync(viewer, sentRow.Id, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.FilesAsync(viewer, sentRow.Id, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.ExportAsync(viewer, Query(), ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.PreviewImportAsync(viewer, request, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() => service.ImportAsync(viewer, request, ct))).Status);
+        Assert.Equal(403, (await Assert.ThrowsAsync<ApiException>(() =>
+            service.BatchDeleteAsync(viewer, new([new(sentRow.Id, sentRow.UpdatedAt)]), ct))).Status);
     }
 
     [Fact(Timeout = 180_000)]
@@ -227,6 +252,9 @@ public sealed class OutsourceItemTests
         await database.ExecuteAsync("""
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9721,'oo_viewer','unused','查看甲','oo@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES(70,'查看清单',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource:view');
+            INSERT INTO user_roles(user_id,role_id) VALUES(9721,70);
             """, ct);
         var viewer = new CurrentUser(9721, "oo_viewer", "INTERNAL", null);
         var factory = EfTestSupport.DbContextFactory(database.Options);
@@ -259,6 +287,9 @@ public sealed class OutsourceItemTests
         await database.ExecuteAsync("""
             INSERT INTO users(id,employee_no,password_hash,real_name,email,user_type,supplier_id,status,must_change_password,failed_login_attempts,created_at,updated_at) VALUES
               (9722,'wo_viewer','unused','查看甲','wo@example.invalid','INTERNAL',NULL,'ACTIVE',0,0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            INSERT INTO roles(id,name,is_built_in,status,created_at,updated_at) VALUES(70,'查看清单',0,'ACTIVE',UTC_TIMESTAMP(),UTC_TIMESTAMP());
+            INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code IN ('outsource:view','outsource:export');
+            INSERT INTO user_roles(user_id,role_id) VALUES(9722,70);
             """, ct);
         var viewer = new CurrentUser(9722, "wo_viewer", "INTERNAL", null);
         var factory = EfTestSupport.DbContextFactory(database.Options);

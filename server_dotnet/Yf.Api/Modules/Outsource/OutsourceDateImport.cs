@@ -32,7 +32,7 @@ public sealed class OutsourceDateImportService(IDbContextFactory<YfDbContext> db
     {
         var rows = ValidateRowCount(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await OutsourceItemService.AuthorizeReadAsync(context, actor, OutsourcePermissions.DateImport, ct);
+        await OutsourceItemService.AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.DateImport);
         var parsed = Parse(rows);
         var workOrders = parsed.Where(x => x.Valid).Select(x => x.WorkOrderNo).ToArray();
         var items = await context.OutsourceItems.AsNoTracking().Where(x => workOrders.Contains(x.WorkOrderNo)).ToArrayAsync(ct);
@@ -46,7 +46,7 @@ public sealed class OutsourceDateImportService(IDbContextFactory<YfDbContext> db
         var parsed = Parse(rows);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, OutsourcePermissions.DateImport, ct);
+        actor = await OutsourceItemService.AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.DateImport);
         var workOrders = parsed.Where(x => x.Valid).Select(x => x.WorkOrderNo).ToArray();
         var ids = await context.OutsourceItems.AsNoTracking().Where(x => workOrders.Contains(x.WorkOrderNo))
             .OrderBy(x => x.Id).Select(x => x.Id).ToArrayAsync(ct);

@@ -94,7 +94,7 @@ public sealed record OutsourceExport(byte[] Content, string FileName);
 
 /// <summary>
 /// The outsourcing list itself: import (preview then confirm, both against IPMS), the overall table and per-vendor
-/// tabs, export, purchasing edits and deletion of unsent rows. See 外协清单契约 → 汇入 / 采购编辑与删除 / 页面.
+/// tabs, export, purchasing edits and deletion. See 外协清单契约 → 汇入 / 采购编辑与删除 / 页面.
 /// </summary>
 public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactory, AuditService audit, IIpmsClient ipms)
 {
@@ -110,7 +110,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     {
         var rows = ValidateRowCount(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Manage, ct);
+        await AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Import);
         var planned = await PlanImportAsync(context, rows, ct);
         return new(planned.Count(x => x.Status == "READY"), planned.Count(x => x.Status == "SKIPPED"),
             planned.Count(x => x.Status == "INVALID"), planned.Select(x => x.Preview).ToArray());
@@ -121,12 +121,12 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     {
         var rows = ValidateRowCount(request);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Manage, ct);
+        await AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Import);
         var planned = await PlanImportAsync(context, rows, ct);
         await context.Database.CloseConnectionAsync();
 
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Import);
         var ready = planned.Where(x => x.Status == "READY").ToArray();
         var vendorIds = ready.Select(x => x.VendorId).Distinct().ToArray();
         var activeVendors = await context.OemCompanies.Where(x => vendorIds.Contains(x.Id) && x.Status == AccountStatuses.Active)
@@ -281,7 +281,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         CurrentUser actor, OutsourceItemQuery query, ulong page, uint size, ulong offset, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, null, ct);
+        await AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View);
         var reference = await OutsourceReference.LoadAsync(context, ct);
         var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
         var total = (ulong)await filtered.LongCountAsync(ct);
@@ -293,7 +293,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<OutsourceItemFilesResponse> FilesAsync(CurrentUser actor, ulong id, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, null, ct);
+        await AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View);
         if (!await context.OutsourceItems.AnyAsync(x => x.Id == id, ct))
             throw ApiException.NotFound("外协记录不存在或已被删除");
         var canOpen = await AccessService.HasPermissionAsync(context.Database.Connection(), null, actor.Id, OemPermissions.OutsourceFileView, ct);
@@ -303,7 +303,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<OutsourceExport> ExportAsync(CurrentUser actor, OutsourceItemQuery query, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, null, ct);
+        await AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Export);
         var reference = await OutsourceReference.LoadAsync(context, ct);
         var filtered = Filter(context.OutsourceItems.AsNoTracking(), query, reference);
         if (await filtered.CountAsync(ct) > MaximumExportRows)
@@ -378,7 +378,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<OutsourceItemChangeResponse[]> ChangesAsync(CurrentUser actor, ulong id, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, null, ct);
+        await AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View);
         if (!await context.OutsourceItems.AnyAsync(x => x.Id == id, ct)) throw ApiException.NotFound("外协记录不存在或已被删除");
         var layout = await OutsourceFieldLayout.LoadAsync(context, ct);
         var rows = await context.OutsourceItemChanges.AsNoTracking().Where(x => x.ItemId == id)
@@ -420,7 +420,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var versions = ValidateBatch(request.Items);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Delete);
         var locked = await LockAsync(context, versions, ct);
         var ids = locked.Select(x => x.Id).ToArray();
         var boundItemId = await context.OemTransfers.AsNoTracking()
@@ -429,7 +429,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         if (boundItemId is { } bound)
             throw ApiException.Conflict($"工令 {locked.Single(x => x.Id == bound).WorkOrderNo} 已有往来文件，不能删除");
 
-        // Anyone with the edit-and-send permission may delete, sent rows included: the vendor is not told, so the audit
+        // Deleting a sent row does not notify the vendor, so the audit
         // record says whether the row had been mailed. Its mail history keeps the work order number (no FK to items).
         await context.OutsourceItems.Where(x => ids.Contains(x.Id)).ExecuteDeleteAsync(ct);
         var vendors = await VendorNamesAsync(context, ct);
@@ -457,7 +457,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         if (request.Completed is not { } completed) throw ApiException.BadRequest("请指定标记为已完成或重新开启");
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Manage, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Manage);
         var locked = await LockAsync(context, versions, ct);
         var now = DateTime.UtcNow;
         foreach (var before in locked)
@@ -490,7 +490,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     public async Task<OutsourceSendQueueResponse> SendQueueAsync(CurrentUser actor, CancellationToken ct)
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
-        await AuthorizeReadAsync(context, actor, OutsourcePermissions.Send, ct);
+        await AuthorizeReadAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Send);
         var count = await context.OutsourceItems.AsNoTracking().CountAsync(x => x.ClosedAt == null
             && (x.SendStatus == OutsourceSendStatuses.Unsent || x.SendStatus == OutsourceSendStatuses.PendingNotice), ct);
         return new(count);
@@ -510,7 +510,7 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
         var versions = ValidateBatch(request.Items);
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        actor = await AuthorizeWriteAsync(context, actor, OutsourcePermissions.Send, ct);
+        actor = await AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.View, OutsourcePermissions.Send);
         var locked = await LockAsync(context, versions, ct);
         if (locked.Any(x => x.ClosedAt is not null)) throw ApiException.Conflict("已完成的记录不需要通知");
         if (locked.FirstOrDefault(x => !OutsourceSendStatuses.AwaitsSender(x.SendStatus)) is { } other)
@@ -600,8 +600,8 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
     {
         await using var context = await dbFactory.CreateDbContextAsync(ct);
         await using var transaction = await context.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
-        // No permission of its own: the field settings decide which columns this account fills in (checked per change below).
-        actor = await AuthorizeWriteAsync(context, actor, null, ct);
+        // The account must see the list; field settings decide which changed columns it may write.
+        actor = await AuthorizeWriteAsync(context, actor, ct, OutsourcePermissions.View);
         var editor = await OutsourceEditor.LoadAsync(context, actor.Id, ct);
         if (!(await OutsourceFieldLayout.LoadAsync(context, ct)).Columns.Any(column => OutsourceFieldLayout.CanEdit(column, editor)))
             throw ApiException.Forbidden();
@@ -732,26 +732,34 @@ public sealed class OutsourceItemService(IDbContextFactory<YfDbContext> dbFactor
 
     // ---- authorization ----
 
-    /// <summary>An active internal account, plus <paramref name="permission"/> when one is given (null: any internal account).</summary>
-    internal static async Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, string? permission, CancellationToken ct)
+    /// <summary>Rechecks the internal account and requires every supplied action permission.</summary>
+    internal static async Task AuthorizeReadAsync(YfDbContext context, CurrentUser actor, CancellationToken ct, params string[] permissions)
     {
         AccessService.RequireInternal(actor);
         await context.Database.OpenConnectionAsync(ct);
         var connection = context.Database.Connection();
         actor = await AccessService.ReadActorAsync(connection, null, actor, ct);
         AccessService.RequireInternal(actor);
-        if (permission is not null) await AccessService.RequirePermissionAsync(connection, null, actor, permission, ct);
+        await RequirePermissionsAsync(connection, null, actor, permissions, ct);
     }
 
-    internal static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, string? permission, CancellationToken ct)
+    internal static async Task<CurrentUser> AuthorizeWriteAsync(YfDbContext context, CurrentUser actor, CancellationToken ct, params string[] permissions)
     {
         AccessService.RequireInternal(actor);
         var connection = context.Database.Connection();
         var transaction = context.Database.RequireTransaction();
         actor = await AccessService.LockActorAsync(connection, transaction, actor, ct);
         AccessService.RequireInternal(actor);
-        if (permission is not null) await AccessService.RequirePermissionAsync(connection, transaction, actor, permission, ct);
+        await RequirePermissionsAsync(connection, transaction, actor, permissions, ct);
         return actor;
+    }
+
+    private static async Task RequirePermissionsAsync(MySqlConnection connection, MySqlTransaction? transaction,
+        CurrentUser actor, string[] required, CancellationToken ct)
+    {
+        if (required.Length == 0) return;
+        var granted = await AccessService.PermissionCodesAsync(connection, transaction, actor.Id, ct);
+        if (!required.All(permission => granted.Contains(permission, StringComparer.Ordinal))) throw ApiException.Forbidden();
     }
 
     internal static IReadOnlyList<string> TemplateHeaders => ImportHeaders;
