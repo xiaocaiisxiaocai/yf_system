@@ -152,13 +152,14 @@ public sealed class OutsourceIpmsSyncService(
                 try { found = await ipms.LookupAsync(batch.Select(x => x.WorkOrderNo).ToArray(), ct); }
                 catch (IpmsUnavailableException unavailable) { error = unavailable.Message; break; }
                 var byNo = found.Values.ToDictionary(x => x.WorkOrderNo, StringComparer.OrdinalIgnoreCase);
-                var supervisorNotices = await SupervisorNoticesAsync(context, batch, byNo, vendorKeys, ct);
                 var now = await DbClock.UtcNowAsync(context, ct, 3);
+                var snapshots = await EffectiveSnapshotsAsync(context, batch, byNo, now, ct);
+                var supervisorNotices = await SupervisorNoticesAsync(context, batch, snapshots, vendorKeys, ct);
                 foreach (var item in batch)
                 {
                     processed++;
                     if (!byNo.TryGetValue(item.WorkOrderNo, out var order)) { missing++; continue; }
-                    var result = await ApplyAsync(context, item, order, now,
+                    var result = await ApplyAsync(context, item, order, snapshots[item.Id], now,
                         trigger == "SCHEDULED" ? OutsourceHistory.IpmsScheduled : OutsourceHistory.IpmsManual, actorId, vendorKeys, supervisorNotices.Contains(item.Id), ct);
                     if (result.Changed) changed++;
                     if (result.Closed) closed++;
@@ -194,17 +195,41 @@ public sealed class OutsourceIpmsSyncService(
         return new(processed, changed, closed, missing, error);
     }
 
+    // A previously imported Excel fallback fills only gaps in this snapshot. Existing records
+    // without these values keep ordinary IPMS replacement semantics, including cleared fields.
+    private static async Task<Dictionary<ulong, OutsourceItem>> EffectiveSnapshotsAsync(YfDbContext db, OutsourceItem[] batch,
+        IReadOnlyDictionary<string, IpmsWorkOrder> orders, DateTime now, CancellationToken ct)
+    {
+        var snapshots = new Dictionary<ulong, OutsourceItem>();
+        foreach (var item in batch)
+        {
+            if (!orders.TryGetValue(item.WorkOrderNo, out var order)) continue;
+            var next = new OutsourceItem();
+            OutsourceItemService.ApplyIpms(next, order, now);
+            snapshots.Add(item.Id, next);
+        }
+        if (snapshots.Count == 0) return snapshots;
+        var ids = snapshots.Keys.ToArray();
+        var fallbacks = await (from value in db.OutsourceItemValues
+                               join field in db.OutsourceFields on value.FieldId equals field.Id
+                               where ids.Contains(value.ItemId) && field.BuiltIn
+                               select new { value.ItemId, field.FieldKey, field.Label, value.Value }).ToArrayAsync(ct);
+        foreach (var fallback in fallbacks)
+            OutsourceItemService.FillMissingIpmsValue(snapshots[fallback.ItemId], fallback.FieldKey, fallback.Value, fallback.Label);
+        return snapshots;
+    }
+
     // A vendor-visible supervisor can change when the directory changes, even if IPMS returns the same owner.
     private static async Task<HashSet<ulong>> SupervisorNoticesAsync(YfDbContext context, OutsourceItem[] batch,
-        IReadOnlyDictionary<string, IpmsWorkOrder> orders, IReadOnlySet<string> vendorKeys, CancellationToken ct)
+        IReadOnlyDictionary<ulong, OutsourceItem> snapshots, IReadOnlySet<string> vendorKeys, CancellationToken ct)
     {
         const string supervisorKey = "supervisor";
         if (!vendorKeys.Contains(supervisorKey)) return [];
         var sentItems = new List<(OutsourceItem Item, string? NextOwner)>();
         foreach (var item in batch)
         {
-            if (item.SendStatus != OutsourceSendStatuses.Sent || !orders.TryGetValue(item.WorkOrderNo, out var order)) continue;
-            sentItems.Add((item, OutsourceItemService.MechanicalOwnerOf(order)));
+            if (item.SendStatus != OutsourceSendStatuses.Sent || !snapshots.TryGetValue(item.Id, out var next)) continue;
+            sentItems.Add((item, next.MechanicalOwner));
         }
         var owners = sentItems.Select(x => x.Item.MechanicalOwner).Concat(sentItems.Select(x => x.NextOwner));
         var supervisors = await MechanicalSupervisorDirectory.ResolveAsync(context, owners, ct);
@@ -231,11 +256,9 @@ public sealed class OutsourceIpmsSyncService(
 
     private sealed record ItemResult(bool Changed, bool Closed);
 
-    private static async Task<ItemResult> ApplyAsync(YfDbContext context, OutsourceItem item, IpmsWorkOrder order, DateTime now,
+    private static async Task<ItemResult> ApplyAsync(YfDbContext context, OutsourceItem item, IpmsWorkOrder order, OutsourceItem next, DateTime now,
         string source, ulong? actorId, IReadOnlySet<string> vendorKeys, bool supervisorNotice, CancellationToken ct)
     {
-        var next = new OutsourceItem();
-        OutsourceItemService.ApplyIpms(next, order, now);
         // A work order imported before IPMS data exists gets its first due date here.
         var originalDue = item.OriginalDueDate ?? order.DueDate;
         var latestDue = item.LatestDueDate ?? originalDue;

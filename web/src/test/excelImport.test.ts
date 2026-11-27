@@ -56,6 +56,15 @@ describe('Excel import workbook safety', () => {
     })).rejects.toThrow('最多支持 1 条数据')
   })
 
+  it('reads wide configured work-order templates by header name and keeps the column cap for other imports', async () => {
+    const optional = Array.from({ length: 64 }, (_, index) => `自定义列${index + 1}`)
+    const file = makeFile(XLSX.utils.aoa_to_sheet([[...optional, '工令'], [...optional.map(() => ''), 'WO-65']]))
+    const options = { requiredHeaders: ['工令'], optionalHeaders: optional, maxRows: 10 }
+    const rows = await readExcelTable(file, { ...options, matchHeadersByName: true })
+    expect(rows.map(row => [row.rowNumber, row.values['工令']])).toEqual([[2, 'WO-65']])
+    await expect(readExcelTable(file, options)).rejects.toThrow('64 列')
+  })
+
   it('exports values as text cells and round-trips formula-looking strings safely', async () => {
     const bytes = await createExcelWorkbook([{ name: '数据', headers: ['账号', '备注'], rows: [['0012', '=1+1']] }])
     const workbook = XLSX.read(bytes, { type: 'array', cellFormula: true })

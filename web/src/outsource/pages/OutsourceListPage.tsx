@@ -21,6 +21,7 @@ import { filterTerms } from '../filterTerms'
 import { exportOutsourceItems, listOutsourceItems } from '../itemRequests'
 import { OUTSOURCE_PERMISSIONS } from '../outsourceNavigation'
 import { normalizeImportDate } from '../importDate'
+import { ITEM_IMPORT_HEADERS, itemImportRow, itemImportTemplate } from '../itemImportWorkbook'
 import { ItemHistoryDrawer, LatestDueCell } from './ItemHistory'
 import SendMailDialog from './SendMailDialog'
 import './OutsourceListPage.css'
@@ -35,7 +36,7 @@ type Vendor = ApiResponses['GET /outsource/settings/vendors'][number]
 type OutsourceType = ApiResponses['GET /outsource/settings/types'][number]
 type SyncStatus = ApiResponses['GET /outsource/sync-status']
 type FieldColumn = ApiResponses['GET /outsource/fields']['fields'][number]
-type ImportRow = { rowNumber: number; outsourceDate: string; workOrderNo: string; vendorName: string; typeName: string }
+type ImportRow = ReturnType<typeof itemImportRow> & { expectedItemId?: number; expectedUpdatedAt?: string; expectedChangeHash?: string }
 type DateImportRow = { rowNumber: number; workOrderNo: string; bomOn: string; drawingReleasedOn: string }
 
 const STATUS_OPTIONS = [
@@ -77,11 +78,7 @@ const FILE_OPTIONS = [
   { label: '无档案', value: 'none' },
 ]
 
-const IMPORT_HEADERS = ['外发日期', '工令', '外发类型', '外发厂商'] as const
 const DATE_IMPORT_HEADERS = ['工令', 'BOM时间', '发图'] as const
-const IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
-  { name: '数据', headers: IMPORT_HEADERS, rows: [['2026-11-23', '21000001', 'OEMA', '示例厂商']] },
-]
 const DATE_IMPORT_WORKBOOK: ExcelWorkbookSheet[] = [
   { name: '数据', headers: DATE_IMPORT_HEADERS, rows: [['21000001', '2026-11-24', '2026-11-25']] },
 ]
@@ -178,6 +175,7 @@ export default function OutsourceListPage() {
       http.get<ApiResponses['GET /outsource/fields']>('/outsource/fields'),
     ])
     setVendors(vendorResponse.data); setTypes(typeResponse.data); setLayout(fieldResponse.data.fields)
+    return fieldResponse.data.fields
   }, [])
 
   const load = useCallback(async () => {
@@ -314,25 +312,44 @@ export default function OutsourceListPage() {
   const closedSelected = selectedItems.filter((item) => item.closed).length
   const sentSelected = selectedItems.filter((item) => item.sendStatus !== 'UNSENT').length
 
-  const prepareImport = async (rows: ExcelImportRow[]) => {
-    const payload: ImportRow[] = rows.map((row) => ({
-      rowNumber: row.rowNumber,
-      outsourceDate: normalizeImportDate(row.values['外发日期']),
-      workOrderNo: row.values['工令'],
-      vendorName: row.values['外发厂商'],
-      typeName: row.values['外发类型'],
-    }))
+  const importTemplate = useMemo(() => itemImportTemplate(layout, canDateImport), [layout, canDateImport])
+  const openImport = async () => {
     try {
-      const response = await http.post<ApiResponses['POST /outsource/items/import/preview']>('/outsource/items/import/preview', { rows: payload })
+      const fields = layout.length ? layout : await loadReference()
+      if (fields.length === 0) { Message.error('无法读取工令栏位，请重试'); return }
+      setImportOpen(true)
+    } catch (error) {
+      Message.error(requestErrorMessage(error, '无法读取工令栏位，请重试'))
+    }
+  }
+  const prepareImport = async (rows: ExcelImportRow[]) => {
+    const source = rows.map(row => itemImportRow(row, importTemplate.columns))
+    try {
+      const response = await http.post<ApiResponses['POST /outsource/items/import/preview']>('/outsource/items/import/preview', { rows: source })
       const byRow = new Map(response.data.rows.map((row) => [row.rowNumber, row]))
-      const preview: ImportPreviewRow[] = payload.map((row) => {
+      const labels = new Map(importTemplate.columns.map(column => [column.key, column.label]))
+      const payload: ImportRow[] = []
+      const preview: ImportPreviewRow[] = source.map((row) => {
         const result = byRow.get(row.rowNumber)
+        if (!result) throw new Error(`缺少第 ${row.rowNumber} 行的预览结果，请重新预览`)
+        if (result.status === 'READY') payload.push(row)
+        if (result.status === 'READY_UPDATE') {
+          const { expectedItemId, expectedUpdatedAt, expectedChangeHash } = result
+          if (!expectedItemId || !expectedUpdatedAt || !expectedChangeHash?.trim())
+            throw new Error(`第 ${row.rowNumber} 行缺少工令版本或变更摘要，请重新预览`)
+          payload.push({ ...row, expectedItemId, expectedUpdatedAt, expectedChangeHash })
+        }
         return {
           rowNumber: row.rowNumber,
           key: row.workOrderNo,
-          detail: [row.vendorName, result?.customer, result?.typeLabel].filter(Boolean).join(' · '),
-          status: (result?.status ?? 'INVALID') as ImportPreviewRow['status'],
-          message: result?.message ?? undefined,
+          fieldValues: {
+            outsourceDate: result.outsourceDate ?? row.outsourceDate, type: result.typeLabel ?? row.typeName,
+            vendor: result.vendorName ?? row.vendorName, customer: result.customer, machineModel: result.machineModel,
+            quantity: result.quantity?.toString(), latestDueDate: result.latestDueDate, ...result.fieldValues,
+          },
+          changedLabels: result.changedFields?.map(key => labels.get(key) ?? key),
+          status: result.status as ImportPreviewRow['status'],
+          message: result.message ?? undefined,
         }
       })
       return { payload, preview }
@@ -463,10 +480,9 @@ export default function OutsourceListPage() {
     workOrderNo: {
       dataIndex: 'workOrderNo', width: 110,
       render: (_, item) => item.ipmsSyncedAt == null && !item.closed
-        ? <Space size={4} wrap>
-          <span>{item.workOrderNo}</span>
-          <Tooltip content="IPMS 尚无此工令资料；若长期不消失，请确认工令号是否正确"><Tag size="small" color="gold">待同步</Tag></Tooltip>
-        </Space> : item.workOrderNo,
+        ? <Tooltip content="IPMS 尚无此工令资料；若长期不消失，请确认工令号是否正确">
+          <span><span role="img" aria-label="待同步" className="outsource-files-light outsource-files-light--unsynced" />{item.workOrderNo}</span>
+        </Tooltip> : item.workOrderNo,
     },
     customer: {
       dataIndex: 'customer', width: 150, ellipsis: true,
@@ -520,7 +536,8 @@ export default function OutsourceListPage() {
     }
   })
   const columns: TableColumnProps<Item>[] = [
-    { ...byColumn('serialNo', '序号', 'number'), title: '序号', dataIndex: 'serialNo', width: 70, fixed: 'left', align: 'center' },
+    { title: '序号', key: 'serialNo', width: 70, fixed: 'left', align: 'center',
+      render: (_, __, index) => (page - 1) * pageSize + index + 1 },
     ...fieldColumns.filter((column) => column.fixed),
     ...fieldColumns.filter((column) => !column.fixed),
     {
@@ -589,7 +606,7 @@ export default function OutsourceListPage() {
           onClick={() => void syncNow()}>{openSelected.length > 0 ? `同步所选 (${openSelected.length})` : '立即同步'}</Button>}
         <Button icon={<IconDownload />} loading={exporting} onClick={() => void exportItems()}>导出</Button>
         {canDateImport && <Button icon={<IconUpload />} onClick={() => setDateImportOpen(true)}>导入BOM/发图</Button>}
-        {canManage && <Button type="primary" icon={<IconUpload />} onClick={() => setImportOpen(true)}>导入</Button>}
+        {canManage && <Button type="primary" icon={<IconUpload />} onClick={() => void openImport()}>导入</Button>}
       </Space>
     </div>
     {error ? <LoadError message="外发工令加载失败" onRetry={() => { void loadReference().catch(() => undefined); void load() }} />
@@ -614,8 +631,10 @@ export default function OutsourceListPage() {
     <SendMailDialog itemIds={mailing} onClose={() => setMailing(null)}
       onSent={() => { setMailing(null); setSelected([]); void load() }} />
     <ExcelImportDialog<ImportRow> visible={importOpen} title="汇入外发工令" templateName="外发工令汇入模板.xlsx"
-      requiredHeaders={IMPORT_HEADERS} templateSheets={IMPORT_WORKBOOK} maxRows={500} keyTitle="工令"
-      notice={<>填写外发日期、工令、外发类型和外发厂商，序号自动编。IPMS 暂无该工令时可先导入，客户、机型等资料由后续同步补齐。已存在或文件内重复的工令会跳过，外发类型与厂商不符的行不会汇入。最多 500 行。</>}
+      requiredHeaders={ITEM_IMPORT_HEADERS} optionalHeaders={importTemplate.optionalHeaders} matchHeadersByName
+      templateSheets={importTemplate.sheets} previewFields={importTemplate.columns.filter(column => column.key !== 'workOrderNo')}
+      maxRows={500} keyTitle="工令" updateExisting
+      notice={<>外发日期、工令、外发类型和外发厂商必填。相同工令按预览更新，空白可选栏位保留原值；文件内重复工令会跳过。客户、机型等资料优先取 IPMS，缺值时采用 Excel。填写权限见模板「说明」。最多 500 行。</>}
       prepare={prepareImport} commit={commitImport}
       onImported={() => { void load() }} onClose={() => setImportOpen(false)} />
     <ExcelImportDialog<DateImportRow> visible={dateImportOpen} title="导入BOM时间与发图" templateName="BOM时间与发图导入模板.xlsx"

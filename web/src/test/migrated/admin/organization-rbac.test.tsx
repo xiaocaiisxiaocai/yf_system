@@ -78,7 +78,7 @@ function installDefaultGet() {
     if (url === '/admin/users') return { data: page(mocks.users) }
     if (url === '/admin/suppliers') return { data: page(mocks.suppliers) }
     if (url === '/supplier-options' || url === '/project-dictionaries') return { data: [] }
-    if (url.endsWith('/accounts')) return { data: [] }
+    if (url.endsWith('/accounts') || url.endsWith('/contacts')) return { data: [] }
     return { data: page() }
   })
 }
@@ -323,16 +323,23 @@ describe('组织、角色与权限行为', () => {
         render: () => render(<SupplierList />),
         pagePermission: 'supplier:manage', deletePermission: 'supplier:delete', rowText: '可删供应商',
         setup: () => { mocks.suppliers = [{ id: 8, name: '可删供应商', status: 'ACTIVE', createdAt: '' }] },
+        findContainer: async () => {
+          const summary = await screen.findByRole('region', { name: '供应商信息' })
+          expect(within(summary).getByRole('heading', { name: '可删供应商' })).toBeVisible()
+          return summary
+        },
       },
       {
         render: () => render(<UserList />),
         pagePermission: 'user:manage', deletePermission: 'user:delete', rowText: '可删用户',
         setup: () => { mocks.users = [{ id: 2, employeeNo: 'staff', realName: '可删用户', email: 'staff@example.invalid', status: 'ACTIVE', createdAt: '' }] },
+        findContainer: async () => (await screen.findByText('可删用户')).closest('tr')!,
       },
       {
         render: () => render(<RoleList />),
         pagePermission: 'role:manage', deletePermission: 'role:delete', rowText: '可删角色',
         setup: () => { mocks.roles = [{ id: 9, name: '可删角色', isBuiltIn: false, permissionIds: [], assignedUserCount: 0, status: 'ACTIVE' }] },
+        findContainer: async () => (await screen.findByText('可删角色')).closest('tr')!,
       },
     ]
 
@@ -341,16 +348,16 @@ describe('组织、角色与权限行为', () => {
       item.setup()
       mocks.permissions = [item.pagePermission]
       let view = item.render()
-      let row = (await screen.findByText(item.rowText)).closest('tr')!
-      expect(within(row).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+      let container = await item.findContainer()
+      expect(within(container).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
       view.unmount()
 
       installDefaultGet()
       item.setup()
       mocks.permissions = [item.pagePermission, item.deletePermission]
       view = item.render()
-      row = (await screen.findByText(item.rowText)).closest('tr')!
-      expect(within(row).getByRole('button', { name: '删除' })).toBeVisible()
+      container = await item.findContainer()
+      expect(within(container).getByRole('button', { name: '删除' })).toBeVisible()
       view.unmount()
     }
   })
@@ -418,10 +425,12 @@ describe('组织、角色与权限行为', () => {
     allowed.unmount()
 
     render(<SupplierList />)
-    const row = (await screen.findByText('供应商')).closest('tr')!
-    expect(within(row).getByRole('button', { name: '账号管理' })).toBeVisible()
-    expect(within(row).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
-    expect(within(row).queryByRole('button', { name: '停用' })).not.toBeInTheDocument()
+    const summary = await screen.findByRole('region', { name: '供应商信息' })
+    expect(within(summary).getByRole('heading', { name: '供应商' })).toBeVisible()
+    expect(await screen.findByRole('region', { name: '账号管理' })).toBeVisible()
+    expect(screen.queryByRole('region', { name: '联络人' })).not.toBeInTheDocument()
+    expect(within(summary).queryByRole('button', { name: '编辑' })).not.toBeInTheDocument()
+    expect(within(summary).queryByRole('button', { name: '停用' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新增供应商' })).not.toBeInTheDocument()
   })
 

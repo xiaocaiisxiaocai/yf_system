@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { ConfigProvider } from '@arco-design/web-react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { TABLE_PAGINATION } from '../../../components/tablePagination'
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(),
@@ -78,10 +80,27 @@ function account(id: number, employeeNo: string) {
   return { id, employeeNo, roleName: '供应商人员', status: 'ACTIVE', createdAt: '', lastLoginAt: null }
 }
 
-async function openAccounts(user: ReturnType<typeof userEvent.setup>, supplierName = 'fixture') {
-  const row = (await screen.findByText(supplierName)).closest('tr')!
-  await user.click(within(row).getByRole('button', { name: '账号管理' }))
-  await screen.findByText(new RegExp(`账号管理 · ${supplierName}`))
+function supplierListPanel() {
+  return screen.getByRole('complementary', { name: '供应商列表' })
+}
+
+function supplierSummaryPanel() {
+  return screen.getByRole('region', { name: '供应商信息' })
+}
+
+async function findAccountsPanel(supplierName = 'fixture') {
+  const summary = await screen.findByRole('region', { name: '供应商信息' })
+  await within(summary).findByRole('heading', { name: supplierName })
+  return screen.findByRole('region', { name: '账号管理' })
+}
+
+async function selectSupplier(user: ReturnType<typeof userEvent.setup>, supplierName: string) {
+  const list = supplierListPanel()
+  const button = await within(list).findByRole('button', { name: new RegExp(supplierName) })
+  await user.click(button)
+  const summary = supplierSummaryPanel()
+  await within(summary).findByRole('heading', { name: supplierName })
+  return summary
 }
 
 describe('供应商与分页列表行为', () => {
@@ -90,7 +109,7 @@ describe('供应商与分页列表行为', () => {
     mocks.permissions = ['project:create', 'project:update', 'project:delete', 'supplier:manage', 'supplier:account', 'supplier:delete', 'supplier:account_delete', 'user:manage', 'user:delete', 'role:manage', 'role:delete', 'file:download', 'file:delete']
     mocks.user = { id: 1, employeeNo: 'admin', realName: '管理员', userType: 'INTERNAL', isSystemAdmin: true }
     installGet(async (url: string) => {
-      if (url === '/departments' || url === '/admin/user-role-options' || url === '/permissions' || url === '/supplier-options' || url === '/project-dictionaries') return { data: [] }
+      if (url === '/departments' || url === '/admin/user-role-options' || url === '/permissions' || url === '/supplier-options' || url === '/project-dictionaries' || url.endsWith('/accounts') || url.endsWith('/contacts')) return { data: [] }
       if (url === '/admin/roles' || url === '/admin/audit-logs') return { data: page([], 20) }
       return { data: page() }
     })
@@ -188,27 +207,26 @@ describe('供应商与分页列表行为', () => {
     view.unmount()
   })
 
-  it('supplier account permission revocation removes the open account drawer', async () => {
+  it('supplier account permission revocation removes the flat account panel', async () => {
     mocks.permissions = []
     let accountRequests = 0
     installGet(async (url: string) => {
       if (url.endsWith('/accounts')) { accountRequests += 1; return { data: [] } }
+      if (url.endsWith('/contacts')) return { data: [] }
       return { data: page([supplierRow()]) }
     })
-    const user = userEvent.setup()
     const view = render(<SupplierList />)
-    expect(await screen.findByText('fixture')).toBeVisible()
-    expect(screen.queryByRole('button', { name: '账号管理' })).not.toBeInTheDocument()
+    expect(await within(supplierListPanel()).findByText('fixture')).toBeVisible()
+    expect(screen.queryByRole('region', { name: '账号管理' })).not.toBeInTheDocument()
 
     mocks.permissions = ['supplier:account']
     view.rerender(<SupplierList />)
-    await openAccounts(user)
-    expect(document.querySelector('.account-drawer')).toBeInTheDocument()
-    expect(accountRequests).toBe(1)
+    expect(await findAccountsPanel()).toBeVisible()
+    await waitFor(() => expect(accountRequests).toBe(1))
 
     mocks.permissions = []
     view.rerender(<SupplierList />)
-    expect(document.querySelector('.account-drawer')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '账号管理' })).not.toBeInTheDocument()
     expect(accountRequests).toBe(1)
   })
 
@@ -219,16 +237,17 @@ describe('供应商与分页列表行为', () => {
         if (fail) throw new Error('simulated failure')
         return { data: [account(16, 'fixture-account')] }
       }
+      if (url.endsWith('/contacts')) return { data: [] }
       return { data: page([supplierRow()]) }
     })
     const user = userEvent.setup()
     render(<SupplierList />)
-    await openAccounts(user)
-    expect(await screen.findByText('账号列表暂不可用')).toBeVisible()
-    expect(document.querySelector('.account-drawer .account-table')).not.toBeInTheDocument()
+    const panel = await findAccountsPanel()
+    expect(await within(panel).findByText('账号列表暂不可用')).toBeVisible()
+    expect(panel.querySelector('.account-table')).not.toBeInTheDocument()
     fail = false
-    await user.click(screen.getByRole('button', { name: '重试' }))
-    expect(await screen.findByText('fixture-account')).toBeVisible()
+    await user.click(within(panel).getByRole('button', { name: '重试' }))
+    expect(await within(panel).findByText('fixture-account')).toBeVisible()
   })
 
   it('password reset dialogs discard a cancelled password before another account opens', async () => {
@@ -253,27 +272,30 @@ describe('供应商与分页列表行为', () => {
     view.unmount()
 
     const accounts = [account(21, 'supplier-a'), account(22, 'supplier-b')]
-    installGet(async (url: string) => url.endsWith('/accounts') ? { data: accounts } : { data: page([supplierRow()]) })
+    installGet(async (url: string) => {
+      if (url.endsWith('/accounts')) return { data: accounts }
+      if (url.endsWith('/contacts')) return { data: [] }
+      return { data: page([supplierRow()]) }
+    })
     view = render(<SupplierList />)
-    await openAccounts(user)
-    row = (await screen.findByText('supplier-a')).closest('tr')!
+    const accountsPanel = await findAccountsPanel()
+    row = (await within(accountsPanel).findByText('supplier-a')).closest('tr')!
     await user.click(within(row).getByRole('button', { name: '重置密码' }))
     await user.type(screen.getByPlaceholderText('5-20 位'), 'Secret#2026')
-    expect(document.querySelector('.account-drawer')).toBeInTheDocument()
+    expect(accountsPanel).toBeInTheDocument()
     expect(screen.getAllByText(/重置密码 · supplier-a/)[0]).toBeVisible()
     await user.click(screen.getByRole('button', { name: '取消' }))
-    row = screen.getByText('supplier-b').closest('tr')!
+    row = within(accountsPanel).getByText('supplier-b').closest('tr')!
     await user.click(within(row).getByRole('button', { name: '重置密码' }))
     expect(screen.getByPlaceholderText('5-20 位')).toHaveValue('')
   }, 10_000)
 
-  it('disabled supplier account drawer disables new account creation and rejects stale submit', async () => {
+  it('disabled supplier account panel disables new account creation and rejects stale submit', async () => {
     const supplier = supplierRow({ name: 'FULL_PAGE_SUP00', status: 'DISABLED' })
-    installGet(async (url: string) => url.endsWith('/accounts') || url.endsWith('/supplier-role-options') ? { data: [] } : { data: page([supplier]) })
-    const user = userEvent.setup()
+    installGet(async (url: string) => url.endsWith('/accounts') || url.endsWith('/contacts') || url.endsWith('/supplier-role-options') ? { data: [] } : { data: page([supplier]) })
     render(<SupplierList />)
-    await openAccounts(user, 'FULL_PAGE_SUP00')
-    const add = screen.getByRole('button', { name: '新增账号' })
+    const panel = await findAccountsPanel('FULL_PAGE_SUP00')
+    const add = within(panel).getByRole('button', { name: '新增账号' })
     expect(add).toBeDisabled()
     fireEvent.click(add)
     expect(mocks.post).not.toHaveBeenCalled()
@@ -296,7 +318,7 @@ describe('供应商与分页列表行为', () => {
           if (fail) throw new Error('simulated list failure')
           return { data: page() }
         }
-        if (url === '/permissions' || url === '/departments' || url === '/admin/user-role-options' || url === '/supplier-options' || url === '/project-dictionaries') return { data: [] }
+        if (url === '/permissions' || url === '/departments' || url === '/admin/user-role-options' || url === '/supplier-options' || url === '/project-dictionaries' || url.endsWith('/accounts') || url.endsWith('/contacts')) return { data: [] }
         return { data: page() }
       })
       const view = item.render()
@@ -321,8 +343,9 @@ describe('供应商与分页列表行为', () => {
     render(<SupplierList />)
     await waitFor(() => expect(requests).toHaveLength(1))
     requests.shift()!.resolve({ data: page([supplierRow({ id: 1, name: '旧供应商' })]) })
-    const oldRow = (await screen.findByText('旧供应商')).closest('tr')!
-    await user.click(within(oldRow).getByRole('button', { name: '停用' }))
+    const summary = await screen.findByRole('region', { name: '供应商信息' })
+    expect(within(summary).getByRole('heading', { name: '旧供应商' })).toBeVisible()
+    await user.click(within(summary).getByRole('button', { name: '停用' }))
     fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)
     await waitFor(() => expect(requests).toHaveLength(1))
     const stale = requests.shift()!
@@ -333,24 +356,23 @@ describe('供应商与分页列表行为', () => {
     await waitFor(() => expect(requests.some((request) => request.keyword === 'new-filter')).toBe(true))
     const fresh = requests.find((request) => request.keyword === 'new-filter')!
     fresh.resolve({ data: page([supplierRow({ id: 2, name: '新筛选结果' })]) })
-    expect(await screen.findByText('新筛选结果')).toBeVisible()
+    expect(await within(supplierListPanel()).findByText('新筛选结果')).toBeVisible()
     stale.resolve({ data: page([supplierRow({ id: 1, name: '旧供应商' })]) })
-    await waitFor(() => expect(screen.queryByText('旧供应商')).not.toBeInTheDocument())
+    await waitFor(() => expect(within(supplierListPanel()).queryByText('旧供应商')).not.toBeInTheDocument())
   })
 
   it('new supplier account selects the only supplier role by default', async () => {
     installGet(async (url: string) => {
-      if (url.endsWith('/accounts')) return { data: [] }
+      if (url.endsWith('/accounts') || url.endsWith('/contacts')) return { data: [] }
       if (url.endsWith('/supplier-role-options')) return { data: [{ id: 3, name: '供应商权限' }] }
       return { data: page([supplierRow({ name: '川崎' })]) }
     })
     const user = userEvent.setup()
     render(<SupplierList />)
-    await openAccounts(user, '川崎')
-    const drawer = document.querySelector<HTMLElement>('.account-drawer')!
-    expect(within(drawer).queryByText('姓名')).not.toBeInTheDocument()
-    expect(within(drawer).queryByText('邮箱')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '新增账号' }))
+    const panel = await findAccountsPanel('川崎')
+    expect(within(panel).queryByText('姓名')).not.toBeInTheDocument()
+    expect(within(panel).queryByText('邮箱')).not.toBeInTheDocument()
+    await user.click(within(panel).getByRole('button', { name: '新增账号' }))
     const dialog = await screen.findByRole('dialog', { name: '新增供应商账号' })
     expect(within(dialog).queryByLabelText('姓名')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('邮箱')).not.toBeInTheDocument()
@@ -359,7 +381,7 @@ describe('供应商与分页列表行为', () => {
 
   it('new supplier account prefers the built-in supplier role when several roles exist', async () => {
     installGet(async (url: string) => {
-      if (url.endsWith('/accounts')) return { data: [] }
+      if (url.endsWith('/accounts') || url.endsWith('/contacts')) return { data: [] }
       if (url.endsWith('/supplier-role-options')) {
         return { data: [{ id: 9, name: '只读供应商' }, { id: 4, name: '供应商人员' }] }
       }
@@ -367,33 +389,36 @@ describe('供应商与分页列表行为', () => {
     })
     const user = userEvent.setup()
     render(<SupplierList />)
-    await openAccounts(user, '川崎')
-    await user.click(screen.getByRole('button', { name: '新增账号' }))
+    const panel = await findAccountsPanel('川崎')
+    await user.click(within(panel).getByRole('button', { name: '新增账号' }))
     const dialog = await screen.findByRole('dialog', { name: '新增供应商账号' })
     expect(await within(dialog).findByText('供应商人员')).toBeVisible()
     expect(within(dialog).queryByText('只读供应商')).not.toBeInTheDocument()
   })
 
-  it('supplier account drawer fits on desktop and keeps columns reachable on narrow screens without phone fields', async () => {
-    installGet(async (url: string) => url.endsWith('/accounts') ? { data: [account(11, 'supplier-11')] } : { data: page([supplierRow()]) })
+  it('supplier account panel fits on desktop and keeps columns reachable on narrow screens without phone fields', async () => {
+    installGet(async (url: string) => {
+      if (url.endsWith('/accounts')) return { data: [account(11, 'supplier-11')] }
+      if (url.endsWith('/contacts')) return { data: [] }
+      return { data: page([supplierRow()]) }
+    })
     const user = userEvent.setup()
     render(<SupplierList />)
-    await openAccounts(user)
-    const drawer = document.querySelector<HTMLElement>('.account-drawer')!
-    expect(drawer).toBeInTheDocument()
-    expect(drawer.querySelector('.account-table')).toBeInTheDocument()
-    expect(within(drawer).getByText('角色')).toBeVisible()
-    expect(within(drawer).queryByText('电话')).not.toBeInTheDocument()
-    expect(drawer.querySelector('table')).toHaveStyle({ width: '840px' })
-    await user.click(screen.getByRole('button', { name: '新增账号' }))
+    const panel = await findAccountsPanel()
+    expect(panel).toBeInTheDocument()
+    expect(panel.querySelector('.account-table')).toBeInTheDocument()
+    expect(within(panel).getByText('角色')).toBeVisible()
+    expect(within(panel).queryByText('电话')).not.toBeInTheDocument()
+    expect(panel.querySelector('table')).toHaveStyle({ width: '700px' })
+    await user.click(within(panel).getByRole('button', { name: '新增账号' }))
     expect(screen.queryByLabelText('电话')).not.toBeInTheDocument()
   })
 
-  it('supplier form and table drop contact address and email fields', async () => {
-    installGet(async () => ({ data: page([supplierRow()]) }))
+  it('supplier form and workspace drop contact address and email fields', async () => {
+    installGet(async (url: string) => url.endsWith('/accounts') || url.endsWith('/contacts') ? { data: [] } : { data: page([supplierRow()]) })
     const user = userEvent.setup()
     render(<SupplierList />)
-    expect(await screen.findByText('fixture')).toBeVisible()
+    expect(await within(supplierListPanel()).findByText('fixture')).toBeVisible()
     for (const removed of ['联系人', '联系电话', '联系邮箱', '地址']) expect(screen.queryByText(removed)).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '新增供应商' }))
     expect(screen.getByPlaceholderText('公司全称')).toBeVisible()
@@ -404,20 +429,24 @@ describe('供应商与分页列表行为', () => {
   it('supplier and supplier-account status writes ignore synchronous duplicate clicks', async () => {
     const supplierPending = deferred<{ data: Record<string, never> }>()
     const accountPending = deferred<{ data: Record<string, never> }>()
-    installGet(async (url: string) => url.endsWith('/accounts') ? { data: [account(12, 'supplier-12')] } : { data: page([supplierRow()]) })
+    installGet(async (url: string) => {
+      if (url.endsWith('/accounts')) return { data: [account(12, 'supplier-12')] }
+      if (url.endsWith('/contacts')) return { data: [] }
+      return { data: page([supplierRow()]) }
+    })
     mocks.put.mockImplementation((url: string) => url.includes('supplier-accounts') ? accountPending.promise : supplierPending.promise)
     const user = userEvent.setup()
     render(<SupplierList />)
-    const row = (await screen.findByText('fixture')).closest('tr')!
-    const disableSupplier = within(row).getByRole('button', { name: '停用' })
+    const summary = await screen.findByRole('region', { name: '供应商信息' })
+    const disableSupplier = within(summary).getByRole('button', { name: '停用' })
     await user.click(disableSupplier)
     const confirm = await screen.findByRole('button', { name: '确定' })
     fireEvent.click(confirm); fireEvent.click(confirm)
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1))
     supplierPending.resolve({ data: {} })
 
-    await openAccounts(user)
-    const accountRow = (await screen.findByText('supplier-12')).closest('tr')!
+    const panel = await findAccountsPanel()
+    const accountRow = (await within(panel).findByText('supplier-12')).closest('tr')!
     const disableAccount = within(accountRow).getByRole('button', { name: '停用' })
     fireEvent.click(disableAccount)
     const confirmAccount = await screen.findByRole('button', { name: '确定' })
@@ -432,9 +461,11 @@ describe('供应商与分页列表行为', () => {
     const activePending = deferred<{ data: Record<string, never> }>()
     const disabledPending = deferred<{ data: Record<string, never> }>()
     const accountPending = deferred<{ data: Record<string, never> }>()
-    installGet(async (url: string) => url.endsWith('/accounts')
-      ? { data: [account(12, 'supplier-12')] }
-      : { data: page([supplierRow({ id: 8, name: '启用厂商', status: 'ACTIVE' }), supplierRow({ id: 9, name: '停用厂商', status: 'DISABLED' })]) })
+    installGet(async (url: string) => {
+      if (url.endsWith('/accounts')) return { data: [account(12, 'supplier-12')] }
+      if (url.endsWith('/contacts')) return { data: [] }
+      return { data: page([supplierRow({ id: 8, name: '启用厂商', status: 'ACTIVE' }), supplierRow({ id: 9, name: '停用厂商', status: 'DISABLED' })]) }
+    })
     mocks.put.mockImplementation((url: string) => {
       if (url.includes('/supplier-accounts/')) return accountPending.promise
       if (url.includes('/suppliers/8/')) return activePending.promise
@@ -443,8 +474,9 @@ describe('供应商与分页列表行为', () => {
     const user = userEvent.setup()
     render(<SupplierList />)
 
-    const activeRow = (await screen.findByText('启用厂商')).closest('tr')!
-    const getDisableBtn = () => within(activeRow).getByRole('button', { name: '停用' })
+    const activeSummary = await screen.findByRole('region', { name: '供应商信息' })
+    expect(within(activeSummary).getByRole('heading', { name: '启用厂商' })).toBeVisible()
+    const getDisableBtn = () => within(activeSummary).getByRole('button', { name: '停用' })
     await user.click(getDisableBtn())
     let popup = await screen.findByRole('tooltip')
     fireEvent.click(within(popup).getByRole('button', { name: '确定' }))
@@ -459,8 +491,8 @@ describe('供应商与分页列表行为', () => {
     activePending.resolve({ data: {} })
     await waitFor(() => expect(getDisableBtn()).toBeEnabled())
 
-    const disabledRow = screen.getByText('停用厂商').closest('tr')!
-    const getEnableBtn = () => within(disabledRow).getByRole('button', { name: '启用' })
+    const disabledSummary = await selectSupplier(user, '停用厂商')
+    const getEnableBtn = () => within(disabledSummary).getByRole('button', { name: '启用' })
     await user.click(getEnableBtn())
     popup = await screen.findByRole('tooltip')
     fireEvent.click(within(popup).getByRole('button', { name: '确定' }))
@@ -475,8 +507,9 @@ describe('供应商与分页列表行为', () => {
     disabledPending.resolve({ data: {} })
     await waitFor(() => expect(getEnableBtn()).toBeEnabled())
 
-    await openAccounts(user, '启用厂商')
-    const accountRow = (await screen.findByText('supplier-12')).closest('tr')!
+    await selectSupplier(user, '启用厂商')
+    const accountsPanel = await findAccountsPanel('启用厂商')
+    const accountRow = (await within(accountsPanel).findByText('supplier-12')).closest('tr')!
     const getDisableAccount = () => within(accountRow).getByRole('button', { name: '停用' })
     await user.click(getDisableAccount())
     popup = await screen.findByRole('tooltip')
@@ -493,6 +526,66 @@ describe('供应商与分页列表行为', () => {
     await waitFor(() => expect(getDisableAccount()).toBeEnabled())
   })
 
+  it('switching suppliers updates flat account and contact panels together', async () => {
+    installGet(async (url: string) => {
+      if (url === '/admin/suppliers') {
+        return {
+          data: page([
+            supplierRow({ id: 8, name: '汇川', remark: '华东供应商' }),
+            supplierRow({ id: 9, name: '川崎', remark: '华南供应商' }),
+          ]),
+        }
+      }
+      if (url === '/admin/suppliers/8/accounts') return { data: [account(81, 'hc_001')] }
+      if (url === '/admin/suppliers/9/accounts') return { data: [account(91, 'cq_001')] }
+      if (url === '/admin/suppliers/8/contacts') return { data: [{ id: 101, name: '张工', email: 'zhang@hc.test', sortNo: 1, status: 'ACTIVE' }] }
+      if (url === '/admin/suppliers/9/contacts') return { data: [{ id: 102, name: '李工', email: 'li@cq.test', sortNo: 2, status: 'ACTIVE' }] }
+      return { data: [] }
+    })
+    const user = userEvent.setup()
+    render(<SupplierList />)
+
+    const accountsPanel = await findAccountsPanel('汇川')
+    const contactsPanel = await screen.findByRole('region', { name: '联络人' })
+    expect(await within(accountsPanel).findByText('hc_001')).toBeVisible()
+    expect(await within(contactsPanel).findByText('张工')).toBeVisible()
+    expect(within(supplierSummaryPanel()).getByText('备注：华东供应商')).toBeVisible()
+
+    await selectSupplier(user, '川崎')
+    expect(await within(await findAccountsPanel('川崎')).findByText('cq_001')).toBeVisible()
+    expect(await within(screen.getByRole('region', { name: '联络人' })).findByText('李工')).toBeVisible()
+    expect(within(supplierSummaryPanel()).getByText('备注：华南供应商')).toBeVisible()
+  })
+
+  it('left supplier list hides pagination on a single page and keeps multi-page controls compact under global pagination config', async () => {
+    installGet(async (url: string) => {
+      if (url === '/admin/suppliers') return { data: page([supplierRow({ name: '单页供应商' })], 100, 1, 2) }
+      return { data: [] }
+    })
+    const singlePage = render(
+      <ConfigProvider componentConfig={{ Pagination: TABLE_PAGINATION }}>
+        <SupplierList />
+      </ConfigProvider>,
+    )
+    await within(supplierListPanel()).findByText('单页供应商')
+    expect(supplierListPanel().querySelector('.arco-pagination')).toBeNull()
+    singlePage.unmount()
+
+    installGet(async (url: string) => {
+      if (url === '/admin/suppliers') return { data: page([supplierRow({ name: '多页供应商' })], 100, 1, 120) }
+      return { data: [] }
+    })
+    render(
+      <ConfigProvider componentConfig={{ Pagination: TABLE_PAGINATION }}>
+        <SupplierList />
+      </ConfigProvider>,
+    )
+    await within(supplierListPanel()).findByText('多页供应商')
+    expect(supplierListPanel().querySelector('.arco-pagination')).not.toBeNull()
+    expect(within(supplierListPanel()).queryByText(/共 \d+ 条/)).not.toBeInTheDocument()
+    expect(supplierListPanel().querySelector('.arco-pagination-option')).toBeNull()
+  })
+
   it('deleting the only row on a controlled last page reloads the last page allowed by the response total', async () => {
     let deleted = false
     installGet(async (url: string, config?: unknown) => {
@@ -503,12 +596,13 @@ describe('供应商与分页列表行为', () => {
     mocks.delete.mockImplementation(async () => { deleted = true; return { data: {} } })
     const user = userEvent.setup()
     render(<SupplierList />)
-    fireEvent.click((await screen.findByText('2')).closest('.arco-pagination-item')!)
-    const lastRow = (await screen.findByText('末页供应商')).closest('tr')!
-    await user.click(within(lastRow).getByRole('button', { name: '删除' }))
+    fireEvent.click((await within(supplierListPanel()).findByText('2')).closest('.arco-pagination-item')!)
+    await within(supplierListPanel()).findByText('末页供应商')
+    const summary = supplierSummaryPanel()
+    await user.click(within(summary).getByRole('button', { name: '删除' }))
     fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)
-    expect(await screen.findByText('首页供应商')).toBeVisible()
-    expect(screen.getByText('1').closest('.arco-pagination-item')).toHaveClass('arco-pagination-item-active')
+    expect(await within(supplierListPanel()).findByText('首页供应商')).toBeVisible()
+    expect(supplierListPanel().querySelector('.arco-pagination')).toBeNull()
   })
 })
 

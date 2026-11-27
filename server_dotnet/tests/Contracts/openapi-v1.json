@@ -9441,7 +9441,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AdminImportResponse"
+                  "$ref": "#/components/schemas/OutsourceImportResponse"
                 }
               }
             }
@@ -15938,6 +15938,35 @@
             "type": "string",
             "format": "date",
             "nullable": true
+          },
+          "fieldValues": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            },
+            "nullable": true
+          },
+          "expectedItemId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "changedFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "expectedChangeHash": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -15954,6 +15983,41 @@
               "$ref": "#/components/schemas/OutsourceImportRow"
             },
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "OutsourceImportResponse": {
+        "required": [
+          "created",
+          "failed",
+          "rows",
+          "skipped",
+          "updated"
+        ],
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "updated": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "skipped": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminImportRowResult"
+            }
           }
         },
         "additionalProperties": false
@@ -15985,6 +16049,28 @@
             "nullable": true
           },
           "typeName": {
+            "type": "string",
+            "nullable": true
+          },
+          "fieldValues": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "nullable": true
+            },
+            "nullable": true
+          },
+          "expectedItemId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "expectedUpdatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "expectedChangeHash": {
             "type": "string",
             "nullable": true
           }

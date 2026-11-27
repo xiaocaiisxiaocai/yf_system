@@ -75,7 +75,7 @@ public sealed class OutsourceSyncTests
         Assert.Equal((6, 0, 0), (imported.Created, imported.Skipped, imported.Failed));
         var pendingImport = imported.Rows.Single(x => x.Key == "F1");
         Assert.Equal(("CREATED", "IPMS 暂无资料，可先导入，后续同步补齐"), (pendingImport.Status, pendingImport.Message));
-        var repeated = await items.ImportAsync(buyer, new([new(2, "2026-11-05", "F1", "鼎亚", "OEMA")]), ct);
+        var repeated = await items.ImportAsync(buyer, new([new(2, "2026-11-04", "F1", "鼎亚", "OEMA")]), ct);
         Assert.Equal((0, 1, 0), (repeated.Created, repeated.Skipped, repeated.Failed));
         await database.ExecuteAsync("UPDATE outsource_items SET send_status='SENT' WHERE work_order_no IN ('A1','E1')", ct);
         OutsourceItemResponse Row(IEnumerable<OutsourceItemResponse> rows, string no) => rows.Single(x => x.WorkOrderNo == no);

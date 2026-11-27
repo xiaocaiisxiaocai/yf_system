@@ -50,6 +50,7 @@ function deferred<T>(): Deferred<T> {
 }
 
 const supplier = { id: 8, name: '并发供应商', status: 'ACTIVE' as const, createdAt: '' }
+const secondSupplier = { id: 9, name: '切换供应商', status: 'ACTIVE' as const, createdAt: '' }
 type AccountFixture = {
   id: number
   employeeNo: string
@@ -59,32 +60,24 @@ type AccountFixture = {
 const accountA: AccountFixture = { id: 11, employeeNo: 'a11', status: 'ACTIVE', createdAt: '' }
 const accountB: AccountFixture = { id: 12, employeeNo: 'b12', status: 'ACTIVE', createdAt: '' }
 
-function supplierPage() {
-  return { data: { list: [supplier], total: 1, page: 1, pageSize: 10 } }
+function supplierPage(list = [supplier]) {
+  return { data: { list, total: list.length, page: 1, pageSize: 10 } }
 }
 
-async function openAccounts(user: ReturnType<typeof userEvent.setup>, expectedCount: number) {
-  await user.click(await screen.findByRole('button', { name: '账号管理' }))
-  await screen.findByText(`共 ${expectedCount} 个账号`)
+async function waitForAccountsPanel(expectedCount: number) {
+  const panel = await screen.findByRole('region', { name: '账号管理' })
+  await within(panel).findByText(`共 ${expectedCount} 个账号`)
+  return panel
 }
 
-async function closeAccounts(user: ReturnType<typeof userEvent.setup>) {
-  const closeIcon = document.querySelector<HTMLElement>('.arco-drawer-close-icon')
-  expect(closeIcon).not.toBeNull()
-  await user.click(closeIcon!)
-  await waitFor(() => {
-    expect(document.querySelector('.arco-drawer-wrapper')).toBeNull()
-  })
-}
-
-function accountStatusButton(employeeNo: string) {
-  const row = screen.getByText(employeeNo).closest('tr')
+function accountStatusButton(panel: HTMLElement, employeeNo: string) {
+  const row = within(panel).getByText(employeeNo).closest('tr')
   expect(row).not.toBeNull()
   return within(row!).getByRole('button', { name: '停用' })
 }
 
-async function confirmAccountDisable(user: ReturnType<typeof userEvent.setup>, employeeNo: string) {
-  await user.click(accountStatusButton(employeeNo))
+async function confirmAccountDisable(user: ReturnType<typeof userEvent.setup>, panel: HTMLElement, employeeNo: string) {
+  await user.click(accountStatusButton(panel, employeeNo))
   fireEvent.click((await screen.findAllByRole('button', { name: '确定' })).at(-1)!)
 }
 
@@ -96,28 +89,33 @@ describe('供应商账号刷新竞态', () => {
     mocks.delete.mockReset()
   })
 
-  for (const connected of [true, false]) {
-    it(`closing supplier accounts restores only a connected opener (connected=${connected})`, async () => {
-      mocks.get.mockImplementation(async (url: string) => {
-        if (url === '/admin/suppliers') return supplierPage()
-        if (url === '/admin/suppliers/8/accounts') return { data: [accountA] }
-        throw new Error(`unexpected GET ${url}`)
-      })
-
-      const user = userEvent.setup()
-      render(<SupplierList />)
-      const opener = await screen.findByRole('button', { name: '账号管理' })
-      const focus = vi.spyOn(opener, 'focus')
-
-      fireEvent.click(opener)
-      await screen.findByText('共 1 个账号')
-      expect(focus).not.toHaveBeenCalled()
-
-      if (!connected) opener.remove()
-      await closeAccounts(user)
-      expect(focus).toHaveBeenCalledTimes(connected ? 1 : 0)
+  it('switching suppliers ignores a late account response from the previous supplier', async () => {
+    const firstAccounts = deferred<{ data: AccountFixture[] }>()
+    mocks.get.mockImplementation((url: string) => {
+      if (url === '/admin/suppliers') return Promise.resolve(supplierPage([supplier, secondSupplier]))
+      if (url === '/admin/suppliers/8/accounts') return firstAccounts.promise
+      if (url === '/admin/suppliers/9/accounts') return Promise.resolve({ data: [accountB] })
+      throw new Error(`unexpected GET ${url}`)
     })
-  }
+
+    const user = userEvent.setup()
+    render(<SupplierList />)
+    const listPanel = await screen.findByRole('complementary', { name: '供应商列表' })
+    await within(listPanel).findByText('并发供应商')
+
+    await user.click(within(listPanel).getByRole('button', { name: /切换供应商/ }))
+    const accountsPanel = await waitForAccountsPanel(1)
+    expect(within(accountsPanel).getByText('b12')).toBeVisible()
+
+    await act(async () => {
+      firstAccounts.resolve({ data: [accountA] })
+      await firstAccounts.promise
+      await Promise.resolve()
+    })
+
+    expect(within(accountsPanel).getByText('b12')).toBeVisible()
+    expect(within(accountsPanel).queryByText('a11')).not.toBeInTheDocument()
+  })
 
   for (const lateOutcome of ['success', 'failure'] as const) {
     it(`an older account refresh ${lateOutcome} cannot replace the latest successful snapshot`, async () => {
@@ -148,10 +146,10 @@ describe('供应商账号刷新竞态', () => {
 
       const user = userEvent.setup()
       render(<SupplierList />)
-      await openAccounts(user, 2)
+      const panel = await waitForAccountsPanel(2)
 
-      await confirmAccountDisable(user, 'a11')
-      await confirmAccountDisable(user, 'b12')
+      await confirmAccountDisable(user, panel, 'a11')
+      await confirmAccountDisable(user, panel, 'b12')
 
       await waitFor(() => {
         expect(mocks.put).toHaveBeenCalledTimes(2)
@@ -191,8 +189,8 @@ describe('供应商账号刷新竞态', () => {
       })
 
       await waitFor(() => {
-        const rowA = screen.getByText('a11').closest('tr')
-        const rowB = screen.getByText('b12').closest('tr')
+        const rowA = within(panel).getByText('a11').closest('tr')
+        const rowB = within(panel).getByText('b12').closest('tr')
         expect(rowA).not.toBeNull()
         expect(rowB).not.toBeNull()
         expect(within(rowA!).getByText('停用')).toBeVisible()

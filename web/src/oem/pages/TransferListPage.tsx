@@ -382,7 +382,7 @@ export default function TransferListPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE)
   const [direction, setDirection] = useState('')
-  // 从“厂商与账号”页的“传递记录”进入时带 ?companyId=，列表只显示与该厂商的往来。
+  // 厂商页签使用 ?companyId=，刷新或直接打开地址时保留筛选。
   const [searchParams, setSearchParams] = useSearchParams()
   const companyParam = Number(searchParams.get('companyId'))
   const companyId = realm === 'internal' && Number.isSafeInteger(companyParam) && companyParam > 0 ? companyParam : undefined
@@ -470,7 +470,7 @@ export default function TransferListPage() {
     return [...tree, { key: String(departmentId), value: String(departmentId), title: `组织 #${departmentId}（已不存在）`, children: [] }]
   }, [departments.data, departmentId])
   const rows: TransferSummary[] = transfers.data?.list ?? []
-  // 选项只含启用的厂商；从已停用厂商的“传递记录”进入时，用列表里的厂商名补一个选项，避免只显示编号。
+  // 选项只含启用的厂商；地址指定已停用厂商时，从列表补上厂商名。
   const companyFilterOptions = useMemo(() => {
     const options = companyOptions.data ?? []
     if (!companyId || options.some((company) => company.id === companyId)) return options

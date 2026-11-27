@@ -35,10 +35,18 @@ function renderPortal(api: Pick<OemApi, 'outsourceItems'> & Partial<Pick<OemApi,
 describe('ODM/OEMA 门户外发工令', () => {
   it('显示本厂商的记录，按状态着色，可搜索和显示已完成', async () => {
     const user = userEvent.setup()
-    const outsourceItems = vi.fn().mockResolvedValue(page([row(1, 'A1', 'NORMAL', '正常'), row(2, 'A2', 'PAUSED', '暂停')]))
+    const first = row(69, 'A1', 'NORMAL', '正常')
+    const second = row(71, 'A2', 'PAUSED', '暂停')
+    const last = row(204, 'Z1', 'NORMAL', '正常')
+    const outsourceItems = vi.fn<OemApi['outsourceItems']>().mockImplementation(async (params) => {
+      if (params.keyword) return page([second])
+      if (params.page === 2) return { ...page([last]), total: 101, page: 2 }
+      return { ...page([first, second]), total: 101 }
+    })
     renderPortal({ outsourceItems })
     const paused = (await screen.findByText('A2')).closest('tr')!
     expect(paused).toHaveClass('outsource-row--paused')
+    expect(paused.cells[0]).toHaveTextContent(/^2$/)
     expect(within(paused).getByText('暂停')).toBeInTheDocument()
     expect(screen.getByText('A1').closest('tr')).toHaveClass('outsource-row--normal')
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual(
@@ -46,11 +54,14 @@ describe('ODM/OEMA 门户外发工令', () => {
     expect(screen.queryByRole('button', { name: /编辑|删除|发送/ })).not.toBeInTheDocument()
     expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, keyword: '', includeClosed: false })
 
+    await user.click(screen.getByText('2', { selector: '.arco-pagination-item' }))
+    expect((await screen.findByText('Z1')).closest('tr')!.cells[0]).toHaveTextContent(/^101$/)
     const search = screen.getByPlaceholderText('工令、客户或机型')
     await user.type(search, 'A2')
     // Arco reads keyCode 13 for Enter, which user-event does not set in jsdom.
     fireEvent.keyDown(search, { key: 'Enter', code: 'Enter', keyCode: 13, charCode: 13, which: 13 })
     await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, keyword: 'A2', includeClosed: false }))
+    expect((await screen.findByText('A2')).closest('tr')!.cells[0]).toHaveTextContent(/^1$/)
     await user.click(screen.getByText('显示已完成'))
     await waitFor(() => expect(outsourceItems).toHaveBeenLastCalledWith({ page: 1, pageSize: 100, keyword: 'A2', includeClosed: true }))
   })

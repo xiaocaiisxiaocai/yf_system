@@ -10,6 +10,8 @@ export interface ExcelTableOptions {
   sheetName?: string
   requiredHeaders: readonly string[]
   optionalHeaders?: readonly string[]
+  /** Identify required columns anywhere in the header; the default requires them first, in order. */
+  matchHeadersByName?: boolean
   /** Header names from older templates, mapped to the current name, so files filled in earlier still import. */
   headerAliases?: Readonly<Record<string, string>>
   /** Allows one extra worksheet row for the template example. */
@@ -63,8 +65,10 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
 
   const range = XLSX.utils.decode_range(sheet['!ref'])
   const fullRange = sheet['!fullref'] ? XLSX.utils.decode_range(sheet['!fullref']) : range
-  if (fullRange.e.c >= 64 || fullRange.e.r > maxSheetRows)
-    throw new Error(`工作表最多支持 ${options.maxRows} 条数据、64 列`)
+  const allowed = new Set([...options.requiredHeaders, ...(options.optionalHeaders ?? [])])
+  const maxColumns = options.matchHeadersByName ? Math.max(64, allowed.size) : 64
+  if (fullRange.e.c >= maxColumns || fullRange.e.r > maxSheetRows)
+    throw new Error(`工作表最多支持 ${options.maxRows} 条数据、${maxColumns} 列`)
   for (let row = 1; row <= range.e.r; row++) {
     for (let column = 0; column <= range.e.c; column++) {
       const cell = sheet[XLSX.utils.encode_cell({ r: row, c: column })] as { f?: unknown; t?: string } | undefined
@@ -76,8 +80,10 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: false, defval: '' })
   const stringCell = (value: unknown) => typeof value === 'string' ? value.trim() : value == null ? '' : String(value).trim()
   const headers = (matrix[0] ?? []).map(stringCell).map(header => options.headerAliases?.[header] ?? header)
-  const allowed = new Set([...options.requiredHeaders, ...(options.optionalHeaders ?? [])])
-  if (options.requiredHeaders.some((header, index) => headers[index] !== header))
+  if (options.matchHeadersByName) {
+    const missing = options.requiredHeaders.filter(header => !headers.includes(header))
+    if (missing.length) throw new Error(`缺少必填表头：${missing.join('、')}`)
+  } else if (options.requiredHeaders.some((header, index) => headers[index] !== header))
     throw new Error(`表头不匹配，请使用系统模板：${options.requiredHeaders.join('、')}`)
   if (headers.some(header => !header || !allowed.has(header))) throw new Error('表头为空或包含不支持的列')
   if (new Set(headers).size !== headers.length) throw new Error('表头不能重复')
@@ -87,19 +93,19 @@ export async function readExcelTable(file: File, options: ExcelTableOptions): Pr
   for (let index = 1; index < matrix.length; index++) {
     const values = matrix[index] ?? []
     if (values.every(value => stringCell(value) === '')) continue
-    const rowNumber = index + 1
-    const row: Record<string, string> = {}
+    const rowNumber = range.s.r + index + 1
+    const row: Record<string, string> = Object.create(null)
     const numericCells = new Set<string>()
     headers.forEach((header, column) => {
       row[header] = stringCell(values[column])
-      const cell = sheet[XLSX.utils.encode_cell({ r: index, c: column })] as { t?: string } | undefined
+      const cell = sheet[XLSX.utils.encode_cell({ r: rowNumber - 1, c: range.s.c + column })] as { t?: string } | undefined
       if (cell?.t === 'n') numericCells.add(header)
     })
     const parsed = { rowNumber, values: row, numericCells }
     if (options.ignoreExampleRow?.(parsed)) examples++
     else result.push(parsed)
   }
-  if (fullRange.e.r - examples > options.maxRows) throw new Error(`工作表最多支持 ${options.maxRows} 条数据、64 列`)
+  if (fullRange.e.r - examples > options.maxRows) throw new Error(`工作表最多支持 ${options.maxRows} 条数据、${maxColumns} 列`)
   if (result.length === 0 && examples === 0) throw new Error('没有可导入的数据行')
   return result
 }

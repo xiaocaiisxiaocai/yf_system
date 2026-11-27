@@ -80,6 +80,7 @@ describe('ExcelImportDialog', () => {
     const input = screen.getByLabelText('选择 Excel 文件') as HTMLInputElement
     await user.upload(input, new File([buffer], 'accounts.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
     expect(await screen.findByText('待导入 1')).toBeInTheDocument()
+    expect(screen.queryByText(/待新增|待更新/)).not.toBeInTheDocument()
     expect(screen.queryByText('Temporary#2026')).not.toBeInTheDocument()
     expect(commit).not.toHaveBeenCalled()
 
@@ -87,6 +88,7 @@ describe('ExcelImportDialog', () => {
     await waitFor(() => expect(commit).toHaveBeenCalledWith([
       { rowNumber: 2, employeeNo: 'U001', initialPassword: 'Temporary#2026' },
     ]))
+    expect(await screen.findByText('新增 1，跳过 0，失败 0')).toBeVisible()
     // 没有失败行时导入完成后自动关闭。
     await waitFor(() => expect(screen.getByRole('dialog', { hidden: true })).not.toBeVisible())
   })

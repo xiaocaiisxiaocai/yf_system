@@ -277,7 +277,6 @@ public sealed class OutsourceFilesTests
         var mailFields = layout.MailWorkbookFields();
         Assert.DoesNotContain(mailFields, x => x.Key == "files");
         Assert.DoesNotContain("files", OutsourceWorkbook.Snapshot(reference.Json(row), mailFields).Keys);
-        Assert.DoesNotContain("档案", OutsourceItemService.TemplateHeaders);
         Assert.DoesNotContain(layout.WorkbookFields(vendor: true), x => x.Key == "files");
 
         using var export = await admin.Http.GetAsync($"{Items}/export", ct);

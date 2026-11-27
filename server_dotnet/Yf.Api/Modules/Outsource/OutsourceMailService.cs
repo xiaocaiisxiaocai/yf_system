@@ -114,7 +114,7 @@ public sealed class OutsourceMailService(IDbContextFactory<YfDbContext> dbFactor
                 BodyHtml = OutsourceMailContent.Html(draft.Kind, draft.VendorName, draft.Items, draft.Changed, plan.BodyFields(draft.Kind)),
                 BodyText = OutsourceMailContent.Text(draft.Kind, draft.VendorName, draft.Items, plan.BodyFields(draft.Kind)),
                 AttachmentName = notice ? OutsourceMailContent.AttachmentName(draft.VendorName, day) : null,
-                Attachment = notice ? OutsourceWorkbook.Build(draft.Items, draft.Changed, plan.VendorFields, forVendor: true) : null,
+                Attachment = notice ? OutsourceWorkbook.Build(draft.Items, draft.Changed, plan.VendorFields, OutsourceWorkbook.Purpose.MailAttachment) : null,
                 Status = OutsourceMailStatuses.Queued, NextAttemptAt = now,
             };
             context.OutsourceMails.Add(mail);

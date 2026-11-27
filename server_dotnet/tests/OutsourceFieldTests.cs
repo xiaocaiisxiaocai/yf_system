@@ -1,5 +1,7 @@
 using Dapper;
+using Microsoft.Extensions.Logging.Abstractions;
 using Yf.Api.Infrastructure;
+using Yf.Api.Infrastructure.Entities;
 using Yf.Api.Modules.Outsource;
 using Yf.Api.Modules.Outsource.Ipms;
 
@@ -78,6 +80,286 @@ public sealed class OutsourceFieldTests
 
     /// <summary>Holds only outsource:send: no column of the list is theirs unless they are named on it.</summary>
     private static readonly CurrentUser Sender = new(9744, "of_sender", "INTERNAL", null);
+
+    [Theory]
+    [InlineData("quantity", "-1")]
+    [InlineData("quantity", "2.5")]
+    [InlineData("workOrderIssuedOn", "2026-02-30")]
+    public void ImportRejectsInvalidOptionalNumbersAndDates(string key, string value)
+    {
+        var item = new OutsourceItem();
+        var error = Assert.Throws<ApiException>(() => OutsourceItemService.FillMissingIpmsValue(item, key, value, key));
+        Assert.Equal(400, error.Status);
+        Assert.Null(item.Quantity);
+        Assert.Null(item.WorkOrderIssuedOn);
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task FullColumnImportPreviewsAndStoresOnlyAuthorizedValues()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_full_import", ct);
+        await using var scope = f.Database;
+        await scope.ExecuteAsync("""
+            INSERT INTO outsource_fields(field_key,built_in,label,data_type,options,sort_no,status,editor_scope,vendor_visible,vendor_editable)
+            VALUES('deliveryMode',0,'交付方式','SELECT','["自取","送货"]',9999,'ACTIVE','ALL',0,0);
+            """, ct);
+        f.Ipms.Add("MIXED-01");
+        f.Ipms.Orders["MIXED-01"] = f.Ipms.Orders["MIXED-01"] with { MachineModel = null, Quantity = null };
+
+        static OutsourceImportRow Row(int row, string no, Dictionary<string, string?>? fields = null) =>
+            new(row, "2026-11-26", no, "鼎亚", "OEMA", fields);
+        var rich = Row(2, "MIXED-01", new()
+        {
+            ["customer"] = "Excel 客户", ["machineModel"] = "EX-305", ["quantity"] = "4",
+            ["originalDueDate"] = "2026-12-01", ["latestDueDate"] = "2027-01-05",
+            ["remark"] = "提前备料", ["status"] = "暂停", ["deliveryMode"] = "送货",
+            ["bomOn"] = "   ", ["drawingReleasedOn"] = null,
+        });
+        var request = new OutsourceImportRequest([
+            rich, Row(3, "FOUR-COLS"), Row(4, "BAD-OPTION", new() { ["deliveryMode"] = "未知" }),
+            Row(5, "NO-DATE-GRANT", new() { ["bomOn"] = "2026-12-02" }),
+            Row(6, "SYSTEM-VALUE", new() { ["sendStatus"] = "SENT" }),
+            Row(7, "BLANK-TYPE") with { TypeName = "" },
+        ]);
+        var preview = await f.Items.PreviewImportAsync(f.Planner, request, ct);
+        Assert.Equal((2, 0, 4), (preview.Ready, preview.Skipped, preview.Invalid));
+        var proposed = preview.Rows.Single(x => x.WorkOrderNo == "MIXED-01");
+        Assert.Equal(("超穎(泰國)", "EX-305", 4, new DateOnly(2027, 1, 5)),
+            (proposed.Customer, proposed.MachineModel, proposed.Quantity, proposed.LatestDueDate));
+        Assert.Equal("2026-12-31", proposed.FieldValues!["originalDueDate"]);
+        Assert.Equal("送货", proposed.FieldValues["deliveryMode"]);
+        Assert.Equal("暂停", proposed.FieldValues["status"]);
+        Assert.Empty((await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct)).List);
+
+        var result = await f.Items.ImportAsync(f.Planner, request, ct);
+        Assert.Equal((2, 0, 4), (result.Created, result.Skipped, result.Failed));
+        var stored = (await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct)).List;
+        var mixed = stored.Single(x => x.WorkOrderNo == "MIXED-01");
+        Assert.Equal((proposed.Customer, proposed.MachineModel, proposed.Quantity, proposed.LatestDueDate),
+            (mixed.Customer, mixed.MachineModel, mixed.Quantity, mixed.LatestDueDate));
+        Assert.Equal((new DateOnly(2026, 12, 31), "PAUSED", "提前备料", "送货"),
+            (mixed.OriginalDueDate, mixed.Status, mixed.Remark, mixed.CustomValues!["deliveryMode"]));
+        Assert.Null(mixed.BomOn);
+        var legacy = stored.Single(x => x.WorkOrderNo == "FOUR-COLS");
+        Assert.Equal("NORMAL", legacy.Status);
+        Assert.Null(legacy.Remark);
+        Assert.Null(legacy.MachineModel);
+        Assert.Null(legacy.IpmsSyncedAt);
+        Assert.Equal(2, stored.Count);
+
+        var retry = await f.Items.ImportAsync(f.Planner, new([rich]), ct);
+        Assert.Equal((0, 1, 0), (retry.Created, retry.Skipped, retry.Failed));
+        Assert.Equal("提前备料", (await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct)).List.Single(x => x.Id == mixed.Id).Remark);
+
+        using var sync = new OutsourceIpmsSyncService(EfTestSupport.DbContextFactory(scope.Options), new AuditService([]),
+            f.Ipms, scope.Options, NullLogger<OutsourceIpmsSyncService>.Instance);
+        await sync.SyncNowAsync(f.Buyer, new([mixed.Id]), ct);
+        var sparse = (await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct)).List.Single(x => x.Id == mixed.Id);
+        Assert.Equal(("EX-305", 4), (sparse.MachineModel, sparse.Quantity));
+        f.Ipms.Orders["MIXED-01"] = f.Ipms.Orders["MIXED-01"] with
+        {
+            MachineModel = "IPMS-501", Quantity = 6, DueDate = new DateOnly(2027, 2, 1),
+        };
+        await sync.SyncNowAsync(f.Buyer, new([mixed.Id]), ct);
+        var refreshed = (await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct)).List.Single(x => x.Id == mixed.Id);
+        Assert.Equal(("IPMS-501", 6), (refreshed.MachineModel, refreshed.Quantity));
+        Assert.Equal((mixed.OriginalDueDate, mixed.LatestDueDate), (refreshed.OriginalDueDate, refreshed.LatestDueDate));
+
+        await scope.ExecuteAsync("INSERT INTO role_permissions(role_id,permission_id) SELECT 70,id FROM permissions WHERE code='outsource:date_import'", ct);
+        var dates = new OutsourceImportRequest([Row(2, "WITH-DATES", new()
+        {
+            ["bomOn"] = "2026-12-02", ["drawingReleasedOn"] = "2026-12-03", ["customer"] = "尚未同步客户",
+        })]);
+        Assert.Equal(1, (await f.Items.ImportAsync(f.Planner, dates, ct)).Created);
+        var dated = (await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct)).List.Single(x => x.WorkOrderNo == "WITH-DATES");
+        Assert.Equal((new DateOnly(2026, 12, 2), new DateOnly(2026, 12, 3), "尚未同步客户"),
+            (dated.BomOn, dated.DrawingReleasedOn, dated.Customer));
+
+        var scoped = new OutsourceImportRequest([Row(2, "RECHECK", new() { ["deliveryMode"] = "自取" })]);
+        Assert.Equal(1, (await f.Items.PreviewImportAsync(f.Planner, scoped, ct)).Ready);
+        var field = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.Single(x => x.Key == "deliveryMode");
+        await f.Fields.UpdateAsync(f.Admin, field.Id, new(null, null, null, null, null, "ROLES", [71]), ct);
+        Assert.Equal(1, (await f.Items.ImportAsync(f.Planner, scoped, ct)).Failed);
+        Assert.DoesNotContain((await f.Items.ListAsync(f.Buyer, All(), 1, 50, 0, ct)).List, x => x.WorkOrderNo == "RECHECK");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task ImportUpdatesThePreviewedWorkOrderInPlaceAndSkipsUnchangedRows()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_import_overwrite", ct);
+        await using var scope = f.Database;
+        await scope.ExecuteAsync("""
+            INSERT INTO outsource_fields(field_key,built_in,label,data_type,options,sort_no,status,editor_scope,vendor_visible,vendor_editable)
+            VALUES('phase',0,'工期','TEXT',NULL,9999,'ACTIVE','ALL',0,0);
+            UPDATE outsource_fields SET vendor_visible=0 WHERE field_key='mechanicalOwner';
+            INSERT INTO departments(id,name,kind,sort_no,status,created_at,updated_at) VALUES
+              (9001,'部门甲','DIVISION',1,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)),
+              (9002,'部门乙','DIVISION',2,'ACTIVE',UTC_TIMESTAMP(3),UTC_TIMESTAMP(3));
+            UPDATE users SET department_id=9001 WHERE id IN (9740,9741);
+            UPDATE users SET department_id=9002 WHERE id IN (9742,9743);
+            UPDATE departments SET leader_account_id=9740 WHERE id=9001;
+            UPDATE departments SET leader_account_id=9742 WHERE id=9002;
+            """, ct);
+        var original = new OutsourceImportRow(2, "2026-11-26", "WO-KEEP", "鼎亚", "OEMA", new()
+        {
+            ["remark"] = "待装配", ["phase"] = "第二阶段", ["quantity"] = "12",
+            ["customer"] = "预填客户", ["latestDueDate"] = "2027-01-10", ["status"] = "暂停", ["mechanicalOwner"] = "生管甲",
+        });
+        var same = original with { RowNumber = 4, WorkOrderNo = "WO-SAME", FieldValues = null };
+        Assert.Equal(2, (await f.Items.ImportAsync(f.Planner, new([original, same]), ct)).Created);
+        async Task<OutsourceItemResponse> GetItem() =>
+            (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single(x => x.WorkOrderNo == original.WorkOrderNo);
+        var before = await GetItem();
+        await scope.ExecuteAsync($"""
+            UPDATE outsource_items SET send_status='SENT', notified_vendor_id=vendor_id WHERE id={before.Id};
+            INSERT INTO oem_transfers(direction,oem_company_id,outsource_item_id,title,lifecycle_status,retention_template_id,created_at,updated_at,concurrency_version)
+            VALUES('INTERNAL_TO_OEM',{before.VendorId},{before.Id},'关联传递单','DRAFT',(SELECT MIN(id) FROM oem_retention_templates),UTC_TIMESTAMP(3),UTC_TIMESTAMP(3),0);
+            """, ct);
+        before = await GetItem();
+        var update = original with
+        {
+            WorkOrderNo = "wo-keep", OutsourceDate = "2026-11-29",
+            FieldValues = new() { ["remark"] = "可送货", ["phase"] = " ", ["quantity"] = null, ["latestDueDate"] = "" },
+        };
+        var create = new OutsourceImportRow(3, "2026-11-26", "WO-NEW", "鼎亚", "OEMA");
+        var preview = await f.Items.PreviewImportAsync(f.Buyer, new([update, create, same]), ct);
+        Assert.Equal((2, 1, 0), (preview.Ready, preview.Skipped, preview.Invalid));
+        Assert.Equal(["READY_UPDATE", "READY", "SKIPPED"], preview.Rows.Select(r => r.Status));
+        var proposed = preview.Rows[0];
+        Assert.Equal((before.Id, before.UpdatedAt), (proposed.ExpectedItemId, proposed.ExpectedUpdatedAt));
+        Assert.Equal((12, before.LatestDueDate, "预填客户"), (proposed.Quantity, proposed.LatestDueDate, proposed.Customer));
+        Assert.Equal("可送货", proposed.FieldValues!["remark"]);
+        Assert.Equal("第二阶段", proposed.FieldValues["phase"]);
+        Assert.Equal(["outsourceDate", "remark"], proposed.ChangedFields!.Order(StringComparer.Ordinal));
+        Assert.Equal("待装配", (await GetItem()).Remark);
+
+        var stamped = ConfirmUpdate(update, proposed);
+        var confirmation = new OutsourceImportRequest([stamped, create, same]);
+        var result = await f.Items.ImportAsync(f.Buyer, confirmation, ct);
+        Assert.Equal((1, 1, 1, 0), (result.Created, result.Updated, result.Skipped, result.Failed));
+        Assert.Equal(["UPDATED", "CREATED", "SKIPPED"], result.Rows.Select(r => r.Status));
+        var after = await GetItem();
+        Assert.Equal((before.Id, before.SerialNo, before.ImportedAt, before.ImportedBy),
+            (after.Id, after.SerialNo, after.ImportedAt, after.ImportedBy));
+        Assert.Equal((new DateOnly(2026, 11, 29), "可送货", "PENDING_NOTICE"), (after.OutsourceDate, after.Remark, after.SendStatus));
+        Assert.Equal((12, before.LatestDueDate, "PAUSED", "第二阶段"), (after.Quantity, after.LatestDueDate, after.Status, after.CustomValues!["phase"]));
+        await using (var connection = await scope.Database.OpenAsync(ct))
+            Assert.Equal(before.Id, await connection.QuerySingleAsync<ulong>("SELECT outsource_item_id FROM oem_transfers WHERE title='关联传递单'"));
+        var history = await f.Items.ChangesAsync(f.Buyer, before.Id, ct);
+        Assert.Contains(history, change => change.Field == "remark" && change.Source == "EDIT" && change.ActorName == "采购乙"
+            && change.OldValue == "待装配" && change.NewValue == "可送货");
+
+        var stale = await Assert.ThrowsAsync<ApiException>(() => f.Items.ImportAsync(f.Buyer,
+            new([create with { WorkOrderNo = "WO-UNEXPECTED" }, stamped]), ct));
+        Assert.Equal(409, stale.Status);
+        Assert.DoesNotContain((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List, x => x.WorkOrderNo == "WO-UNEXPECTED");
+        var repeatedPreview = await f.Items.PreviewImportAsync(f.Buyer, new([update, create, same]), ct);
+        Assert.Equal((0, 3, 0), (repeatedPreview.Ready, repeatedPreview.Skipped, repeatedPreview.Invalid));
+        var replay = await f.Items.ImportAsync(f.Buyer, new([update, create, same]), ct);
+        Assert.Equal((0, 0, 3, 0), (replay.Created, replay.Updated, replay.Skipped, replay.Failed));
+        Assert.Equal(after.UpdatedAt, (await GetItem()).UpdatedAt);
+        Assert.Equal(history.Length, (await f.Items.ChangesAsync(f.Buyer, before.Id, ct)).Length);
+
+        // The owner is hidden from vendors, but its derived supervisor is in their last signed-off snapshot.
+        Assert.Equal("管理员", after.Supervisor);
+        await scope.ExecuteAsync("""
+            UPDATE outsource_items SET send_status='SENT', notified_vendor_id=vendor_id, last_sent_snapshot='{"supervisor":"管理员"}'
+            WHERE work_order_no='WO-KEEP';
+            """, ct);
+        var reassign = update with { FieldValues = new() { ["mechanicalOwner"] = "机构丙" } };
+        var assignment = Assert.Single((await f.Items.PreviewImportAsync(f.Buyer, new([reassign]), ct)).Rows);
+        Assert.Equal("采购乙", assignment.FieldValues!["supervisor"]);
+        await f.Items.ImportAsync(f.Buyer, new([ConfirmUpdate(reassign, assignment)]), ct);
+        var notified = await GetItem();
+        Assert.Equal(("采购乙", "PENDING_NOTICE"), (notified.Supervisor, notified.SendStatus));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task ImportConfirmationRechecksTheWorkOrderVersionIdentityAndPermissions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var f = await CreateAsync("outsource_overwrite_guard", ct);
+        await using var scope = f.Database;
+        var item = await ImportOneAsync(f, "WO-EDIT", ct);
+        var change = new OutsourceImportRow(2, "2026-11-04", "WO-EDIT", "鼎亚", "OEMA", new() { ["remark"] = "Excel 新备注" });
+        var create = new OutsourceImportRow(3, "2026-11-04", "WO-ATOMIC", "鼎亚", "OEMA");
+        async Task<OutsourceImportRow> PreviewUpdate(OutsourceImportRow? input = null)
+        {
+            var row = input ?? change;
+            var candidate = Assert.Single((await f.Items.PreviewImportAsync(f.Planner, new([row]), ct)).Rows);
+            Assert.Equal("READY_UPDATE", candidate.Status);
+            return ConfirmUpdate(row, candidate);
+        }
+        async Task AssertConflict(OutsourceImportRow stamped)
+        {
+            var conflict = await Assert.ThrowsAsync<ApiException>(() => f.Items.ImportAsync(f.Planner, new([create, stamped]), ct));
+            Assert.Equal(409, conflict.Status);
+            Assert.DoesNotContain((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List, x => x.WorkOrderNo == create.WorkOrderNo);
+        }
+        var before = await PreviewUpdate();
+        await AssertConflict(before with { ExpectedChangeHash = null });
+        await AssertConflict(before with { ExpectedChangeHash = new string('0', 64) });
+        // Legacy/create-only confirmation cannot overwrite an existing order without its preview identity.
+        Assert.Equal(1, (await f.Items.ImportAsync(f.Planner, new([change]), ct)).Skipped);
+        await f.Items.UpdateAsync(f.Buyer, item.Id, new(null, item.VendorId, null, "另一采购已修改", item.Status, item.UpdatedAt), ct);
+        await AssertConflict(before);
+        var file = change with { FieldValues = new() { ["remark"] = "Excel 新备注", ["machineModel"] = "Excel 机型" } };
+        var beforeIpms = await PreviewUpdate(file);
+        var originalOrder = f.Ipms.Orders["WO-EDIT"];
+        f.Ipms.Orders["WO-EDIT"] = originalOrder with { MachineModel = "IPMS-新机型" };
+        await AssertConflict(beforeIpms);
+        Assert.Equal(originalOrder.MachineModel, (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single().MachineModel);
+        f.Ipms.Orders["WO-EDIT"] = originalOrder;
+        var latest = await PreviewUpdate();
+        var remarkField = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.Single(x => x.Key == "remark");
+        await f.Fields.UpdateAsync(f.Admin, remarkField.Id, new(null, null, null, null, null, "ROLES", [71]), ct);
+        Assert.Equal(1, (await f.Items.ImportAsync(f.Planner, new([latest]), ct)).Failed);
+        Assert.Equal("另一采购已修改", (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single().Remark);
+        await f.Fields.UpdateAsync(f.Admin, remarkField.Id, new(null, null, null, null, null, "ALL", null), ct);
+        var dateField = (await f.Fields.SettingsAsync(f.Admin, ct)).Fields.Single(x => x.Key == "outsourceDate");
+        await f.Fields.UpdateAsync(f.Admin, dateField.Id, new(null, null, null, null, null, "ROLES", [71]), ct);
+        var deniedDate = change with { OutsourceDate = "2026-11-30" };
+        Assert.Equal("INVALID", Assert.Single((await f.Items.PreviewImportAsync(f.Planner, new([deniedDate]), ct)).Rows).Status);
+        Assert.Equal("READY_UPDATE", Assert.Single((await f.Items.PreviewImportAsync(f.Planner, new([change]), ct)).Rows).Status);
+        await f.Fields.UpdateAsync(f.Admin, dateField.Id, new(null, null, null, null, null, "ALL", null), ct);
+
+        await f.Items.BatchDeleteAsync(f.Buyer, new([new(item.Id, latest.ExpectedUpdatedAt!.Value)]), ct);
+        await AssertConflict(latest);
+        var replacement = await ImportOneAsync(f, "WO-EDIT", ct);
+        Assert.NotEqual(item.Id, replacement.Id);
+        await AssertConflict(latest);
+        Assert.Null((await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single().Remark);
+
+        var first = await PreviewUpdate();
+        var second = await PreviewUpdate(change with { FieldValues = new() { ["remark"] = "另一份导入" } });
+        async Task<bool> Submit(OutsourceImportRow input)
+        {
+            try
+            {
+                Assert.Equal(1, (await f.Items.ImportAsync(f.Planner, new([input]), ct)).Updated);
+                return true;
+            }
+            catch (ApiException ex) when (ex.Status == 409) { return false; }
+        }
+        var outcomes = await Task.WhenAll(Submit(first), Submit(second));
+        Assert.Single(outcomes, accepted => accepted);
+        var final = (await f.Items.ListAsync(f.Buyer, All(), 1, 20, 0, ct)).List.Single();
+        Assert.Equal(outcomes[0] ? "Excel 新备注" : "另一份导入", final.Remark);
+        var beforeClose = await PreviewUpdate(change with { FieldValues = new() { ["remark"] = "完成前的更新" } });
+        await f.Items.SetCompletionAsync(f.Buyer, new([new(final.Id, final.UpdatedAt)], true), ct);
+        await AssertConflict(beforeClose);
+        Assert.Equal("INVALID", Assert.Single((await f.Items.PreviewImportAsync(f.Planner, new([change]), ct)).Rows).Status);
+    }
+
+    private static OutsourceImportRow ConfirmUpdate(OutsourceImportRow row, OutsourceImportPreviewRow preview)
+    {
+        Assert.NotNull(preview.ExpectedItemId);
+        Assert.NotNull(preview.ExpectedUpdatedAt);
+        Assert.False(string.IsNullOrWhiteSpace(preview.ExpectedChangeHash));
+        return row with { ExpectedItemId = preview.ExpectedItemId, ExpectedUpdatedAt = preview.ExpectedUpdatedAt, ExpectedChangeHash = preview.ExpectedChangeHash };
+    }
 
     [Fact(Timeout = 180_000)]
     public async Task TheMigrationKeepsTodaysColumnsAndAddsAnInternalRobotVColumn()

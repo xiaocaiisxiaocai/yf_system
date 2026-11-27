@@ -1,10 +1,13 @@
+import { ConfigProvider } from '@arco-design/web-react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { AxiosInstance } from 'axios'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
+import { TABLE_PAGINATION } from '../../components/tablePagination'
 import { OemProvider } from '../../oem/OemContext'
 import { OemApi } from '../../oem/api/OemApi'
-import type { Company, Page, VendorAccount } from '../../oem/api/types'
+import type { Company, CompanyContact, Page, VendorAccount } from '../../oem/api/types'
 import CompaniesPage from '../../oem/pages/admin/CompaniesPage'
 
 vi.mock('../../utils/excelWorkbook', () => ({
@@ -13,7 +16,6 @@ vi.mock('../../utils/excelWorkbook', () => ({
   readExcelTable: vi.fn(),
 }))
 import { downloadExcelWorkbook, readExcelTable } from '../../utils/excelWorkbook'
-import { MemoryRouter } from 'react-router-dom'
 
 
 function company(overrides: Partial<Company> = {}): Company {
@@ -24,6 +26,7 @@ function company(overrides: Partial<Company> = {}): Company {
     status: 'ACTIVE',
     accountCount: 1,
     activeAccountCount: 1,
+    contactCount: 1,
     createdAt: '2026-10-05T00:00:00Z',
     updatedAt: '2026-10-05T00:00:00Z',
     ...overrides,
@@ -39,6 +42,20 @@ function account(overrides: Partial<VendorAccount> = {}): VendorAccount {
     mustChangePassword: false,
     locked: false,
     lastLoginAt: null,
+    createdAt: '2026-10-05T00:00:00Z',
+    updatedAt: '2026-10-05T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function contact(overrides: Partial<CompanyContact> = {}): CompanyContact {
+  return {
+    id: 41,
+    companyId: 7,
+    name: '陈志明',
+    email: 'zm.chen@example.test',
+    sortNo: 1,
+    status: 'ACTIVE',
     createdAt: '2026-10-05T00:00:00Z',
     updatedAt: '2026-10-05T00:00:00Z',
     ...overrides,
@@ -79,7 +96,7 @@ function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
   return {
     companies: vi.fn().mockResolvedValue(page([company()])),
     accounts: vi.fn().mockResolvedValue([account()]),
-    contacts: vi.fn().mockResolvedValue([]),
+    contacts: vi.fn().mockResolvedValue([contact()]),
     createContact: vi.fn(),
     updateContact: vi.fn(),
     setContactStatus: vi.fn(),
@@ -98,40 +115,53 @@ function baseApi(overrides: Partial<OemApi> = {}): Partial<OemApi> {
   }
 }
 
-async function openAccounts(user: ReturnType<typeof userEvent.setup>) {
-  const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
-  await user.click(within(row).getByRole('button', { name: '账号管理' }))
-  await screen.findByText('OEM_0031')
-  return document.querySelector<HTMLElement>('.oem-accounts-drawer')!
+function vendorPanel() {
+  return screen.getByRole('complementary', { name: '厂商列表' })
 }
 
-async function openRowMore(user: ReturnType<typeof userEvent.setup>, row: HTMLElement) {
-  await user.click(within(row).getByRole('button', { name: '更多' }))
+function summarySection() {
+  return screen.getByRole('region', { name: '厂商信息' })
+}
+
+function findAccountsPanel() {
+  return screen.findByRole('region', { name: '账号管理' })
+}
+
+function findContactsPanel() {
+  return screen.findByRole('region', { name: '联络人' })
 }
 
 describe('ODM/OEMA 厂商与账号目录', () => {
-  it('仅厂商管理可维护厂商及联络人，不能打开账号列表', async () => {
+  it('仅厂商管理可维护厂商及联络人，不渲染或请求账号列表', async () => {
     const api = baseApi()
     renderDirectory(api, ['oem:company_manage'])
-    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    expect(within(row).getByRole('button', { name: '联络人' })).toBeVisible()
-    expect(within(row).queryByRole('button', { name: '账号管理' })).not.toBeInTheDocument()
+    expect(await within(vendorPanel()).findByText('精工制造有限公司')).toBeVisible()
+    const contacts = await findContactsPanel()
+    expect(await within(contacts).findByText('陈志明')).toBeVisible()
+    expect(screen.queryByRole('region', { name: '账号管理' })).not.toBeInTheDocument()
     expect(api.accounts).not.toHaveBeenCalled()
   })
 
-  it.each(['oem:account_manage', 'oem:directory_view'])('%s 单独可以读取账号，撤权即关闭已打开的账号列表', async (permission) => {
+  it.each(['oem:account_manage', 'oem:directory_view'])('%s 单独可以平铺读取账号，不加载联络人，撤权即卸载账号面板', async (permission) => {
     const api = baseApi()
     const view = renderDirectory(api, [permission])
-    const drawer = await openAccounts(userEvent.setup())
-    expect(within(drawer).getByRole('button', { name: '新增账号' }).hasAttribute('disabled')).toBe(permission === 'oem:directory_view')
+    const accounts = await findAccountsPanel()
+    expect(await within(accounts).findByText('OEM_0031')).toBeVisible()
+    expect(within(accounts).getByRole('button', { name: '新增账号' }).hasAttribute('disabled')).toBe(permission === 'oem:directory_view')
+    expect(screen.queryByRole('region', { name: '联络人' })).not.toBeInTheDocument()
     expect(api.accounts).toHaveBeenCalledWith(7)
+    expect(api.contacts).not.toHaveBeenCalled()
+
     view.rerender(directoryElement(api, ['oem:company_manage']))
     expect(screen.queryByText('OEM_0031')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '账号管理' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '账号管理' })).not.toBeInTheDocument()
+    const contacts = await findContactsPanel()
+    expect(await within(contacts).findByText('陈志明')).toBeVisible()
+
     view.rerender(directoryElement(api, [permission]))
-    expect(screen.getByRole('button', { name: '账号管理' })).toBeVisible()
-    expect(screen.queryByText('OEM_0031')).not.toBeInTheDocument()
-    expect(api.accounts).toHaveBeenCalledTimes(1)
+    const restoredAccounts = await findAccountsPanel()
+    expect(await within(restoredAccounts).findByText('OEM_0031')).toBeVisible()
+    expect(screen.queryByRole('region', { name: '联络人' })).not.toBeInTheDocument()
   })
 
   it('撤回账号管理后立即关闭依赖账号列表的导入对话框', async () => {
@@ -145,17 +175,20 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     expect(screen.queryByRole('dialog', { name: '导入 ODM/OEMA 厂商账号' })).not.toBeInTheDocument()
     view.rerender(directoryElement(api, ['oem:account_manage']))
     expect(screen.queryByRole('dialog', { name: '导入 ODM/OEMA 厂商账号' })).not.toBeInTheDocument()
-    expect(api.accounts).not.toHaveBeenCalled()
   })
 
-  it('厂商列表和编辑资料与 Robot 一致，默认显示名称、状态、创建时间和操作', async () => {
+  it('同页主从平铺展示厂商、账号管理与联络人，且编辑厂商仅维护名称与备注', async () => {
     const user = userEvent.setup()
-    renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
-    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    expect(screen.getAllByRole('columnheader').map(cell => cell.textContent)).toEqual(['名称', '状态', '创建时间', '操作'])
-    expect(screen.getByRole('button', { name: '显示列' })).toBeInTheDocument()
-    await openRowMore(user, row)
-    fireEvent.click(await screen.findByRole('menuitem', { name: '编辑' }))
+    renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage', 'oem:transfer_view'])
+    expect(await within(vendorPanel()).findByText('精工制造有限公司')).toBeVisible()
+    expect(within(summarySection()).getByRole('heading', { name: '精工制造有限公司' })).toBeVisible()
+    expect(within(summarySection()).queryByRole('button', { name: '传递记录' })).not.toBeInTheDocument()
+    const accounts = await findAccountsPanel()
+    const contacts = await findContactsPanel()
+    expect(await within(accounts).findByText('OEM_0031')).toBeVisible()
+    expect(await within(contacts).findByText('陈志明')).toBeVisible()
+
+    await user.click(within(summarySection()).getByRole('button', { name: '编辑' }))
     const dialog = await screen.findByRole('dialog', { name: '编辑厂商' })
     expect(within(dialog).getByLabelText('厂商名称')).toBeVisible()
     expect(within(dialog).getByLabelText('备注')).toBeVisible()
@@ -163,6 +196,33 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     expect(within(dialog).queryByLabelText('联系电话')).not.toBeInTheDocument()
     expect(within(dialog).queryByLabelText('联系邮箱')).not.toBeInTheDocument()
   })
+
+  it('切换左侧厂商时右侧账号管理与联络人同步切换', async () => {
+    const user = userEvent.setup()
+    const vendorA = company({ id: 7, name: '甲厂商', accountCount: 1, contactCount: 1 })
+    const vendorB = company({ id: 8, name: '乙厂商', accountCount: 1, contactCount: 1 })
+    const accounts = vi.fn().mockImplementation(async (companyId: number) => companyId === 7
+      ? [account({ id: 71, companyId: 7, employeeNo: 'A_ACC' })]
+      : [account({ id: 81, companyId: 8, employeeNo: 'B_ACC' })])
+    const contacts = vi.fn().mockImplementation(async (companyId: number) => companyId === 7
+      ? [contact({ id: 72, companyId: 7, name: '甲联络人', email: 'a@example.test' })]
+      : [contact({ id: 82, companyId: 8, name: '乙联络人', email: 'b@example.test' })])
+
+    renderDirectory(baseApi({
+      companies: vi.fn().mockResolvedValue(page([vendorA, vendorB])),
+      accounts,
+      contacts,
+    }), ['oem:company_manage', 'oem:account_manage'])
+
+    expect(await within(await findAccountsPanel()).findByText('A_ACC')).toBeVisible()
+    expect(await within(await findContactsPanel()).findByText('甲联络人')).toBeVisible()
+
+    await user.click(within(vendorPanel()).getByRole('button', { name: /乙厂商/ }))
+    expect(await within(await findAccountsPanel()).findByText('B_ACC')).toBeVisible()
+    expect(await within(await findContactsPanel()).findByText('乙联络人')).toBeVisible()
+    expect(within(summarySection()).getByRole('heading', { name: '乙厂商' })).toBeVisible()
+  })
+
   it('可通知人员是统一的一份名单：只在工具栏打开，可移除和恢复', async () => {
     const user = userEvent.setup()
     const person = { userId: 51, employeeNo: 'E051', realName: '王五', departmentName: '采购课', email: 'w@example.invalid', canReceive: true, unavailableReason: null, removed: false }
@@ -175,8 +235,8 @@ describe('ODM/OEMA 厂商与账号目录', () => {
       setRecipientRemovedFromAll,
     }), ['oem:company_manage'])
 
-    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    expect(within(row).queryByRole('button', { name: '可通知人员' })).not.toBeInTheDocument()
+    await within(vendorPanel()).findByText('精工制造有限公司')
+    expect(within(summarySection()).queryByRole('button', { name: '可通知人员' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '可通知人员' }))
     await screen.findByText('赵六（E052）')
     const drawer = document.querySelector<HTMLElement>('.arco-drawer')!
@@ -285,11 +345,12 @@ describe('ODM/OEMA 厂商与账号目录', () => {
   it('共用 ODM/OEMA 登录账号不显示或要求填写联系人姓名和邮箱', async () => {
     const user = userEvent.setup()
     renderDirectory(baseApi(), ['oem:account_manage'])
-    const drawer = await openAccounts(user)
+    const accounts = await findAccountsPanel()
+    expect(await within(accounts).findByText('OEM_0031')).toBeVisible()
 
-    expect(within(drawer).queryByText('姓名')).not.toBeInTheDocument()
-    expect(within(drawer).queryByText('邮箱')).not.toBeInTheDocument()
-    await user.click(within(drawer).getByRole('button', { name: '新增账号' }))
+    expect(within(accounts).queryByText('姓名')).not.toBeInTheDocument()
+    expect(within(accounts).queryByText('邮箱')).not.toBeInTheDocument()
+    await user.click(within(accounts).getByRole('button', { name: '新增账号' }))
     const dialog = await screen.findByRole('dialog', { name: '新增账号' })
     expect(within(dialog).getByLabelText('账号')).toBeVisible()
     expect(within(dialog).getByLabelText('初始密码')).toBeVisible()
@@ -309,23 +370,20 @@ describe('ODM/OEMA 厂商与账号目录', () => {
   })
 
   it('删除按钮要求 manage 与 delete 权限同时具备', async () => {
-    const user = userEvent.setup()
     const view = renderDirectory(baseApi(), ['oem:company_manage', 'oem:account_manage'])
 
-    const rowWithoutDelete = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    await openRowMore(user, rowWithoutDelete)
-    expect(await screen.findByRole('menuitem', { name: '编辑' })).toBeVisible()
-    expect(screen.queryByRole('menuitem', { name: '删除' })).not.toBeInTheDocument()
-    const drawer = await openAccounts(user)
-    expect(within(drawer).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+    const accountsWithoutDelete = await findAccountsPanel()
+    expect(await within(accountsWithoutDelete).findByText('OEM_0031')).toBeVisible()
+    expect(within(summarySection()).getByRole('button', { name: '编辑' })).toBeVisible()
+    expect(within(summarySection()).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
+    expect(within(accountsWithoutDelete).queryByRole('button', { name: '删除' })).not.toBeInTheDocument()
     view.unmount()
 
     renderDirectory(baseApi(), ['oem:company_manage', 'oem:company_delete', 'oem:account_manage', 'oem:account_delete'])
-    const companyRow = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    await openRowMore(user, companyRow)
-    expect(await screen.findByRole('menuitem', { name: '删除' })).toBeVisible()
-    const permittedDrawer = await openAccounts(user)
-    expect(within(permittedDrawer).getByRole('button', { name: '删除' })).toBeVisible()
+    const accountsWithDelete = await findAccountsPanel()
+    expect(await within(accountsWithDelete).findByText('OEM_0031')).toBeVisible()
+    expect(within(summarySection()).getByRole('button', { name: '删除' })).toBeVisible()
+    expect(within(accountsWithDelete).getByRole('button', { name: '删除' })).toBeVisible()
   })
 
   it('账号删除失败保留行并显示服务端原因，成功后刷新账号与厂商计数', async () => {
@@ -344,41 +402,43 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     renderDirectory(baseApi({ companies, accounts, deleteAccount }), [
       'oem:company_manage', 'oem:account_manage', 'oem:account_delete',
     ])
-    const drawer = await openAccounts(user)
-    let accountRow = within(drawer).getByText('OEM_0031').closest('tr')!
+    const panel = await findAccountsPanel()
+    expect(await within(panel).findByText('OEM_0031')).toBeVisible()
+    let accountRow = within(panel).getByText('OEM_0031').closest('tr')!
 
     await user.click(within(accountRow).getByRole('button', { name: '删除' }))
     expect(await screen.findByText('删除账号“OEM_0031”')).toBeVisible()
     let confirmDialog = screen.getByText('删除账号“OEM_0031”').closest<HTMLElement>('[role="dialog"]')!
     await user.click(within(confirmDialog).getByRole('button', { name: '确认删除' }))
-    expect(await within(drawer).findByRole('alert')).toHaveTextContent(backendReason)
-    expect(within(drawer).getByText('OEM_0031')).toBeVisible()
+    expect(await within(panel).findByRole('alert')).toHaveTextContent(backendReason)
+    expect(within(panel).getByText('OEM_0031')).toBeVisible()
     await waitFor(() => expect(screen.queryByText('删除账号“OEM_0031”')).not.toBeInTheDocument())
 
     shouldFail = false
-    accountRow = within(drawer).getByText('OEM_0031').closest('tr')!
+    accountRow = within(panel).getByText('OEM_0031').closest('tr')!
     await user.click(within(accountRow).getByRole('button', { name: '删除' }))
     confirmDialog = (await screen.findAllByText('删除账号“OEM_0031”')).at(-1)!.closest<HTMLElement>('[role="dialog"]')!
     await user.click(within(confirmDialog).getByRole('button', { name: '确认删除' }))
-    await waitFor(() => expect(within(drawer).queryByText('OEM_0031')).not.toBeInTheDocument())
-    expect(screen.queryByText('0 / 0')).not.toBeInTheDocument()
+    await waitFor(() => expect(within(panel).queryByText('OEM_0031')).not.toBeInTheDocument())
+    expect(within(vendorPanel()).getByText(/账号 0/)).toBeVisible()
     expect(accounts).toHaveBeenCalledTimes(2)
     expect(companies).toHaveBeenCalledTimes(2)
   })
 
-  it('账号停用被拒绝时在抽屉内显示服务端原因，不刷新列表', async () => {
+  it('账号停用被拒绝时在面板内显示服务端原因，不刷新列表', async () => {
     const user = userEvent.setup()
     const backendReason = '该厂商有含业务记录的草稿，草稿仅创建人可见。须保留一个启用账号，请先启用其他账号或停用厂商。'
     const accounts = vi.fn().mockResolvedValue([account()])
     const setAccountStatus = vi.fn().mockRejectedValue({ response: { status: 409, data: { code: 40901, message: backendReason } } })
     renderDirectory(baseApi({ accounts, setAccountStatus }), ['oem:company_manage', 'oem:account_manage'])
-    const drawer = await openAccounts(user)
-    const accountRow = within(drawer).getByText('OEM_0031').closest('tr')!
+    const panel = await findAccountsPanel()
+    expect(await within(panel).findByText('OEM_0031')).toBeVisible()
+    const accountRow = within(panel).getByText('OEM_0031').closest('tr')!
 
     await user.click(within(accountRow).getByRole('button', { name: '停用' }))
     fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
     await waitFor(() => expect(setAccountStatus).toHaveBeenCalledWith(31, 'DISABLED'))
-    expect(await within(drawer).findByRole('alert')).toHaveTextContent(`停用失败：${backendReason}`)
+    expect(await within(panel).findByRole('alert')).toHaveTextContent(`停用失败：${backendReason}`)
     expect(accounts).toHaveBeenCalledTimes(1)
     expect(within(accountRow).getByRole('button', { name: '停用' })).toBeVisible()
   })
@@ -393,10 +453,9 @@ describe('ODM/OEMA 厂商与账号目录', () => {
       return company({ status: 'DISABLED' })
     })
     renderDirectory(baseApi({ companies, setCompanyStatus }), ['oem:company_manage', 'oem:account_manage'])
-    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
+    await within(vendorPanel()).findByText('精工制造有限公司')
 
-    await openRowMore(user, row)
-    fireEvent.click(await screen.findByRole('menuitem', { name: '停用' }))
+    await user.click(within(summarySection()).getByRole('button', { name: '停用' }))
     let confirmDialog = (await screen.findByText('停用厂商“精工制造有限公司”')).closest<HTMLElement>('[role="dialog"]')!
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /确\s*定/ }))
     expect(await screen.findByText(`停用失败：${backendReason}`)).toHaveAttribute('role', 'alert')
@@ -405,8 +464,7 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     await waitFor(() => expect(screen.queryByText('停用厂商“精工制造有限公司”')).not.toBeInTheDocument())
 
     shouldFail = false
-    await openRowMore(user, row)
-    fireEvent.click((await screen.findAllByRole('menuitem', { name: '停用' })).at(-1)!)
+    await user.click(within(summarySection()).getByRole('button', { name: '停用' }))
     confirmDialog = (await screen.findAllByText('停用厂商“精工制造有限公司”')).at(-1)!.closest<HTMLElement>('[role="dialog"]')!
     fireEvent.click(within(confirmDialog).getByRole('button', { name: /确\s*定/ }))
     await waitFor(() => expect(companies).toHaveBeenCalledTimes(2))
@@ -427,10 +485,9 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     })
     renderDirectory(baseApi({ companies, deleteCompany }), ['oem:company_manage', 'oem:company_delete'])
 
-    fireEvent.click((await screen.findByText('2')).closest('.arco-pagination-item')!)
-    const lastRow = (await screen.findByText('末页厂商')).closest('tr')!
-    await openRowMore(user, lastRow)
-    fireEvent.click(await screen.findByRole('menuitem', { name: '删除' }))
+    fireEvent.click((await within(vendorPanel()).findByText('2')).closest('.arco-pagination-item')!)
+    await within(vendorPanel()).findByText('末页厂商')
+    await user.click(within(summarySection()).getByRole('button', { name: '删除' }))
     expect(await screen.findByText('删除厂商“末页厂商”')).toBeVisible()
     const confirmDialog = screen.getByText('删除厂商“末页厂商”').closest<HTMLElement>('[role="dialog"]')!
     const confirm = within(confirmDialog).getByRole('button', { name: '确认删除' })
@@ -439,8 +496,34 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     await waitFor(() => expect(deleteCompany).toHaveBeenCalledTimes(1))
     await act(async () => pending.resolve())
 
-    expect(await screen.findByText('首页厂商')).toBeVisible()
-    expect(screen.getByText('1').closest('.arco-pagination-item')).toHaveClass('arco-pagination-item-active')
+    expect(await within(vendorPanel()).findByText('首页厂商')).toBeVisible()
+    expect(companies).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1 }))
+    expect(vendorPanel().querySelector('.arco-pagination')).toBeNull()
+  })
+
+  it('左侧厂商列表单页隐藏分页，多页时在全局分页配置下也不显示重复总数或条数选择', async () => {
+    const view = render(
+      <ConfigProvider componentConfig={{ Pagination: TABLE_PAGINATION }}>
+        {directoryElement(baseApi({
+          companies: vi.fn().mockResolvedValue(page([company()], 1, 2)),
+        }), ['oem:company_manage'])}
+      </ConfigProvider>,
+    )
+    await within(vendorPanel()).findByText('精工制造有限公司')
+    expect(vendorPanel().querySelector('.arco-pagination')).toBeNull()
+    view.unmount()
+
+    render(
+      <ConfigProvider componentConfig={{ Pagination: TABLE_PAGINATION }}>
+        {directoryElement(baseApi({
+          companies: vi.fn().mockResolvedValue(page([company()], 1, 120)),
+        }), ['oem:company_manage'])}
+      </ConfigProvider>,
+    )
+    await within(vendorPanel()).findByText('精工制造有限公司')
+    expect(vendorPanel().querySelector('.arco-pagination')).not.toBeNull()
+    expect(within(vendorPanel()).queryByText(/共 \d+ 条/)).not.toBeInTheDocument()
+    expect(vendorPanel().querySelector('.arco-pagination-option')).toBeNull()
   })
 
   it('厂商保存忽略同步重复确认', async () => {
@@ -448,7 +531,7 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     const pending = deferred<Company>()
     const createCompany = vi.fn().mockReturnValue(pending.promise)
     renderDirectory(baseApi({ createCompany }), ['oem:company_manage'])
-    await screen.findByText('精工制造有限公司')
+    await within(vendorPanel()).findByText('精工制造有限公司')
 
     await user.click(screen.getByRole('button', { name: '新增厂商' }))
     await user.type(screen.getByLabelText('厂商名称'), '新厂商')
@@ -476,19 +559,17 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     })
     renderDirectory(baseApi({ companies, accounts, deleteAccount }), ['oem:company_manage', 'oem:account_manage', 'oem:account_delete'])
 
-    const firstRow = (await screen.findByText('骏创')).closest('tr')!
-    fireEvent.click(within(firstRow).getByRole('button', { name: '账号管理' }))
+    await within(vendorPanel()).findByText('骏创')
     await waitFor(() => expect(accounts).toHaveBeenCalledWith(junchuang.id))
-    const secondRow = screen.getByText('元控').closest('tr')!
-    fireEvent.click(within(secondRow).getByRole('button', { name: '账号管理' }))
-    expect(await screen.findByText('YK001')).toBeVisible()
+    await user.click(within(vendorPanel()).getByRole('button', { name: /元控/ }))
+    const panel = await findAccountsPanel()
+    expect(await within(panel).findByText('YK001')).toBeVisible()
 
     await act(async () => firstAccounts.resolve([junchuangAccount]))
-    expect(screen.getByText('YK001')).toBeVisible()
+    expect(within(panel).getByText('YK001')).toBeVisible()
     expect(screen.queryByText('JC001')).not.toBeInTheDocument()
 
-    const drawer = document.querySelector<HTMLElement>('.oem-accounts-drawer')!
-    const accountRow = within(drawer).getByText('YK001').closest('tr')!
+    const accountRow = within(panel).getByText('YK001').closest('tr')!
     await user.click(within(accountRow).getByRole('button', { name: '删除' }))
     const confirm = (await screen.findByText('删除账号“YK001”')).closest<HTMLElement>('[role="dialog"]')!
     await user.click(within(confirm).getByRole('button', { name: '确认删除' }))
@@ -508,9 +589,8 @@ describe('ODM/OEMA 厂商与账号目录', () => {
     const accounts = vi.fn().mockResolvedValue([account({ status: 'DISABLED' })])
     renderDirectory(baseApi({ accounts }), ['oem:company_manage', 'oem:account_manage'])
 
-    const row = (await screen.findByText('精工制造有限公司')).closest('tr')!
-    await user.click(within(row).getByRole('button', { name: '账号管理' }))
-    expect(await screen.findByText('该厂商所有账号均已停用，暂时无法登录门户接收或回传文件。')).toBeVisible()
+    const panel = await findAccountsPanel()
+    expect(await within(panel).findByText('该厂商所有账号均已停用，暂时无法登录门户接收或回传文件。')).toBeVisible()
 
     await user.click(screen.getByRole('button', { name: '导入' }))
     fireEvent.click(await screen.findByText('导入账号'))

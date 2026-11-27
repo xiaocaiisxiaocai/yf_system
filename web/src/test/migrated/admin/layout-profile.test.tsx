@@ -306,7 +306,6 @@ describe('管理员布局与个人资料', () => {
     const removeStyles = installApplicationStyles()
     const pages = [
       <MemoryRouter key="projects"><ProjectList /></MemoryRouter>,
-      <SupplierList key="suppliers" />,
       <UserList key="users" />,
       <RoleList key="roles" />,
       <AuditLog key="audit" />,
@@ -323,6 +322,14 @@ describe('管理员布局与个人资料', () => {
       if (body) expect(getComputedStyle(body).minHeight).toMatch(/^0(?:px)?$/)
       view.unmount()
     }
+
+    const suppliers = render(<SupplierList />)
+    const supplierCard = await waitFor(() => suppliers.container.querySelector<HTMLElement>('.page-card--table')!)
+    expect(getComputedStyle(supplierCard).overflow).toBe('hidden')
+    expect(suppliers.container.querySelector('.supplier-directory-workspace')).toBeTruthy()
+    expect(suppliers.container.querySelector('.supplier-list-panel')).toBeTruthy()
+    expect(suppliers.container.querySelector('.supplier-detail-panel')).toBeTruthy()
+    suppliers.unmount()
     removeStyles()
   })
 })

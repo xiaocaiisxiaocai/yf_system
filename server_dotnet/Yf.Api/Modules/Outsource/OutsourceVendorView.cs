@@ -66,7 +66,7 @@ public sealed class OutsourceVendorViewService(IDbContextFactory<YfDbContext> db
         var content = OutsourceWorkbook.Build(rows.Select(reference.Json).ToArray(), null,
             reference.Layout.WorkbookFields(vendor: true).Select(field => field.Key == OutsourceBuiltInFields.ElectricalHandoffKey
                 ? field with { Value = item => HandoffAvailable(reference, item) ? field.Value(item) : null }
-                : field).ToArray(), forVendor: true);
+                : field).ToArray(), OutsourceWorkbook.Purpose.VendorExport);
         var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(8)).ToString("yyyyMMdd", CultureInfo.InvariantCulture);
         return new(content, $"外协清单_{today}.xlsx");
     }

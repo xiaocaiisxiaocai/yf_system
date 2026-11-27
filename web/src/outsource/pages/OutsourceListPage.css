@@ -186,6 +186,10 @@
   background: rgb(var(--green-6));
 }
 
+.outsource-files-light--unsynced {
+  background: rgb(var(--orange-6));
+}
+
 .outsource-files-popover {
   width: min(440px, calc(100vw - 48px));
 }

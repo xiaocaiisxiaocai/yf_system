@@ -4,8 +4,8 @@ using Yf.Api.Infrastructure;
 namespace Yf.Api.Modules.Outsource.Ipms;
 
 /// <summary>
-/// The IPMS fields the outsourcing list copies for one work order. Every field is read-only in this system;
-/// IPMS stays the source of truth. The outsourcing type, BOM时间 and 发图 are not among them: staff enter them (外协契约 → 外发类型字典与防呆). See 外协清单契约 → 数据与字段归属.
+/// The IPMS fields the outsourcing list copies for one work order. IPMS supplies authoritative values;
+/// a new-item import may fill missing fields from Excel. Staff enter the outsourcing type, BOM时间 and 发图 separately.
 /// </summary>
 public sealed record IpmsWorkOrder(
     string WorkOrderNo,

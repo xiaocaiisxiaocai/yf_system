@@ -165,7 +165,7 @@ describe('ODM/OEMA 列表加载失败', () => {
     expect(await screen.findByText('阻断的传递单')).toBeVisible()
   })
 
-  it('账号抽屉失败可重试，再次失败时保留已有账号', async () => {
+  it('账号面板失败可重试，再次失败时保留已有账号', async () => {
     const user = userEvent.setup()
     const accounts = vi.fn()
       .mockRejectedValueOnce(serverDown())
@@ -174,21 +174,21 @@ describe('ODM/OEMA 列表加载失败', () => {
     renderOem(<CompaniesPage />, {
       companies: vi.fn().mockResolvedValue(page([company()])),
       accounts,
+      contacts: vi.fn().mockResolvedValue([]),
       setAccountStatus: vi.fn().mockResolvedValue(undefined),
     }, ['oem:company_manage', 'oem:account_manage'])
 
-    await user.click(await screen.findByRole('button', { name: '账号管理' }))
-    const drawer = document.querySelector('.oem-accounts-drawer') as HTMLElement
-    expect(await within(drawer).findByRole('button', { name: '重试' })).toBeVisible()
-    expect(within(drawer).getByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
-    expect(within(drawer).queryByText('OEM_0031')).not.toBeInTheDocument()
+    const panel = await screen.findByRole('region', { name: '账号管理' })
+    expect(await within(panel).findByRole('button', { name: '重试' })).toBeVisible()
+    expect(within(panel).getByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
+    expect(within(panel).queryByText('OEM_0031')).not.toBeInTheDocument()
 
-    await user.click(within(drawer).getByRole('button', { name: '重试' }))
-    expect(await within(drawer).findByText('OEM_0031')).toBeVisible()
+    await user.click(within(panel).getByRole('button', { name: '重试' }))
+    expect(await within(panel).findByText('OEM_0031')).toBeVisible()
 
-    await user.click(within(drawer).getByRole('button', { name: '停用' }))
+    await user.click(within(panel).getByRole('button', { name: '停用' }))
     fireEvent.click(await screen.findByRole('button', { name: /确\s*定/ }))
-    expect(await within(drawer).findByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
-    expect(within(drawer).getByText('OEM_0031')).toBeVisible()
+    expect(await within(panel).findByRole('alert')).toHaveTextContent('账号列表加载失败，请重试')
+    expect(within(panel).getByText('OEM_0031')).toBeVisible()
   })
 })
