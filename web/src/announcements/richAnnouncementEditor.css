@@ -1,0 +1,57 @@
+.rich-announcement-editor {
+  width: 100%;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--color-bg-2);
+}
+.rich-announcement-editor:focus-within { border-color: rgb(var(--primary-6)); }
+.rich-announcement-toolbar, .rich-image-controls, .rich-pending-image {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rich-announcement-toolbar {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--color-border-2);
+  background: var(--color-fill-1);
+}
+.rich-announcement-toolbar button, .rich-image-controls button, .rich-pending-image button, .rich-image-frame button,
+.rich-announcement-toolbar select, .rich-announcement-toolbar input, .rich-image-controls input:not([type="range"]) {
+  min-height: 26px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 3px;
+  padding: 2px 6px;
+  background: var(--color-bg-2);
+  color: var(--color-text-1);
+  font: inherit;
+  font-size: 12px;
+}
+.rich-announcement-toolbar input { flex: 1; min-width: 100px; }
+.rich-announcement-toolbar button, .rich-image-controls button, .rich-pending-image button { cursor: pointer; }
+.rich-announcement-editor button:disabled { cursor: default; color: var(--color-text-4); }
+.rich-announcement-toolbar button[aria-pressed="true"] { border-color: rgb(var(--primary-6)); color: rgb(var(--primary-6)); }
+.rich-announcement-toolbar .rich-block-grip { cursor: grab; }
+.rich-announcement-document {
+  min-height: 170px;
+  max-height: min(44vh, 480px);
+  padding: 10px 14px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  outline: none;
+  white-space: pre-wrap;
+}
+.rich-announcement-document p { margin: 0 0 4px; }
+.rich-announcement-document h2, .rich-announcement-document h3 { margin: 8px 0 4px; }
+.rich-announcement-document ol, .rich-announcement-document ul { padding-left: 26px; }
+.rich-announcement-document table { border-collapse: collapse; margin: 6px 0; width: 100%; }
+.rich-announcement-document td, .rich-announcement-document th { border: 1px solid var(--color-border-3); padding: 4px; vertical-align: top; }
+.rich-announcement-document th { background: var(--color-fill-2); }
+.rich-image { margin: 8px 0; padding: 5px; border: 1px solid var(--color-border-2); }
+.rich-image--selected { border-color: rgb(var(--primary-6)); }
+.rich-image-frame img { display: block; width: 100%; max-height: 340px; object-fit: contain; object-position: left; }
+.rich-image-controls { padding-top: 5px; color: var(--color-text-2); font-size: 12px; }
+.rich-image-controls input[aria-label="图注"] { flex: 1; min-width: 95px; }
+.rich-image-controls input[type="range"] { width: 70px; vertical-align: middle; }
+.rich-pending-image { padding: 6px; margin: 4px 0; border: 1px dashed var(--color-border-3); }

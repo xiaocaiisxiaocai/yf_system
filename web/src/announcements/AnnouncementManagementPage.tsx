@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { lazy, Suspense, useRef, useState } from 'react'
 import { Button, Card, Empty, Input, Message, Modal, Select, Space, Spin, Tag, Typography } from '@arco-design/web-react'
 import { IconPlus, IconSearch } from '@arco-design/web-react/icon'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -10,15 +10,17 @@ import { actionSlots } from '../components/ActionSlots'
 import { DEFAULT_PAGE_SIZE } from '../components/tablePagination'
 import { useAuth } from '../store/auth'
 import { ANNOUNCEMENT_PERMISSIONS } from './announcementPermissions'
-import AnnouncementEditor from './AnnouncementEditor'
 import { internalAudience } from './managementLabels'
 import AnnouncementReadDetails from './AnnouncementReadDetails'
+import AnnouncementOrderDialog from './AnnouncementOrderDialog'
+import AnnouncementRichBody from './AnnouncementRichBody'
 import { managementApi, type ManageDetail, type ManageRow } from './managementApi'
 import './announcementManagement.css'
 
+const AnnouncementEditor = lazy(() => import('./AnnouncementEditor'))
 const states: Record<string, string> = { DRAFT: '草稿', PUBLISHED: '已发布', WITHDRAWN: '已下架' }
 type DetailPanel = { mode: 'new' } | { mode: 'preview' | 'edit' | 'copy'; row: ManageRow }
-type Panel = DetailPanel | { mode: 'reads' | 'withdraw'; row: ManageRow }
+type Panel = DetailPanel | { mode: 'reads' | 'withdraw'; row: ManageRow } | { mode: 'ordering' }
 
 function ManagementPreview({ detail, onClose }: { detail: ManageDetail; onClose: () => void }) {
   const external = detail.externalScope === 'ALL' ? '全部 ODM/OEMA 公司'
@@ -33,7 +35,8 @@ function ManagementPreview({ detail, onClose }: { detail: ManageDetail; onClose:
       <dt>外部可见</dt><dd>{external}</dd>
       {detail.withdrawnAt && <><dt>下架人</dt><dd>{detail.withdrawnByName}</dd><dt>下架时间</dt><dd>{fmtTime(detail.withdrawnAt)}</dd></>}
     </dl>
-    <article className="announcement-body">{detail.body}</article>
+    <AnnouncementRichBody announcementId={detail.id} body={detail.body} documentJson={detail.documentJson}
+      assets={detail.assets} access="manage" />
   </Modal>
 }
 
@@ -57,10 +60,13 @@ function DetailDialog({ panel, onClose, onSaved }: { panel: DetailPanel; onClose
       }} /></Modal>
   }
   if (panel.mode === 'preview' && detail.data) return <ManagementPreview detail={detail.data} onClose={onClose} />
+  const loading = <Modal visible title="公告" footer={null} onCancel={onClose}><Spin /></Modal>
   if (editor && options.data && (id === null || detail.data)) {
-    return <AnnouncementEditor source={detail.data} copy={panel.mode === 'copy'} options={options.data} onClose={onClose} onSaved={onSaved} />
+    return <Suspense fallback={loading}>
+      <AnnouncementEditor source={detail.data} copy={panel.mode === 'copy'} options={options.data} onClose={onClose} onSaved={onSaved} />
+    </Suspense>
   }
-  return <Modal visible title="公告" footer={null} onCancel={onClose}><Spin /></Modal>
+  return loading
 }
 
 function ManagementContent() {
@@ -135,6 +141,7 @@ function ManagementContent() {
         value={status} onChange={value => { setStatus(value || undefined); setPage(1) }}
         options={Object.entries(states).map(([value, label]) => ({ value, label }))} />
       <Button onClick={search}>查询</Button>
+      {pin && <Button onClick={() => setPanel({ mode: 'ordering' })}>调整顺序</Button>}
     </Space>{publish && <Button type="primary" icon={<IconPlus />} onClick={() => setPanel({ mode: 'new' })}>新建公告</Button>}</div>
     {list.isRefetchError && <div role="status"><Space>
       <Typography.Text type="warning">刷新失败，当前显示上次加载的公告。</Typography.Text>
@@ -171,6 +178,7 @@ function ManagementContent() {
         onCancel={() => { if (!writing.current) setPanel(null) }} onOk={() => changeState(panel.row, 'withdraw')}>
       下架《{panel.row.title}》后，所有读者将无法再查看此公告，已有阅读记录将保留。
     </Modal>}
+    {pin && panel?.mode === 'ordering' && <AnnouncementOrderDialog onClose={() => setPanel(null)} onSaved={finish} />}
     {panel?.mode === 'reads' && <AnnouncementReadDetails row={panel.row} onClose={() => setPanel(null)} />}
     {panel && (panel.mode === 'preview' || panel.mode === 'edit' || panel.mode === 'copy' || panel.mode === 'new') &&
       <DetailDialog panel={panel} onClose={() => setPanel(null)} onSaved={finish} />}

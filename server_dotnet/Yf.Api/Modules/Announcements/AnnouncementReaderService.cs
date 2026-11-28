@@ -6,13 +6,18 @@ using Yf.Api.Modules.Oem.Common;
 namespace Yf.Api.Modules.Announcements;
 
 public sealed record AnnouncementReaderItemResponse(
-    ulong Id, string Title, string DepartmentName, DateTime PublishedAt, DateTime? PinnedAt, bool IsRead, string Preview);
+    ulong Id, string Title, string DepartmentName, DateTime PublishedAt, DateTime? PinnedAt, bool IsRead, string Preview,
+    ulong? FirstImageId, int ImageCount, int AttachmentCount, string? FirstAttachmentName);
 
 public sealed record AnnouncementReaderPageResponse(
     IReadOnlyList<AnnouncementReaderItemResponse> List, ulong Total, ulong Page, ulong PageSize, ulong UnreadCount);
 
 public sealed record AnnouncementReaderDetailResponse(
-    ulong Id, string Title, string DepartmentName, DateTime PublishedAt, DateTime? PinnedAt, bool IsRead, string Body);
+    ulong Id, string Title, string DepartmentName, DateTime PublishedAt, DateTime? PinnedAt, bool IsRead, string Body,
+    string? DocumentJson)
+{
+    public AnnouncementAssetResponse[] Assets { get; init; } = [];
+}
 
 public sealed class AnnouncementReaderService(IDbContextFactory<YfDbContext> dbFactory)
 {
@@ -35,12 +40,20 @@ public sealed class AnnouncementReaderService(IDbContextFactory<YfDbContext> dbF
         }
         var total = unreadOnly is true && string.IsNullOrWhiteSpace(keyword)
             ? unreadCount : (ulong)await query.LongCountAsync(ct);
-        var items = await query.OrderByDescending(item => item.PinnedAt)
-            .ThenByDescending(item => item.PublishedAt).ThenByDescending(item => item.Id)
+        var savedAssets = uow.Db.AnnouncementAssetLinks.Where(link => link.SortOrder != null);
+        var images = savedAssets.Where(link => link.Asset.Kind == "IMAGE");
+        var attachments = savedAssets.Where(link => link.Asset.Kind == "ATTACHMENT");
+        var items = await query.InReaderOrder()
             .Page(offset, size)
             .Select(item => new AnnouncementReaderItemResponse(item.Id, item.Title, item.DepartmentName,
                 item.PublishedAt!.Value, item.PinnedAt, readIds.Contains(item.Id),
-                item.Body.Length > PreviewLength ? item.Body.Substring(0, PreviewLength) + "…" : item.Body)).ToArrayAsync(ct);
+                item.Body.Length > PreviewLength ? item.Body.Substring(0, PreviewLength) + "…" : item.Body,
+                images.Where(link => link.AnnouncementId == item.Id).OrderBy(link => link.SortOrder)
+                    .Select(link => (ulong?)link.AssetId).FirstOrDefault(),
+                images.Count(link => link.AnnouncementId == item.Id),
+                attachments.Count(link => link.AnnouncementId == item.Id),
+                attachments.Where(link => link.AnnouncementId == item.Id).OrderBy(link => link.SortOrder)
+                    .Select(link => link.Asset.FileName).FirstOrDefault())).ToArrayAsync(ct);
         return new(items, total, number, size, unreadCount);
     }
 
@@ -49,10 +62,11 @@ public sealed class AnnouncementReaderService(IDbContextFactory<YfDbContext> dbF
         await using var uow = await OemUnitOfWork.ReadAsync(dbFactory, ct);
         var visible = await VisibleAsync(uow, actor, ct);
         var readIds = ReadIds(uow.Db, actor);
-        return await visible.Where(item => item.Id == id)
+        var detail = await visible.Where(item => item.Id == id)
             .Select(item => new AnnouncementReaderDetailResponse(item.Id, item.Title, item.DepartmentName,
-                item.PublishedAt!.Value, item.PinnedAt, readIds.Contains(item.Id), item.Body))
+                item.PublishedAt!.Value, item.PinnedAt, readIds.Contains(item.Id), item.Body, item.DocumentJson))
             .SingleOrDefaultAsync(ct) ?? throw ApiException.NotFound("公告不可查看");
+        return detail with { Assets = await AnnouncementContentAssets.ListAsync(uow.Db, id, ct) };
     }
 
     public async Task<EmptyResponse> ReadAsync(OemActor actor, ulong id, CancellationToken ct)
@@ -88,7 +102,7 @@ public sealed class AnnouncementReaderService(IDbContextFactory<YfDbContext> dbF
         db.AnnouncementReads.Where(read => read.Realm == actor.Realm && read.AccountId == actor.Id)
             .Select(read => read.AnnouncementId);
 
-    private static async Task<IQueryable<Announcement>> VisibleAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct)
+    internal static async Task<IQueryable<Announcement>> VisibleAsync(OemUnitOfWork uow, OemActor actor, CancellationToken ct)
     {
         var current = await OemAuthorizer.RecheckAsync(uow, actor, ct);
         var db = uow.Db;

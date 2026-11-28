@@ -3,6 +3,7 @@ import { Button, Tooltip, Typography } from '@arco-design/web-react'
 import { IconQuestionCircle } from '@arco-design/web-react/icon'
 import { createSessionQueryScope, queryClient } from '../api/queryClient'
 import { useAuth } from '../store/auth'
+import { newClientUuid } from '../utils/clientUuid'
 import { fmtTime } from '../api/types'
 import { MessageImageComposer, MessageImages, pasteMessageImages } from './MessageImages'
 import { ReceiptBody } from './MessageReceipts'
@@ -24,16 +25,6 @@ import {
   useMessageSync,
 } from './message-panel/useMessageQueries'
 
-/** randomUUID 只在 HTTPS/localhost 可用；HTTP 部署时退回 getRandomValues（不要求安全上下文）生成 v4 UUID。 */
-function newClientMessageId() {
-  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16))
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-}
-
 function draftImageIdentity(files: readonly File[]) {
   return files.map(file => `${file.name}\0${file.size}\0${file.lastModified}`).join('\n')
 }
@@ -47,7 +38,7 @@ function clientMessageIdFor(
   const imageIdentity = draftImageIdentity(files)
   const current = slot.current
   if (current && current.text === text && current.imageIdentity === imageIdentity) return current.clientMessageId
-  const clientMessageId = newClientMessageId()
+  const clientMessageId = newClientUuid()
   slot.current = { clientMessageId, text, imageIdentity }
   return clientMessageId
 }

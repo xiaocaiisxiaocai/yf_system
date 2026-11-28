@@ -10,6 +10,7 @@ import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../components/tablePaginat
 import { useOem } from '../oem/OemContext'
 import { listAnnouncements, type AnnouncementInbox } from './announcementReaderApi'
 import { OpenAnnouncement } from './AnnouncementDetail'
+import AnnouncementAssetImage from './AnnouncementAssetImage'
 import './announcementCenter.css'
 
 export default function AnnouncementCenter() {
@@ -71,8 +72,16 @@ export default function AnnouncementCenter() {
             </Space> },
             { title: '内容预览', dataIndex: 'preview', width: 340, render: (_, row) =>
               <div className="announcement-excerpt">
-                <span>{row.preview}</span>
-                <Button type="text" size="mini" onClick={() => setOpenId(row.id)}>查看全文</Button>
+                {row.firstImageId != null && <AnnouncementAssetImage key={JSON.stringify([queryScope, row.id, row.firstImageId])}
+                  thumbnail announcementId={row.id} assetId={row.firstImageId} access={realm} client={api.http} alt="公告首图" />}
+                <div className="announcement-excerpt-text">
+                  <span>{row.preview || row.firstAttachmentName}</span>
+                  <div className="announcement-excerpt-actions">
+                    {row.imageCount > 0 && <small>共 {row.imageCount} 张图片</small>}
+                    {row.attachmentCount > 0 && <small>共 {row.attachmentCount} 个附件</small>}
+                    <Button type="text" size="mini" onClick={() => setOpenId(row.id)}>查看全文</Button>
+                  </div>
+                </div>
               </div> },
             { title: '发布部门', dataIndex: 'departmentName', width: 150 },
             { title: '发布时间', dataIndex: 'publishedAt', width: 170, render: fmtTime },

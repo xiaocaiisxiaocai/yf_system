@@ -26,7 +26,9 @@ function typeOf(schema) {
     case 'integer':
     case 'number': return 'number' + nullable
     case 'boolean': return 'boolean' + nullable
-    case 'string': return (schema.enum ? schema.enum.map(value => JSON.stringify(value)).join(' | ') : 'string') + nullable
+    case 'string':
+      if (schema.format === 'binary') return 'Blob' + nullable
+      return (schema.enum ? schema.enum.map(value => JSON.stringify(value)).join(' | ') : 'string') + nullable
     case 'array': return `Array<${typeOf(schema.items)}>` + nullable
     case 'object':
     case undefined:

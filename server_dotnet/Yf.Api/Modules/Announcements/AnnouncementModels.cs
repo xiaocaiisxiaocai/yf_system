@@ -8,7 +8,9 @@ public sealed record AnnouncementCompanyOption(ulong Id, string Name, int Accoun
 public sealed record AnnouncementOptionsResponse(ulong? DepartmentId, string? DepartmentName,
     AnnouncementOption[] Departments, AnnouncementCompanyOption[] Companies);
 public sealed record AnnouncementDraftRequest(string? Title, string? Body, string? InternalScope,
-    string? ExternalScope, ulong[]? DepartmentIds, ulong[]? CompanyIds, ulong? Version = null);
+    string? ExternalScope, ulong[]? DepartmentIds, ulong[]? CompanyIds, ulong? Version = null,
+    string? DocumentJson = null, ulong[]? AttachmentIds = null, ulong? CopyFromId = null, string? CreateKey = null);
+public sealed record AnnouncementAssetResponse(ulong Id, string Kind, string FileName, string ContentType, long SizeBytes);
 public sealed record AnnouncementReadRow(string Realm, ulong AccountId, string AccountName, string DisplayName,
     DateTime FirstReadAt, DateTime LastReadAt);
 
@@ -51,6 +53,8 @@ public sealed record AnnouncementManagementDetailResponse : AnnouncementManageme
     }
 
     public required string Body { get; init; }
+    public string? DocumentJson { get; init; }
+    public AnnouncementAssetResponse[] Assets { get; init; } = [];
     public required string InternalScope { get; init; }
     public string? ExternalScope { get; init; }
     public required AnnouncementOption[] Departments { get; init; }

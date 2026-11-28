@@ -99,6 +99,10 @@ public sealed partial class AnnouncementManagementService
             .OrderBy(c => c.CompanyName).ThenBy(c => c.CompanyId)
             .Select(c => new AnnouncementOption(c.CompanyId, c.CompanyName)).ToArrayAsync(ct);
         return new(Row(entity, access), entity.Body, entity.InternalScope, entity.ExternalScope, departments,
-            companies, entity.WithdrawnAt, entity.WithdrawnByName);
+            companies, entity.WithdrawnAt, entity.WithdrawnByName)
+        {
+            DocumentJson = entity.DocumentJson,
+            Assets = await AnnouncementContentAssets.ListAsync(uow.Db, entity.Id, ct),
+        };
     }
 }

@@ -15,6 +15,21 @@ export interface AdminImportRowResult {
   message: string | null
 }
 
+export interface AnnouncementAssetResponse {
+  id: number
+  kind: string
+  fileName: string
+  contentType: string
+  sizeBytes: number
+}
+
+export interface AnnouncementAssetUploadForm {
+  uploadKey: string
+  kind: string
+  file: Blob
+  thumbnail?: Blob | null
+}
+
 export interface AnnouncementCompanyOption {
   id: number
   name: string
@@ -29,6 +44,10 @@ export interface AnnouncementDraftRequest {
   departmentIds?: Array<number> | null
   companyIds?: Array<number> | null
   version?: number | null
+  documentJson?: string | null
+  attachmentIds?: Array<number> | null
+  copyFromId?: number | null
+  createKey?: string | null
 }
 
 export interface AnnouncementManagementDetailResponse {
@@ -49,6 +68,8 @@ export interface AnnouncementManagementDetailResponse {
   canPin: boolean
   canReadDetails: boolean
   body: string
+  documentJson: string | null
+  assets: Array<AnnouncementAssetResponse>
   internalScope: string
   externalScope: string | null
   departments: Array<AnnouncementOption>
@@ -88,6 +109,32 @@ export interface AnnouncementOptionsResponse {
   companies: Array<AnnouncementCompanyOption>
 }
 
+export interface AnnouncementOrderChange {
+  id: number
+  sortOrder?: number | null
+}
+
+export interface AnnouncementOrderRequest {
+  pinned: boolean
+  revision: string
+  changes: Array<AnnouncementOrderChange>
+}
+
+export interface AnnouncementOrderResponse {
+  revision: string
+  list: Array<AnnouncementOrderRow>
+}
+
+export interface AnnouncementOrderRow {
+  id: number
+  title: string
+  departmentName: string
+  publishedAt: string
+  pinnedAt: string | null
+  sortOrder: number | null
+  version: number
+}
+
 export interface AnnouncementReadRow {
   realm: string
   accountId: number
@@ -105,6 +152,8 @@ export interface AnnouncementReaderDetailResponse {
   pinnedAt: string | null
   isRead: boolean
   body: string
+  documentJson: string | null
+  assets: Array<AnnouncementAssetResponse>
 }
 
 export interface AnnouncementReaderItemResponse {
@@ -115,6 +164,10 @@ export interface AnnouncementReaderItemResponse {
   pinnedAt: string | null
   isRead: boolean
   preview: string
+  firstImageId: number | null
+  imageCount: number
+  attachmentCount: number
+  firstAttachmentName: string | null
 }
 
 export interface AnnouncementReaderPageResponse {
@@ -2548,14 +2601,19 @@ export interface ApiResponses {
   "GET /announcements/manage": PageResponseOfAnnouncementManagementRow
   "POST /announcements/manage": AnnouncementManagementDetailResponse
   "GET /announcements/manage/options": AnnouncementOptionsResponse
+  "GET /announcements/manage/ordering": AnnouncementOrderResponse
+  "PUT /announcements/manage/ordering": EmptyResponse
   "GET /announcements/manage/{id}": AnnouncementManagementDetailResponse
   "PUT /announcements/manage/{id}": AnnouncementManagementDetailResponse
+  "POST /announcements/manage/{id}/assets": AnnouncementAssetResponse
+  "GET /announcements/manage/{id}/assets/{assetId}": Blob
   "POST /announcements/manage/{id}/pin": EmptyResponse
   "POST /announcements/manage/{id}/publish": EmptyResponse
   "GET /announcements/manage/{id}/reads": PageResponseOfAnnouncementReadRow
   "POST /announcements/manage/{id}/unpin": EmptyResponse
   "POST /announcements/manage/{id}/withdraw": EmptyResponse
   "GET /announcements/{id}": AnnouncementReaderDetailResponse
+  "GET /announcements/{id}/assets/{assetId}": Blob
   "POST /announcements/{id}/read": EmptyResponse
   "POST /auth/login": LoginResponse
   "POST /auth/logout": EmptyResponse
@@ -2594,6 +2652,7 @@ export interface ApiResponses {
   "PUT /oem/accounts/{id}/status": OemAccountResponse
   "GET /oem/announcements": AnnouncementReaderPageResponse
   "GET /oem/announcements/{id}": AnnouncementReaderDetailResponse
+  "GET /oem/announcements/{id}/assets/{assetId}": Blob
   "POST /oem/announcements/{id}/read": EmptyResponse
   "GET /oem/approvals/pending": OemPageResponseOfOemPendingApprovalResponse
   "POST /oem/approvals/{taskId}/approve": OemTransferDetailResponse

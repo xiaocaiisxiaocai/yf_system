@@ -27,6 +27,8 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<RoleDataScope> RoleDataScopes => Set<RoleDataScope>();
     public DbSet<UserDataScope> UserDataScopes => Set<UserDataScope>();
     public DbSet<Announcement> Announcements => Set<Announcement>();
+    public DbSet<AnnouncementAsset> AnnouncementAssets => Set<AnnouncementAsset>();
+    public DbSet<AnnouncementAssetLink> AnnouncementAssetLinks => Set<AnnouncementAssetLink>();
     public DbSet<AnnouncementDepartment> AnnouncementDepartments => Set<AnnouncementDepartment>();
     public DbSet<AnnouncementCompany> AnnouncementCompanies => Set<AnnouncementCompany>();
     public DbSet<AnnouncementRead> AnnouncementReads => Set<AnnouncementRead>();

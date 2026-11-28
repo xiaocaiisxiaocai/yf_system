@@ -6,6 +6,7 @@ import { fmtTime } from '../api/types'
 import LoadError from '../components/LoadError'
 import { useOem } from '../oem/OemContext'
 import { getAnnouncement, recordAnnouncementRead, type AnnouncementContent } from './announcementReaderApi'
+import AnnouncementRichBody from './AnnouncementRichBody'
 
 function inaccessible(error: unknown) {
   const status = (error as { response?: { status?: number } } | null)?.response?.status
@@ -56,7 +57,8 @@ export function OpenAnnouncement({ id }: { id: string }) {
       <span>{content.departmentName}</span>
       <time dateTime={content.publishedAt ?? undefined}>{fmtTime(content.publishedAt)}</time>
     </Space>
-    <p style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{content.body}</p>
+    <AnnouncementRichBody announcementId={content.id} body={content.body} documentJson={content.documentJson}
+      assets={content.assets} access={realm} client={api.http} />
     {failure === 'record' && <Space>
       <span role="alert">阅读时间记录失败</span>
       <Button size="small" onClick={() => {
