@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Card, Checkbox, Empty, Input, Space, Tag } from '@arco-design/web-react'
+import { Button, Card, Checkbox, Empty, Input, Modal, Space, Tag } from '@arco-design/web-react'
 import { IconSearch } from '@arco-design/web-react/icon'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
@@ -9,6 +9,8 @@ import ResizableTable from '../components/ResizableTable'
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS } from '../components/tablePagination'
 import { useOem } from '../oem/OemContext'
 import { listAnnouncements, type AnnouncementInbox } from './announcementReaderApi'
+import { OpenAnnouncement } from './AnnouncementDetail'
+import './announcementCenter.css'
 
 export default function AnnouncementCenter() {
   const { api, realm, base, queryScope } = useOem()
@@ -21,6 +23,7 @@ export default function AnnouncementCenter() {
   const sizeParam = Number(search.get('pageSize'))
   const pageSize = PAGE_SIZE_OPTIONS.includes(sizeParam) ? sizeParam : DEFAULT_PAGE_SIZE
   const [input, setInput] = useState(keyword)
+  const [openId, setOpenId] = useState<number | null>(null)
   const inbox = useQuery({
     queryKey: ['announcement-inbox', ...queryScope, keyword, unreadOnly, page, pageSize],
     queryFn: ({ signal }) => listAnnouncements(api.http, realm, { keyword, unreadOnly, page, pageSize }, signal),
@@ -57,15 +60,20 @@ export default function AnnouncementCenter() {
       {data && !inbox.isError && <span aria-live="polite">未读 {data.unreadCount} 条</span>}
     </div>
     {inbox.isError ? <LoadError message="公告列表加载失败" onRetry={() => void inbox.refetch()} />
-      : <ResizableTable<AnnouncementInbox['list'][number]> tableId={`announcements-${realm}`} growKey="title"
+      : <ResizableTable<AnnouncementInbox['list'][number]> tableId={`announcements-${realm}`} growKey="preview"
           rowKey="id" className="page-table" data={data?.list ?? []} loading={inbox.isLoading}
           noDataElement={inbox.isLoading ? <span /> : <Empty description={unreadOnly ? '暂无未读公告' : '暂无公告'} />}
-          scroll={{ x: 760, y: 'var(--page-table-scroll-y)' }}
+          scroll={{ x: 900, y: 'var(--page-table-scroll-y)' }}
           columns={[
-            { title: '标题', key: 'title', width: 320, render: (_, row) => <Space>
+            { title: '标题', key: 'title', width: 200, render: (_, row) => <Space>
               {row.pinnedAt && <Tag color="orange">置顶</Tag>}
               <Link className="table-link" to={`${base}/announcements/${row.id}${location.search}`}>{row.title}</Link>
             </Space> },
+            { title: '内容预览', dataIndex: 'preview', width: 340, render: (_, row) =>
+              <div className="announcement-excerpt">
+                <span>{row.preview}</span>
+                <Button type="text" size="mini" onClick={() => setOpenId(row.id)}>查看全文</Button>
+              </div> },
             { title: '发布部门', dataIndex: 'departmentName', width: 150 },
             { title: '发布时间', dataIndex: 'publishedAt', width: 170, render: fmtTime },
             { title: '阅读状态', key: 'isRead', width: 96, render: (_, row) =>
@@ -74,5 +82,9 @@ export default function AnnouncementCenter() {
           pagination={{ current: page, pageSize, total: data?.total ?? 0,
             onChange: (next, size) => update({ page: String(size === pageSize ? next : 1), pageSize: String(size) }),
           }} />}
+    {openId !== null && <Modal visible title="公告全文" footer={null} onCancel={() => setOpenId(null)}
+      className="announcement-full-text" style={{ width: 'min(720px, 94vw)' }}>
+      <OpenAnnouncement key={JSON.stringify([queryScope, openId])} id={String(openId)} />
+    </Modal>}
   </Card>
 }

@@ -103,6 +103,31 @@ public sealed partial class AnnouncementAcceptanceTests(AnnouncementFixture w) :
     }
 
     [Fact]
+    public async Task InboxShowsOnlyAnExcerptToEligibleReadersWithoutRecordingAnOpen()
+    {
+        await w.EnsureAsync(Ct);
+        var prefix = new string('甲', 159) + "📦";
+        var body = prefix + "完整公告的后续内容";
+        const string title = "Inline preview";
+        var draft = await w.Author.PostAsync(Manage, new
+        {
+            title, body, internalScope = "OWN", externalScope = "SELECTED", companyIds = new[] { w.Company }
+        }, Ct).Ok();
+        var id = draft.Id();
+        await w.Author.PostAsync($"{Manage}/{id}/publish?version={draft.Id("version")}", null, Ct).Ok();
+        foreach (var (reader, route) in new[] { (w.SectionReader, Internal), (w.Vendor, External) })
+        {
+            var row = Assert.Single((await List(reader, route, title))["list"]!.AsArray())!;
+            Assert.Equal(prefix + "…", row["preview"]!.GetValue<string>());
+            Assert.Null(row["body"]);
+            Assert.False(row["isRead"]!.GetValue<bool>());
+            Assert.Equal(body, (await reader.GetAsync($"{route}/{id}", Ct).Ok())["body"]!.GetValue<string>());
+        }
+        await Hidden(w.OtherVendor, External, id, title);
+        Assert.Empty(await Reads(w.Author, id));
+    }
+
+    [Fact]
     public async Task WithdrawalRequiresOriginalPublisherAndIndependentCurrentPermission()
     {
         await w.EnsureAsync(Ct);

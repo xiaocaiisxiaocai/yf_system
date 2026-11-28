@@ -6,7 +6,7 @@ using Yf.Api.Modules.Oem.Common;
 namespace Yf.Api.Modules.Announcements;
 
 public sealed record AnnouncementReaderItemResponse(
-    ulong Id, string Title, string DepartmentName, DateTime PublishedAt, DateTime? PinnedAt, bool IsRead);
+    ulong Id, string Title, string DepartmentName, DateTime PublishedAt, DateTime? PinnedAt, bool IsRead, string Preview);
 
 public sealed record AnnouncementReaderPageResponse(
     IReadOnlyList<AnnouncementReaderItemResponse> List, ulong Total, ulong Page, ulong PageSize, ulong UnreadCount);
@@ -16,6 +16,8 @@ public sealed record AnnouncementReaderDetailResponse(
 
 public sealed class AnnouncementReaderService(IDbContextFactory<YfDbContext> dbFactory)
 {
+    private const int PreviewLength = 160;
+
     public async Task<AnnouncementReaderPageResponse> ListAsync(
         OemActor actor, string? keyword, bool? unreadOnly, int? page, int? pageSize, CancellationToken ct)
     {
@@ -37,7 +39,8 @@ public sealed class AnnouncementReaderService(IDbContextFactory<YfDbContext> dbF
             .ThenByDescending(item => item.PublishedAt).ThenByDescending(item => item.Id)
             .Page(offset, size)
             .Select(item => new AnnouncementReaderItemResponse(item.Id, item.Title, item.DepartmentName,
-                item.PublishedAt!.Value, item.PinnedAt, readIds.Contains(item.Id))).ToArrayAsync(ct);
+                item.PublishedAt!.Value, item.PinnedAt, readIds.Contains(item.Id),
+                item.Body.Length > PreviewLength ? item.Body.Substring(0, PreviewLength) + "…" : item.Body)).ToArrayAsync(ct);
         return new(items, total, number, size, unreadCount);
     }
 
