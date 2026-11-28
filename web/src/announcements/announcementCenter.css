@@ -1,0 +1,22 @@
+.announcement-excerpt {
+  text-align: left;
+}
+
+.announcement-excerpt > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.announcement-excerpt > button {
+  margin-top: 2px;
+  padding-inline: 0;
+}
+
+.announcement-full-text .arco-modal-content {
+  max-height: calc(100dvh - 160px);
+  overflow-y: auto;
+}

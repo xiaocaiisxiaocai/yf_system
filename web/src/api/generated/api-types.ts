@@ -114,6 +114,7 @@ export interface AnnouncementReaderItemResponse {
   publishedAt: string
   pinnedAt: string | null
   isRead: boolean
+  preview: string
 }
 
 export interface AnnouncementReaderPageResponse {

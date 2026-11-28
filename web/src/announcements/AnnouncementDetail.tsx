@@ -12,7 +12,7 @@ function inaccessible(error: unknown) {
   return status === 403 || status === 404
 }
 
-function OpenAnnouncement({ id }: { id: string }) {
+export function OpenAnnouncement({ id }: { id: string }) {
   const { api, realm } = useOem()
   const queryClient = useQueryClient()
   const [content, setContent] = useState<AnnouncementContent | null>(null)

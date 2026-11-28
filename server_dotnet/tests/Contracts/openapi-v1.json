@@ -11633,6 +11633,7 @@
           "id",
           "isRead",
           "pinnedAt",
+          "preview",
           "publishedAt",
           "title"
         ],
@@ -11659,6 +11660,9 @@
           },
           "isRead": {
             "type": "boolean"
+          },
+          "preview": {
+            "type": "string"
           }
         },
         "additionalProperties": false
