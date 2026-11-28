@@ -7,6 +7,7 @@ using Swashbuckle.AspNetCore.Swagger;
 using Swashbuckle.AspNetCore.SwaggerGen;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
+using Yf.Api.Modules.Announcements;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem;
@@ -93,7 +94,7 @@ public sealed class OpenApiContractTests
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.Services.AddSingleton(new AppOptions { WorkerEnabled = false }).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule().AddOutsourceModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule().AddOutsourceModule().AddAnnouncementModule();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen(options =>
         {
@@ -105,7 +106,7 @@ public sealed class OpenApiContractTests
             options.SchemaFilter<NullableReferencePropertiesFilter>();
         });
         await using var app = builder.Build();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapOemModule().MapOutsourceModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapOemModule().MapOutsourceModule().MapAnnouncementModule();
         // UseEndpoints publishes the mapped routes to the global EndpointDataSource that ApiExplorer reads;
         // the server and background workers are never started.
         app.UseRouting();

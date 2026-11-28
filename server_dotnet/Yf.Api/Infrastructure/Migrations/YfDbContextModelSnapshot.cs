@@ -22,6 +22,213 @@ namespace Yf.Api.Infrastructure.Migrations
 
             MySqlModelBuilderExtensions.AutoIncrementColumns(modelBuilder);
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.Announcement", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("longtext")
+                        .HasColumnName("body");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("created_at");
+
+                    b.Property<ulong>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<ulong?>("DepartmentId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("department_id");
+
+                    b.Property<string>("DepartmentName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("department_name");
+
+                    b.Property<string>("ExternalScope")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("external_scope");
+
+                    b.Property<string>("InternalScope")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("internal_scope");
+
+                    b.Property<DateTime?>("PinnedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("pinned_at");
+
+                    b.Property<DateTime?>("PublishedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("published_at");
+
+                    b.Property<ulong?>("PublisherId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("publisher_id");
+
+                    b.Property<string>("PublisherName")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("publisher_name");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)")
+                        .HasColumnName("title");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("updated_at");
+
+                    b.Property<ulong>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("version");
+
+                    b.Property<DateTime?>("WithdrawnAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("withdrawn_at");
+
+                    b.Property<ulong?>("WithdrawnBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("withdrawn_by");
+
+                    b.Property<string>("WithdrawnByName")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("withdrawn_by_name");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedBy", "Status")
+                        .HasDatabaseName("idx_announcements_creator_status");
+
+                    b.HasIndex("DepartmentId", "Status")
+                        .HasDatabaseName("idx_announcements_department_status");
+
+                    b.HasIndex("Status", "PinnedAt", "PublishedAt", "Id")
+                        .HasDatabaseName("idx_announcements_reader");
+
+                    b.ToTable("announcements", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementCompany", b =>
+                {
+                    b.Property<ulong>("AnnouncementId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("announcement_id");
+
+                    b.Property<ulong>("CompanyId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("company_id");
+
+                    b.Property<string>("CompanyName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("company_name");
+
+                    b.HasKey("AnnouncementId", "CompanyId");
+
+                    b.HasIndex("CompanyId")
+                        .HasDatabaseName("idx_announcement_companies_company");
+
+                    b.ToTable("announcement_companies", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementDepartment", b =>
+                {
+                    b.Property<ulong>("AnnouncementId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("announcement_id");
+
+                    b.Property<ulong>("DepartmentId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("department_id");
+
+                    b.Property<string>("DepartmentName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("department_name");
+
+                    b.HasKey("AnnouncementId", "DepartmentId");
+
+                    b.HasIndex("DepartmentId")
+                        .HasDatabaseName("idx_announcement_departments_department");
+
+                    b.ToTable("announcement_departments", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementRead", b =>
+                {
+                    b.Property<ulong>("AnnouncementId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("announcement_id");
+
+                    b.Property<string>("Realm")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("realm");
+
+                    b.Property<ulong>("AccountId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("account_id");
+
+                    b.Property<string>("AccountName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("account_name");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("display_name");
+
+                    b.Property<DateTime>("FirstReadAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("first_read_at");
+
+                    b.Property<DateTime>("LastReadAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("last_read_at");
+
+                    b.HasKey("AnnouncementId", "Realm", "AccountId");
+
+                    b.HasIndex("AnnouncementId", "LastReadAt")
+                        .HasDatabaseName("idx_announcement_reads_last");
+
+                    b.ToTable("announcement_reads", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AuditLog", b =>
                 {
                     b.Property<ulong>("Id")
@@ -4960,6 +5167,36 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.ToTable("oem_upload_sessions", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementCompany", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Announcement", null)
+                        .WithMany()
+                        .HasForeignKey("AnnouncementId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_announcement_companies_announcement");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementDepartment", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Announcement", null)
+                        .WithMany()
+                        .HasForeignKey("AnnouncementId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_announcement_departments_announcement");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementRead", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Announcement", null)
+                        .WithMany()
+                        .HasForeignKey("AnnouncementId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_announcement_reads_announcement");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.CollaborationRead", b =>

@@ -91,10 +91,12 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await GateAsync(context, actor, "role:manage", ct);
         await ceiling.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
         var role = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
-        if (request.PermissionIds is { } permissionIds)
-            await ApplyPermissionAssignmentAsync(context, actor, role, id, permissionIds.Distinct().ToArray(), ct);
+        var announcementCeiling = request.PermissionIds is { } permissionIds
+            ? await ApplyPermissionAssignmentAsync(context, actor, role, id, permissionIds.Distinct().ToArray(), ct)
+            : null;
         if (request.Scopes is { } scopes)
             await ApplyScopeAssignmentAsync(context, actor, role, id, scopes, ct);
+        await CheckAnnouncementGrantAsync(context, id, announcementCeiling, ct);
         var result = new RoleAuthorizationResponse(
             // 调用到这里已经通过 EnsureManageRoleAsync，因此对本次调用者而言 canManage 恒为真。
             await JsonAsync(context, role, canManage: true, ct),
@@ -187,9 +189,12 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         var local = await context.RoleDataScopes.AsNoTracking()
             .Where(setting => setting.RoleId == roleId)
             .ToDictionaryAsync(setting => setting.Domain, setting => setting.Scope, ct);
+        var announcementManager = !local.ContainsKey(DataScopeDomains.Announcement)
+            && await DataScopeService.AnnouncementManagerRoles(context).AnyAsync(id => id == roleId, ct);
         return DataScopeDomains.All.Select(domain =>
         {
-            var scope = local.GetValueOrDefault(domain) ?? DataScopeValues.Self;
+            var scope = local.GetValueOrDefault(domain) ?? (domain == DataScopeDomains.Announcement && announcementManager
+                ? DataScopeValues.Org : DataScopeValues.Self);
             return new DataScopeResponse(domain, DataScopeDomains.Label(domain),
                 local.GetValueOrDefault(domain), scope, DataScopeValues.Label(scope));
         }).ToArray();
@@ -309,12 +314,13 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
         await GateAsync(context, actor, "role:manage", ct);
         await ceiling.EnsureManageRoleAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor, id, ct);
         var role = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
-        await ApplyPermissionAssignmentAsync(context, actor, role, id, ids, ct);
+        var announcementCeiling = await ApplyPermissionAssignmentAsync(context, actor, role, id, ids, ct);
+        await CheckAnnouncementGrantAsync(context, id, announcementCeiling, ct);
         await tx.CommitAsync(ct);
     }
 
     /// <summary>Writes a role's action permissions; the caller owns the transaction and the gate.</summary>
-    private async Task ApplyPermissionAssignmentAsync(
+    private async Task<DataScopeResolution?> ApplyPermissionAssignmentAsync(
         YfDbContext context, CurrentUser actor, Role role, ulong id, ulong[] ids, CancellationToken ct)
     {
         var assignedToSupplier = await context.UserRoles.Join(context.Users, ur => ur.UserId, u => u.Id, (ur, u) => new { ur, u })
@@ -347,6 +353,12 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             await EnsureProjectListRemovalSafeAsync(context, id, ct);
         var old = oldPermissions.Select(x => x.Id).ToArray();
         var oldIds = old.ToHashSet();
+        // Giving a scoped action can activate a wider pre-existing range even without editing the range
+        // setting. Capture the grantor before any changes (a role can include the grantor themselves).
+        DataScopeResolution? announcementCeiling = null;
+        if (valid.Any(p => !oldIds.Contains(p.Id) && p.Code is "announcement:publish" or "announcement:pin" or "announcement:reads")
+            && !await AccessService.IsSystemAdminAsync(context.Database.Connection(), context.Database.RequireTransaction(), actor.Id, ct))
+            announcementCeiling = await DataScopeService.ResolveAsync(context, actor.Id, DataScopeDomains.Announcement, ct);
         var newIds = ids.ToHashSet();
         var orderedNewPermissions = valid.OrderBy(x => x.Id).ToArray();
         var addedPermissions = orderedNewPermissions.Where(x => !oldIds.Contains(x.Id)).Select(PermissionAuditJson).ToArray();
@@ -368,6 +380,21 @@ public sealed class RoleService(IDbContextFactory<YfDbContext> dbFactory, Permis
             removedPermissions,
             changes = AuditChange.OnlyChanged(new AuditChange("permissions", "权限", oldPermissionDetails, newPermissionDetails))
         }, null, ct);
+        return announcementCeiling;
+    }
+
+    private static async Task CheckAnnouncementGrantAsync(YfDbContext db, ulong roleId,
+        DataScopeResolution? grantor, CancellationToken ct)
+    {
+        if (grantor is null || grantor.IsAll) return;
+        var roleScope = await db.RoleDataScopes.Where(r => r.RoleId == roleId && r.Domain == DataScopeDomains.Announcement)
+            .Select(r => r.Scope).SingleOrDefaultAsync(ct) ?? DataScopeValues.Org;
+        if (!DataScopeService.CanGrant(grantor.Scope, roleScope))
+            throw ApiException.Forbidden(DataScopeCeiling.WiderThanActorMessage);
+        var members = await db.UserRoles.Where(r => r.RoleId == roleId).Select(r => r.UserId).Distinct().ToArrayAsync(ct);
+        var effective = await DataScopeService.ResolveManyAsync(db, members, DataScopeDomains.Announcement, ct);
+        if (effective.Values.Any(range => !DataScopeService.Covers(grantor, range)))
+            throw ApiException.Forbidden(DataScopeCeiling.WiderThanActorMessage);
     }
 
     public async Task DeleteAsync(CurrentUser actor, ulong id, CancellationToken ct)

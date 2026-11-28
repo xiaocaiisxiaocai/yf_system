@@ -269,6 +269,9 @@ public sealed class DepartmentService(IDbContextFactory<YfDbContext> dbFactory, 
         var row = await FindAsync(context, id, ct) ?? throw ApiException.NotFound();
         if (await context.Departments.AnyAsync(d => d.ParentId == id, ct)) throw ApiException.BadRequest("请先删除下级组织节点");
         if (await context.Users.AnyAsync(u => u.DepartmentId == id, ct)) throw ApiException.BadRequest("该组织仍有用户，请先调整用户归属或停用组织");
+        if (await context.Announcements.AnyAsync(a => a.DepartmentId == id, ct)
+            || await context.AnnouncementDepartments.AnyAsync(d => d.DepartmentId == id, ct))
+            throw ApiException.BadRequest("该组织已被公告署名或接收范围引用，请停用组织以保留历史。");
         // oem_flow_template_scopes.department_id has no FK, so check it explicitly instead of orphaning the binding.
         if (await context.OemFlowTemplateScopes.AnyAsync(scope => scope.DepartmentId == id, ct))
             throw ApiException.BadRequest("该组织仍绑定 ODM/OEMA 审批模板，请先在审批模板中解除绑定");

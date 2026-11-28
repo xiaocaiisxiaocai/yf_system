@@ -26,7 +26,7 @@ public sealed class MigrationRoundTripTests
     private const string BeforeOutsourceTypeElectricalHandoff = "20261124093646_AddOutsourceFilesField";
     private const string RenameHandoffLabel = "20261125030000_RenameOutsourceHandoffLabel";
     private const string WidenRecipientEmail = "20261125140406_WidenOutsourceMailRecipientEmail";
-    private const string Latest = "20261126031537_AddAccountNetworkScope";
+    private const string Latest = "20261128074749_AddAnnouncements";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -322,6 +322,11 @@ public sealed class MigrationRoundTripTests
 
         await migrator.MigrateAsync(BeforeElectricalHandoff, ct);
         var beforeElectricalHandoff = await SchemaAsync(database, ct);
+        foreach (var name in new[] { "announcements", "announcement_reads", "announcement_companies", "announcement_departments" })
+        {
+            Assert.Contains(latestSchema, line => line.StartsWith($"table|{name}|", StringComparison.Ordinal));
+            Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith($"table|{name}|", StringComparison.Ordinal));
+        }
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("table|outsource_default_cc_modules|", StringComparison.Ordinal));
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|outsource_items|electrical_handoff", StringComparison.Ordinal));
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|users|network_scope|", StringComparison.Ordinal));
@@ -535,7 +540,7 @@ public sealed class MigrationRoundTripTests
             WHERE rp.role_id=1 GROUP BY p.code ORDER BY p.code
             """)).ToArray();
         Assert.All(adminGrants, row => Assert.Equal(1, row.Count));
-        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Concat(OutsourceCodes).Concat(NonOemCrudCodes)
+        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Concat(OutsourceCodes).Concat(NonOemCrudCodes).Concat(AnnouncementCodes)
                 .Order(StringComparer.Ordinal).ToArray(),
             adminGrants.Select(row => row.Code).Order(StringComparer.Ordinal).ToArray());
         var outsourceCatalog = (await connection.QueryAsync<(string Code, int Count)>("""
@@ -570,6 +575,9 @@ public sealed class MigrationRoundTripTests
     }
 
     private static readonly string[] PreOemCodes = ["dashboard", "org:dept", "org:user", "user:manage", "dept:manage"];
+
+    private static readonly string[] AnnouncementCodes =
+        ["announcement", "announcement:pin", "announcement:publish", "announcement:reads", "announcement:withdraw"];
 
     /// <summary>The outsourcing codes the built-in administrator holds after an upgrade.</summary>
     private static readonly string[] OutsourceCodes =

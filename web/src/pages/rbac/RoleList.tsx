@@ -46,6 +46,7 @@ const WORK_ORDER_PERMISSION_NAMES: Record<string, string> = {
 const SCOPE_DOMAINS = [
   { domain: 'project', label: '项目范围' },
   { domain: 'oem_transfer', label: 'ODM/OEMA 传递单范围' },
+  { domain: 'announcement', label: '公告管理范围' },
 ] as const
 const SCOPE_LABELS: Record<string, string> = {
   SELF: '仅本人', ORG: '本组织及下级', ALL: '全部',
@@ -598,7 +599,7 @@ function RoleTable({ canManageRoles }: { canManageRoles: boolean }) {
                     disabled={!canAssign || roleScopesLoading || roleScopesLoadedFor !== permTarget.id}
                     onChange={(value) => setRoleScopes((prev) => ({ ...prev, [domain]: value }))}
                   >
-                    <Select.Option value="">未设置（主管看所辖组织）</Select.Option>
+                    <Select.Option value="">{domain === 'announcement' ? '未设置（公告管理按所属部门）' : '未设置（主管看所辖组织）'}</Select.Option>
                     <Select.Option value="SELF">仅本人（主管也不扩大）</Select.Option>
                     <Select.Option value="ORG">{SCOPE_LABELS.ORG}</Select.Option>
                     <Select.Option value="ALL">{SCOPE_LABELS.ALL}</Select.Option>

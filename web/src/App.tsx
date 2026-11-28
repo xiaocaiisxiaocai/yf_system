@@ -5,6 +5,7 @@ import { useAuth } from './store/auth'
 import { bootAuth, isOemPortalPath, isSafeLoginReturnPath, retryBootAuth } from './api/client'
 import { OEM_SETTINGS_PERMISSIONS, OUTSOURCE_MANAGEMENT_PATH, OUTSOURCE_MANAGEMENT_PERMISSIONS } from './oem/oemNavigation'
 import { OUTSOURCE_PERMISSIONS } from './outsource/outsourceNavigation'
+import { ANNOUNCEMENT_MANAGEMENT_PERMISSIONS } from './announcements/announcementPermissions'
 import { OEM_UI_ENABLED } from './features'
 import { decideAuthStorageSync } from './store/authStorageSync'
 import RouteErrorBoundary from './components/RouteErrorBoundary'
@@ -35,6 +36,9 @@ const OemTransferList = lazy(() => import('./oem/pages/TransferListPage'))
 const OemTransferDetail = lazy(() => import('./oem/pages/TransferDetailPage'))
 const PortalOutsource = lazy(() => import('./oem/pages/PortalOutsourcePage'))
 const OemApprovals = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.ApprovalsHub })))
+const AnnouncementCenter = lazy(() => import('./announcements/AnnouncementCenter'))
+const AnnouncementDetail = lazy(() => import('./announcements/AnnouncementDetail'))
+const AnnouncementManagement = lazy(() => import('./announcements/AnnouncementManagementPage'))
 const OutsourceManagement = lazy(() => import('./oem/pages/admin/OutsourceManagementPage'))
 const OemSettings = lazy(() => import('./oem/pages/OemHubs').then((m) => ({ default: m.SettingsHub })))
 const OemAudit = lazy(() => import('./oem/pages/admin/PolicyPages').then((m) => ({ default: m.AuditPage })))
@@ -182,6 +186,9 @@ export default function App() {
         {OEM_UI_ENABLED && <>
           <Route path="/oem" element={<Guard><OemInternalLayout /></Guard>}>
             <Route index element={<OemLanding />} />
+            <Route path="announcements" element={<AnnouncementCenter />} />
+            <Route path="announcements/:id" element={<AnnouncementDetail />} />
+            <Route path="admin/announcements" element={<Guard anyPermission={ANNOUNCEMENT_MANAGEMENT_PERMISSIONS}><AnnouncementManagement /></Guard>} />
             <Route path="transfers" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create']}><OemTransferList /></Guard>} />
             <Route path="transfers/:id" element={<Guard anyPermission={['oem:transfer_view', 'oem:transfer_create', 'oem:flow_approve', 'oem:approval_recover']}><OemTransferDetail /></Guard>} />
             <Route path="approvals" element={<Guard anyPermission={['oem:flow_approve', 'oem:approval_recover']}><OemApprovals /></Guard>} />
@@ -200,6 +207,8 @@ export default function App() {
             <Route path="transfers" element={<OemTransferList />} />
             <Route path="transfers/:id" element={<OemTransferDetail />} />
             <Route path="outsource" element={<PortalOutsource />} />
+            <Route path="announcements" element={<AnnouncementCenter />} />
+            <Route path="announcements/:id" element={<AnnouncementDetail />} />
           </Route>
         </>}
         <Route path="/outsource" element={<Guard><OutsourceLayout /></Guard>}>

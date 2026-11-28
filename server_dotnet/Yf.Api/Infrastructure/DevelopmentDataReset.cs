@@ -12,6 +12,7 @@ namespace Yf.Api.Infrastructure;
 internal static class DevelopmentDataReset
 {
     private static readonly string[] ClearedTables = [
+        "announcement_reads", "announcement_departments", "announcement_companies", "announcements",
         "oem_download_ranges", "oem_download_leases", "oem_download_sessions", "oem_file_promotions", "oem_file_scan_jobs",
         "oem_flow_tasks", "oem_flow_instance_nodes", "oem_flow_instances", "oem_upload_sessions",
         "oem_transfer_internal_recipients", "oem_transfer_files", "oem_transfers",
@@ -33,6 +34,10 @@ internal static class DevelopmentDataReset
     private static readonly IReadOnlyDictionary<string, Func<YfDbContext, CancellationToken, Task<long>>> TableCounts =
         new Dictionary<string, Func<YfDbContext, CancellationToken, Task<long>>>(StringComparer.Ordinal)
         {
+            ["announcements"] = (db, ct) => db.Announcements.LongCountAsync(ct),
+            ["announcement_reads"] = (db, ct) => db.AnnouncementReads.LongCountAsync(ct),
+            ["announcement_departments"] = (db, ct) => db.AnnouncementDepartments.LongCountAsync(ct),
+            ["announcement_companies"] = (db, ct) => db.AnnouncementCompanies.LongCountAsync(ct),
             ["oem_download_ranges"] = (db, ct) => db.OemDownloadRanges.LongCountAsync(ct),
             ["oem_download_leases"] = (db, ct) => db.OemDownloadLeases.LongCountAsync(ct),
             ["oem_download_sessions"] = (db, ct) => db.OemDownloadSessions.LongCountAsync(ct),
@@ -301,6 +306,8 @@ internal static class DevelopmentDataReset
         // OEM transfer data first (oem_transfers references both oem_companies and outsource_items).
         // Approval/retention templates, outsource fields/types and sync/mirror settings survive;
         // their people/organisation/vendor references do not.
+        // Audience rows and read history cascade with their announcement.
+        await db.Announcements.ExecuteDeleteAsync(ct);
         await db.OemDownloadRanges.ExecuteDeleteAsync(ct);
         await db.OemDownloadLeases.ExecuteDeleteAsync(ct);
         await db.OemDownloadSessions.ExecuteDeleteAsync(ct);

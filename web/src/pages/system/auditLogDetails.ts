@@ -67,6 +67,10 @@ const action = (label: string, categoryCode: string, categoryLabel: string, colo
 })
 
 export const ACTIONS: Record<string, ActionMeta> = {
+  ANNOUNCEMENT_PUBLISH: action('发布公告', 'ANNOUNCEMENT', '公告', 'green'),
+  ANNOUNCEMENT_PIN: action('置顶公告', 'ANNOUNCEMENT', '公告', 'orange'),
+  ANNOUNCEMENT_UNPIN: action('取消公告置顶', 'ANNOUNCEMENT', '公告', 'gray'),
+  ANNOUNCEMENT_WITHDRAW: action('下架公告', 'ANNOUNCEMENT', '公告', 'red'),
   LOGIN: action('登录成功', 'AUTH', '认证安全', 'green'),
   LOGIN_FAILED: action('登录失败', 'AUTH', '认证安全', 'red'),
   LOGIN_LOCKED: action('账号锁定', 'AUTH', '认证安全', 'red'),
@@ -167,11 +171,13 @@ export const ACTIONS: Record<string, ActionMeta> = {
 }
 
 export const CATEGORY_OPTIONS = [
+  ['ANNOUNCEMENT', '公告'],
   ['AUTH', '认证安全'], ['PROJECT', '项目协作'], ['FILE', '文件'], ['MESSAGE', '留言'],
   ['ORG', '组织与权限'], ['SUPPLIER', '供应商'], ['SYSTEM', '系统'],
 ] as const
 
 export const TARGET_LABELS: Record<string, string> = {
+  announcement: '公告',
   user: '用户', role: '角色', department: '组织', supplier: '供应商', project: '项目', project_group: '主项目（已停用）',
   file: '文件', message: '留言', upload_session: '上传任务', audit_log: '操作日志',
   system_config: '系统参数', email_outbox: '邮件队列', project_dictionary: '数据字典', robot_part: 'Robot 料号',

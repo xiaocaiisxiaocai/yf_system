@@ -504,7 +504,7 @@ describe('ODM/OEMA 前端入口与路由', () => {
 
     expect(await screen.findByPlaceholderText('搜索传递记录')).toBeInTheDocument()
     expect(screen.getByText('ODM/OEM工令协作')).toBeInTheDocument()
-    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['外发工令', '文件传递单'])
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual(['外发工令', '文件传递单', '公告中心'])
     expect(screen.getByRole('checkbox', { name: '只看我发送的' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: '只看发给我的' })).not.toBeInTheDocument()
     expect(internalRefresh).not.toHaveBeenCalled()
