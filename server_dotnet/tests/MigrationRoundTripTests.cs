@@ -540,7 +540,7 @@ public sealed class MigrationRoundTripTests
             WHERE rp.role_id=1 GROUP BY p.code ORDER BY p.code
             """)).ToArray();
         Assert.All(adminGrants, row => Assert.Equal(1, row.Count));
-        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Concat(OutsourceCodes).Concat(NonOemCrudCodes)
+        Assert.Equal(PreOemCodes.Concat(OemAndLeaderCodes).Concat(OutsourceCodes).Concat(NonOemCrudCodes).Concat(AnnouncementCodes)
                 .Order(StringComparer.Ordinal).ToArray(),
             adminGrants.Select(row => row.Code).Order(StringComparer.Ordinal).ToArray());
         var outsourceCatalog = (await connection.QueryAsync<(string Code, int Count)>("""
@@ -575,6 +575,9 @@ public sealed class MigrationRoundTripTests
     }
 
     private static readonly string[] PreOemCodes = ["dashboard", "org:dept", "org:user", "user:manage", "dept:manage"];
+
+    private static readonly string[] AnnouncementCodes =
+        ["announcement", "announcement:pin", "announcement:publish", "announcement:reads", "announcement:withdraw"];
 
     /// <summary>The outsourcing codes the built-in administrator holds after an upgrade.</summary>
     private static readonly string[] OutsourceCodes =
