@@ -1,12 +1,12 @@
 import { Button, Result } from '@arco-design/web-react'
-import { IconCheckCircle, IconEmail, IconFile, IconHistory, IconList, IconNotification, IconSettings, IconStorage, IconUserGroup } from '@arco-design/web-react/icon'
+import { IconCheckCircle, IconEmail, IconFile, IconHistory, IconList, IconNotification, IconPhone, IconSettings, IconStorage, IconUserGroup } from '@arco-design/web-react/icon'
 import { useNavigate } from 'react-router-dom'
 import { useShallow } from 'zustand/react/shallow'
 import AccountMenu from '../components/AccountMenu'
 import { OEM_UI_ENABLED } from '../features'
 import { ANNOUNCEMENT_MANAGEMENT_PERMISSIONS } from '../announcements/announcementPermissions'
 import { OEM_SETTINGS_PERMISSIONS, OUTSOURCE_MANAGEMENT_PATH, OUTSOURCE_MANAGEMENT_PERMISSIONS } from '../oem/oemNavigation'
-import { OUTSOURCE_HOME, OUTSOURCE_PERMISSIONS } from '../outsource/outsourceNavigation'
+import { OUTSOURCE_CONTACTS_PATH, OUTSOURCE_HOME, OUTSOURCE_PERMISSIONS } from '../outsource/outsourceNavigation'
 import { SEND_QUEUE_PATH, useSendQueue, useSendQueuePolling } from '../outsource/sendQueue'
 import { useAuth } from '../store/auth'
 import { WORK_ORDER_TITLE } from './navigation'
@@ -32,6 +32,7 @@ export default function WorkOrderLayout() {
       path: OUTSOURCE_HOME, label: '外发工令', icon: <IconList />, visible: internal,
       badge: canSend ? queued : undefined, to: canSend && queued > 0 ? SEND_QUEUE_PATH : undefined,
     },
+    { path: OUTSOURCE_CONTACTS_PATH, label: '对接联络表', icon: <IconPhone />, visible: internal },
     { path: '/oem/transfers', label: '文件传递单', icon: <IconFile />, visible: oem && (has('oem:transfer_create') || has('oem:transfer_view')) },
     { path: '/oem/approvals', label: '审批', icon: <IconCheckCircle />, visible: oem && (has('oem:flow_approve') || has('oem:approval_recover')) },
     { path: '/outsource/mails', label: '发送记录', icon: <IconEmail />, visible: canSend },

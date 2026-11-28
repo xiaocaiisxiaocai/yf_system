@@ -316,6 +316,9 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             || await uow.Db.OutsourceTypeVendors.AnyAsync(mapping => mapping.VendorId == id, ct)
             || await uow.Db.OutsourceMails.AnyAsync(mail => mail.VendorId == id, ct))
             throw ApiException.BadRequest("该厂商已用于外协清单（外协记录、外发类型或发送记录），请停用厂商以保留记录。");
+        if (await uow.Db.OutsourceContactPeople.AnyAsync(person => person.VendorId == id, ct)
+            || await uow.Db.OutsourceContactRowVendors.AnyAsync(rv => rv.VendorId == id, ct))
+            throw ApiException.BadRequest("该厂商已用于对接联络表，请停用厂商以保留记录。");
         var removedEmptyDrafts = await DirectoryTransfers(uow.Db, id, emptyDrafts: true).ExecuteDeleteAsync(ct);
         var removedContacts = await uow.Db.OemCompanyContacts.Where(contact => contact.OemCompanyId == id).ExecuteDeleteAsync(ct);
         await audit.WriteAsync(uow, current, "OEM_COMPANY_DELETE", "oem_company", id,

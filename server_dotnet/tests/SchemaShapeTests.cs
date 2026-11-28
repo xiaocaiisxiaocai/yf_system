@@ -96,6 +96,7 @@ public sealed class SchemaShapeTests
         "20261126031537_AddAccountNetworkScope",
         "20261128074749_AddAnnouncements",
         "20261128092337_AddAnnouncementRichContent",
+        "20261128114631_AddOutsourceContacts",
     ];
 
     [Fact]
@@ -368,8 +369,18 @@ public sealed class SchemaShapeTests
             Assert.False(await TableExistsAsync(conn, "seaql_migrations", ct));
             Assert.Equal("admin", await conn.ExecuteScalarAsync<string>("SELECT employee_no FROM users"));
             Assert.Equal("系统管理员", await conn.ExecuteScalarAsync<string>("SELECT name FROM roles"));
-            Assert.Equal(68, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
-            Assert.Equal(68, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(70, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM permissions"));
+            Assert.Equal(70, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM role_permissions"));
+            Assert.Equal(2, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM permissions p JOIN permissions parent ON parent.id=p.parent_id
+                JOIN role_permissions grant_row ON grant_row.permission_id=p.id
+                JOIN roles r ON grant_row.role_id=r.id
+                WHERE parent.code='outsource' AND p.type='ACTION' AND r.is_built_in=1 AND r.name='系统管理员'
+                  AND p.code IN ('outsource:contact_manage','outsource:contact_settings')
+                """));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_contact_columns"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_contact_rows"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_contact_people"));
             Assert.Equal(4, await conn.ExecuteScalarAsync<int>("""
                 SELECT COUNT(*) FROM permissions p JOIN permissions parent ON parent.id=p.parent_id
                 JOIN role_permissions grant_row ON grant_row.permission_id=p.id

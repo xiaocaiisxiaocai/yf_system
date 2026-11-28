@@ -89,6 +89,8 @@ internal static class BootstrapSeedCatalog
         (237, "announcement:withdraw", "公告下架", "ACTION", 235, 83),
         (238, "announcement:pin", "公告置顶管理", "ACTION", 235, 84),
         (239, "announcement:reads", "查看公告阅读明细", "ACTION", 235, 85),
+        (240, "outsource:contact_manage", "管理对接联络表", "ACTION", 217, 86),
+        (241, "outsource:contact_settings", "管理联络表列布局", "ACTION", 217, 87),
     ];
 
     private static readonly (string Key, string Value, string Description)[] Configs =

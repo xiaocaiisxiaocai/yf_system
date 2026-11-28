@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Avatar, Button, Dropdown, Menu, Result, Space, Spin } from '@arco-design/web-react'
 import {
-  IconDown, IconFile, IconList, IconLock, IconNotification, IconPoweroff,
+  IconDown, IconFile, IconList, IconLock, IconNotification, IconPhone, IconPoweroff,
 } from '@arco-design/web-react/icon'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -103,6 +103,7 @@ export function PortalLayout() {
       <OemProvider value={oemValue}>
         <Shell title={WORK_ORDER_TITLE} subtitle={account?.companyName} menu={[
           { path: `${PORTAL_BASE}/outsource`, label: '外发工令', icon: <IconList />, visible: true },
+          { path: `${PORTAL_BASE}/contacts`, label: '对接联络表', icon: <IconPhone />, visible: true },
           { path: `${PORTAL_BASE}/transfers`, label: '文件传递单', icon: <IconFile />, visible: true },
           { path: `${PORTAL_BASE}/announcements`, label: '公告中心', icon: <IconNotification />, visible: true },
         ]} account={

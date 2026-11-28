@@ -26,6 +26,10 @@ internal static class OutsourcePermissions
     internal const string Settings = "outsource:settings";
     /// <summary>Imports BOM时间 and 发图 from Excel; these two columns are never edited on the list.</summary>
     internal const string DateImport = "outsource:date_import";
+    /// <summary>Manages unified contact matrix rows, visibility, people master, and Excel imports.</summary>
+    internal const string ContactManage = "outsource:contact_manage";
+    /// <summary>Configures dynamic columns of the unified contact matrix.</summary>
+    internal const string ContactSettings = "outsource:contact_settings";
 }
 
 internal static class OutsourceDefaultCcModules
