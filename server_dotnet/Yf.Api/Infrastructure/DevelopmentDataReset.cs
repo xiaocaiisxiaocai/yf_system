@@ -18,6 +18,8 @@ internal static class DevelopmentDataReset
         "oem_flow_tasks", "oem_flow_instance_nodes", "oem_flow_instances", "oem_upload_sessions",
         "oem_transfer_internal_recipients", "oem_transfer_files", "oem_transfers",
         "outsource_mail_items", "outsource_mail_recipients", "outsource_mails", "outsource_mail_batches",
+        "outsource_contact_row_people", "outsource_contact_row_values", "outsource_contact_row_vendors",
+        "outsource_contact_rows", "outsource_contact_columns", "outsource_contact_people",
         "outsource_item_changes", "outsource_item_values", "outsource_items",
         "outsource_type_vendors", "outsource_vendor_emails", "outsource_default_cc_modules", "outsource_default_cc",
         "outsource_customer_aliases", "outsource_field_editor_roles", "outsource_field_editor_users",
@@ -57,6 +59,12 @@ internal static class DevelopmentDataReset
             ["outsource_mail_recipients"] = (db, ct) => db.OutsourceMailRecipients.LongCountAsync(ct),
             ["outsource_mails"] = (db, ct) => db.OutsourceMails.LongCountAsync(ct),
             ["outsource_mail_batches"] = (db, ct) => db.OutsourceMailBatches.LongCountAsync(ct),
+            ["outsource_contact_row_people"] = (db, ct) => db.OutsourceContactRowPeople.LongCountAsync(ct),
+            ["outsource_contact_row_values"] = (db, ct) => db.OutsourceContactRowValues.LongCountAsync(ct),
+            ["outsource_contact_row_vendors"] = (db, ct) => db.OutsourceContactRowVendors.LongCountAsync(ct),
+            ["outsource_contact_rows"] = (db, ct) => db.OutsourceContactRows.LongCountAsync(ct),
+            ["outsource_contact_columns"] = (db, ct) => db.OutsourceContactColumns.LongCountAsync(ct),
+            ["outsource_contact_people"] = (db, ct) => db.OutsourceContactPeople.LongCountAsync(ct),
             ["outsource_item_changes"] = (db, ct) => db.OutsourceItemChanges.LongCountAsync(ct),
             ["outsource_item_values"] = (db, ct) => db.OutsourceItemValues.LongCountAsync(ct),
             ["outsource_items"] = (db, ct) => db.OutsourceItems.LongCountAsync(ct),
@@ -328,6 +336,12 @@ internal static class DevelopmentDataReset
         await db.OutsourceMailRecipients.ExecuteDeleteAsync(ct);
         await db.OutsourceMails.ExecuteDeleteAsync(ct);
         await db.OutsourceMailBatches.ExecuteDeleteAsync(ct);
+        await db.OutsourceContactRowPeople.ExecuteDeleteAsync(ct);
+        await db.OutsourceContactRowValues.ExecuteDeleteAsync(ct);
+        await db.OutsourceContactRowVendors.ExecuteDeleteAsync(ct);
+        await db.OutsourceContactRows.ExecuteDeleteAsync(ct);
+        await db.OutsourceContactColumns.ExecuteDeleteAsync(ct);
+        await db.OutsourceContactPeople.ExecuteDeleteAsync(ct);
         await db.OutsourceItemChanges.ExecuteDeleteAsync(ct);
         await db.OutsourceItemValues.ExecuteDeleteAsync(ct);
         await db.OutsourceItems.ExecuteDeleteAsync(ct);

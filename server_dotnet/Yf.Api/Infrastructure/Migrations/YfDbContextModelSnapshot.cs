@@ -1252,6 +1252,361 @@ namespace Yf.Api.Infrastructure.Migrations
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
 
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactColumn", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<bool>("AutoMerge")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("auto_merge");
+
+                    b.Property<string>("ColKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("col_key");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<string>("DataType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("data_type");
+
+                    b.Property<bool>("IsGroupColumn")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_group_column");
+
+                    b.Property<string>("PersonDisplay")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("COMBINED")
+                        .HasColumnName("person_display");
+
+                    b.Property<string>("PhoneTitle")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("phone_title");
+
+                    b.Property<int>("SortNo")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_no");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("title");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
+
+                    b.Property<bool>("VendorVisible")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(true)
+                        .HasColumnName("vendor_visible");
+
+                    b.Property<double>("WidthHint")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("double")
+                        .HasDefaultValue(18.0)
+                        .HasColumnName("width_hint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ColKey")
+                        .IsUnique()
+                        .HasDatabaseName("uk_occ_col_key");
+
+                    b.HasIndex("SortNo", "Id")
+                        .HasDatabaseName("idx_occ_sort");
+
+                    b.ToTable("outsource_contact_columns", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactPerson", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("email");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Phone")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("phone");
+
+                    b.Property<string>("ScopeType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("scope_type");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasDefaultValue("ACTIVE")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TitleHint")
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("title_hint");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
+
+                    b.Property<ulong?>("UpdatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("updated_by");
+
+                    b.Property<ulong?>("UserId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("user_id");
+
+                    b.Property<ulong?>("VendorId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("vendor_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Phone")
+                        .HasDatabaseName("idx_ocp_phone");
+
+                    b.HasIndex("UserId")
+                        .IsUnique()
+                        .HasDatabaseName("uk_ocp_user_id");
+
+                    b.HasIndex("VendorId");
+
+                    b.HasIndex("ScopeType", "VendorId", "Status")
+                        .HasDatabaseName("idx_ocp_scope_vendor_status");
+
+                    b.ToTable("outsource_contact_people", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactRow", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("created_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    b.Property<ulong?>("CreatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("created_by");
+
+                    b.Property<int>("SortNo")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_no");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("datetime(3)")
+                        .HasColumnName("updated_at")
+                        .HasDefaultValueSql("CURRENT_TIMESTAMP(3)");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlComputedColumn(b.Property<DateTime>("UpdatedAt"));
+
+                    b.Property<ulong?>("UpdatedBy")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("updated_by");
+
+                    b.Property<uint>("Version")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int unsigned")
+                        .HasDefaultValue(1u)
+                        .HasColumnName("version");
+
+                    b.Property<string>("Visibility")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(24)
+                        .HasColumnType("varchar(24)")
+                        .HasDefaultValue("INTERNAL_ONLY")
+                        .HasColumnName("visibility");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Visibility")
+                        .HasDatabaseName("idx_ocr_visibility");
+
+                    b.HasIndex("SortNo", "Id")
+                        .HasDatabaseName("idx_ocr_sort");
+
+                    b.ToTable("outsource_contact_rows", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactRowPerson", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<ulong>("ColumnId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("column_id");
+
+                    b.Property<ulong>("PersonId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("person_id");
+
+                    b.Property<string>("PrefixLabel")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("prefix_label");
+
+                    b.Property<ulong>("RowId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("row_id");
+
+                    b.Property<int>("SortNo")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0)
+                        .HasColumnName("sort_no");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ColumnId")
+                        .HasDatabaseName("idx_ocrp_column");
+
+                    b.HasIndex("PersonId")
+                        .HasDatabaseName("idx_ocrp_person");
+
+                    b.HasIndex("RowId", "ColumnId", "PersonId")
+                        .IsUnique()
+                        .HasDatabaseName("uk_ocrp_row_col_person");
+
+                    b.ToTable("outsource_contact_row_people", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactRowValue", b =>
+                {
+                    b.Property<ulong>("RowId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("row_id");
+
+                    b.Property<ulong>("ColumnId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("column_id");
+
+                    b.Property<string>("TextValue")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("varchar(2000)")
+                        .HasColumnName("text_value");
+
+                    b.HasKey("RowId", "ColumnId");
+
+                    b.HasIndex("ColumnId")
+                        .HasDatabaseName("idx_ocrval_column");
+
+                    b.ToTable("outsource_contact_row_values", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactRowVendor", b =>
+                {
+                    b.Property<ulong>("RowId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("row_id");
+
+                    b.Property<ulong>("VendorId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("vendor_id");
+
+                    b.HasKey("RowId", "VendorId");
+
+                    b.HasIndex("VendorId")
+                        .HasDatabaseName("idx_ocrv_vendor");
+
+                    b.ToTable("outsource_contact_row_vendors", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceCustomerAlias", b =>
                 {
                     b.Property<ulong>("Id")
@@ -5472,6 +5827,79 @@ namespace Yf.Api.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired()
                         .HasConstraintName("fk_mr_user");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactPerson", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_ocp_user");
+
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemCompany", null)
+                        .WithMany()
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("fk_ocp_vendor");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactRowPerson", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceContactColumn", null)
+                        .WithMany()
+                        .HasForeignKey("ColumnId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_ocrp_column");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceContactPerson", null)
+                        .WithMany()
+                        .HasForeignKey("PersonId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_ocrp_person");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceContactRow", null)
+                        .WithMany()
+                        .HasForeignKey("RowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_ocrp_row");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactRowValue", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceContactColumn", null)
+                        .WithMany()
+                        .HasForeignKey("ColumnId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_ocrval_column");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceContactRow", null)
+                        .WithMany()
+                        .HasForeignKey("RowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_ocrval_row");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceContactRowVendor", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.OutsourceContactRow", null)
+                        .WithMany()
+                        .HasForeignKey("RowId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_ocrv_row");
+
+                    b.HasOne("Yf.Api.Modules.Oem.Data.OemCompany", null)
+                        .WithMany()
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_ocrv_vendor");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.OutsourceDefaultCc", b =>

@@ -26,7 +26,8 @@ public sealed class MigrationRoundTripTests
     private const string BeforeOutsourceTypeElectricalHandoff = "20261124093646_AddOutsourceFilesField";
     private const string RenameHandoffLabel = "20261125030000_RenameOutsourceHandoffLabel";
     private const string WidenRecipientEmail = "20261125140406_WidenOutsourceMailRecipientEmail";
-    private const string Latest = "20261128092337_AddAnnouncementRichContent";
+    private const string BeforeOutsourceContacts = "20261128092337_AddAnnouncementRichContent";
+    private const string Latest = "20261128114631_AddOutsourceContacts";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -582,7 +583,7 @@ public sealed class MigrationRoundTripTests
 
     /// <summary>The outsourcing codes the built-in administrator holds after an upgrade.</summary>
     private static readonly string[] OutsourceCodes =
-        ["outsource", "outsource:date_import", "outsource:file_view", "outsource:manage", "outsource:send", "outsource:settings"];
+        ["outsource", "outsource:contact_manage", "outsource:contact_settings", "outsource:date_import", "outsource:file_view", "outsource:manage", "outsource:send", "outsource:settings"];
 
     private static async Task<NotSupportedException> AssertRollbackRefusedAsync(
         SchemaShapeTests.SchemaDatabaseScope database,
@@ -802,6 +803,44 @@ public sealed class MigrationRoundTripTests
         Assert.Equal((new DateTime(2026, 12, 5), new DateTime(2026, 10, 15), "SENT"), (rows["W2"].Original, rows["W2"].Latest, rows["W2"].Send));
         foreach (var no in new[] { "W3", "W4", "W5" })
             Assert.Equal((new DateTime(2026, 9, 30), new DateTime(2026, 9, 30)), (rows[no].Original, rows[no].Latest));
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AddOutsourceContactsCreatesSchemaAndPermissionsAndRollsBackCleanly()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var database = await SchemaShapeTests.SchemaDatabaseScope.CreateOrSkipAsync("outsource_contacts_rt", ct);
+        await database.InitializeWithMigrationsAsync(ct);
+        await using var context = await EfTestSupport.DbContextFactory(database.Options).CreateDbContextAsync(ct);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(BeforeOutsourceContacts, ct);
+        var beforeSchema = await SchemaAsync(database, ct);
+
+        await migrator.MigrateAsync(Latest, ct);
+        var afterSchema = await SchemaAsync(database, ct);
+        Assert.Contains(afterSchema, line => line.StartsWith("table|outsource_contact_columns|", StringComparison.Ordinal));
+        Assert.Contains(afterSchema, line => line.StartsWith("table|outsource_contact_people|", StringComparison.Ordinal));
+        Assert.Contains(afterSchema, line => line.StartsWith("table|outsource_contact_rows|", StringComparison.Ordinal));
+        Assert.Contains(afterSchema, line => line.StartsWith("table|outsource_contact_row_vendors|", StringComparison.Ordinal));
+        Assert.Contains(afterSchema, line => line.StartsWith("table|outsource_contact_row_values|", StringComparison.Ordinal));
+        Assert.Contains(afterSchema, line => line.StartsWith("table|outsource_contact_row_people|", StringComparison.Ordinal));
+
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_contact_columns"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_contact_rows"));
+            Assert.Equal(0, await conn.ExecuteScalarAsync<int>("SELECT COUNT(*) FROM outsource_contact_people"));
+            Assert.Equal(2, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM permissions p JOIN permissions parent ON parent.id=p.parent_id
+                WHERE parent.code='outsource' AND p.code IN ('outsource:contact_manage','outsource:contact_settings')
+                """));
+        }
+
+        await migrator.MigrateAsync(BeforeOutsourceContacts, ct);
+        Assert.Equal(beforeSchema, await SchemaAsync(database, ct));
+
+        await migrator.MigrateAsync(Latest, ct);
+        Assert.Equal(afterSchema, await SchemaAsync(database, ct));
     }
 
     private static async Task<string> LastMigrationAsync(SchemaShapeTests.SchemaDatabaseScope database, CancellationToken ct) =>

@@ -102,6 +102,12 @@ public sealed class YfDbContext(DbContextOptions<YfDbContext> options) : DbConte
     public DbSet<OutsourceMail> OutsourceMails => Set<OutsourceMail>();
     public DbSet<OutsourceMailRecipient> OutsourceMailRecipients => Set<OutsourceMailRecipient>();
     public DbSet<OutsourceMailItem> OutsourceMailItems => Set<OutsourceMailItem>();
+    public DbSet<OutsourceContactPerson> OutsourceContactPeople => Set<OutsourceContactPerson>();
+    public DbSet<OutsourceContactColumn> OutsourceContactColumns => Set<OutsourceContactColumn>();
+    public DbSet<OutsourceContactRow> OutsourceContactRows => Set<OutsourceContactRow>();
+    public DbSet<OutsourceContactRowVendor> OutsourceContactRowVendors => Set<OutsourceContactRowVendor>();
+    public DbSet<OutsourceContactRowValue> OutsourceContactRowValues => Set<OutsourceContactRowValue>();
+    public DbSet<OutsourceContactRowPerson> OutsourceContactRowPeople => Set<OutsourceContactRowPerson>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

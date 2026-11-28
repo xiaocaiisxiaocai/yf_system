@@ -20,6 +20,8 @@ public static class OutsourceModule
         .AddSingleton<OutsourceVendorViewService>()
         .AddSingleton<OutsourceFieldService>()
         .AddSingleton<OutsourceItemService>()
+        .AddSingleton<OutsourceContactService>()
+        .AddSingleton<OutsourceContactVendorService>()
         .AddSingleton<OutsourceVendorEmailService>()
         .AddSingleton<OutsourceDateImportService>()
         .AddSingleton<OutsourceIpmsSyncService>()
@@ -173,6 +175,63 @@ public static class OutsourceModule
             s.SaveSettingsAsync(AccessService.GetCurrent(c), r, ct));
         mirror.MapPost("/test", (MesMirrorTestRequest r, HttpContext c, MesMirrorSyncService s, CancellationToken ct) =>
             s.TestAsync(AccessService.GetCurrent(c), r, ct));
+
+        var contacts = endpoints.MapGroup("/api/v1/outsource/contacts");
+        contacts.MapGet("", (HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.GetMatrixAsync(AccessService.GetCurrent(c), c.Request.Query["group"], c.Request.Query["keyword"],
+                QueryValues.OptionalUInt64(c.Request, "vendorId"), ct));
+        contacts.MapGet("/export", async (HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+        {
+            var export = await s.ExportAsync(AccessService.GetCurrent(c), c.Request.Query["group"], c.Request.Query["keyword"],
+                QueryValues.OptionalUInt64(c.Request, "vendorId"), ct);
+            return Results.File(export.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.FileName);
+        });
+        contacts.MapGet("/template", async (HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+        {
+            var export = await s.TemplateAsync(AccessService.GetCurrent(c), ct);
+            return Results.File(export.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.FileName);
+        });
+        contacts.MapGet("/columns", (HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.ListColumnsAsync(AccessService.GetCurrent(c), ct));
+        contacts.MapPost("/columns", (OutsourceContactColumnCreate r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.CreateColumnAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapPut("/columns/order", (OutsourceContactColumnOrderRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.ReorderColumnsAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapPut("/columns/{id:long}", (ulong id, OutsourceContactColumnUpdate r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.UpdateColumnAsync(AccessService.GetCurrent(c), id, r, ct));
+        contacts.MapDelete("/columns/{id:long}", (ulong id, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.DeleteColumnAsync(AccessService.GetCurrent(c), id, ct));
+        contacts.MapPost("/rows", (OutsourceContactRowCreate r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.CreateRowAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapPost("/rows/{id:long}/duplicate", (ulong id, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.DuplicateRowAsync(AccessService.GetCurrent(c), id, ct));
+        contacts.MapPut("/rows/order", (OutsourceContactRowOrderRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.ReorderRowsAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapPut("/rows/visibility", (OutsourceContactVisibilityUpdateRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.UpdateVisibilityAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapDelete("/rows/{id:long}", (ulong id, uint expectedVersion, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.DeleteRowAsync(AccessService.GetCurrent(c), id, expectedVersion, ct));
+        contacts.MapPut("/cells", (OutsourceContactCellsUpdateRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.UpdateCellsAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapGet("/people", (HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.ListPeopleAsync(AccessService.GetCurrent(c), c.Request.Query["scopeType"],
+                QueryValues.OptionalUInt64(c.Request, "vendorId"), c.Request.Query["keyword"], c.Request.Query["status"], ct));
+        contacts.MapGet("/user-options", (HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.ListUserOptionsAsync(AccessService.GetCurrent(c), c.Request.Query["keyword"], ct));
+        contacts.MapPost("/people", (OutsourceContactPersonUpsert r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.CreatePersonAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapPut("/people/{id:long}", (ulong id, OutsourceContactPersonUpsert r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.UpdatePersonAsync(AccessService.GetCurrent(c), id, r, ct));
+        contacts.MapPut("/people/{id:long}/status", (ulong id, StatusRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.SetPersonStatusAsync(AccessService.GetCurrent(c), id, r.Status, ct));
+        contacts.MapGet("/people/{id:long}/references", (ulong id, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.GetPersonReferencesAsync(AccessService.GetCurrent(c), id, ct));
+        contacts.MapPost("/people/{id:long}/handover", (ulong id, OutsourceContactHandoverRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.HandoverPersonAsync(AccessService.GetCurrent(c), id, r, ct));
+        contacts.MapPost("/import/preview", (OutsourceContactImportPreviewRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.PreviewImportAsync(AccessService.GetCurrent(c), r, ct));
+        contacts.MapPost("/import", (OutsourceContactImportRequest r, HttpContext c, OutsourceContactService s, CancellationToken ct) =>
+            s.ImportAsync(AccessService.GetCurrent(c), r, ct));
         return endpoints;
     }
 

@@ -911,6 +911,39 @@ export interface OemCompanyUpsert {
   remark?: string | null
 }
 
+export interface OemContactCellPersonResponse {
+  personId: number
+  prefixLabel: string | null
+  name: string
+  phone: string
+  email: string | null
+}
+
+export interface OemContactColumnResponse {
+  id: number
+  colKey: string
+  title: string
+  dataType: string
+  personDisplay: string
+  phoneTitle: string | null
+  autoMerge: boolean
+  isGroupColumn: boolean
+  sortNo: number
+  widthHint: number
+}
+
+export interface OemContactMatrixResponse {
+  columns: Array<OemContactColumnResponse>
+  rows: Array<OemContactRowResponse>
+}
+
+export interface OemContactRowResponse {
+  id: number
+  sortNo: number
+  values: Record<string, string>
+  people: Record<string, Array<OemContactCellPersonResponse>>
+}
+
 export interface OemDownloadSessionResponse {
   downloadSessionId: string
   url: string
@@ -1331,6 +1364,247 @@ export interface OutsourceCcUserResponse {
 export interface OutsourceCompletionRequest {
   items?: Array<OutsourceItemVersion> | null
   completed?: boolean | null
+}
+
+export interface OutsourceContactCellPersonInput {
+  personId: number
+  prefixLabel?: string | null
+}
+
+export interface OutsourceContactCellPersonResponse {
+  personId: number
+  prefixLabel: string | null
+  name: string
+  phone: string
+  email: string | null
+  scopeType: string
+  vendorId: number | null
+  vendorName: string | null
+  status: string
+}
+
+export interface OutsourceContactCellsUpdateRequest {
+  columnId: number
+  rows?: Array<OutsourceContactRowVersion> | null
+  textValue?: string | null
+  people?: Array<OutsourceContactCellPersonInput> | null
+}
+
+export interface OutsourceContactColumnCreate {
+  title?: string | null
+  dataType?: string | null
+  personDisplay?: string | null
+  phoneTitle?: string | null
+  autoMerge: boolean
+  vendorVisible: boolean
+  isGroupColumn: boolean
+  widthHint?: number | null
+}
+
+export interface OutsourceContactColumnOrderRequest {
+  columnIds?: Array<number> | null
+}
+
+export interface OutsourceContactColumnResponse {
+  id: number
+  colKey: string
+  title: string
+  dataType: string
+  personDisplay: string
+  phoneTitle: string | null
+  autoMerge: boolean
+  vendorVisible: boolean
+  isGroupColumn: boolean
+  sortNo: number
+  widthHint: number
+  status: string
+}
+
+export interface OutsourceContactColumnUpdate {
+  title?: string | null
+  dataType?: string | null
+  personDisplay?: string | null
+  phoneTitle?: string | null
+  autoMerge?: boolean | null
+  vendorVisible?: boolean | null
+  isGroupColumn?: boolean | null
+  widthHint?: number | null
+}
+
+export interface OutsourceContactHandoverRequest {
+  targetPersonId: number
+  rowIds?: Array<number> | null
+}
+
+export interface OutsourceContactHandoverResponse {
+  replacedCount: number
+}
+
+export interface OutsourceContactImportCellInput {
+  colKey: string
+  textValue?: string | null
+  phonePairText?: string | null
+}
+
+export interface OutsourceContactImportPersonOverride {
+  matchKey: string
+  vendorId?: number | null
+}
+
+export interface OutsourceContactImportPersonPlan {
+  matchKey: string
+  name: string
+  phone: string
+  scopeType: string
+  vendorId: number | null
+  vendorName: string | null
+  action: string
+  existingPhone: string | null
+  existingPersonId: number | null
+  canMarkVendor: boolean
+  suggestedVendorId: number | null
+  suggestedVendorName: string | null
+}
+
+export interface OutsourceContactImportPreviewRequest {
+  mode?: string | null
+  rows?: Array<OutsourceContactImportRowInput> | null
+  personOverrides?: Array<OutsourceContactImportPersonOverride> | null
+}
+
+export interface OutsourceContactImportPreviewResponse {
+  mode: string
+  ready: number
+  skipped: number
+  invalid: number
+  rows: Array<OutsourceContactImportPreviewRow>
+  peoplePlans: Array<OutsourceContactImportPersonPlan>
+  phoneChangeCount: number
+  replaceCount: number
+  previewVersion: string
+}
+
+export interface OutsourceContactImportPreviewRow {
+  rowNumber: number
+  status: string
+  message: string | null
+  visibility: string
+  vendorNames: Array<string>
+  groupValue: string | null
+  resolvedPeopleCount: number
+}
+
+export interface OutsourceContactImportRequest {
+  mode?: string | null
+  rows?: Array<OutsourceContactImportRowInput> | null
+  personOverrides?: Array<OutsourceContactImportPersonOverride> | null
+  confirmPhoneUpdates: boolean
+  previewVersion?: string | null
+}
+
+export interface OutsourceContactImportResponse {
+  inserted: number
+  replaced: number
+  createdPeople: number
+  updatedPhones: number
+  skipped: number
+}
+
+export interface OutsourceContactImportRowInput {
+  rowNumber: number
+  visibilityText?: string | null
+  cells?: Array<OutsourceContactImportCellInput> | null
+}
+
+export interface OutsourceContactMatrixResponse {
+  columns: Array<OutsourceContactColumnResponse>
+  rows: Array<OutsourceContactRowResponse>
+  vendors: Array<OutsourceContactVendorOption>
+  canManage: boolean
+  canConfigureColumns: boolean
+}
+
+export interface OutsourceContactPeopleResponse {
+  people: Array<OutsourceContactPersonResponse>
+  vendors: Array<OutsourceContactVendorOption>
+}
+
+export interface OutsourceContactPersonReferenceResponse {
+  rowId: number
+  rowIndex: number
+  groupValue: string | null
+  columnId: number
+  columnTitle: string
+  prefixLabel: string | null
+}
+
+export interface OutsourceContactPersonResponse {
+  id: number
+  scopeType: string
+  vendorId: number | null
+  vendorName: string | null
+  userId: number | null
+  userEmployeeNo: string | null
+  userRealName: string | null
+  name: string
+  phone: string
+  email: string | null
+  titleHint: string | null
+  status: string
+  updatedAt: string
+}
+
+export interface OutsourceContactPersonUpsert {
+  scopeType?: string | null
+  vendorId?: number | null
+  userId?: number | null
+  name?: string | null
+  phone?: string | null
+  email?: string | null
+  titleHint?: string | null
+}
+
+export interface OutsourceContactRowCreate {
+  insertAfterRowId?: number | null
+}
+
+export interface OutsourceContactRowOrderRequest {
+  rowIds?: Array<number> | null
+}
+
+export interface OutsourceContactRowResponse {
+  id: number
+  sortNo: number
+  visibility: string
+  version: number
+  vendorIds: Array<number>
+  values: Record<string, string>
+  people: Record<string, Array<OutsourceContactCellPersonResponse>>
+  updatedAt: string
+}
+
+export interface OutsourceContactRowVersion {
+  rowId: number
+  expectedVersion: number
+}
+
+export interface OutsourceContactUserOption {
+  id: number
+  employeeNo: string
+  realName: string
+  email: string | null
+}
+
+export interface OutsourceContactVendorOption {
+  id: number
+  name: string
+  status: string
+}
+
+export interface OutsourceContactVisibilityUpdateRequest {
+  rows?: Array<OutsourceContactRowVersion> | null
+  visibility?: string | null
+  vendorIds?: Array<number> | null
 }
 
 export interface OutsourceCustomerAliasCreate {
@@ -2680,6 +2954,8 @@ export interface ApiResponses {
   "PUT /oem/company-contacts/{id}": OemCompanyContactResponse
   "PUT /oem/company-contacts/{id}/status": OemCompanyContactResponse
   "GET /oem/company-options": Array<OemCompanyOptionResponse>
+  "GET /oem/contacts": OemContactMatrixResponse
+  "GET /oem/contacts/export": Blob
   "GET /oem/file-policies": Array<OemSettingResponse>
   "PUT /oem/file-policies": Array<OemSettingResponse>
   "DELETE /oem/files/{id}": EmptyResponse
@@ -2725,6 +3001,29 @@ export interface ApiResponses {
   "GET /oem/uploads/{sessionId}": OemUploadSessionResponse
   "PUT /oem/uploads/{sessionId}/chunks/{index}": EmptyResponse
   "POST /oem/uploads/{sessionId}/merge": OemUploadedFileResponse
+  "GET /outsource/contacts": OutsourceContactMatrixResponse
+  "PUT /outsource/contacts/cells": Array<OutsourceContactRowResponse>
+  "GET /outsource/contacts/columns": Array<OutsourceContactColumnResponse>
+  "POST /outsource/contacts/columns": OutsourceContactColumnResponse
+  "PUT /outsource/contacts/columns/order": Array<OutsourceContactColumnResponse>
+  "DELETE /outsource/contacts/columns/{id}": EmptyResponse
+  "PUT /outsource/contacts/columns/{id}": OutsourceContactColumnResponse
+  "GET /outsource/contacts/export": Blob
+  "POST /outsource/contacts/import": OutsourceContactImportResponse
+  "POST /outsource/contacts/import/preview": OutsourceContactImportPreviewResponse
+  "GET /outsource/contacts/people": OutsourceContactPeopleResponse
+  "POST /outsource/contacts/people": OutsourceContactPersonResponse
+  "PUT /outsource/contacts/people/{id}": OutsourceContactPersonResponse
+  "POST /outsource/contacts/people/{id}/handover": OutsourceContactHandoverResponse
+  "GET /outsource/contacts/people/{id}/references": Array<OutsourceContactPersonReferenceResponse>
+  "PUT /outsource/contacts/people/{id}/status": OutsourceContactPersonResponse
+  "POST /outsource/contacts/rows": OutsourceContactRowResponse
+  "PUT /outsource/contacts/rows/order": EmptyResponse
+  "PUT /outsource/contacts/rows/visibility": Array<OutsourceContactRowResponse>
+  "DELETE /outsource/contacts/rows/{id}": EmptyResponse
+  "POST /outsource/contacts/rows/{id}/duplicate": OutsourceContactRowResponse
+  "GET /outsource/contacts/template": Blob
+  "GET /outsource/contacts/user-options": Array<OutsourceContactUserOption>
   "GET /outsource/fields": OutsourceFieldLayoutResponse
   "GET /outsource/items": PageResponseOfOutsourceItemResponse
   "PUT /outsource/items/batch": OutsourceBatchResponse

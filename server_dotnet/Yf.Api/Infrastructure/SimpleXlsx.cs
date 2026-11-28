@@ -19,6 +19,9 @@ public enum XlsxFill
 public sealed record XlsxRow(IReadOnlyList<string?> Cells, XlsxFill RowFill = XlsxFill.None,
     IReadOnlySet<int>? HighlightedCells = null, XlsxFill HighlightFill = XlsxFill.Yellow);
 
+/// <summary>A rectangular merge range in the worksheet (1-based rows, 0-based columns).</summary>
+public sealed record XlsxMerge(int StartRow, int StartColumn, int EndRow, int EndColumn);
+
 /// <summary>
 /// Writes a single-sheet .xlsx with text cells, a bold header and solid fills, using only the framework's zip
 /// support. Every value is written as an inline string, so nothing is ever evaluated as a formula.
@@ -29,7 +32,8 @@ public static class SimpleXlsx
     private const int HeaderStyle = 5;
 
     public static byte[] Write(string sheetName, IReadOnlyList<string> headers, IReadOnlyList<XlsxRow> rows,
-        IReadOnlyList<double>? columnWidths = null)
+        IReadOnlyList<double>? columnWidths = null, IReadOnlyList<XlsxMerge>? merges = null,
+        bool gridBorders = false, IReadOnlySet<int>? centeredColumns = null)
     {
         if (string.IsNullOrWhiteSpace(sheetName) || sheetName.Length > 31) throw new ArgumentException("Invalid sheet name.", nameof(sheetName));
         using var buffer = new MemoryStream();
@@ -51,16 +55,22 @@ public static class SimpleXlsx
                 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
                 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>
                 """);
-            Add(zip, "xl/styles.xml", """
-                <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-                <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="7"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFE0E0"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE6F4EA"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF7D1"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="8"><xf fillId="0"/><xf fillId="1"/><xf fillId="2" applyFill="1"/><xf fillId="3" applyFill="1"/><xf fillId="4" applyFill="1"/><xf fontId="1" applyFont="1"/><xf fillId="5" applyFill="1"/><xf fillId="6" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>
-                """);
-            Add(zip, "xl/worksheets/sheet1.xml", Sheet(headers, rows, columnWidths));
+            Add(zip, "xl/styles.xml", gridBorders
+                ? """
+                    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FF1E40AF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8F1FF"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border/><border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right><top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom></border></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="3"><xf fontId="0" borderId="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf fontId="0" borderId="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf fontId="1" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>
+                    """
+                : """
+                    <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+                    <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="7"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFE0E0"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9D9D9"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE6F4EA"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF7D1"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="8"><xf fillId="0"/><xf fillId="1"/><xf fillId="2" applyFill="1"/><xf fillId="3" applyFill="1"/><xf fillId="4" applyFill="1"/><xf fontId="1" applyFont="1"/><xf fillId="5" applyFill="1"/><xf fillId="6" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>
+                    """);
+            Add(zip, "xl/worksheets/sheet1.xml", Sheet(headers, rows, columnWidths, merges, gridBorders, centeredColumns));
         }
         return buffer.ToArray();
     }
 
-    private static string Sheet(IReadOnlyList<string> headers, IReadOnlyList<XlsxRow> rows, IReadOnlyList<double>? widths)
+    private static string Sheet(IReadOnlyList<string> headers, IReadOnlyList<XlsxRow> rows,
+        IReadOnlyList<double>? widths, IReadOnlyList<XlsxMerge>? merges, bool gridBorders, IReadOnlySet<int>? centeredColumns)
     {
         var xml = new StringBuilder();
         xml.Append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">""");
@@ -73,14 +83,28 @@ public static class SimpleXlsx
             xml.Append("</cols>");
         }
         xml.Append("<sheetData>");
-        AppendRow(xml, 1, headers, _ => HeaderStyle);
+        AppendRow(xml, 1, headers, _ => gridBorders ? 2 : HeaderStyle);
         for (var index = 0; index < rows.Count; index++)
         {
             var row = rows[index];
-            AppendRow(xml, index + 2, row.Cells, column =>
-                row.HighlightedCells?.Contains(column) == true ? (int)row.HighlightFill : (int)row.RowFill);
+            AppendRow(xml, index + 2, row.Cells, column => gridBorders
+                ? (centeredColumns?.Contains(column) == true ? 1 : 0)
+                : (row.HighlightedCells?.Contains(column) == true ? (int)row.HighlightFill : (int)row.RowFill));
         }
-        xml.Append("</sheetData></worksheet>");
+        xml.Append("</sheetData>");
+        if (merges is { Count: > 0 })
+        {
+            xml.Append("<mergeCells count=\"").Append(merges.Count).Append("\">");
+            foreach (var merge in merges)
+            {
+                if (merge.EndRow < merge.StartRow || merge.EndColumn < merge.StartColumn) continue;
+                var from = ColumnName(merge.StartColumn) + merge.StartRow;
+                var to = ColumnName(merge.EndColumn) + merge.EndRow;
+                xml.Append("<mergeCell ref=\"").Append(from).Append(':').Append(to).Append("\"/>");
+            }
+            xml.Append("</mergeCells>");
+        }
+        xml.Append("</worksheet>");
         return xml.ToString();
     }
 

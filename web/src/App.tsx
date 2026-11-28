@@ -46,6 +46,8 @@ const OutsourceLayout = lazy(() => import('./outsource/OutsourceLayout'))
 const OutsourceLanding = lazy(() => import('./outsource/OutsourceLayout').then((m) => ({ default: m.OutsourceLanding })))
 const OutsourceSettings = lazy(() => import('./outsource/pages/OutsourceSettingsPage'))
 const OutsourceList = lazy(() => import('./outsource/pages/OutsourceListPage'))
+const OutsourceContacts = lazy(() => import('./outsource/pages/OutsourceContactsPage'))
+const PortalContacts = lazy(() => import('./oem/pages/PortalContactsPage'))
 const OutsourceMails = lazy(() => import('./outsource/pages/OutsourceMailsPage'))
 const OutsourceIpmsData = lazy(() => import('./outsource/pages/MesOrdersPage'))
 const PortalLogin = lazy(() => import('./oem/pages/portal/PortalAuthPages').then((m) => ({ default: m.PortalLoginPage })))
@@ -207,6 +209,7 @@ export default function App() {
             <Route path="transfers" element={<OemTransferList />} />
             <Route path="transfers/:id" element={<OemTransferDetail />} />
             <Route path="outsource" element={<PortalOutsource />} />
+            <Route path="contacts" element={<PortalContacts />} />
             <Route path="announcements" element={<AnnouncementCenter />} />
             <Route path="announcements/:id" element={<AnnouncementDetail />} />
           </Route>
@@ -214,6 +217,7 @@ export default function App() {
         <Route path="/outsource" element={<Guard><OutsourceLayout /></Guard>}>
           <Route index element={<OutsourceLanding />} />
           <Route path="items" element={<OutsourceList />} />
+          <Route path="contacts" element={<OutsourceContacts />} />
           <Route path="mails" element={<Guard permission={OUTSOURCE_PERMISSIONS.send}><OutsourceMails /></Guard>} />
           <Route path="ipms-data" element={<Guard permission={OUTSOURCE_PERMISSIONS.settings}><OutsourceIpmsData /></Guard>} />
           <Route path="settings" element={<Guard permission={OUTSOURCE_PERMISSIONS.settings}><OutsourceSettings /></Guard>} />

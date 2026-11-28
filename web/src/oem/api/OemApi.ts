@@ -88,6 +88,13 @@ export class OemApi {
       responseType: 'blob', timeout: 0,
     })).data as Blob
 
+  // Unified read-only contact matrix of the vendor's own company (portal only)
+  contactMatrix = () => this.get<'GET /oem/contacts', ApiResponses['GET /oem/contacts']>('/oem/contacts')
+  contactMatrixExport = async () =>
+    (await this.http.get<ApiResponses['GET /oem/contacts/export']>('/oem/contacts/export', {
+      responseType: 'blob', timeout: 0,
+    })).data as Blob
+
   // Transfers
   sendableItems = (workOrderNo: string, signal?: AbortSignal) =>
     this.get<'GET /oem/sendable-items', SendableItem[]>('/oem/sendable-items', { workOrderNo }, { signal })

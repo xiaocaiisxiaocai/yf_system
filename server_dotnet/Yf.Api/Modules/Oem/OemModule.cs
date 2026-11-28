@@ -119,6 +119,13 @@ public static class OemModule
             var export = await s.ExportAsync(OemActorAccessor.Get(c), c.Request, ct);
             return Results.File(export.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.FileName);
         });
+        secured.MapGet("/contacts", (HttpContext c, Outsource.OutsourceContactVendorService s, CancellationToken ct) =>
+            s.GetAsync(OemActorAccessor.Get(c), ct)).Produces<Outsource.OemContactMatrixResponse>();
+        secured.MapGet("/contacts/export", async (HttpContext c, Outsource.OutsourceContactVendorService s, CancellationToken ct) =>
+        {
+            var export = await s.ExportAsync(OemActorAccessor.Get(c), ct);
+            return Results.File(export.Content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", export.FileName);
+        });
         return endpoints;
     }
 }
