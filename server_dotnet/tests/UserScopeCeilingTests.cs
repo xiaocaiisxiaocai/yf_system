@@ -122,6 +122,17 @@ public sealed class UserScopeCeilingTests
             new DataScopeAssign([new DataScopeEntry(DataScopeDomains.Project, "ORG")]), ct));
         Assert.Equal(403, roleDefault.Status);
 
+        // Adding an announcement action implicitly activates the role's departmental range.
+        // An assignment without a scope field must still reject a role with a member outside the grantor's division.
+        var readPermissionId = await database.ScalarAsync<ulong>(
+            "SELECT id FROM permissions WHERE code='announcement:reads'", ct);
+        var grant = await Assert.ThrowsAsync<ApiException>(() =>
+            roles.AssignPermissionsAsync(Manager, 9102, [readPermissionId], ct));
+        Assert.Equal(403, grant.Status);
+        Assert.Equal(DataScopeCeiling.WiderThanActorMessage, grant.Message);
+        Assert.Equal(0, await database.ScalarAsync<int>(
+            $"SELECT COUNT(*) FROM role_permissions WHERE role_id=9102 AND permission_id={readPermissionId}", ct));
+
         Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM user_data_scopes WHERE user_id=9203", ct));
         Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM role_data_scopes WHERE role_id=9102", ct));
         Assert.Equal(0, await database.ScalarAsync<int>("SELECT COUNT(*) FROM users WHERE employee_no='newcomer'", ct));

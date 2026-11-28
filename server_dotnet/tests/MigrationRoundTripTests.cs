@@ -26,7 +26,7 @@ public sealed class MigrationRoundTripTests
     private const string BeforeOutsourceTypeElectricalHandoff = "20261124093646_AddOutsourceFilesField";
     private const string RenameHandoffLabel = "20261125030000_RenameOutsourceHandoffLabel";
     private const string WidenRecipientEmail = "20261125140406_WidenOutsourceMailRecipientEmail";
-    private const string Latest = "20261126031537_AddAccountNetworkScope";
+    private const string Latest = "20261128074749_AddAnnouncements";
 
     /// <summary>Every permission the upgrade must add (the fresh-install catalog's OEM/leader codes).</summary>
     private static readonly string[] OemAndLeaderCodes =
@@ -322,6 +322,11 @@ public sealed class MigrationRoundTripTests
 
         await migrator.MigrateAsync(BeforeElectricalHandoff, ct);
         var beforeElectricalHandoff = await SchemaAsync(database, ct);
+        foreach (var name in new[] { "announcements", "announcement_reads", "announcement_companies", "announcement_departments" })
+        {
+            Assert.Contains(latestSchema, line => line.StartsWith($"table|{name}|", StringComparison.Ordinal));
+            Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith($"table|{name}|", StringComparison.Ordinal));
+        }
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("table|outsource_default_cc_modules|", StringComparison.Ordinal));
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|outsource_items|electrical_handoff", StringComparison.Ordinal));
         Assert.DoesNotContain(beforeElectricalHandoff, line => line.StartsWith("column|users|network_scope|", StringComparison.Ordinal));

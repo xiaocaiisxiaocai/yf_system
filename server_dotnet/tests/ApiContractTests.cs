@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Yf.Api.Infrastructure;
 using Yf.Api.Modules.Admin;
+using Yf.Api.Modules.Announcements;
 using Yf.Api.Modules.Files;
 using Yf.Api.Modules.Identity;
 using Yf.Api.Modules.Oem;
@@ -24,9 +25,9 @@ public class ApiContractTests
             Path.Combine(AppContext.BaseDirectory, "Contracts/api-v1.json"), TestContext.Current.CancellationToken))!;
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         builder.Services.AddSingleton(new AppOptions()).AddSingleton<AppDb>().AddSingleton<AccessService>().AddSingleton<AuditService>();
-        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule().AddOutsourceModule();
+        builder.Services.AddIdentityModule().AddAdminModule().AddProjectsModule().AddFilesModule().AddSystemModule().AddOemModule().AddOutsourceModule().AddAnnouncementModule();
         await using var app = builder.Build();
-        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule().MapOutsourceModule();
+        app.MapIdentityModule().MapAdminModule().MapProjectsModule().MapFilesModule().MapSystemModule().MapProjectRealtime().MapOemModule().MapOutsourceModule().MapAnnouncementModule();
         var endpoints = ((IEndpointRouteBuilder)app).DataSources.SelectMany(x => x.Endpoints).OfType<RouteEndpoint>().ToArray();
         Assert.Contains(endpoints, endpoint => endpoint.RoutePattern.RawText == "/api/v1/collaboration/live");
         // SignalR validates transport methods inside its request delegate rather than HttpMethodMetadata.

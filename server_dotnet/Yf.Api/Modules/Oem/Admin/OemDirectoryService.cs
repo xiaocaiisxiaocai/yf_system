@@ -309,6 +309,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
             throw ApiException.BadRequest($"该厂商仍有 {accountCount} 个关联账号，请先逐个删除账号；如需保留账号请停用厂商");
         if (await RetainedTransferReasonAsync(uow.Db, id, ct) is { } reason)
             throw ApiException.BadRequest($"{reason}请停用厂商以保留记录。");
+        if (await uow.Db.AnnouncementCompanies.AnyAsync(c => c.CompanyId == id, ct))
+            throw ApiException.BadRequest("该厂商已被公告接收范围引用，请停用厂商以保留历史。");
         // The outsourcing list uses these companies as its vendors.
         if (await uow.Db.OutsourceItems.AnyAsync(item => item.VendorId == id || item.NotifiedVendorId == id, ct)
             || await uow.Db.OutsourceTypeVendors.AnyAsync(mapping => mapping.VendorId == id, ct)
@@ -708,6 +710,8 @@ public sealed class OemDirectoryService(IDbContextFactory<YfDbContext> dbFactory
     private static async Task EnsureNoAccountHistoryAsync(OemUnitOfWork uow, ulong id,
         IQueryable<OemTransfer> ownEmptyDrafts, CancellationToken ct)
     {
+        if (await uow.Db.AnnouncementReads.AnyAsync(r => r.Realm == OemRealms.Oem && r.AccountId == id, ct))
+            throw ApiException.BadRequest("该账号已有公告阅读记录，请停用账号以保留历史。");
         var hasHistory = await uow.Db.OemTransfers.AnyAsync(transfer => (transfer.OemSenderAccountId == id
                 || transfer.ClosedByRealm == OemRealms.Oem && transfer.ClosedById == id)
                 && !ownEmptyDrafts.Any(draft => draft.Id == transfer.Id), ct)

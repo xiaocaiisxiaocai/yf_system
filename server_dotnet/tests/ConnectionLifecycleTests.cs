@@ -222,6 +222,12 @@ public sealed class ConnectionLifecycleTests
                 Assert.True(seededOutsourceFieldCount > 0);
                 await conn.ExecuteAsync("""
                     INSERT INTO roles(name,is_built_in,status) VALUES('重置角色',0,'ACTIVE');
+                    INSERT INTO announcements(created_by,department_name,title,body,internal_scope,status,version,created_at,updated_at)
+                    SELECT id,'','重置公告','','OWN','DRAFT',1,UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)
+                    FROM users WHERE employee_no='admin';
+                    INSERT INTO announcement_reads(announcement_id,realm,account_id,account_name,display_name,first_read_at,last_read_at)
+                    SELECT id,'INTERNAL',created_by,'admin','管理员',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)
+                    FROM announcements WHERE title='重置公告';
                     INSERT INTO role_data_scopes(role_id,`domain`,`scope`)
                     SELECT id,'project','ORG' FROM roles WHERE name='重置角色';
                     INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status)
@@ -306,6 +312,8 @@ public sealed class ConnectionLifecycleTests
             Assert.Equal(1, plan.Counts["outsource_type_vendors"]);
             Assert.Equal(1, plan.Counts["outsource_vendor_emails"]);
             Assert.Equal(1, plan.Counts["user_data_scopes"]);
+            Assert.Equal(1, plan.Counts["announcements"]);
+            Assert.Equal(1, plan.Counts["announcement_reads"]);
             Assert.Equal(1, plan.Counts["project_work_orders"]);
 
             var result = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
@@ -313,6 +321,7 @@ public sealed class ConnectionLifecycleTests
             foreach (var table in new[]
             {
                 "oem_companies", "oem_company_contacts", "oem_transfers", "oem_transfer_internal_recipients",
+                "announcements", "announcement_reads", "announcement_departments", "announcement_companies",
                 "oem_internal_recipient_exclusions", "outsource_mail_items", "outsource_mail_recipients",
                 "outsource_mails", "outsource_mail_batches", "outsource_item_changes", "outsource_item_values",
                 "outsource_items", "outsource_type_vendors", "outsource_vendor_emails",

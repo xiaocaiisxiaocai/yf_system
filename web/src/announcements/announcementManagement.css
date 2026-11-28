@@ -1,0 +1,11 @@
+.announcement-management .action-slots > .action-slot { --action-slot-width: 72px; }
+.announcement-management .action-slot--empty { display: none; }
+.announcement-title-link { appearance: none; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+.announcement-title { margin: 0 0 12px; overflow-wrap: anywhere; }
+.announcement-metadata { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0 0 16px; }
+.announcement-metadata dt { color: var(--color-text-3); }
+.announcement-metadata dd { margin: 0; overflow-wrap: anywhere; }
+.announcement-metadata summary { cursor: pointer; }
+.announcement-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--color-border-2); }
+.announcement-form-error { margin-bottom: 12px; }
+.announcement-dialog .arco-modal-content { max-height: calc(100dvh - 180px); overflow-y: auto; }

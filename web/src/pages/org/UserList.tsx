@@ -70,6 +70,7 @@ const ORG_KIND_LABEL = { DIVISION: '事业部', DEPARTMENT: '部门', SECTION: '
 const SCOPE_DOMAINS = [
   { domain: 'project', label: '项目范围' },
   { domain: 'oem_transfer', label: 'ODM/OEMA 传递单范围' },
+  { domain: 'announcement', label: '公告管理范围' },
 ] as const
 const SCOPE_LABELS: Record<string, string> = {
   SELF: '仅本人', ORG: '本组织及下级', ALL: '全部',

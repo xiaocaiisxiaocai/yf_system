@@ -543,6 +543,9 @@ public sealed class UserService(IDbContextFactory<YfDbContext> dbFactory, Permis
     {
         if (await context.Departments.AnyAsync(x => x.LeaderAccountId == id, ct))
             throw ApiException.BadRequest("该账号仍是组织主管，请先清除或转交主管后再删除");
+        if (await context.Announcements.AnyAsync(x => x.CreatedBy == id || x.PublisherId == id || x.WithdrawnBy == id, ct)
+            || await context.AnnouncementReads.AnyAsync(x => x.Realm == IdentityRealms.Internal && x.AccountId == id, ct))
+            throw ApiException.BadRequest("该账号已有公告或阅读记录，请停用账号以保留历史。");
         if (await context.Projects.AnyAsync(x => x.ResponsibleUserId == id, ct))
             throw ApiException.BadRequest("该账号仍是项目负责人，请先结束相关项目");
         if (await context.Projects.AnyAsync(x => x.CreatedBy == id, ct) || await context.ProjectStatusLogs.AnyAsync(x => x.OperatorId == id, ct))

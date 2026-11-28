@@ -15,6 +15,115 @@ export interface AdminImportRowResult {
   message: string | null
 }
 
+export interface AnnouncementCompanyOption {
+  id: number
+  name: string
+  accountCount: number
+}
+
+export interface AnnouncementDraftRequest {
+  title?: string | null
+  body?: string | null
+  internalScope?: string | null
+  externalScope?: string | null
+  departmentIds?: Array<number> | null
+  companyIds?: Array<number> | null
+  version?: number | null
+}
+
+export interface AnnouncementManagementDetailResponse {
+  id: number
+  version: number
+  title: string
+  status: string
+  departmentId: number | null
+  departmentName: string
+  publisherId: number | null
+  publisherName: string | null
+  publishedAt: string | null
+  pinnedAt: string | null
+  updatedAt: string
+  canEdit: boolean
+  canPublish: boolean
+  canWithdraw: boolean
+  canPin: boolean
+  canReadDetails: boolean
+  body: string
+  internalScope: string
+  externalScope: string | null
+  departments: Array<AnnouncementOption>
+  companies: Array<AnnouncementOption>
+  withdrawnAt: string | null
+  withdrawnByName: string | null
+}
+
+export interface AnnouncementManagementRow {
+  id: number
+  version: number
+  title: string
+  status: string
+  departmentId: number | null
+  departmentName: string
+  publisherId: number | null
+  publisherName: string | null
+  publishedAt: string | null
+  pinnedAt: string | null
+  updatedAt: string
+  canEdit: boolean
+  canPublish: boolean
+  canWithdraw: boolean
+  canPin: boolean
+  canReadDetails: boolean
+}
+
+export interface AnnouncementOption {
+  id: number
+  name: string
+}
+
+export interface AnnouncementOptionsResponse {
+  departmentId: number | null
+  departmentName: string | null
+  departments: Array<AnnouncementOption>
+  companies: Array<AnnouncementCompanyOption>
+}
+
+export interface AnnouncementReadRow {
+  realm: string
+  accountId: number
+  accountName: string
+  displayName: string
+  firstReadAt: string
+  lastReadAt: string
+}
+
+export interface AnnouncementReaderDetailResponse {
+  id: number
+  title: string
+  departmentName: string
+  publishedAt: string
+  pinnedAt: string | null
+  isRead: boolean
+  body: string
+}
+
+export interface AnnouncementReaderItemResponse {
+  id: number
+  title: string
+  departmentName: string
+  publishedAt: string
+  pinnedAt: string | null
+  isRead: boolean
+}
+
+export interface AnnouncementReaderPageResponse {
+  list: Array<AnnouncementReaderItemResponse>
+  total: number
+  page: number
+  pageSize: number
+  unreadCount: number
+}
+
 export interface ApiErrorResponse {
   code: number
   message: string
@@ -1649,6 +1758,20 @@ export interface OutsourceVendorRow {
   purgedFileCount: number
 }
 
+export interface PageResponseOfAnnouncementManagementRow {
+  list: Array<AnnouncementManagementRow>
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface PageResponseOfAnnouncementReadRow {
+  list: Array<AnnouncementReadRow>
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface PageResponseOfAuditLogResponse {
   list: Array<AuditLogResponse>
   total: number
@@ -2420,6 +2543,19 @@ export interface ApiResponses {
   "PUT /admin/users/{id}/password": EmptyResponse
   "PUT /admin/users/{id}/roles": EmptyResponse
   "PUT /admin/users/{id}/status": UserResponse
+  "GET /announcements": AnnouncementReaderPageResponse
+  "GET /announcements/manage": PageResponseOfAnnouncementManagementRow
+  "POST /announcements/manage": AnnouncementManagementDetailResponse
+  "GET /announcements/manage/options": AnnouncementOptionsResponse
+  "GET /announcements/manage/{id}": AnnouncementManagementDetailResponse
+  "PUT /announcements/manage/{id}": AnnouncementManagementDetailResponse
+  "POST /announcements/manage/{id}/pin": EmptyResponse
+  "POST /announcements/manage/{id}/publish": EmptyResponse
+  "GET /announcements/manage/{id}/reads": PageResponseOfAnnouncementReadRow
+  "POST /announcements/manage/{id}/unpin": EmptyResponse
+  "POST /announcements/manage/{id}/withdraw": EmptyResponse
+  "GET /announcements/{id}": AnnouncementReaderDetailResponse
+  "POST /announcements/{id}/read": EmptyResponse
   "POST /auth/login": LoginResponse
   "POST /auth/logout": EmptyResponse
   "PUT /auth/password": EmptyResponse
@@ -2455,6 +2591,9 @@ export interface ApiResponses {
   "GET /oem/accounts/{id}": OemAccountResponse
   "PUT /oem/accounts/{id}/password": EmptyResponse
   "PUT /oem/accounts/{id}/status": OemAccountResponse
+  "GET /oem/announcements": AnnouncementReaderPageResponse
+  "GET /oem/announcements/{id}": AnnouncementReaderDetailResponse
+  "POST /oem/announcements/{id}/read": EmptyResponse
   "GET /oem/approvals/pending": OemPageResponseOfOemPendingApprovalResponse
   "POST /oem/approvals/{taskId}/approve": OemTransferDetailResponse
   "POST /oem/approvals/{taskId}/reject": OemTransferDetailResponse

@@ -9,15 +9,17 @@ public static class DataScopeDomains
 {
     public const string Project = "project";
     public const string OemTransfer = "oem_transfer";
+    public const string Announcement = "announcement";
 
-    public static readonly string[] All = [Project, OemTransfer];
+    public static readonly string[] All = [Project, OemTransfer, Announcement];
 
-    public static bool IsValid(string? domain) => domain is Project or OemTransfer;
+    public static bool IsValid(string? domain) => domain is Project or OemTransfer or Announcement;
 
     public static string Label(string domain) => domain switch
     {
         Project => "项目",
         OemTransfer => "ODM/OEMA 传递单",
+        Announcement => "公告管理",
         _ => domain,
     };
 }
@@ -100,8 +102,18 @@ public static class DataScopeService
             return ids.ToDictionary(id => id, id => new DataScopeResolution(settled[id], NoOrgs));
         }
 
+        // Only managers receive an implicit announcement range. Ordinary accounts keep their existing
+        // delegation ceilings even when assigned to a different department.
+        var managerRoles = AnnouncementManagerRoles(db);
+        var managerIds = domain == DataScopeDomains.Announcement && settled.Count < ids.Length
+            ? (await (from userRole in db.UserRoles
+                      join role in db.Roles on userRole.RoleId equals role.Id
+                      where Enumerable.Contains(ids, userRole.UserId) && role.Status == AccountStatuses.Active
+                         && managerRoles.Contains(role.Id)
+                      select userRole.UserId).Distinct().ToArrayAsync(ct)).ToHashSet()
+            : [];
         var departments = await db.Departments.AsNoTracking()
-            .Select(department => new { department.Id, department.ParentId, department.Status, department.LeaderAccountId })
+            .Select(department => new { department.Id, department.ParentId, department.Status, department.LeaderAccountId, department.Kind })
             .ToArrayAsync(ct);
         var activeOrgs = departments.Where(department => department.Status == AccountStatuses.Active)
             .Select(department => department.Id).ToHashSet();
@@ -119,7 +131,11 @@ public static class DataScopeService
                 if (known == DataScopeValues.Org) orgUsers.Add(id);
                 continue;
             }
-            if (ledByUser[id].Any()) { settled[id] = DataScopeValues.Org; orgUsers.Add(id); }
+            if (domain == DataScopeDomains.Announcement ? managerIds.Contains(id) : ledByUser[id].Any())
+            {
+                settled[id] = DataScopeValues.Org;
+                orgUsers.Add(id);
+            }
             else settled[id] = DataScopeValues.Self;
         }
         var membershipByUser = orgUsers.Count == 0
@@ -127,6 +143,10 @@ public static class DataScopeService
             : (await db.Users.AsNoTracking().Where(user => Enumerable.Contains(orgUsers, user.Id))
                     .Select(user => new { user.Id, user.DepartmentId }).ToArrayAsync(ct))
                 .ToDictionary(row => row.Id, row => row.DepartmentId);
+        var sectionParents = domain == DataScopeDomains.Announcement
+            ? departments.Where(org => org.Kind == "SECTION" && org.ParentId.HasValue && activeOrgs.Contains(org.Id))
+                .ToDictionary(org => org.Id, org => org.ParentId!.Value)
+            : [];
         var result = new Dictionary<ulong, DataScopeResolution>(ids.Length);
         foreach (var id in ids)
         {
@@ -135,11 +155,19 @@ public static class DataScopeService
                 result[id] = new(settled[id], NoOrgs);
                 continue;
             }
-            var roots = ledByUser[id].Concat(membershipByUser.GetValueOrDefault(id) is ulong own ? [own] : []);
+            var roots = ledByUser[id].Concat(membershipByUser.GetValueOrDefault(id) is ulong own
+                ? [sectionParents.GetValueOrDefault(own, own)] : []);
             result[id] = new(DataScopeValues.Org, Subtree(roots, activeOrgs, children));
         }
         return result;
     }
+
+    internal static IQueryable<ulong> AnnouncementManagerRoles(YfDbContext db) =>
+        from grant in db.RolePermissions
+        join permission in db.Permissions on grant.PermissionId equals permission.Id
+        where permission.Code == "announcement:publish" || permission.Code == "announcement:withdraw"
+           || permission.Code == "announcement:pin" || permission.Code == "announcement:reads"
+        select grant.RoleId;
 
     /// <summary>The widest active role default per account; an account may be bound to more than one role row.</summary>
     private static async Task<IReadOnlyDictionary<ulong, string>> RoleDefaultRowsAsync(
