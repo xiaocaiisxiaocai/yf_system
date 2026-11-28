@@ -1294,17 +1294,17 @@ public sealed class OutsourceContactService(IDbContextFactory<YfDbContext> dbFac
 
                         if (matched is not null)
                         {
-                            var action = string.Equals(matched.Phone, token.Phone, StringComparison.Ordinal)
+                            var personAction = string.Equals(matched.Phone, token.Phone, StringComparison.Ordinal)
                                 ? "REUSE"
                                 : "UPDATE_PHONE";
-                            if (action == "UPDATE_PHONE") detectedPhoneChanges.Add(matched.Id);
+                            if (personAction == "UPDATE_PHONE") detectedPhoneChanges.Add(matched.Id);
 
                             if (!peoplePlans.ContainsKey(matchKey))
                             {
                                 peoplePlans[matchKey] = new OutsourceContactImportPersonPlan(
                                     matchKey, matched.Name, token.Phone, matched.ScopeType, matched.VendorId,
                                     matched.VendorId.HasValue ? vendorNames.GetValueOrDefault(matched.VendorId.Value) : null,
-                                    action, action == "UPDATE_PHONE" ? matched.Phone : null, matched.Id,
+                                    personAction, personAction == "UPDATE_PHONE" ? matched.Phone : null, matched.Id,
                                     singleVendorId.HasValue, singleVendorId,
                                     singleVendorId.HasValue ? vendorNames.GetValueOrDefault(singleVendorId.Value) : null);
                             }

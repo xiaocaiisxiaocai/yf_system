@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Alert, Button, Card, Checkbox, Drawer, Empty, Input, InputNumber, Message, Modal, Popconfirm, Radio, Select, Space, Spin, Table, Tabs, Tag,
+  Alert, Button, Card, Checkbox, Drawer, Empty, Input, InputNumber, Message, Modal, Radio, Select, Space, Spin, Tabs, Tag,
 } from '@arco-design/web-react'
 import type { TableColumnProps } from '@arco-design/web-react'
 import {
@@ -9,7 +9,9 @@ import {
 import http from '../../api/client'
 import { requestErrorMessage } from '../../api/requestError'
 import type { ApiResponses } from '../../api/types'
+import DangerPopconfirm from '../../components/DangerPopconfirm'
 import LoadError from '../../components/LoadError'
+import ResizableTable from '../../components/ResizableTable'
 import { saveBlob } from '../../utils/saveBlob'
 import { buildMergedContactGrid, getDistinctGroups } from '../contactsMerge'
 import { parseContactsWorkbook, type ContactImportRowPayload } from '../contactsWorkbook'
@@ -801,14 +803,14 @@ export default function OutsourceContactsPage() {
               <Button size="mini" icon={<IconPhone />} onClick={() => void openQuickPhone(p.id)}>改电话</Button>
               <Button size="mini" icon={<IconEdit />} onClick={() => void openEditPerson(p)}>编辑</Button>
               <Button size="mini" icon={<IconSwap />} onClick={() => void openHandover(p)}>交接</Button>
-              <Popconfirm
+              <DangerPopconfirm
                 title={p.status === 'ACTIVE' ? `确认停用「${p.name}」？停用后外包门户将自动隐藏该联系人。` : `确认恢复启用「${p.name}」？`}
                 onOk={() => void handleTogglePersonStatus(p)}
               >
                 <Button size="mini" status={p.status === 'ACTIVE' ? 'warning' : 'success'}>
                   {p.status === 'ACTIVE' ? '停用' : '启用'}
                 </Button>
-              </Popconfirm>
+              </DangerPopconfirm>
             </>
           )}
         </Space>
@@ -985,9 +987,9 @@ export default function OutsourceContactsPage() {
                               <Button size="mini" icon={<IconCopy />} title="在下方复制一行" onClick={() => void handleDuplicateRow(rowObj.id)}>复制</Button>
                               <Button size="mini" icon={<IconArrowUp />} disabled={rawIndex <= 0} onClick={() => void handleMoveRow(rowObj.id, -1)} />
                               <Button size="mini" icon={<IconArrowDown />} disabled={rawIndex < 0 || rawIndex >= allRows.length - 1} onClick={() => void handleMoveRow(rowObj.id, 1)} />
-                              <Popconfirm title="确认删除这一行吗？" onOk={() => void handleDeleteRow(rowObj)}>
+                              <DangerPopconfirm title="确认删除这一行吗？" onOk={() => void handleDeleteRow(rowObj)}>
                                 <Button size="mini" status="danger" icon={<IconDelete />} />
-                              </Popconfirm>
+                              </DangerPopconfirm>
                             </Space>
                           </td>
                         )}
@@ -1023,7 +1025,8 @@ export default function OutsourceContactsPage() {
               </Button>
             )}
           </div>
-          <Table rowKey="id" columns={peopleColumns} data={filteredPeople} pagination={{ pageSize: 20 }} />
+          <ResizableTable tableId="outsource-contacts-people" growKey="name"
+            rowKey="id" columns={peopleColumns} data={filteredPeople} pagination={{ pageSize: 20 }} />
         </>
       )}
 
@@ -1092,9 +1095,9 @@ export default function OutsourceContactsPage() {
                     >
                       编辑
                     </Button>
-                    <Popconfirm title={`确认删除列「${col.title}」及其填报内容？`} onOk={() => void handleDeleteColumn(col)}>
+                    <DangerPopconfirm title={`确认删除列「${col.title}」及其填报内容？`} onOk={() => void handleDeleteColumn(col)}>
                       <Button size="mini" status="danger" icon={<IconDelete />} />
-                    </Popconfirm>
+                    </DangerPopconfirm>
                   </Space>
                 </div>
               </div>
@@ -1550,7 +1553,9 @@ export default function OutsourceContactsPage() {
                   <Tag color={importModal.preview.invalid > 0 ? 'red' : 'gray'}>异常：{importModal.preview.invalid}</Tag>
                 </Space>
 
-                <Table
+                <ResizableTable
+                  tableId="outsource-contacts-import-preview"
+                  growKey="message"
                   size="small"
                   pagination={false}
                   scroll={{ y: 200 }}
