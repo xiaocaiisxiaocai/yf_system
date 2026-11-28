@@ -27,6 +27,9 @@ public sealed class OpenApiContractTests
     // Endpoints whose success body is not JSON.
     private static readonly HashSet<string> BinaryEndpoints = new(StringComparer.Ordinal)
     {
+        "GET /api/v1/announcements/manage/{id}/assets/{assetId}",
+        "GET /api/v1/announcements/{id}/assets/{assetId}",
+        "GET /api/v1/oem/announcements/{id}/assets/{assetId}",
         "GET /api/v1/files/{id}/download",
         "GET /api/v1/files/{id}/native-download/{handle}",
         "GET /api/v1/files/batch-download/{handle}",

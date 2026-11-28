@@ -78,6 +78,29 @@ public sealed partial class AnnouncementManagementService(IDbContextFactory<YfDb
         if (!access.Publish) throw ApiException.Forbidden();
         var db = uow.Db;
         var now = await OperationTimeAsync(db, ct);
+        string? createKey = null;
+        if (request.CreateKey is { } key)
+        {
+            if (id.HasValue || !Guid.TryParse(key, out var parsed) || parsed == Guid.Empty)
+                throw ApiException.BadRequest("新建草稿标识无效");
+            createKey = parsed.ToString("N");
+            // A response may be lost after commit. Serialize creates for this author so concurrent retries
+            // recover the same ID without replaying the payload over a newer save or publication.
+            await db.Database.SqlQuery<ulong>($"SELECT id AS Value FROM users WHERE id={actor.Id} FOR UPDATE").SingleAsync(ct);
+            var createdId = await db.Announcements.Where(a => a.CreatedBy == actor.Id && a.CreateKey == createKey)
+                .Select(a => (ulong?)a.Id).SingleOrDefaultAsync(ct);
+            if (createdId is { } prior)
+            {
+                var existing = await LockedAsync(uow, prior, ct);
+                if (!await access.Visible(db).AnyAsync(a => a.Id == prior, ct)) throw ApiException.NotFound("公告不可查看");
+                return await DescribeAsync(uow, existing, access, ct);
+            }
+        }
+        if (request.CopyFromId is { } source)
+        {
+            if (id.HasValue) throw ApiException.BadRequest("仅新建草稿时可指定复制来源");
+            if (!await access.Visible(db).AnyAsync(a => a.Id == source, ct)) throw ApiException.NotFound("公告不可查看");
+        }
         Announcement row;
         if (id.HasValue)
         {
@@ -89,13 +112,15 @@ public sealed partial class AnnouncementManagementService(IDbContextFactory<YfDb
         }
         else
         {
-            row = new() { CreatedBy = actor.Id, CreatedAt = now };
+            row = new() { CreatedBy = actor.Id, CreatedAt = now, CreateKey = createKey };
             db.Announcements.Add(row);
         }
 
         var title = request.Title?.Trim() ?? "";
-        var body = request.Body?.Trim() ?? "";
-        if (title.Length > 200 || body.Length > 20000) throw ApiException.BadRequest("标题最多 200 字，正文最多 20000 字");
+        if (title.Length > 200) throw ApiException.BadRequest("公告标题最多 200 字");
+        if (row.DocumentJson is not null && request.DocumentJson is null)
+            throw ApiException.Conflict("请刷新并使用图文编辑器保存此公告");
+        var document = AnnouncementDocument.FromDraft(request);
         var internalScope = request.InternalScope ?? "OWN";
         if (internalScope is not ("OWN" or "ALL" or "SELECTED")
             || request.ExternalScope is not (null or "ALL" or "SELECTED"))
@@ -108,13 +133,15 @@ public sealed partial class AnnouncementManagementService(IDbContextFactory<YfDb
         if (departments.Length != departmentIds.Count || companies.Length != companyIds.Count)
             throw ApiException.BadRequest("所选部门或公司已停用或不存在，请重新选择");
         row.Title = title;
-        row.Body = body;
+        row.Body = document.Text;
+        row.DocumentJson = document.Json;
         row.InternalScope = internalScope;
         row.ExternalScope = request.ExternalScope;
         row.DepartmentId = options.DepartmentId;
         row.DepartmentName = options.DepartmentName ?? "";
         row.UpdatedAt = now;
         await db.SaveChangesAsync(ct);
+        await AnnouncementContentAssets.BindAsync(db, row.Id, request.CopyFromId, document.Images, request.AttachmentIds, now, ct);
         if (id.HasValue)
         {
             await db.AnnouncementDepartments.Where(d => d.AnnouncementId == row.Id).ExecuteDeleteAsync(ct);
@@ -140,8 +167,10 @@ public sealed partial class AnnouncementManagementService(IDbContextFactory<YfDb
         if (row.Status == "PUBLISHED" && row.PublisherId == actor.Id) return EmptyResponse.Instance;
         if (row.Status != "DRAFT") throw ApiException.Conflict("仅草稿可发布");
         if (version.HasValue && version != row.Version) throw ApiException.VersionConflict("草稿已变更，请重新预览后发布");
-        if (row.Title.Length == 0 || row.Body.Length == 0) throw ApiException.BadRequest("请填写公告标题和正文");
         var db = uow.Db;
+        if (row.Title.Length == 0 || (row.Body.Length == 0 && !await db.AnnouncementAssetLinks
+                .AnyAsync(link => link.AnnouncementId == id && link.SortOrder != null, ct)))
+            throw ApiException.BadRequest("请填写公告标题，并添加正文、图片或附件");
         var department = await AnnouncementOrganization.DepartmentAsync(db, actor.Id, ct)
             ?? throw ApiException.BadRequest("未确定发布部门，请先设置账号所属部门");
         if (row.DepartmentId != department.Id || row.DepartmentName != department.Name)
@@ -167,6 +196,8 @@ public sealed partial class AnnouncementManagementService(IDbContextFactory<YfDb
         }
         else throw ApiException.BadRequest("请选择外部可见范围");
 
+        await db.AnnouncementAssetLinks.Where(link => link.AnnouncementId == id && link.SortOrder == null)
+            .ExecuteDeleteAsync(ct);
         row.PublisherId = actor.Id;
         row.PublisherName = await ActorNameAsync(db, actor.Id, ct);
         row.Status = "PUBLISHED";

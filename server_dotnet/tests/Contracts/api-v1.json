@@ -1,4 +1,10 @@
 [
+  "GET /api/v1/announcements/manage/ordering",
+  "PUT /api/v1/announcements/manage/ordering",
+  "GET /api/v1/announcements/manage/{}/assets/{}",
+  "POST /api/v1/announcements/manage/{}/assets",
+  "GET /api/v1/announcements/{}/assets/{}",
+  "GET /api/v1/oem/announcements/{}/assets/{}",
   "GET /api/v1/announcements",
   "GET /api/v1/announcements/{}",
   "POST /api/v1/announcements/{}/read",

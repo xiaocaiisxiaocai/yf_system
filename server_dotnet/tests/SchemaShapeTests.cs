@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Dapper;
 using Microsoft.EntityFrameworkCore;
@@ -95,6 +95,7 @@ public sealed class SchemaShapeTests
         "20261125140406_WidenOutsourceMailRecipientEmail",
         "20261126031537_AddAccountNetworkScope",
         "20261128074749_AddAnnouncements",
+        "20261128092337_AddAnnouncementRichContent",
     ];
 
     [Fact]

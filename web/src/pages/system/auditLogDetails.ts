@@ -70,6 +70,7 @@ export const ACTIONS: Record<string, ActionMeta> = {
   ANNOUNCEMENT_PUBLISH: action('发布公告', 'ANNOUNCEMENT', '公告', 'green'),
   ANNOUNCEMENT_PIN: action('置顶公告', 'ANNOUNCEMENT', '公告', 'orange'),
   ANNOUNCEMENT_UNPIN: action('取消公告置顶', 'ANNOUNCEMENT', '公告', 'gray'),
+  ANNOUNCEMENT_ORDER: action('调整公告顺序', 'ANNOUNCEMENT', '公告', 'purple'),
   ANNOUNCEMENT_WITHDRAW: action('下架公告', 'ANNOUNCEMENT', '公告', 'red'),
   LOGIN: action('登录成功', 'AUTH', '认证安全', 'green'),
   LOGIN_FAILED: action('登录失败', 'AUTH', '认证安全', 'red'),

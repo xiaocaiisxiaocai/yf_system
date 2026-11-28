@@ -5,7 +5,10 @@ namespace Yf.Api.Modules.Announcements;
 public static class AnnouncementModule
 {
     public static IServiceCollection AddAnnouncementModule(this IServiceCollection services) =>
-        services.AddSingleton<AnnouncementManagementService>().AddSingleton<AnnouncementReaderService>();
+        services.AddSingleton<AnnouncementManagementService>().AddSingleton<AnnouncementReaderService>()
+            .AddSingleton<AnnouncementAssetStore>()
+            .AddSingleton<IOemBackgroundJob>(provider => new DelegateOemJob("announcement-asset-cleanup", TimeSpan.FromHours(1),
+                ct => provider.GetRequiredService<AnnouncementAssetStore>().CleanupAsync(ct)));
 
     public static IEndpointRouteBuilder MapAnnouncementModule(this IEndpointRouteBuilder endpoints)
     {
@@ -13,6 +16,8 @@ public static class AnnouncementModule
         MapReader(root, false);
         MapReader(endpoints.MapGroup(OemApi.Prefix + "/announcements").AddEndpointFilter<OemAccessFilter>(), true);
         var management = root.MapGroup("/manage");
+        AnnouncementAssetEndpoints.MapManagement(management);
+        management.MapAnnouncementOrdering();
         management.MapGet("", (HttpContext c, AnnouncementManagementService s, string? keyword, string? status,
             int? page, int? pageSize, CancellationToken ct) => s.ListAsync(AccessService.GetCurrent(c), keyword, status, page, pageSize, ct));
         management.MapGet("/options", (HttpContext c, AnnouncementManagementService s, CancellationToken ct) =>
@@ -45,6 +50,7 @@ public static class AnnouncementModule
         }
         group.MapGet("", (HttpContext c, AnnouncementReaderService s, string? keyword, bool? unreadOnly, int? page,
             int? pageSize, CancellationToken ct) => s.ListAsync(Actor(c), keyword, unreadOnly, page, pageSize, ct));
+        AnnouncementAssetEndpoints.MapReader(group, Actor);
         group.MapGet("/{id:long}", (ulong id, HttpContext c, AnnouncementReaderService s, CancellationToken ct) =>
             s.DetailAsync(Actor(c), id, ct));
         group.MapPost("/{id:long}/read", (ulong id, HttpContext c, AnnouncementReaderService s, CancellationToken ct) =>

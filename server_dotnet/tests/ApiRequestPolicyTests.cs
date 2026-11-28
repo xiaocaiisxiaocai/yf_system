@@ -45,6 +45,12 @@ public sealed class ApiRequestPolicyTests
     [InlineData("/api/v1/messages/1/images/not-an-id", false)]
     [InlineData("/api/v1/messages/1/images/2/extra", false)]
     [InlineData("/api/v1/messages/1/reads", false)]
+    [InlineData("/api/v1/announcements/12/assets/34", true)]
+    [InlineData("/api/v1/announcements/manage/12/assets/34", true)]
+    [InlineData("/API/V1/OEM/Announcements/12/Assets/34/", true)]
+    [InlineData("/api/v1/announcements/12/assets", false)]
+    [InlineData("/api/v1/oem/announcements/12/assets/missing", false)]
+    [InlineData("/api/v1/announcements/manage/12/assets/34/other", false)]
     public void ContentPolicyMatchesCaseInsensitiveRoutes(string path, bool expected)
     {
         var request = new DefaultHttpContext().Request;

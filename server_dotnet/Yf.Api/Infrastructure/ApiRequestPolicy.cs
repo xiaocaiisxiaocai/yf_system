@@ -23,6 +23,7 @@ internal static class ApiRequestPolicy
     internal static bool IsFileContent(HttpRequest request)
     {
         if (!HttpMethods.IsGet(request.Method) && !HttpMethods.IsHead(request.Method)) return false;
+        if (IsAnnouncementAsset(request.Path)) return true;
         var segments = request.Path.Value?.TrimEnd('/').Split('/', StringSplitOptions.None);
         if (segments is ["", var api7, var version7, var segment3, var segment4, var segment5, var segment6])
         {
@@ -39,6 +40,18 @@ internal static class ApiRequestPolicy
             && RoutePart(api, "api") && RoutePart(version, "v1") && RoutePart(resource, "files")
             && (RoutePart(action, "content") || RoutePart(action, "media"))
             && ulong.TryParse(id, NumberStyles.None, CultureInfo.InvariantCulture, out _);
+    }
+
+    private static bool IsAnnouncementAsset(PathString path)
+    {
+        if (!path.StartsWithSegments("/api/v1/announcements/manage", out var remaining)
+            && !path.StartsWithSegments("/api/v1/announcements", out remaining)
+            && !path.StartsWithSegments("/api/v1/oem/announcements", out remaining))
+            return false;
+        return remaining.Value?.TrimEnd('/').Split('/') is ["", var announcementId, var assets, var assetId]
+            && RoutePart(assets, "assets")
+            && ulong.TryParse(announcementId, NumberStyles.None, CultureInfo.InvariantCulture, out _)
+            && ulong.TryParse(assetId, NumberStyles.None, CultureInfo.InvariantCulture, out _);
     }
 
     // ASP.NET route literals are case-insensitive, so policy checks must match that behavior.

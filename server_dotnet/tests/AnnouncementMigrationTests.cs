@@ -71,5 +71,31 @@ public sealed class AnnouncementMigrationTests
         await Verify(previous, 0);
         await migrations.MigrateAsync(current, ct);
         await Verify(current, 4);
+
+        // Upgrade a genuine plain-text announcement from the original schema, including a pin and a read.
+        await database.ExecuteAsync("""
+            INSERT INTO announcements(created_by,department_name,title,body,internal_scope,status,version,
+                                      created_at,updated_at,published_at,pinned_at)
+                VALUES(1,'研发部','旧公告','旧公告的第二行','ALL','PUBLISHED',1,
+                       UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6),UTC_TIMESTAMP(6));
+            INSERT INTO announcement_reads(announcement_id,realm,account_id,account_name,display_name,first_read_at,last_read_at)
+                SELECT id,'internal',1,'admin','管理员',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)
+                FROM announcements WHERE title='旧公告';
+            """, ct);
+        const string rich = "20261128092337_AddAnnouncementRichContent";
+        await migrations.MigrateAsync(rich, ct);
+        await using (var conn = await database.Database.OpenAsync(ct))
+        {
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("""
+                SELECT COUNT(*) FROM announcements a JOIN announcement_reads r ON r.announcement_id=a.id
+                WHERE a.title='旧公告' AND a.body='旧公告的第二行' AND a.document_json IS NULL AND a.create_key IS NULL
+                AND a.pinned_at IS NOT NULL AND a.normal_sort_order IS NULL AND a.pinned_sort_order IS NULL
+                AND r.account_name='admin'
+                """));
+        }
+        await migrations.MigrateAsync(current, ct);
+        await Verify(current, 4);
+        await migrations.MigrateAsync(rich, ct);
+        await Verify(rich, 4);
     }
 }

@@ -9,3 +9,9 @@
 .announcement-body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--color-border-2); }
 .announcement-form-error { margin-bottom: 12px; }
 .announcement-dialog .arco-modal-content { max-height: calc(100dvh - 180px); overflow-y: auto; }
+.announcement-attachments-editor { width: 100%; }
+.announcement-attachments-editor ol { list-style: none; padding: 0; margin: 8px 0 0; }
+.announcement-attachments-editor li { display: flex; align-items: center; justify-content: space-between; gap: 8px 14px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px solid var(--color-border-2); }
+.announcement-file-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; min-width: 0; overflow-wrap: anywhere; }
+.announcement-file-meta small { color: var(--color-text-3); }
+.announcement-file-meta [role=alert] { color: rgb(var(--danger-6)); }

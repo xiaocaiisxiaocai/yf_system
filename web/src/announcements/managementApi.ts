@@ -11,6 +11,7 @@ export type ReadPage = ApiResponses['GET /announcements/manage/{id}/reads']
 export interface DraftValues {
   title: string
   body: string
+  documentJson: string | null
   internalScope: string
   externalScope: string | null
   departmentIds: number[]

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Button, Modal, Result, Spin } from '@arco-design/web-react'
 import { IconClose } from '@arco-design/web-react/icon'
 import { PreviewWatermark } from '../../components/PreviewWatermark'
@@ -6,11 +6,12 @@ import PreviewFallback from '../../components/PreviewFallback'
 import { createPreviewDeadline } from '../../components/previewDeadline'
 import { useAuth } from '../../store/auth'
 import { usePortalAuth } from '../api/portalSession'
-import type { TransferFile } from '../api/types'
+import type { Realm, TransferFile } from '../api/types'
 import { useOem } from '../OemContext'
 import { oemPreviewKind } from './oemPreview'
 
 export type OemPreviewFile = Pick<TransferFile, 'id' | 'originalName' | 'ext'>
+type LoadBlob = (id: number, signal: AbortSignal, onProgress?: (loaded: number) => void) => Promise<Blob>
 
 const PdfPreview = lazy(() => import('../../components/PdfPreview'))
 const ImagePreview = lazy(() => import('../../components/ImagePreview'))
@@ -19,8 +20,7 @@ const PptxPreview = lazy(() => import('../../components/PptxPreview'))
 const DocxPreview = lazy(() => import('../../components/DocxPreview'))
 
 /** Watermark identity of whoever is looking: the internal user or the OEM vendor account. */
-function useViewerIdentity(): { employeeNo?: string; realName?: string } {
-  const { realm } = useOem()
+function useViewerIdentity(realm: Realm): { employeeNo?: string; realName?: string } {
   const internalUser = useAuth((state) => state.user)
   const portalAccount = usePortalAuth((state) => state.account)
   return realm === 'oem'
@@ -28,8 +28,9 @@ function useViewerIdentity(): { employeeNo?: string; realName?: string } {
     : { employeeNo: internalUser?.employeeNo, realName: internalUser?.realName }
 }
 
-function OemImage({ file, toolbarContainer }: { file: OemPreviewFile; toolbarContainer: HTMLElement | null }) {
-  const { api } = useOem()
+function PreviewImage({ file, toolbarContainer, loadBlob }: {
+  file: OemPreviewFile; toolbarContainer: HTMLElement | null; loadBlob: LoadBlob
+}) {
   const [attempt, setAttempt] = useState(0)
   const [state, setState] = useState<{ url?: string; failed?: boolean }>({})
   const retry = useCallback(() => {
@@ -45,7 +46,7 @@ function OemImage({ file, toolbarContainer }: { file: OemPreviewFile; toolbarCon
       controller.abort()
       setState({ failed: true })
     })
-    api.previewBlob(file.id, controller.signal, (loaded) => deadline.progress(loaded)).then((blob) => {
+    loadBlob(file.id, controller.signal, (loaded) => deadline.progress(loaded)).then((blob) => {
       if (!active || controller.signal.aborted) return
       deadline.clear()
       url = URL.createObjectURL(blob)
@@ -60,7 +61,7 @@ function OemImage({ file, toolbarContainer }: { file: OemPreviewFile; toolbarCon
       controller.abort()
       if (url) URL.revokeObjectURL(url)
     }
-  }, [api, file.id, attempt])
+  }, [loadBlob, file.id, attempt])
   if (state.failed) {
     return <Result status="error" title="图片预览失败" subTitle="读取失败，请重试。"
       extra={<Button onClick={retry}>重试图片预览</Button>} />
@@ -74,15 +75,23 @@ function OemImage({ file, toolbarContainer }: { file: OemPreviewFile; toolbarCon
  * and modal layout as the collaboration file preview. Bytes come from the OEM content endpoint.
  */
 export default function OemFilePreview({ file, onClose }: { file: OemPreviewFile | null; onClose: () => void }) {
-  const { api } = useOem()
-  const { employeeNo, realName } = useViewerIdentity()
+  const { api, realm } = useOem()
+  const loadBlob = useCallback<LoadBlob>((id, signal, onProgress) =>
+    onProgress ? api.previewBlob(id, signal, onProgress) : api.previewBlob(id, signal), [api])
+  return <FileBlobPreview file={file} realm={realm} loadBlob={loadBlob} onClose={onClose} />
+}
+
+export function FileBlobPreview({ file, realm, loadBlob, navigation, onClose }: {
+  file: OemPreviewFile | null; realm: Realm; loadBlob: LoadBlob; navigation?: ReactNode; onClose: () => void
+}) {
+  const { employeeNo, realName } = useViewerIdentity(realm)
   const [toolbar, setToolbar] = useState<HTMLDivElement | null>(null)
   const kind = file ? oemPreviewKind(file.ext) : null
   const fileId = file?.id
   const loadContent = useCallback(
     async (signal: AbortSignal, onProgress?: (loaded: number) => void) =>
-      (await (onProgress ? api.previewBlob(fileId!, signal, onProgress) : api.previewBlob(fileId!, signal))).arrayBuffer(),
-    [api, fileId],
+      (await loadBlob(fileId!, signal, onProgress)).arrayBuffer(),
+    [loadBlob, fileId],
   )
   return (
     <Modal
@@ -91,6 +100,7 @@ export default function OemFilePreview({ file, onClose }: { file: OemPreviewFile
       closable={false}
       title={file ? <div className="file-preview-heading">
         <span className="file-preview-name" title={file.originalName}>预览：{file.originalName}</span>
+        {navigation}
         <div className="file-preview-controls" ref={setToolbar} />
         <Button className="file-preview-close" type="text" aria-label="关闭文件预览" icon={<IconClose />} onClick={onClose} />
       </div> : ''}
@@ -104,7 +114,7 @@ export default function OemFilePreview({ file, onClose }: { file: OemPreviewFile
         <div className="file-preview-surface">
           <Suspense fallback={<PreviewFallback />}>
             {kind === 'pdf' && <PdfPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
-            {kind === 'image' && <OemImage file={file} toolbarContainer={toolbar} />}
+            {kind === 'image' && <PreviewImage key={file.id} file={file} toolbarContainer={toolbar} loadBlob={loadBlob} />}
             {kind === 'excel' && <ExcelPreview fileId={file.id} ext={file.ext} loadContent={loadContent} />}
             {kind === 'pptx' && <PptxPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}
             {kind === 'docx' && <DocxPreview fileId={file.id} toolbarContainer={toolbar} loadContent={loadContent} />}

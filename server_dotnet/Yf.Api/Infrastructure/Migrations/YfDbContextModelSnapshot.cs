@@ -36,6 +36,12 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("longtext")
                         .HasColumnName("body");
 
+                    b.Property<string>("CreateKey")
+                        .HasMaxLength(32)
+                        .HasColumnType("varchar(32)")
+                        .HasColumnName("create_key")
+                        .UseCollation("ascii_bin");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)")
                         .HasColumnName("created_at");
@@ -54,6 +60,10 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(64)")
                         .HasColumnName("department_name");
 
+                    b.Property<string>("DocumentJson")
+                        .HasColumnType("longtext")
+                        .HasColumnName("document_json");
+
                     b.Property<string>("ExternalScope")
                         .HasMaxLength(16)
                         .HasColumnType("varchar(16)")
@@ -65,9 +75,17 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasColumnType("varchar(16)")
                         .HasColumnName("internal_scope");
 
+                    b.Property<int?>("NormalSortOrder")
+                        .HasColumnType("int")
+                        .HasColumnName("normal_sort_order");
+
                     b.Property<DateTime?>("PinnedAt")
                         .HasColumnType("datetime(6)")
                         .HasColumnName("pinned_at");
+
+                    b.Property<int?>("PinnedSortOrder")
+                        .HasColumnType("int")
+                        .HasColumnName("pinned_sort_order");
 
                     b.Property<DateTime?>("PublishedAt")
                         .HasColumnType("datetime(6)")
@@ -118,6 +136,10 @@ namespace Yf.Api.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CreatedBy", "CreateKey")
+                        .IsUnique()
+                        .HasDatabaseName("uk_announcements_create");
+
                     b.HasIndex("CreatedBy", "Status")
                         .HasDatabaseName("idx_announcements_creator_status");
 
@@ -128,6 +150,111 @@ namespace Yf.Api.Infrastructure.Migrations
                         .HasDatabaseName("idx_announcements_reader");
 
                     b.ToTable("announcements", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementAsset", b =>
+                {
+                    b.Property<ulong>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("id");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<ulong>("Id"));
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("varchar(128)")
+                        .HasColumnName("content_type");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("varchar(255)")
+                        .HasColumnName("file_name");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasColumnType("char(64)")
+                        .HasColumnName("sha256")
+                        .UseCollation("ascii_bin");
+
+                    b.Property<long>("SizeBytes")
+                        .HasColumnType("bigint")
+                        .HasColumnName("size_bytes");
+
+                    b.Property<string>("StoragePath")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("storage_path")
+                        .UseCollation("ascii_bin");
+
+                    b.Property<string>("ThumbnailStoragePath")
+                        .HasMaxLength(512)
+                        .HasColumnType("varchar(512)")
+                        .HasColumnName("thumbnail_storage_path")
+                        .UseCollation("ascii_bin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StoragePath")
+                        .IsUnique()
+                        .HasDatabaseName("uk_announcement_assets_path");
+
+                    b.ToTable("announcement_assets", (string)null);
+
+                    MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementAssetLink", b =>
+                {
+                    b.Property<ulong>("AnnouncementId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("announcement_id");
+
+                    b.Property<ulong>("AssetId")
+                        .HasColumnType("bigint unsigned")
+                        .HasColumnName("asset_id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime(6)")
+                        .HasColumnName("created_at");
+
+                    b.Property<int?>("SortOrder")
+                        .HasColumnType("int")
+                        .HasColumnName("sort_order");
+
+                    b.Property<string>("UploadKey")
+                        .HasMaxLength(36)
+                        .HasColumnType("varchar(36)")
+                        .HasColumnName("upload_key")
+                        .UseCollation("ascii_bin");
+
+                    b.HasKey("AnnouncementId", "AssetId");
+
+                    b.HasIndex("AssetId");
+
+                    b.HasIndex("AnnouncementId", "UploadKey")
+                        .IsUnique()
+                        .HasDatabaseName("uk_announcement_asset_links_upload");
+
+                    b.HasIndex("SortOrder", "CreatedAt")
+                        .HasDatabaseName("idx_announcement_asset_links_pending");
+
+                    b.ToTable("announcement_asset_links", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
                 });
@@ -5167,6 +5294,25 @@ namespace Yf.Api.Infrastructure.Migrations
                     b.ToTable("oem_upload_sessions", (string)null);
 
                     MySqlEntityTypeBuilderExtensions.UseCollation(b, "utf8mb4_unicode_ci");
+                });
+
+            modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementAssetLink", b =>
+                {
+                    b.HasOne("Yf.Api.Infrastructure.Entities.Announcement", null)
+                        .WithMany()
+                        .HasForeignKey("AnnouncementId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_announcement_asset_links_announcement");
+
+                    b.HasOne("Yf.Api.Infrastructure.Entities.AnnouncementAsset", "Asset")
+                        .WithMany()
+                        .HasForeignKey("AssetId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_announcement_asset_links_asset");
+
+                    b.Navigation("Asset");
                 });
 
             modelBuilder.Entity("Yf.Api.Infrastructure.Entities.AnnouncementCompany", b =>

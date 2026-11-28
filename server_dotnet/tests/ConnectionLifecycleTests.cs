@@ -228,6 +228,11 @@ public sealed class ConnectionLifecycleTests
                     INSERT INTO announcement_reads(announcement_id,realm,account_id,account_name,display_name,first_read_at,last_read_at)
                     SELECT id,'INTERNAL',created_by,'admin','管理员',UTC_TIMESTAMP(6),UTC_TIMESTAMP(6)
                     FROM announcements WHERE title='重置公告';
+                    INSERT INTO announcement_assets(kind,file_name,content_type,size_bytes,sha256,storage_path,created_at)
+                    VALUES('ATTACHMENT','packing.pdf','application/pdf',1,REPEAT('a',64),'announcement-assets/test/packing.pdf',UTC_TIMESTAMP(6));
+                    INSERT INTO announcement_asset_links(announcement_id,asset_id,sort_order,created_at)
+                    SELECT a.id,f.id,0,UTC_TIMESTAMP(6) FROM announcements a CROSS JOIN announcement_assets f
+                    WHERE a.title='重置公告' AND f.file_name='packing.pdf';
                     INSERT INTO role_data_scopes(role_id,`domain`,`scope`)
                     SELECT id,'project','ORG' FROM roles WHERE name='重置角色';
                     INSERT INTO users(employee_no,password_hash,real_name,email,user_type,status)
@@ -314,14 +319,21 @@ public sealed class ConnectionLifecycleTests
             Assert.Equal(1, plan.Counts["user_data_scopes"]);
             Assert.Equal(1, plan.Counts["announcements"]);
             Assert.Equal(1, plan.Counts["announcement_reads"]);
+            Assert.Equal(1, plan.Counts["announcement_assets"]);
+            Assert.Equal(1, plan.Counts["announcement_asset_links"]);
             Assert.Equal(1, plan.Counts["project_work_orders"]);
 
+            var announcementDirectory = Path.Combine(root, "announcement-assets", "test");
+            Directory.CreateDirectory(announcementDirectory);
+            await File.WriteAllBytesAsync(Path.Combine(announcementDirectory, "packing.pdf"), [42], ct);
             var result = await DevelopmentDataReset.ResetAsync(database.Options, plan.Database, plan.StorageRoot, ct);
             Assert.True(result.ResetCompleted);
+            Assert.False(Directory.Exists(announcementDirectory));
             foreach (var table in new[]
             {
                 "oem_companies", "oem_company_contacts", "oem_transfers", "oem_transfer_internal_recipients",
                 "announcements", "announcement_reads", "announcement_departments", "announcement_companies",
+                "announcement_assets", "announcement_asset_links",
                 "oem_internal_recipient_exclusions", "outsource_mail_items", "outsource_mail_recipients",
                 "outsource_mails", "outsource_mail_batches", "outsource_item_changes", "outsource_item_values",
                 "outsource_items", "outsource_type_vendors", "outsource_vendor_emails",
